@@ -229,6 +229,9 @@ class Backup_Lite_Restore_Service {
 
             self::cleanup_job_tmp( $job_id, $extracted );
 
+            // Clear caches and refresh permalinks after restore
+            self::post_restore_cleanup();
+
             $meta['stage']      = 'done';
             $meta['progress']   = 100;
             $meta['message']    = __( 'Restore completed successfully.', 'museder-restoreone' );
@@ -583,10 +586,106 @@ class Backup_Lite_Restore_Service {
             return;
         }
 
-        $tables = $GLOBALS['wpdb']->get_col( 'SHOW TABLES' );
-        foreach ( $tables as $table ) {
-            $GLOBALS['wpdb']->query( $GLOBALS['wpdb']->prepare( "UPDATE {$table} SET option_value = REPLACE(option_value, %s, %s)", $from, $to ) );
+        // Use the complete search-replace implementation from Backup_Lite_Restore
+        $pairs = [
+            [
+                'search'  => $from,
+                'replace' => $to,
+            ],
+        ];
+
+        self::run_search_replace( $pairs );
+    }
+
+    /**
+     * Complete search-replace implementation that handles all text fields and serialized data.
+     *
+     * @param array $pairs Array of search/replace pairs.
+     */
+    protected static function run_search_replace( $pairs ) {
+        global $wpdb;
+
+        $tables = $wpdb->get_col( 'SHOW TABLES' );
+        if ( empty( $tables ) ) {
+            return;
         }
+
+        $text_types = [ 'tinytext', 'text', 'mediumtext', 'longtext', 'varchar', 'char' ];
+
+        foreach ( $tables as $table ) {
+            $columns = $wpdb->get_results( "SHOW COLUMNS FROM `{$table}`", ARRAY_A );
+            if ( empty( $columns ) ) {
+                continue;
+            }
+
+            $targets = [];
+            foreach ( $columns as $column ) {
+                if ( in_array( strtolower( $column['Type'] ), $text_types, true ) ) {
+                    $targets[] = $column['Field'];
+                }
+            }
+
+            if ( empty( $targets ) ) {
+                continue;
+            }
+
+            $rows = $wpdb->get_results( "SELECT * FROM `{$table}`", ARRAY_A );
+            if ( empty( $rows ) ) {
+                continue;
+            }
+
+            foreach ( $rows as $row ) {
+                $update = [];
+                foreach ( $targets as $field ) {
+                    $original = $row[ $field ];
+                    $replaced = self::serialized_replace_recursive( $pairs, maybe_unserialize( $original ) );
+                    $maybe    = is_array( $replaced ) || is_object( $replaced ) ? serialize( $replaced ) : $replaced;
+                    if ( $maybe !== $original ) {
+                        $update[ $field ] = $maybe;
+                    }
+                }
+
+                if ( ! empty( $update ) ) {
+                    $where_key = isset( $row['id'] ) ? 'id' : array_key_first( $row );
+                    $wpdb->update( $table, $update, [ $where_key => $row[ $where_key ] ] );
+                }
+            }
+        }
+    }
+
+    /**
+     * Recursively replace search strings in arrays, objects, and strings.
+     *
+     * @param array $pairs Search/replace pairs.
+     * @param mixed $value Value to process.
+     * @return mixed Processed value.
+     */
+    protected static function serialized_replace_recursive( $pairs, $value ) {
+        if ( is_array( $value ) ) {
+            foreach ( $value as $key => $item ) {
+                $value[ $key ] = self::serialized_replace_recursive( $pairs, $item );
+            }
+            return $value;
+        }
+
+        if ( is_object( $value ) ) {
+            foreach ( $value as $key => $item ) {
+                $value->$key = self::serialized_replace_recursive( $pairs, $item );
+            }
+            return $value;
+        }
+
+        if ( is_string( $value ) ) {
+            foreach ( $pairs as $pair ) {
+                if ( empty( $pair['search'] ) ) {
+                    continue;
+                }
+                $replace = isset( $pair['replace'] ) ? $pair['replace'] : '';
+                $value   = str_replace( $pair['search'], $replace, $value );
+            }
+        }
+
+        return $value;
     }
 
     protected static function cleanup_job_tmp( $job_id, $extract_dir ) {
@@ -598,6 +697,57 @@ class Backup_Lite_Restore_Service {
         if ( file_exists( $tmp ) ) {
             backup_lite_delete_directory( $tmp );
         }
+    }
+
+    /**
+     * Perform post-restore cleanup operations: clear caches and refresh permalinks.
+     */
+    protected static function post_restore_cleanup() {
+        global $wpdb;
+
+        // Clear WordPress object cache
+        if ( function_exists( 'wp_cache_flush' ) ) {
+            wp_cache_flush();
+        }
+
+        // Clear transients
+        $wpdb->query( "DELETE FROM {$wpdb->options} WHERE option_name LIKE '_transient_%' OR option_name LIKE '_site_transient_%'" );
+
+        // Refresh permalink structure
+        if ( function_exists( 'flush_rewrite_rules' ) ) {
+            flush_rewrite_rules( false );
+        }
+
+        // Clear any plugin-specific caches
+        if ( function_exists( 'wp_cache_delete' ) ) {
+            // Clear common cache groups
+            wp_cache_delete( 'alloptions', 'options' );
+        }
+
+        // Ensure site URL and home URL are correctly set based on current server
+        // This is a safety check in case URL replacement didn't catch everything
+        $protocol = is_ssl() ? 'https' : 'http';
+        $host     = isset( $_SERVER['HTTP_HOST'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_HOST'] ) ) : '';
+        
+        if ( ! empty( $host ) ) {
+            $expected_site_url = $protocol . '://' . $host;
+            $expected_home_url  = $expected_site_url;
+            
+            $current_site_url = get_option( 'siteurl' );
+            $current_home_url = get_option( 'home' );
+            
+            // Only update if URLs don't match (excluding trailing slashes)
+            if ( rtrim( $current_site_url, '/' ) !== rtrim( $expected_site_url, '/' ) ) {
+                update_option( 'siteurl', $expected_site_url );
+                backup_lite_log( 'info', 'Updated siteurl option after restore.', [ 'old' => $current_site_url, 'new' => $expected_site_url ] );
+            }
+            if ( rtrim( $current_home_url, '/' ) !== rtrim( $expected_home_url, '/' ) ) {
+                update_option( 'home', $expected_home_url );
+                backup_lite_log( 'info', 'Updated home option after restore.', [ 'old' => $current_home_url, 'new' => $expected_home_url ] );
+            }
+        }
+
+        backup_lite_log( 'info', 'Post-restore cleanup completed.', [] );
     }
 
     protected static function restore_from_snapshot( array $snapshot ) {

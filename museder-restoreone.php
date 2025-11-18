@@ -3,7 +3,7 @@
 Plugin Name: Museder RestoreOne – Backup & One-Click Restore
 Plugin URI: https://musederlabs.com/
 Description: A lightweight WordPress backup & restore plugin focused on compatibility, single-file site snapshots, and clean restore workflows.
-Version: 2.6.38
+Version: 2.6.39
 Author: Museder Labs
 Author URI: https://musederlabs.com/
 License: GPLv2 or later
@@ -13,7 +13,7 @@ Domain Path: /languages
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-define( 'BACKUP_LITE_VERSION', '2.6.38' );
+define( 'BACKUP_LITE_VERSION', '2.6.39' );
 define( 'BACKUP_LITE_PATH', plugin_dir_path( __FILE__ ) );
 define( 'BACKUP_LITE_URL', plugin_dir_url( __FILE__ ) );
 

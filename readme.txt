@@ -4,7 +4,7 @@ Tags: backup, migration, restore, site-backup, database-backup
 Requires at least: 6.8.3
 Tested up to: 6.8.3
 Requires PHP: 7.4
-Stable tag: 2.6.38
+Stable tag: 2.6.39
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -93,6 +93,12 @@ No. The Lite version runs entirely on your server and does not send backup conte
 
 == Changelog ==
 
+= 2.6.39 =
+* Fixed incomplete URL search-replace during restore: now properly handles all database tables and text fields, including serialized data (arrays and objects).
+* Added post-restore cleanup: automatically clears WordPress object cache, transients, and refreshes permalink rules after restore completes.
+* Improved site URL validation: ensures siteurl and home options are correctly set based on current server configuration after restore.
+* This fixes the issue where restored sites would not display the correct content after clicking "Got It" on the restore completion dialog.
+
 = 2.6.38 =
 * Maintenance release: bumps the version number and regenerates the distribution package so the signed-download fix and hardening updates are reflected in the latest ZIP.
 
@@ -116,6 +122,9 @@ No. The Lite version runs entirely on your server and does not send backup conte
 (Older versions were internal pre-release builds and are not listed here.)
 
 == Upgrade Notice ==
+
+= 2.6.39 =
+Critical fix for restore functionality: URL replacement now works correctly for all database fields, and post-restore cleanup ensures the site displays correctly after restore. Recommended update for all users.
 
 = 2.6.38 =
 Packaging refresh so the latest download/restore fixes are present in the official ZIP. Update if you previously downloaded 2.6.36/2.6.37 directly from Git without the signed link fix.
