@@ -1,0 +1,297 @@
+(function () {
+    'use strict';
+
+    var prefersDark = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+    var bodyReady = false;
+    var config = window.BackupLiteAdmin || {};
+    var themePreference = config.theme || 'auto';
+    var features = (config && config.features) ? config.features : { restoreV2: true, animations: true, extendedLog: false };
+
+    function resolveTheme(value) {
+        if (value === 'auto') {
+            if (prefersDark && typeof prefersDark.matches === 'boolean') {
+                return prefersDark.matches ? 'dark' : 'light';
+            }
+            return 'light';
+        }
+        return value === 'dark' ? 'dark' : 'light';
+    }
+
+    function applyTheme(theme) {
+        var mode = resolveTheme(theme);
+        document.documentElement.setAttribute('data-bl-theme', mode === 'dark' ? 'dark' : 'light');
+        if (document.body) {
+            document.body.classList.add('backup-lite-admin');
+            bodyReady = true;
+        }
+    }
+
+    function attachBodyClass() {
+        if (!bodyReady && document.body) {
+            document.body.classList.add('backup-lite-admin');
+            bodyReady = true;
+        }
+    }
+
+    function initTheme() {
+        if (document.body) {
+            applyTheme(themePreference);
+        } else {
+            document.addEventListener('DOMContentLoaded', function () {
+                applyTheme(themePreference);
+            });
+        }
+
+        if (prefersDark && typeof prefersDark.addEventListener === 'function') {
+            prefersDark.addEventListener('change', function (event) {
+                if (themePreference === 'auto') {
+                    applyTheme(event.matches ? 'dark' : 'light');
+                }
+            });
+        }
+    }
+
+    initTheme();
+
+    window.BackupLiteUI = window.BackupLiteUI || {};
+    window.BackupLiteUI.setTheme = function (value) {
+        themePreference = value || 'auto';
+        applyTheme(value);
+    };
+
+    window.BackupLiteUI.getTheme = function () {
+        return document.documentElement.getAttribute('data-bl-theme') || 'light';
+    };
+
+    document.addEventListener('DOMContentLoaded', attachBodyClass);
+
+    // Utility helpers
+    window.BackupLiteUI.toggleClass = function (selector, className, enable) {
+        var nodes = document.querySelectorAll(selector);
+        nodes.forEach(function (node) {
+            if (enable) {
+                node.classList.add(className);
+            } else {
+                node.classList.remove(className);
+            }
+        });
+    };
+
+    window.BackupLiteUI.setStepState = function (selector, state) {
+        var node = document.querySelector(selector);
+        if (!node) {
+            return;
+        }
+        node.dataset.blState = state;
+    };
+
+    window.BackupLiteUI.autoScroll = function (selector) {
+        var node = document.querySelector(selector);
+        if (node) {
+            node.scrollTop = node.scrollHeight;
+        }
+    };
+
+    // ============================================
+    // PRO Features Lock & Upgrade Modal
+    // ============================================
+
+    var proUpgradeModal = null;
+    var proFeatureNotice = null;
+
+    function createProModal() {
+        if (proUpgradeModal) {
+            return proUpgradeModal;
+        }
+
+        var modal = document.createElement('div');
+        modal.className = 'backup-lite-pro-modal';
+        modal.innerHTML = [
+            '<div class="backup-lite-pro-modal-content">',
+            '  <div class="backup-lite-pro-modal-header">',
+            '    <h2>' + (window.BackupLitePro && window.BackupLitePro.strings ? window.BackupLitePro.strings.modalTitle : 'Museder RestoreOne PRO Required') + '</h2>',
+            '    <p class="backup-lite-pro-modal-subtitle">' + (window.BackupLitePro && window.BackupLitePro.strings ? window.BackupLitePro.strings.modalSubtitle : 'This feature requires Museder RestoreOne PRO to activate.') + '</p>',
+            '    <p class="backup-lite-pro-modal-feature"></p>',
+            '  </div>',
+            '  <div class="backup-lite-pro-modal-body">',
+            '    <ul>',
+            '      <li>AI Backup Copilot</li>',
+            '      <li>Cloud Storage Integration</li>',
+            '      <li>Advanced Filters & Smart Retention</li>',
+            '      <li>System Reports & Analytics</li>',
+            '    </ul>',
+            '  </div>',
+            '  <div class="backup-lite-pro-modal-footer">',
+            '    <button class="backup-lite-pro-modal-close">' + (window.BackupLitePro && window.BackupLitePro.strings ? window.BackupLitePro.strings.close : 'Close') + '</button>',
+            '    <button class="backup-lite-pro-modal-upgrade">' + (window.BackupLitePro && window.BackupLitePro.strings ? window.BackupLitePro.strings.upgrade : 'Upgrade to PRO') + '</button>',
+            '  </div>',
+            '</div>'
+        ].join('');
+
+        if (document.body) {
+            document.body.appendChild(modal);
+            proUpgradeModal = modal;
+        } else {
+            // Wait for body to be available
+            document.addEventListener('DOMContentLoaded', function () {
+                if (document.body && !proUpgradeModal) {
+                    document.body.appendChild(modal);
+                    proUpgradeModal = modal;
+                }
+            });
+            return null;
+        }
+
+        // Close button
+        var closeBtn = modal.querySelector('.backup-lite-pro-modal-close');
+        if (closeBtn) {
+            closeBtn.addEventListener('click', function () {
+                hideProModal();
+            });
+        }
+
+        // Upgrade button
+        var upgradeBtn = modal.querySelector('.backup-lite-pro-modal-upgrade');
+        if (upgradeBtn) {
+            upgradeBtn.addEventListener('click', function () {
+                var upgradeUrl = (window.BackupLitePro && window.BackupLitePro.upgradeUrl) || 'https://your-site.com/pro';
+                window.open(upgradeUrl, '_blank');
+            });
+        }
+
+        // Close on backdrop click
+        modal.addEventListener('click', function (e) {
+            if (e.target === modal) {
+                hideProModal();
+            }
+        });
+
+        // Close on ESC key
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape' && modal.classList.contains('active')) {
+                hideProModal();
+            }
+        });
+
+        proFeatureNotice = modal.querySelector('.backup-lite-pro-modal-feature');
+
+        return modal;
+    }
+
+    function formatFeatureLabel(featureKey) {
+        if (!featureKey) {
+            return '';
+        }
+        return featureKey.replace(/[_-]+/g, ' ').replace(/\b\w/g, function (match) {
+            return match.toUpperCase();
+        });
+    }
+
+    function showProModal(featureKey) {
+        var modal = createProModal();
+        if (!modal) {
+            return;
+        }
+
+        if (proFeatureNotice) {
+            var label = formatFeatureLabel(featureKey);
+            if (label) {
+                var template = (window.BackupLitePro && window.BackupLitePro.strings && window.BackupLitePro.strings.featureLocked) ? window.BackupLitePro.strings.featureLocked : 'Feature "%s" is available in Museder RestoreOne PRO.';
+                proFeatureNotice.textContent = template.replace('%s', label);
+                proFeatureNotice.style.display = 'block';
+            } else {
+                proFeatureNotice.textContent = '';
+                proFeatureNotice.style.display = 'none';
+            }
+        }
+
+        setTimeout(function () {
+            modal.classList.add('active');
+        }, 10);
+    }
+
+    function hideProModal() {
+        if (proUpgradeModal) {
+            proUpgradeModal.classList.remove('active');
+        }
+    }
+
+    // Handle data-upgrade="pro" clicks
+    document.addEventListener('click', function (e) {
+        var target = e.target.closest('[data-upgrade="pro"]');
+        if (!target) {
+            return;
+        }
+
+        e.preventDefault();
+        e.stopPropagation();
+        showProModal(target.getAttribute('data-pro-feature'));
+    }, true);
+
+    document.addEventListener('click', function (e) {
+        var locked = e.target.closest('.js-bl-pro-locked');
+        if (!locked) {
+            return;
+        }
+        e.preventDefault();
+        var featureKey = locked.getAttribute('data-pro-feature') || 'pro_feature';
+        if (window.BackupLiteUI && typeof window.BackupLiteUI.openProUpgradeModal === 'function') {
+            window.BackupLiteUI.openProUpgradeModal(featureKey);
+        } else {
+            showProModal(featureKey);
+        }
+    }, true);
+
+    // Expose functions globally
+    window.BackupLiteUI.showProModal = showProModal;
+    window.BackupLiteUI.hideProModal = hideProModal;
+    window.BackupLiteUI.openProUpgradeModal = showProModal;
+
+    // =============================
+    // Feature Toggles (FREE)
+    // =============================
+    function applyFeatureToggles() {
+        // UI Animations
+        var off = !(features && features.animations);
+        document.documentElement.setAttribute('data-bl-anim', off ? 'off' : 'on');
+        if (off) {
+            document.body.classList.add('bl-anim-off');
+        } else {
+            document.body.classList.remove('bl-anim-off');
+        }
+
+        // Restore Center v2
+        var r2 = !!(features && features.restoreV2);
+        document.documentElement.setAttribute('data-bl-restore-v2', r2 ? 'on' : 'off');
+        if (!r2) {
+            document.body.classList.add('bl-restore-v2-off');
+        } else {
+            document.body.classList.remove('bl-restore-v2-off');
+        }
+
+        // Extended Log Preview
+        if (features && features.extendedLog) {
+            var pre = document.querySelector('pre.log-preview');
+            if (pre) pre.classList.add('bl-log-preview--extended');
+            document.body.classList.add('bl-extended-log-on');
+        } else {
+            var pre2 = document.querySelector('pre.log-preview');
+            if (pre2) pre2.classList.remove('bl-log-preview--extended');
+            document.body.classList.remove('bl-extended-log-on');
+        }
+    }
+
+    // Expose runtime API to apply features without reload
+    window.BackupLiteUI.applyFeatures = function (next) {
+        features = Object.assign({}, features, next || {});
+        applyFeatureToggles();
+    };
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', applyFeatureToggles);
+    } else {
+        applyFeatureToggles();
+    }
+})();
+
+

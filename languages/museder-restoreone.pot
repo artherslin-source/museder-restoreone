@@ -1,0 +1,2838 @@
+# Copyright (C) 2025 Museder Labs
+# This file is distributed under the GPLv2 or later.
+msgid ""
+msgstr ""
+"Project-Id-Version: Museder RestoreOne – Backup & One-Click Restore 2.6.38\n"
+"Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/wp-backup-lite\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"POT-Creation-Date: 2025-11-17T07:36:28+00:00\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"X-Generator: WP-CLI 2.12.0\n"
+"X-Domain: museder-restoreone\n"
+
+#. Plugin Name of the plugin
+#: museder-restoreone.php
+msgid "Museder RestoreOne – Backup & One-Click Restore"
+msgstr ""
+
+#. Plugin URI of the plugin
+#. Author URI of the plugin
+#: museder-restoreone.php
+msgid "https://musederlabs.com/"
+msgstr ""
+
+#. Description of the plugin
+#: museder-restoreone.php
+msgid "A lightweight WordPress backup & restore plugin focused on compatibility, single-file site snapshots, and clean restore workflows."
+msgstr ""
+
+#. Author of the plugin
+#: museder-restoreone.php
+msgid "Museder Labs"
+msgstr ""
+
+#: includes/class-backup-jobs.php:32
+msgid "Unable to build file manifest for backup."
+msgstr ""
+
+#: includes/class-backup-jobs.php:39
+#: includes/class-ui.php:260
+msgid "Preparing backup…"
+msgstr ""
+
+#: includes/class-backup-jobs.php:203
+msgid "Backup cancelled by user."
+msgstr ""
+
+#: includes/class-backup.php:34
+#: includes/class-backup.php:38
+#: includes/class-backup.php:402
+msgid "Backup directory is not writable."
+msgstr ""
+
+#: includes/class-backup.php:68
+#: includes/class-backup.php:73
+#: includes/class-backup.php:419
+msgid "Database export failed. Check logs for details."
+msgstr ""
+
+#: includes/class-backup.php:83
+#: includes/class-backup.php:88
+#: includes/class-backup.php:424
+msgid "Unable to write meta information for backup."
+msgstr ""
+
+#: includes/class-backup.php:109
+#: includes/class-backup.php:115
+msgid "Backup failed. See logs for more information."
+msgstr ""
+
+#: includes/class-backup.php:137
+#: includes/class-backup.php:679
+#: includes/class-ui.php:264
+msgid "Backup completed successfully."
+msgstr ""
+
+#: includes/class-backup.php:440
+msgid "Failed to encode backup manifest."
+msgstr ""
+
+#: includes/class-backup.php:445
+msgid "Unable to write backup manifest."
+msgstr ""
+
+#: includes/class-backup.php:523
+msgid "Backup running…"
+msgstr ""
+
+#: includes/class-backup.php:538
+msgid "Unable to initialize archive."
+msgstr ""
+
+#: includes/class-backup.php:645
+msgid "Unable to append files to archive."
+msgstr ""
+
+#: includes/class-chunk-handler-v2.php:73
+#: includes/class-chunk-handler-v2.php:135
+msgid "Missing required metadata."
+msgstr ""
+
+#: includes/class-chunk-handler-v2.php:89
+msgid "Unable to create temporary directories."
+msgstr ""
+
+#: includes/class-chunk-handler-v2.php:104
+msgid "Failed to write manifest."
+msgstr ""
+
+#: includes/class-chunk-handler-v2.php:140
+msgid "Upload session expired or missing."
+msgstr ""
+
+#: includes/class-chunk-handler-v2.php:144
+msgid "File SHA1 mismatch."
+msgstr ""
+
+#: includes/class-chunk-handler-v2.php:150
+msgid "No chunk file received."
+msgstr ""
+
+#: includes/class-chunk-handler-v2.php:157
+msgid "Chunks directory missing."
+msgstr ""
+
+#: includes/class-chunk-handler-v2.php:161
+msgid "Chunks directory is not writable."
+msgstr ""
+
+#: includes/class-chunk-handler-v2.php:169
+msgid "Unable to read chunk input."
+msgstr ""
+
+#: includes/class-chunk-handler-v2.php:175
+msgid "Unable to write chunk."
+msgstr ""
+
+#: includes/class-chunk-handler-v2.php:187
+msgid "Failed to read from input stream."
+msgstr ""
+
+#: includes/class-chunk-handler-v2.php:200
+msgid "Failed to write chunk to disk."
+msgstr ""
+
+#: includes/class-chunk-handler-v2.php:211
+#: includes/class-chunk-handler.php:133
+msgid "Chunk size mismatch."
+msgstr ""
+
+#: includes/class-chunk-handler-v2.php:220
+#: includes/class-chunk-handler.php:140
+#: includes/class-chunk-handler.php:372
+msgid "Chunk SHA1 verification failed."
+msgstr ""
+
+#: includes/class-chunk-handler-v2.php:228
+msgid "Unable to finalize chunk."
+msgstr ""
+
+#: includes/class-chunk-handler-v2.php:289
+msgid "Missing upload identifier or checksum."
+msgstr ""
+
+#: includes/class-chunk-handler-v2.php:300
+#: includes/class-chunk-handler.php:297
+msgid "Upload session not found."
+msgstr ""
+
+#: includes/class-chunk-handler-v2.php:309
+msgid "No chunk data available."
+msgstr ""
+
+#: includes/class-chunk-handler-v2.php:329
+#: includes/class-restore-handler.php:418
+msgid "Unable to create merged archive."
+msgstr ""
+
+#: includes/class-chunk-handler-v2.php:340
+msgid "Unable to open chunk during finalize."
+msgstr ""
+
+#: includes/class-chunk-handler-v2.php:352
+msgid "Unable to read chunk during finalize."
+msgstr ""
+
+#: includes/class-chunk-handler-v2.php:382
+msgid "Merged archive checksum mismatch."
+msgstr ""
+
+#: includes/class-chunk-handler-v2.php:400
+msgid "ZIP verification failed."
+msgstr ""
+
+#: includes/class-chunk-handler-v2.php:425
+msgid "Insufficient permissions."
+msgstr ""
+
+#: includes/class-chunk-handler-v2.php:434
+msgid "Invalid REST nonce."
+msgstr ""
+
+#: includes/class-chunk-handler.php:44
+#: includes/class-log-handler.php:154
+#: includes/class-restore-handler.php:550
+#: includes/class-schedule-handler.php:794
+#: includes/class-ui.php:574
+#: includes/class-ui.php:597
+#: includes/class-ui.php:679
+#: includes/pro/reports-controller.php:184
+msgid "Unauthorized."
+msgstr ""
+
+#: includes/class-chunk-handler.php:86
+#: includes/class-chunk-handler.php:326
+msgid "Chunk index out of range."
+msgstr ""
+
+#: includes/class-chunk-handler.php:94
+#: includes/class-chunk-handler.php:340
+msgid "Chunk path rejected."
+msgstr ""
+
+#: includes/class-chunk-handler.php:105
+#: includes/class-restore-handler.php:349
+msgid "No chunk file uploaded."
+msgstr ""
+
+#: includes/class-chunk-handler.php:115
+msgid "Unable to open chunk file for writing."
+msgstr ""
+
+#: includes/class-chunk-handler.php:124
+msgid "Failed to write chunk data."
+msgstr ""
+
+#: includes/class-chunk-handler.php:212
+#: includes/class-ui.php:186
+msgid "Upload aborted."
+msgstr ""
+
+#: includes/class-chunk-handler.php:222
+msgid "Unsupported backup file extension."
+msgstr ""
+
+#: includes/class-chunk-handler.php:226
+#: includes/class-chunk-handler.php:330
+msgid "Backup file is too large."
+msgstr ""
+
+#: includes/class-chunk-handler.php:230
+msgid "Total chunk count is invalid."
+msgstr ""
+
+#: includes/class-chunk-handler.php:277
+msgid "Upload token is invalid."
+msgstr ""
+
+#: includes/class-chunk-handler.php:287
+msgid "Invalid upload identifier."
+msgstr ""
+
+#: includes/class-chunk-handler.php:305
+msgid "Upload session metadata corrupted."
+msgstr ""
+
+#: includes/class-chunk-handler.php:334
+msgid "Chunk size exceeds limit."
+msgstr ""
+
+#: includes/class-chunk-handler.php:354
+#: includes/class-chunk-handler.php:359
+msgid "Failed to store uploaded chunk."
+msgstr ""
+
+#: includes/class-chunk-handler.php:362
+msgid "Chunk payload missing."
+msgstr ""
+
+#: includes/class-chunk-handler.php:392
+msgid "Upload incomplete. Please retry missing chunks."
+msgstr ""
+
+#: includes/class-chunk-handler.php:398
+msgid "Finalize already in progress for this upload."
+msgstr ""
+
+#: includes/class-chunk-handler.php:413
+msgid "Chunks missing or corrupted."
+msgstr ""
+
+#: includes/class-chunk-handler.php:422
+msgid "Unable to calculate archive checksum."
+msgstr ""
+
+#: includes/class-chunk-handler.php:436
+msgid "Uploaded backup failed integrity verification."
+msgstr ""
+
+#: includes/class-chunk-handler.php:464
+msgid "Backup archive failed integrity check."
+msgstr ""
+
+#: includes/class-chunk-handler.php:483
+msgid "Failed to move merged archive into backup directory."
+msgstr ""
+
+#: includes/class-chunk-handler.php:505
+msgid "Restore skipped in test mode."
+msgstr ""
+
+#: includes/class-chunk-handler.php:521
+msgid "Restore failed after merging backup."
+msgstr ""
+
+#: includes/class-chunk-handler.php:533
+#: includes/class-restore-handler.php:195
+#: includes/class-restore-service.php:234
+#: includes/class-restore-service.php:243
+#: includes/class-restore.php:94
+msgid "Restore completed successfully."
+msgstr ""
+
+#: includes/class-chunk-handler.php:588
+msgid "Merged file path rejected."
+msgstr ""
+
+#: includes/class-chunk-handler.php:593
+msgid "Failed to create merged archive."
+msgstr ""
+
+#: includes/class-chunk-handler.php:598
+msgid "Failed to lock merged file."
+msgstr ""
+
+#: includes/class-chunk-handler.php:606
+msgid "Failed to read chunk during merge."
+msgstr ""
+
+#: includes/class-chunk-handler.php:613
+msgid "Error while merging chunks."
+msgstr ""
+
+#: includes/class-dashboard.php:56
+msgid "No schedules configured"
+msgstr ""
+
+#: includes/class-dashboard.php:78
+#: includes/class-schedule-handler.php:746
+msgid "Scheduled Backup"
+msgstr ""
+
+#: includes/class-dashboard.php:121
+#: museder-restoreone.php:190
+msgid "Due now"
+msgstr ""
+
+#. translators: %d: number of minutes
+#: includes/class-dashboard.php:127
+#, php-format
+msgid "Next run in %d minute"
+msgid_plural "Next run in %d minutes"
+msgstr[0] ""
+msgstr[1] ""
+
+#. translators: %d: number of hours
+#: includes/class-dashboard.php:132
+#, php-format
+msgid "Next run in %d hour"
+msgid_plural "Next run in %d hours"
+msgstr[0] ""
+msgstr[1] ""
+
+#: includes/class-email-handler.php:48
+msgid "Backup Lite Test Email"
+msgstr ""
+
+#: includes/class-email-handler.php:49
+msgid "✅ This is a test message from Backup Lite. Your email notifications are working."
+msgstr ""
+
+#: includes/class-email-handler.php:62
+msgid "Failed to send test email."
+msgstr ""
+
+#: includes/class-log-handler.php:133
+msgid "Log filename missing."
+msgstr ""
+
+#: includes/class-log-handler.php:139
+#: includes/class-log-handler.php:161
+#: includes/class-log-handler.php:184
+#: includes/class-ui.php:582
+msgid "Log file not found."
+msgstr ""
+
+#: includes/class-log-handler.php:146
+msgid "Unable to delete log file."
+msgstr ""
+
+#: includes/class-pro.php:55
+#: includes/class-schedule-handler.php:852
+#: includes/pro/advanced-filters.php:37
+#: includes/pro/advanced-filters.php:63
+#: includes/pro/ai-service.php:76
+#: includes/pro/ai-service.php:116
+#: includes/pro/ai-service.php:222
+#: includes/pro/ai-service.php:248
+#: includes/pro/ai-service.php:270
+#: includes/pro/ai-service.php:292
+#: includes/pro/cloud-storage.php:35
+#: includes/pro/cloud-storage.php:79
+#: includes/pro/cloud-storage.php:106
+#: includes/pro/health-score.php:37
+#: includes/pro/health-score.php:61
+#: includes/pro/reports-service.php:38
+#: includes/pro/reports-service.php:95
+#: includes/pro/reports-service.php:165
+#: includes/pro/reports-service.php:217
+#: includes/pro/reports-service.php:240
+#: includes/pro/smart-retention.php:35
+#: includes/pro/smart-retention.php:60
+msgid "This feature requires Museder RestoreOne PRO."
+msgstr ""
+
+#: includes/class-restore-controller.php:184
+msgid "Invalid report format."
+msgstr ""
+
+#: includes/class-restore-controller.php:210
+msgid "You are not allowed to perform this action."
+msgstr ""
+
+#: includes/class-restore-controller.php:215
+msgid "Invalid security token."
+msgstr ""
+
+#: includes/class-restore-handler.php:29
+#: includes/class-ui.php:404
+msgid "No restore file uploaded."
+msgstr ""
+
+#: includes/class-restore-handler.php:39
+#: includes/class-ui.php:417
+msgid "Failed to upload restore file."
+msgstr ""
+
+#: includes/class-restore-handler.php:47
+msgid "Unsupported file type. Allowed: zip, wpress."
+msgstr ""
+
+#: includes/class-restore-handler.php:55
+msgid "Unable to store uploaded file for restore."
+msgstr ""
+
+#: includes/class-restore-handler.php:72
+#: includes/class-ui.php:452
+#: includes/class-ui.php:489
+msgid "Backup filename not provided."
+msgstr ""
+
+#: includes/class-restore-handler.php:79
+#: includes/class-restore-service.php:41
+#: includes/class-restore.php:28
+#: includes/class-ui.php:460
+msgid "Backup file not found or unreadable."
+msgstr ""
+
+#: includes/class-restore-handler.php:96
+msgid "Please enter a valid URL."
+msgstr ""
+
+#: includes/class-restore-handler.php:105
+msgid "Unable to download remote backup."
+msgstr ""
+
+#: includes/class-restore-handler.php:111
+msgid "Downloaded file is not a supported backup format."
+msgstr ""
+
+#: includes/class-restore-handler.php:119
+msgid "Unable to store downloaded file for restore."
+msgstr ""
+
+#: includes/class-restore-handler.php:136
+#: includes/class-restore-handler.php:272
+#: includes/class-restore-handler.php:604
+msgid "Waiting for action…"
+msgstr ""
+
+#: includes/class-restore-handler.php:149
+msgid "No restore session is active."
+msgstr ""
+
+#: includes/class-restore-handler.php:177
+msgid "Preparing restore environment…"
+msgstr ""
+
+#: includes/class-restore-handler.php:180
+msgid "Creating safety backup…"
+msgstr ""
+
+#: includes/class-restore-handler.php:185
+#: includes/class-restore-handler.php:186
+msgid "Pre-restore backup failed. Restore aborted."
+msgstr ""
+
+#: includes/class-restore-handler.php:190
+msgid "Restoring database and files…"
+msgstr ""
+
+#: includes/class-restore-handler.php:198
+#: includes/class-restore.php:21
+msgid "Restore failed."
+msgstr ""
+
+#: includes/class-restore-handler.php:221
+msgid "Restore failed because the server interrupted the request. Please review the error log and try again."
+msgstr ""
+
+#: includes/class-restore-handler.php:224
+msgid "Restore was interrupted by MailPoet. Please resolve the MailPoet database error or temporarily disable it before retrying."
+msgstr ""
+
+#: includes/class-restore-handler.php:271
+#: includes/class-ui.php:275
+msgid "Restore process cancelled."
+msgstr ""
+
+#: includes/class-restore-handler.php:303
+msgid "Missing chunk upload metadata."
+msgstr ""
+
+#: includes/class-restore-handler.php:310
+msgid "Unable to create chunk session directory."
+msgstr ""
+
+#: includes/class-restore-handler.php:324
+msgid "Unable to persist chunk session metadata."
+msgstr ""
+
+#: includes/class-restore-handler.php:340
+msgid "Invalid chunk upload parameters."
+msgstr ""
+
+#: includes/class-restore-handler.php:345
+#: includes/class-restore-handler.php:395
+msgid "Chunk session not found."
+msgstr ""
+
+#: includes/class-restore-handler.php:354
+msgid "Unable to access chunk directory."
+msgstr ""
+
+#: includes/class-restore-handler.php:370
+msgid "Unable to store uploaded chunk."
+msgstr ""
+
+#: includes/class-restore-handler.php:390
+msgid "Missing chunk session identifier."
+msgstr ""
+
+#: includes/class-restore-handler.php:406
+msgid "Uploaded chunks incomplete. Please retry."
+msgstr ""
+
+#: includes/class-restore-handler.php:426
+msgid "Unable to read uploaded chunk."
+msgstr ""
+
+#: includes/class-restore-handler.php:506
+msgid "File ready. Review summary before restoring."
+msgstr ""
+
+#: includes/class-restore-report.php:24
+msgid "Report not found."
+msgstr ""
+
+#: includes/class-restore-service.php:23
+msgid "Invalid restore source."
+msgstr ""
+
+#: includes/class-restore-service.php:28
+msgid "Invalid restore file name."
+msgstr ""
+
+#: includes/class-restore-service.php:34
+msgid "Unsupported backup extension."
+msgstr ""
+
+#: includes/class-restore-service.php:57
+msgid "Restore job prepared."
+msgstr ""
+
+#: includes/class-restore-service.php:82
+msgid "Restore source file missing."
+msgstr ""
+
+#: includes/class-restore-service.php:121
+msgid "Validation results available."
+msgstr ""
+
+#: includes/class-restore-service.php:142
+msgid "Please complete validation before running a dry-run."
+msgstr ""
+
+#: includes/class-restore-service.php:160
+msgid "Dry-run summary available."
+msgstr ""
+
+#: includes/class-restore-service.php:183
+msgid "Please validate the archive before executing the restore."
+msgstr ""
+
+#: includes/class-restore-service.php:187
+#: includes/class-restore-service.php:265
+msgid "Another restore operation is currently running."
+msgstr ""
+
+#: includes/class-restore-service.php:191
+#: includes/class-restore-service.php:269
+msgid "Failed to acquire restore lock."
+msgstr ""
+
+#: includes/class-restore-service.php:199
+msgid "Extracting archive and preparing files…"
+msgstr ""
+
+#: includes/class-restore-service.php:206
+msgid "Importing database…"
+msgstr ""
+
+#: includes/class-restore-service.php:212
+msgid "Copying wp-content files…"
+msgstr ""
+
+#: includes/class-restore-service.php:219
+msgid "Applying URL search & replace…"
+msgstr ""
+
+#: includes/class-restore-service.php:226
+msgid "Finalising restore and cleaning up…"
+msgstr ""
+
+#: includes/class-restore-service.php:261
+msgid "No pre-restore snapshot available."
+msgstr ""
+
+#: includes/class-restore-service.php:275
+msgid "Restoring from pre-restore snapshot…"
+msgstr ""
+
+#: includes/class-restore-service.php:283
+#: includes/class-restore-service.php:289
+msgid "Rollback completed successfully."
+msgstr ""
+
+#: includes/class-restore-service.php:325
+msgid "Restore job not found."
+msgstr ""
+
+#: includes/class-restore-service.php:332
+msgid "Corrupted restore job metadata."
+msgstr ""
+
+#: includes/class-restore-service.php:377
+msgid "Unable to write restore job metadata."
+msgstr ""
+
+#: includes/class-restore-service.php:410
+msgid "Failed to create pre-restore backup snapshot."
+msgstr ""
+
+#: includes/class-restore-service.php:482
+msgid "Domain differs from original site. URL replacement will be applied."
+msgstr ""
+
+#: includes/class-restore-service.php:497
+msgid "Failed to extract archive."
+msgstr ""
+
+#: includes/class-restore-service.php:530
+msgid "Database import failed."
+msgstr ""
+
+#: includes/class-restore-service.php:605
+msgid "Snapshot file missing."
+msgstr ""
+
+#: includes/class-restore.php:52
+msgid "Unable to extract backup archive. Check logs for details."
+msgstr ""
+
+#: includes/class-restore.php:66
+msgid "database.sql not found in backup archive."
+msgstr ""
+
+#: includes/class-restore.php:108
+msgid "Database restore failed."
+msgstr ""
+
+#: includes/class-restore.php:113
+msgid "SQL backup file not found or unreadable."
+msgstr ""
+
+#: includes/class-restore.php:132
+#: includes/class-restore.php:507
+msgid "Database restore encountered an error. Check logs."
+msgstr ""
+
+#: includes/class-restore.php:144
+msgid "Database restore completed successfully."
+msgstr ""
+
+#: includes/class-restore.php:177
+msgid "Database restored, but no wp-content data found in archive."
+msgstr ""
+
+#: includes/class-restore.php:191
+msgid "File restore failed. Check file permissions."
+msgstr ""
+
+#: includes/class-restore.php:201
+msgid "Files restored successfully."
+msgstr ""
+
+#: includes/class-schedule-handler.php:49
+msgid "Once Monthly"
+msgstr ""
+
+#: includes/class-schedule-handler.php:109
+#: includes/class-schedule-handler.php:138
+#: includes/class-schedule-handler.php:194
+msgid "Schedule ID missing."
+msgstr ""
+
+#: includes/class-schedule-handler.php:115
+#: includes/class-schedule-handler.php:144
+#: includes/class-schedule-handler.php:175
+#: includes/class-schedule-handler.php:502
+msgid "Schedule not found."
+msgstr ""
+
+#: includes/class-schedule-handler.php:166
+msgid "Free version supports only 1 schedule. Upgrade to Museder RestoreOne PRO for multiple schedules."
+msgstr ""
+
+#: includes/class-schedule-handler.php:249
+msgid "Unknown failure."
+msgstr ""
+
+#: includes/class-schedule-handler.php:514
+#: includes/class-schedule-handler.php:531
+msgid "Failed to start backup."
+msgstr ""
+
+#: includes/class-settings.php:216
+msgid "PRO version is not active."
+msgstr ""
+
+#: includes/class-settings.php:224
+msgid "License key is required."
+msgstr ""
+
+#: includes/class-settings.php:233
+msgid "License key saved. (Validation will be implemented in a future update.)"
+msgstr ""
+
+#: includes/class-ui.php:102
+msgid "Museder RestoreOne PRO Required"
+msgstr ""
+
+#: includes/class-ui.php:103
+msgid "This feature requires Museder RestoreOne PRO to activate."
+msgstr ""
+
+#: includes/class-ui.php:104
+#: templates/page-schedules.php:303
+msgid "Close"
+msgstr ""
+
+#: includes/class-ui.php:105
+#: templates/page-schedules.php:97
+msgid "Upgrade to PRO"
+msgstr ""
+
+#. translators: %s: Name of the locked feature.
+#: includes/class-ui.php:107
+#, php-format
+msgid "Feature \"%s\" is available in Museder RestoreOne PRO."
+msgstr ""
+
+#: includes/class-ui.php:166
+msgid "Restoring will overwrite your current site files and database. Continue?"
+msgstr ""
+
+#: includes/class-ui.php:168
+msgid "Processing…"
+msgstr ""
+
+#: includes/class-ui.php:169
+msgid "Please wait while we complete your request."
+msgstr ""
+
+#: includes/class-ui.php:170
+msgid "Something went wrong"
+msgstr ""
+
+#: includes/class-ui.php:171
+msgid "An unexpected error occurred. Check logs for details."
+msgstr ""
+
+#: includes/class-ui.php:172
+msgid "Please select a backup file to restore."
+msgstr ""
+
+#: includes/class-ui.php:173
+msgid "Please confirm you understand the restore impact."
+msgstr ""
+
+#: includes/class-ui.php:174
+msgid "Completed"
+msgstr ""
+
+#: includes/class-ui.php:175
+msgid "Site backup completed successfully."
+msgstr ""
+
+#: includes/class-ui.php:176
+msgid "Site restore completed successfully."
+msgstr ""
+
+#: includes/class-ui.php:177
+msgid "Download backup"
+msgstr ""
+
+#: includes/class-ui.php:178
+#: templates/page-dashboard.php:182
+#: templates/page-logs.php:41
+msgid "No log entries yet."
+msgstr ""
+
+#: includes/class-ui.php:179
+#: includes/class-ui.php:277
+msgid "Preparing upload…"
+msgstr ""
+
+#. translators: 1: Current chunk number, 2: Total number of chunks.
+#: includes/class-ui.php:181
+#, php-format
+msgid "Uploading chunk %1$s of %2$s…"
+msgstr ""
+
+#: includes/class-ui.php:182
+#: includes/class-ui.php:280
+msgid "Merging uploaded chunks…"
+msgstr ""
+
+#: includes/class-ui.php:183
+msgid "Restoring site…"
+msgstr ""
+
+#. translators: %s: Number of retries left.
+#: includes/class-ui.php:185
+#, php-format
+msgid "Retrying chunk upload… (%1$s attempts left)"
+msgstr ""
+
+#. translators: %s: Transfer speed in megabytes per second.
+#: includes/class-ui.php:188
+#, php-format
+msgid "Speed: %s MB/s"
+msgstr ""
+
+#. translators: %s: Estimated time remaining in seconds.
+#: includes/class-ui.php:190
+#, php-format
+msgid "ETA: %s seconds"
+msgstr ""
+
+#. translators: %s: Maximum allowed file size.
+#: includes/class-ui.php:192
+#, php-format
+msgid "File exceeds maximum allowed size (%s)."
+msgstr ""
+
+#. translators: %s: Number of missing upload chunks.
+#: includes/class-ui.php:194
+#, php-format
+msgid "Missing chunks detected: %s"
+msgstr ""
+
+#: includes/class-ui.php:195
+msgid "Re-uploading missing chunks…"
+msgstr ""
+
+#: includes/class-ui.php:196
+msgid "Unable to start upload session."
+msgstr ""
+
+#. translators: %s: SHA1 hash calculated on the server.
+#: includes/class-ui.php:198
+#, php-format
+msgid "Server SHA1: %s"
+msgstr ""
+
+#. translators: %s: SHA1 hash calculated on the client.
+#: includes/class-ui.php:200
+#, php-format
+msgid "Client SHA1: %s"
+msgstr ""
+
+#: includes/class-ui.php:201
+msgid "Warning: SHA1 mismatch detected!"
+msgstr ""
+
+#: includes/class-ui.php:202
+msgid "Uploaded archive failed integrity check. Please re-upload the backup."
+msgstr ""
+
+#: includes/class-ui.php:203
+msgid "Merged archive could not be validated. Check restore.log for details."
+msgstr ""
+
+#: includes/class-ui.php:204
+msgid "Unable to extract backup archive. See restore.log and debug.log for details."
+msgstr ""
+
+#. translators: %s: List of allowed file extensions.
+#: includes/class-ui.php:206
+#, php-format
+msgid "Unsupported file extension. Allowed: %s"
+msgstr ""
+
+#: includes/class-ui.php:207
+msgid "Are you sure you want to delete this backup? This action cannot be undone."
+msgstr ""
+
+#: includes/class-ui.php:208
+msgid "View"
+msgstr ""
+
+#: includes/class-ui.php:209
+#: templates/page-backups.php:214
+#: templates/page-logs.php:54
+#: templates/page-restore.php:161
+msgid "Download"
+msgstr ""
+
+#: includes/class-ui.php:210
+#: includes/class-ui.php:254
+#: templates/page-backups.php:215
+#: templates/page-logs.php:55
+#: templates/page-schedules.php:199
+msgid "Delete"
+msgstr ""
+
+#: includes/class-ui.php:211
+msgid "Showing last 200KB (truncated)."
+msgstr ""
+
+#: includes/class-ui.php:212
+msgid "Logs refreshed."
+msgstr ""
+
+#: includes/class-ui.php:213
+msgid "Log deleted."
+msgstr ""
+
+#: includes/class-ui.php:214
+msgid "Settings saved successfully."
+msgstr ""
+
+#: includes/class-ui.php:215
+msgid "Delete this log file?"
+msgstr ""
+
+#: includes/class-ui.php:216
+msgid "Test email sent successfully."
+msgstr ""
+
+#: includes/class-ui.php:217
+msgid "Copied to clipboard"
+msgstr ""
+
+#: includes/class-ui.php:218
+#: templates/page-schedules.php:150
+msgid "No schedules configured yet."
+msgstr ""
+
+#: includes/class-ui.php:219
+#: museder-restoreone.php:192
+#: templates/page-dashboard.php:100
+#: templates/page-dashboard.php:150
+#: templates/page-schedules.php:174
+msgid "Success"
+msgstr ""
+
+#: includes/class-ui.php:220
+#: museder-restoreone.php:193
+#: templates/page-dashboard.php:101
+#: templates/page-dashboard.php:151
+#: templates/page-schedules.php:175
+msgid "Failed"
+msgstr ""
+
+#: includes/class-ui.php:221
+#: templates/page-dashboard.php:102
+#: templates/page-dashboard.php:152
+#: templates/page-schedules.php:176
+msgid "Pending"
+msgstr ""
+
+#: includes/class-ui.php:222
+#: templates/page-schedules.php:157
+#: templates/page-schedules.php:287
+#: templates/page-schedules.php:374
+msgid "Enabled"
+msgstr ""
+
+#: includes/class-ui.php:223
+#: templates/page-schedules.php:157
+#: templates/page-schedules.php:287
+#: templates/page-schedules.php:374
+msgid "Disabled"
+msgstr ""
+
+#: includes/class-ui.php:224
+#: templates/page-restore.php:125
+msgid "Restore in Progress"
+msgstr ""
+
+#: includes/class-ui.php:225
+msgid "Restore Completed"
+msgstr ""
+
+#: includes/class-ui.php:226
+msgid "Awaiting restore."
+msgstr ""
+
+#: includes/class-ui.php:227
+#: templates/page-restore.php:46
+msgid "Choose a backup and run Step 1."
+msgstr ""
+
+#: includes/class-ui.php:228
+msgid "Analyzing backup…"
+msgstr ""
+
+#: includes/class-ui.php:229
+msgid "Analysis complete. Continue to Step 2."
+msgstr ""
+
+#: includes/class-ui.php:230
+msgid "Analysis failed. Try again."
+msgstr ""
+
+#: includes/class-ui.php:231
+#: templates/page-restore.php:98
+msgid "Complete Step 1 first to unlock these options."
+msgstr ""
+
+#: includes/class-ui.php:232
+msgid "Options unlocked. Adjust restore behavior."
+msgstr ""
+
+#: includes/class-ui.php:233
+msgid "Options saved. Continue to Step 3."
+msgstr ""
+
+#: includes/class-ui.php:234
+#: templates/page-restore.php:116
+msgid "Complete Steps 1 & 2 before starting the restore."
+msgstr ""
+
+#: includes/class-ui.php:235
+msgid "Ready to start restore."
+msgstr ""
+
+#: includes/class-ui.php:236
+msgid "Restore running…"
+msgstr ""
+
+#: includes/class-ui.php:237
+msgid "Restore finished. Review your site."
+msgstr ""
+
+#: includes/class-ui.php:238
+msgid "Museder RestoreOne has finished restoring your site."
+msgstr ""
+
+#: includes/class-ui.php:239
+msgid "Got it"
+msgstr ""
+
+#: includes/class-ui.php:240
+msgid "Please select at least one backup."
+msgstr ""
+
+#. translators: %s: Number of backups selected.
+#: includes/class-ui.php:242
+#, php-format
+msgid "Downloading %s backup(s)..."
+msgstr ""
+
+#. translators: %s: Number of backups deleted.
+#: includes/class-ui.php:244
+#, php-format
+msgid "Deleted %s backup(s)."
+msgstr ""
+
+#. translators: %s: Number of backups that could not be deleted.
+#: includes/class-ui.php:246
+#, php-format
+msgid "Failed to delete %s backup(s). Check logs."
+msgstr ""
+
+#: includes/class-ui.php:247
+msgid "Backup job started manually."
+msgstr ""
+
+#: includes/class-ui.php:248
+msgid "Please provide a schedule title."
+msgstr ""
+
+#: includes/class-ui.php:249
+msgid "Schedule deleted."
+msgstr ""
+
+#: includes/class-ui.php:250
+msgid "Unable to delete schedule."
+msgstr ""
+
+#: includes/class-ui.php:251
+msgid "An error occurred while verifying the license."
+msgstr ""
+
+#: includes/class-ui.php:252
+#: templates/page-schedules.php:197
+msgid "Start Now"
+msgstr ""
+
+#: includes/class-ui.php:253
+#: templates/page-schedules.php:198
+msgid "Edit"
+msgstr ""
+
+#: includes/class-ui.php:255
+#: templates/page-schedules.php:195
+msgid "Schedule actions"
+msgstr ""
+
+#: includes/class-ui.php:256
+msgid "Are you sure you want to delete the selected backups? This action cannot be undone."
+msgstr ""
+
+#: includes/class-ui.php:257
+msgid "Delete this schedule?"
+msgstr ""
+
+#: includes/class-ui.php:258
+msgid "Backup ready for restore."
+msgstr ""
+
+#: includes/class-ui.php:259
+msgid "This will overwrite your site data. Continue?"
+msgstr ""
+
+#: includes/class-ui.php:261
+msgid "Waiting for server resources…"
+msgstr ""
+
+#: includes/class-ui.php:262
+msgid "Processing files…"
+msgstr ""
+
+#: includes/class-ui.php:263
+msgid "Finalising backup archive…"
+msgstr ""
+
+#: includes/class-ui.php:265
+msgid "Backup failed. Check logs for details."
+msgstr ""
+
+#: includes/class-ui.php:266
+msgid "Resuming previous backup job…"
+msgstr ""
+
+#: includes/class-ui.php:267
+msgid "Continuing backup in the background…"
+msgstr ""
+
+#: includes/class-ui.php:268
+msgid "Backup cancelled."
+msgstr ""
+
+#: includes/class-ui.php:269
+msgid "Backup in progress…"
+msgstr ""
+
+#: includes/class-ui.php:270
+#: templates/page-backups.php:146
+msgid "Backup Site"
+msgstr ""
+
+#: includes/class-ui.php:271
+msgid "Cancel the running backup job?"
+msgstr ""
+
+#: includes/class-ui.php:272
+#: includes/class-ui.php:391
+msgid "Backup job cancelled."
+msgstr ""
+
+#: includes/class-ui.php:273
+msgid "Unable to cancel backup job. Please try again."
+msgstr ""
+
+#: includes/class-ui.php:274
+msgid "Cancel the current restore process?"
+msgstr ""
+
+#: includes/class-ui.php:276
+msgid "Unable to cancel restore process. Please try again."
+msgstr ""
+
+#. translators: 1: Current chunk number, 2: Total chunks, 3: Progress percentage.
+#: includes/class-ui.php:279
+#, php-format
+msgid "Uploading %1$s of %2$s (%3$s%)…"
+msgstr ""
+
+#: includes/class-ui.php:333
+msgid "Backup job created. Processing has started in the background."
+msgstr ""
+
+#: includes/class-ui.php:349
+#: includes/class-ui.php:365
+#: includes/class-ui.php:384
+msgid "Job ID is required."
+msgstr ""
+
+#: includes/class-ui.php:354
+msgid "Backup job not found or already completed."
+msgstr ""
+
+#: includes/class-ui.php:370
+msgid "Backup job not found."
+msgstr ""
+
+#: includes/class-ui.php:375
+msgid "Backup job updated."
+msgstr ""
+
+#: includes/class-ui.php:388
+msgid "Unable to cancel backup job."
+msgstr ""
+
+#: includes/class-ui.php:398
+msgid "Restore not confirmed by user."
+msgstr ""
+
+#: includes/class-ui.php:434
+msgid "Unsupported file type for restore."
+msgstr ""
+
+#: includes/class-ui.php:464
+#: includes/class-ui.php:501
+#: includes/class-ui.php:544
+msgid "Invalid backup file path."
+msgstr ""
+
+#: includes/class-ui.php:497
+#: includes/class-ui.php:549
+#: includes/class-ui.php:605
+msgid "Backup file not found."
+msgstr ""
+
+#: includes/class-ui.php:506
+msgid "Backup deleted successfully."
+msgstr ""
+
+#: includes/class-ui.php:509
+#: includes/class-ui.php:557
+msgid "Failed to delete backup file."
+msgstr ""
+
+#: includes/class-ui.php:532
+msgid "No backup files selected."
+msgstr ""
+
+#: includes/class-ui.php:605
+#: includes/class-ui.php:633
+msgid "Download error"
+msgstr ""
+
+#: includes/class-ui.php:633
+msgid "Unable to read backup file."
+msgstr ""
+
+#: includes/pro/advanced-filters.php:70
+msgid "Exclusion rules saving will be available in Phase E."
+msgstr ""
+
+#: includes/pro/ai-service.php:40
+msgid "Every 6 Hours"
+msgstr ""
+
+#: includes/pro/ai-service.php:132
+msgid "No backup in the last 7 days"
+msgstr ""
+
+#: includes/pro/ai-service.php:135
+msgid "Create a backup immediately and set up a daily schedule"
+msgstr ""
+
+#: includes/pro/ai-service.php:140
+msgid "Last backup is more than 3 days old"
+msgstr ""
+
+#: includes/pro/ai-service.php:153
+msgid "No backup schedule configured"
+msgstr ""
+
+#: includes/pro/ai-service.php:156
+msgid "Set up an automated backup schedule"
+msgstr ""
+
+#: includes/pro/ai-service.php:167
+msgid "No backups exist"
+msgstr ""
+
+#: includes/pro/ai-service.php:174
+msgid "Very few backups available"
+msgstr ""
+
+#: includes/pro/ai-service.php:188
+msgid "Low disk space available"
+msgstr ""
+
+#: includes/pro/ai-service.php:191
+msgid "Consider cleaning up old backups or increasing storage"
+msgstr ""
+
+#. translators: 1: Backup file name, 2: Backup size.
+#: includes/pro/ai-service.php:327
+#, php-format
+msgid "Backup %1$s is unusually large (%2$s)"
+msgstr ""
+
+#: includes/pro/ai-service.php:345
+msgid "Multiple consecutive backup failures detected"
+msgstr ""
+
+#: includes/pro/ai-service.php:355
+msgid "Backup took longer than 1 hour"
+msgstr ""
+
+#: includes/pro/ai-service.php:439
+msgid "No backups exist. Start with daily backups."
+msgstr ""
+
+#: includes/pro/ai-service.php:446
+msgid "Last backup is more than 7 days old."
+msgstr ""
+
+#: includes/pro/ai-service.php:453
+msgid "Daily backups ensure minimal data loss."
+msgstr ""
+
+#: includes/pro/ai-service.php:474
+msgid "You have many backups. Consider keeping only the last 30."
+msgstr ""
+
+#: includes/pro/ai-service.php:480
+msgid "Keep the last 14 backups for 2 weeks of history."
+msgstr ""
+
+#: includes/pro/ai-service.php:486
+msgid "Keep at least 7 backups for weekly history."
+msgstr ""
+
+#: includes/pro/ai-service.php:510
+msgid "Cache directory - can be regenerated"
+msgstr ""
+
+#: includes/pro/ai-service.php:519
+msgid "Backup directory - avoid backing up backups"
+msgstr ""
+
+#. translators: %s: Current PHP version number.
+#: includes/pro/ai-service.php:542
+#, php-format
+msgid "PHP version %s is outdated. Consider upgrading."
+msgstr ""
+
+#: includes/pro/ai-service.php:550
+msgid "No backup has been created yet. Create one immediately."
+msgstr ""
+
+#: includes/pro/cloud-storage.php:43
+msgid "Google Drive"
+msgstr ""
+
+#: includes/pro/cloud-storage.php:50
+msgid "Amazon S3"
+msgstr ""
+
+#: includes/pro/cloud-storage.php:57
+msgid "Dropbox"
+msgstr ""
+
+#: includes/pro/cloud-storage.php:114
+msgid "Cloud storage upload will be available in a future update."
+msgstr ""
+
+#: includes/pro/reports-controller.php:189
+msgid "File not specified."
+msgstr ""
+
+#: includes/pro/reports-controller.php:197
+msgid "Report file not found."
+msgstr ""
+
+#: includes/pro/reports-controller.php:202
+msgid "Invalid file path."
+msgstr ""
+
+#: includes/pro/reports-controller.php:207
+msgid "Security check failed."
+msgstr ""
+
+#: includes/pro/reports-service.php:195
+msgid "High failure rate detected. Review backup logs."
+msgstr ""
+
+#: includes/pro/reports-service.php:224
+msgid "PDF report generation will be available in a future update."
+msgstr ""
+
+#: includes/pro/reports-service.php:270
+msgid "Failed to write report file."
+msgstr ""
+
+#: includes/pro/smart-retention.php:68
+msgid "Retention policy application will be available in Phase E."
+msgstr ""
+
+#: museder-restoreone.php:122
+#: museder-restoreone.php:123
+msgid "Museder RestoreOne"
+msgstr ""
+
+#: museder-restoreone.php:131
+msgid "Dashboard"
+msgstr ""
+
+#: museder-restoreone.php:132
+msgid "Backups"
+msgstr ""
+
+#: museder-restoreone.php:133
+#: templates/page-backups.php:213
+#: templates/page-schedules.php:240
+#: templates/page-schedules.php:327
+#: templates/restore-page.php:41
+msgid "Restore"
+msgstr ""
+
+#: museder-restoreone.php:134
+msgid "Schedules"
+msgstr ""
+
+#: museder-restoreone.php:135
+msgid "Logs"
+msgstr ""
+
+#: museder-restoreone.php:136
+#: templates/page-dashboard.php:27
+msgid "Settings"
+msgstr ""
+
+#: museder-restoreone.php:141
+#: museder-restoreone.php:142
+msgid "PRO Features"
+msgstr ""
+
+#: museder-restoreone.php:151
+#: museder-restoreone.php:203
+#: museder-restoreone.php:214
+#: museder-restoreone.php:271
+#: museder-restoreone.php:281
+#: museder-restoreone.php:291
+#: museder-restoreone.php:302
+#: museder-restoreone.php:311
+#: museder-restoreone.php:320
+#: museder-restoreone.php:329
+#: museder-restoreone.php:338
+#: museder-restoreone.php:347
+msgid "You do not have permission to access this page."
+msgstr ""
+
+#: museder-restoreone.php:191
+#: templates/page-dashboard.php:174
+msgid "No activity recorded in the last 7 days."
+msgstr ""
+
+#: museder-restoreone.php:258
+msgid "No backups available."
+msgstr ""
+
+#: museder-restoreone.php:259
+msgid "Validation results will appear here once the job is prepared."
+msgstr ""
+
+#: museder-restoreone.php:260
+msgid "Please choose a backup file first."
+msgstr ""
+
+#: museder-restoreone.php:261
+msgid "Dry-run results will appear here once available."
+msgstr ""
+
+#: templates/page-backups.php:17
+msgid "Backups Center"
+msgstr ""
+
+#: templates/page-backups.php:18
+msgid "Create fresh snapshots, restore archives, and manage your backup library with ease."
+msgstr ""
+
+#: templates/page-backups.php:23
+#: templates/page-dashboard.php:54
+msgid "Environment Compatibility"
+msgstr ""
+
+#: templates/page-backups.php:28
+#: templates/page-dashboard.php:59
+msgid "Shell commands available"
+msgstr ""
+
+#: templates/page-backups.php:29
+#: templates/page-dashboard.php:60
+msgid "Shell commands disabled (fallback active)"
+msgstr ""
+
+#: templates/page-backups.php:35
+#: templates/page-dashboard.php:66
+msgid "mysqldump detected"
+msgstr ""
+
+#: templates/page-backups.php:36
+#: templates/page-dashboard.php:67
+msgid "mysqldump unavailable (using PHP export)"
+msgstr ""
+
+#: templates/page-backups.php:42
+#: templates/page-dashboard.php:73
+msgid "mysql client detected"
+msgstr ""
+
+#: templates/page-backups.php:43
+#: templates/page-dashboard.php:74
+msgid "mysql client unavailable (using PHP import)"
+msgstr ""
+
+#: templates/page-backups.php:49
+#: templates/page-dashboard.php:80
+msgid "ZipArchive available"
+msgstr ""
+
+#: templates/page-backups.php:50
+#: templates/page-dashboard.php:81
+msgid "ZipArchive missing (using PclZip)"
+msgstr ""
+
+#: templates/page-backups.php:61
+msgid "Create Backup"
+msgstr ""
+
+#: templates/page-backups.php:63
+msgid "Export your entire WordPress site into a single downloadable archive."
+msgstr ""
+
+#: templates/page-backups.php:71
+#: templates/page-backups.php:118
+msgid "Backup Label"
+msgstr ""
+
+#: templates/page-backups.php:72
+#: templates/page-backups.php:119
+msgid "e.g., Before major update"
+msgstr ""
+
+#: templates/page-backups.php:73
+msgid "Add a label to identify this backup (optional)."
+msgstr ""
+
+#: templates/page-backups.php:82
+#: templates/page-backups.php:128
+msgid "Encrypt backup with AES-256"
+msgstr ""
+
+#: templates/page-backups.php:86
+msgid "Encrypt the backup archive for additional security."
+msgstr ""
+
+#: templates/page-backups.php:94
+msgid "Create dual version (Snapshot + Full)"
+msgstr ""
+
+#: templates/page-backups.php:98
+msgid "Create both a quick snapshot and a full backup."
+msgstr ""
+
+#: templates/page-backups.php:104
+#: templates/page-backups.php:136
+#: templates/page-pro-cloud.php:21
+#: templates/page-pro-features.php:81
+msgid "Cloud Storage"
+msgstr ""
+
+#: templates/page-backups.php:106
+msgid "Local Storage"
+msgstr ""
+
+#: templates/page-backups.php:107
+msgid "Google Drive (Coming Soon)"
+msgstr ""
+
+#: templates/page-backups.php:108
+msgid "Amazon S3 (Coming Soon)"
+msgstr ""
+
+#: templates/page-backups.php:109
+msgid "Dropbox (Coming Soon)"
+msgstr ""
+
+#: templates/page-backups.php:111
+msgid "Select cloud storage destinations (multiple selection supported)."
+msgstr ""
+
+#: templates/page-backups.php:120
+msgid "Add a label to identify this backup (PRO feature)."
+msgstr ""
+
+#: templates/page-backups.php:138
+msgid "Local Storage Only (Free)"
+msgstr ""
+
+#: templates/page-backups.php:140
+msgid "Upgrade to PRO for cloud storage integration."
+msgstr ""
+
+#: templates/page-backups.php:154
+msgid "Cancel Backup"
+msgstr ""
+
+#: templates/page-backups.php:161
+msgid "Available Backups"
+msgstr ""
+
+#: templates/page-backups.php:162
+msgid "Select, download, or remove backups from your archive."
+msgstr ""
+
+#: templates/page-backups.php:165
+msgid "Tip"
+msgstr ""
+
+#: templates/page-backups.php:166
+msgid "Keep at least 3 recent backups and rotate weekly for optimal coverage."
+msgstr ""
+
+#: templates/page-backups.php:170
+msgid "Select All"
+msgstr ""
+
+#: templates/page-backups.php:171
+msgid "Clear"
+msgstr ""
+
+#: templates/page-backups.php:172
+msgid "Download Selected"
+msgstr ""
+
+#: templates/page-backups.php:173
+msgid "Delete Selected"
+msgstr ""
+
+#: templates/page-backups.php:176
+msgid "No backups found yet."
+msgstr ""
+
+#: templates/page-backups.php:182
+#: templates/page-logs.php:32
+msgid "File Name"
+msgstr ""
+
+#: templates/page-backups.php:183
+msgid "Type"
+msgstr ""
+
+#: templates/page-backups.php:184
+msgid "Created"
+msgstr ""
+
+#: templates/page-backups.php:185
+#: templates/page-logs.php:34
+msgid "Size"
+msgstr ""
+
+#: templates/page-backups.php:186
+#: templates/page-logs.php:35
+#: templates/page-schedules.php:144
+msgid "Actions"
+msgstr ""
+
+#: templates/page-backups.php:202
+msgid "Encrypted"
+msgstr ""
+
+#: templates/page-backups.php:206
+msgid "Full Site"
+msgstr ""
+
+#: templates/page-backups.php:211
+msgid "Backup actions"
+msgstr ""
+
+#: templates/page-dashboard.php:23
+msgid "Museder RestoreOne Dashboard"
+msgstr ""
+
+#: templates/page-dashboard.php:24
+msgid "Quick overview of your environment, schedules, and the latest backup health signals."
+msgstr ""
+
+#: templates/page-dashboard.php:28
+msgid "View Schedules"
+msgstr ""
+
+#: templates/page-dashboard.php:38
+msgid "Site Backup Health Score (Pro)"
+msgstr ""
+
+#: templates/page-dashboard.php:44
+msgid "Premium sites can see an overall backup health score based on schedules, recent activity, and storage hygiene."
+msgstr ""
+
+#: templates/page-dashboard.php:48
+#: templates/page-settings.php:168
+msgid "Upgrade to Pro"
+msgstr ""
+
+#: templates/page-dashboard.php:88
+msgid "Recent Backups"
+msgstr ""
+
+#: templates/page-dashboard.php:90
+msgid "No backups created yet. Head to the Backups page to create your first snapshot."
+msgstr ""
+
+#: templates/page-dashboard.php:116
+msgid "Schedule Overview"
+msgstr ""
+
+#. translators: 1: Schedule title, 2: Schedule frequency, 3: Next run time.
+#: templates/page-dashboard.php:122
+#, php-format
+msgid "The next backup \"%1$s\" (%2$s) runs at %3$s."
+msgstr ""
+
+#. translators: %s: Date and time when the schedule last ran.
+#: templates/page-dashboard.php:139
+#, php-format
+msgid "Last run: %s"
+msgstr ""
+
+#. translators: %s: Result of the most recent schedule run.
+#: templates/page-dashboard.php:158
+#, php-format
+msgid "Last result: %s"
+msgstr ""
+
+#: templates/page-dashboard.php:165
+msgid "No active schedules found. Create one to automate backups."
+msgstr ""
+
+#: templates/page-dashboard.php:170
+msgid "Activity (Last 7 Days)"
+msgstr ""
+
+#: templates/page-dashboard.php:172
+msgid "Backup success vs failure chart"
+msgstr ""
+
+#: templates/page-dashboard.php:180
+msgid "Latest Logs"
+msgstr ""
+
+#: templates/page-logs.php:16
+msgid "Museder RestoreOne Logs"
+msgstr ""
+
+#: templates/page-logs.php:17
+msgid "Inspect backup, restore, and schedule activity. Logs are stored under wp-content/uploads/backup-lite-logs/."
+msgstr ""
+
+#: templates/page-logs.php:23
+msgid "Log Files"
+msgstr ""
+
+#: templates/page-logs.php:24
+msgid "Select a file to preview the most recent entries."
+msgstr ""
+
+#: templates/page-logs.php:26
+msgid "Refresh"
+msgstr ""
+
+#: templates/page-logs.php:33
+msgid "Last Modified"
+msgstr ""
+
+#: templates/page-logs.php:51
+msgid "Log actions"
+msgstr ""
+
+#: templates/page-logs.php:53
+#: templates/page-logs.php:68
+msgid "Preview"
+msgstr ""
+
+#: templates/page-logs.php:69
+msgid "Select a log file to preview."
+msgstr ""
+
+#: templates/page-pro-ai.php:21
+#: templates/page-pro-features.php:60
+#: templates/page-settings.php:46
+msgid "AI Backup Copilot"
+msgstr ""
+
+#: templates/page-pro-ai.php:28
+msgid "AI-powered backup recommendations, risk analysis, and intelligent scheduling assistance."
+msgstr ""
+
+#: templates/page-pro-ai.php:38
+msgid "Upgrade to PRO to Unlock AI Backup Copilot"
+msgstr ""
+
+#: templates/page-pro-ai.php:41
+msgid "Get AI-powered backup insights, risk analysis, and intelligent scheduling recommendations."
+msgstr ""
+
+#: templates/page-pro-ai.php:45
+#: templates/page-pro-cloud.php:46
+#: templates/page-pro-features.php:45
+#: templates/page-pro-filters.php:45
+#: templates/page-pro-reports.php:45
+#: templates/page-pro-retention.php:45
+#: templates/page-reports.php:51
+msgid "Upgrade Now"
+msgstr ""
+
+#: templates/page-pro-ai.php:52
+msgid "AI Setup Wizard"
+msgstr ""
+
+#: templates/page-pro-ai.php:54
+msgid "Run the AI Setup Wizard to analyze your site and get personalized backup recommendations."
+msgstr ""
+
+#: templates/page-pro-ai.php:57
+#: templates/page-settings.php:50
+msgid "Run AI Setup Wizard"
+msgstr ""
+
+#: templates/page-pro-ai.php:63
+msgid "AI Settings"
+msgstr ""
+
+#: templates/page-pro-ai.php:65
+msgid "AI configuration will be available in Phase D."
+msgstr ""
+
+#: templates/page-pro-cloud.php:29
+msgid "Backup to Google Drive, Amazon S3, Dropbox, and other cloud storage providers."
+msgstr ""
+
+#: templates/page-pro-cloud.php:39
+msgid "Upgrade to PRO for Cloud Storage"
+msgstr ""
+
+#: templates/page-pro-cloud.php:42
+msgid "Store your backups securely in the cloud with automatic synchronization."
+msgstr ""
+
+#: templates/page-pro-cloud.php:53
+msgid "Cloud Storage Providers"
+msgstr ""
+
+#: templates/page-pro-cloud.php:55
+msgid "Cloud storage integration will be available in a future update."
+msgstr ""
+
+#: templates/page-pro-features.php:21
+msgid "Museder RestoreOne PRO Features"
+msgstr ""
+
+#: templates/page-pro-features.php:28
+msgid "Unlock advanced backup and restore capabilities with AI-powered insights and cloud storage integration."
+msgstr ""
+
+#: templates/page-pro-features.php:38
+msgid "Upgrade to Museder RestoreOne PRO"
+msgstr ""
+
+#: templates/page-pro-features.php:41
+msgid "Get access to AI Backup Copilot, cloud storage, advanced filters, and more."
+msgstr ""
+
+#: templates/page-pro-features.php:66
+msgid "AI-powered backup recommendations, risk analysis, and intelligent scheduling."
+msgstr ""
+
+#: templates/page-pro-features.php:69
+#: templates/page-pro-features.php:91
+#: templates/page-pro-features.php:112
+#: templates/page-pro-features.php:133
+msgid "Configure"
+msgstr ""
+
+#: templates/page-pro-features.php:88
+msgid "Backup to Google Drive, Amazon S3, Dropbox, and more cloud storage providers."
+msgstr ""
+
+#: templates/page-pro-features.php:103
+#: templates/page-pro-filters.php:21
+#: templates/page-settings.php:190
+msgid "Advanced Filters"
+msgstr ""
+
+#: templates/page-pro-features.php:109
+#: templates/page-pro-filters.php:28
+msgid "Exclude specific files, folders, and file types from backups with precision control."
+msgstr ""
+
+#: templates/page-pro-features.php:124
+#: templates/page-pro-retention.php:21
+msgid "Smart Retention"
+msgstr ""
+
+#: templates/page-pro-features.php:130
+#: templates/page-pro-retention.php:28
+msgid "AI-powered backup retention policies that automatically manage storage space."
+msgstr ""
+
+#: templates/page-pro-features.php:145
+#: templates/page-pro-reports.php:21
+#: templates/page-reports.php:27
+msgid "System Reports"
+msgstr ""
+
+#: templates/page-pro-features.php:151
+#: templates/page-pro-reports.php:28
+#: templates/page-reports.php:34
+msgid "Comprehensive backup analytics, trends, and AI-powered incident analysis."
+msgstr ""
+
+#: templates/page-pro-features.php:154
+msgid "View Reports"
+msgstr ""
+
+#: templates/page-pro-filters.php:38
+msgid "Upgrade to PRO for Advanced Filters"
+msgstr ""
+
+#: templates/page-pro-filters.php:41
+msgid "Get precise control over what gets backed up with advanced exclusion rules."
+msgstr ""
+
+#: templates/page-pro-filters.php:52
+msgid "Exclusion Rules"
+msgstr ""
+
+#: templates/page-pro-filters.php:54
+msgid "Advanced filter configuration will be available in Phase E."
+msgstr ""
+
+#: templates/page-pro-reports.php:38
+#: templates/page-reports.php:44
+msgid "Upgrade to PRO for System Reports"
+msgstr ""
+
+#: templates/page-pro-reports.php:41
+#: templates/page-reports.php:47
+msgid "Get detailed analytics, backup trends, and AI-powered incident analysis."
+msgstr ""
+
+#: templates/page-pro-reports.php:52
+msgid "Backup Analytics"
+msgstr ""
+
+#: templates/page-pro-reports.php:54
+msgid "System reports and analytics will be available in Phase G."
+msgstr ""
+
+#: templates/page-pro-retention.php:38
+msgid "Upgrade to PRO for Smart Retention"
+msgstr ""
+
+#: templates/page-pro-retention.php:41
+msgid "Let AI automatically manage your backup retention to optimize storage usage."
+msgstr ""
+
+#: templates/page-pro-retention.php:52
+msgid "Retention Policies"
+msgstr ""
+
+#: templates/page-pro-retention.php:54
+msgid "Smart retention configuration will be available in Phase E."
+msgstr ""
+
+#: templates/page-reports.php:60
+msgid "System Check Summary"
+msgstr ""
+
+#: templates/page-reports.php:72
+msgid "Total Backups"
+msgstr ""
+
+#: templates/page-reports.php:80
+msgid "Total Size"
+msgstr ""
+
+#: templates/page-reports.php:88
+msgid "Active Schedules"
+msgstr ""
+
+#: templates/page-reports.php:95
+#: templates/page-settings.php:125
+msgid "Unknown"
+msgstr ""
+
+#: templates/page-reports.php:99
+msgid "Available Space"
+msgstr ""
+
+#: templates/page-reports.php:105
+msgid "System check data will appear here when PRO is activated."
+msgstr ""
+
+#: templates/page-reports.php:114
+msgid "Backup Trends"
+msgstr ""
+
+#: templates/page-reports.php:121
+#: templates/page-reports.php:122
+#: templates/page-reports.php:123
+msgid "Days"
+msgstr ""
+
+#: templates/page-reports.php:132
+msgid "Backup trends chart will be available with PRO."
+msgstr ""
+
+#: templates/page-reports.php:140
+msgid "AI Event Analysis"
+msgstr ""
+
+#: templates/page-reports.php:147
+msgid "Loading AI analysis..."
+msgstr ""
+
+#: templates/page-reports.php:150
+msgid "AI event analysis will be available with PRO."
+msgstr ""
+
+#: templates/page-reports.php:159
+msgid "Export Reports"
+msgstr ""
+
+#: templates/page-reports.php:166
+msgid "Download JSON Report"
+msgstr ""
+
+#: templates/page-reports.php:169
+msgid "Download PDF Report"
+msgstr ""
+
+#: templates/page-restore.php:11
+msgid "Restore Center"
+msgstr ""
+
+#: templates/page-restore.php:17
+msgid "Upload & Analyze"
+msgstr ""
+
+#: templates/page-restore.php:18
+msgid "Choose a backup archive and let RestoreOne inspect it."
+msgstr ""
+
+#: templates/page-restore.php:24
+msgid "Review & Options"
+msgstr ""
+
+#: templates/page-restore.php:25
+msgid "Verify details and decide how the restore should behave."
+msgstr ""
+
+#: templates/page-restore.php:31
+#: templates/page-restore.php:111
+msgid "Execute Restore"
+msgstr ""
+
+#: templates/page-restore.php:32
+msgid "Trigger the restore job and monitor progress."
+msgstr ""
+
+#: templates/page-restore.php:41
+msgid "Backup Archive Source"
+msgstr ""
+
+#: templates/page-restore.php:43
+msgid "Upload a backup file, select an existing archive, or provide a remote URL to begin analysis."
+msgstr ""
+
+#: templates/page-restore.php:50
+msgid "Upload Local File"
+msgstr ""
+
+#: templates/page-restore.php:51
+msgid "Select from Backups"
+msgstr ""
+
+#: templates/page-restore.php:52
+msgid "Remote URL Restore"
+msgstr ""
+
+#: templates/page-restore.php:56
+msgid "Step 1 – Upload & Analyze"
+msgstr ""
+
+#: templates/page-restore.php:60
+msgid "Select a backup…"
+msgstr ""
+
+#: templates/page-restore.php:65
+msgid "Step 1 – Load Info"
+msgstr ""
+
+#: templates/page-restore.php:69
+msgid "Step 1 – Download & Prepare"
+msgstr ""
+
+#: templates/page-restore.php:74
+msgid "File Summary"
+msgstr ""
+
+#: templates/page-restore.php:77
+msgid "File:"
+msgstr ""
+
+#: templates/page-restore.php:78
+msgid "Size:"
+msgstr ""
+
+#: templates/page-restore.php:80
+msgid "SHA1:"
+msgstr ""
+
+#: templates/page-restore.php:82
+msgid "Source:"
+msgstr ""
+
+#: templates/page-restore.php:84
+msgid "No file selected yet."
+msgstr ""
+
+#: templates/page-restore.php:93
+msgid "Review Restore Options"
+msgstr ""
+
+#: templates/page-restore.php:95
+msgid "Choose how the restore will handle existing data, configuration files, and safety backups."
+msgstr ""
+
+#: templates/page-restore.php:101
+msgid "Overwrite existing data"
+msgstr ""
+
+#: templates/page-restore.php:102
+msgid "Apply URL Search & Replace"
+msgstr ""
+
+#: templates/page-restore.php:103
+msgid "Skip wp-config.php"
+msgstr ""
+
+#: templates/page-restore.php:104
+msgid "Backup current site before restore"
+msgstr ""
+
+#: templates/page-restore.php:113
+msgid "Ready when you are. We will show real-time progress and notify you when it finishes."
+msgstr ""
+
+#: templates/page-restore.php:119
+msgid "Step 3 – Start Restore"
+msgstr ""
+
+#: templates/page-restore.php:128
+msgid "Please wait while we restore your site..."
+msgstr ""
+
+#: templates/page-restore.php:137
+#: templates/page-restore.php:144
+msgid "Waiting for action..."
+msgstr ""
+
+#: templates/page-restore.php:140
+msgid "Cancel Restore"
+msgstr ""
+
+#: templates/page-restore.php:149
+msgid "Restore History"
+msgstr ""
+
+#: templates/page-restore.php:151
+msgid "Date/Time"
+msgstr ""
+
+#: templates/page-restore.php:151
+msgid "File"
+msgstr ""
+
+#: templates/page-restore.php:151
+msgid "Result"
+msgstr ""
+
+#: templates/page-restore.php:151
+msgid "Log"
+msgstr ""
+
+#: templates/page-restore.php:163
+msgid "N/A"
+msgstr ""
+
+#: templates/page-restore.php:169
+msgid "No restore history recorded yet."
+msgstr ""
+
+#: templates/page-schedules.php:15
+msgid "Not scheduled"
+msgstr ""
+
+#: templates/page-schedules.php:38
+msgid "(Untitled)"
+msgstr ""
+
+#: templates/page-schedules.php:51
+msgid "Automate everything"
+msgstr ""
+
+#: templates/page-schedules.php:52
+msgid "Scheduled Backups"
+msgstr ""
+
+#: templates/page-schedules.php:53
+msgid "Keep your site safe with reliable automation. Build, monitor, and tweak recurring jobs in one place."
+msgstr ""
+
+#: templates/page-schedules.php:56
+msgid "Create Schedule"
+msgstr ""
+
+#: templates/page-schedules.php:61
+msgid "Total schedules"
+msgstr ""
+
+#: templates/page-schedules.php:65
+msgid "Active"
+msgstr ""
+
+#: templates/page-schedules.php:69
+#: templates/page-schedules.php:141
+msgid "Next run"
+msgstr ""
+
+#. translators: %s: Relative time until the next run.
+#: templates/page-schedules.php:73
+#, php-format
+msgid "in %s"
+msgstr ""
+
+#: templates/page-schedules.php:89
+#: templates/page-schedules.php:106
+msgid "AI Smart Schedule Advisor"
+msgstr ""
+
+#: templates/page-schedules.php:93
+msgid "Get AI-powered recommendations for optimal backup schedules based on your site activity."
+msgstr ""
+
+#: templates/page-schedules.php:109
+msgid "Get AI-powered recommendations for optimal backup schedules."
+msgstr ""
+
+#: templates/page-schedules.php:113
+msgid "Get AI Recommendations"
+msgstr ""
+
+#: templates/page-schedules.php:123
+msgid "List Created Schedules"
+msgstr ""
+
+#: templates/page-schedules.php:124
+msgid "Each schedule runs through WP-Cron. Start, edit, or delete tasks anytime."
+msgstr ""
+
+#: templates/page-schedules.php:127
+#: templates/page-schedules.php:302
+msgid "New Schedule"
+msgstr ""
+
+#: templates/page-schedules.php:137
+msgid "Event name"
+msgstr ""
+
+#: templates/page-schedules.php:138
+#: templates/page-schedules.php:284
+#: templates/page-schedules.php:371
+msgid "Status"
+msgstr ""
+
+#: templates/page-schedules.php:139
+msgid "Period"
+msgstr ""
+
+#: templates/page-schedules.php:140
+msgid "Time to start"
+msgstr ""
+
+#: templates/page-schedules.php:142
+msgid "Last result"
+msgstr ""
+
+#: templates/page-schedules.php:143
+msgid "Last run"
+msgstr ""
+
+#: templates/page-schedules.php:166
+#: templates/page-schedules.php:189
+msgid "—"
+msgstr ""
+
+#: templates/page-schedules.php:215
+msgid "Quick launch"
+msgstr ""
+
+#: templates/page-schedules.php:216
+msgid "Spin up a new schedule"
+msgstr ""
+
+#: templates/page-schedules.php:217
+msgid "Choose when, how often, and where alerts go. This inline builder mirrors the advanced modal experience."
+msgstr ""
+
+#: templates/page-schedules.php:220
+msgid "Pro tip"
+msgstr ""
+
+#: templates/page-schedules.php:221
+msgid "Weekly full backups with a 30-day archive fit most production sites perfectly."
+msgstr ""
+
+#: templates/page-schedules.php:228
+#: templates/page-schedules.php:315
+msgid "Title"
+msgstr ""
+
+#: templates/page-schedules.php:231
+msgid "Nightly web backup"
+msgstr ""
+
+#: templates/page-schedules.php:235
+#: templates/page-schedules.php:322
+msgid "Event type"
+msgstr ""
+
+#: templates/page-schedules.php:239
+#: templates/page-schedules.php:326
+msgid "Backup"
+msgstr ""
+
+#: templates/page-schedules.php:245
+#: templates/page-schedules.php:332
+msgid "Schedule interval"
+msgstr ""
+
+#: templates/page-schedules.php:249
+#: templates/page-schedules.php:336
+msgid "Daily"
+msgstr ""
+
+#: templates/page-schedules.php:250
+#: templates/page-schedules.php:337
+msgid "Weekly"
+msgstr ""
+
+#: templates/page-schedules.php:251
+#: templates/page-schedules.php:338
+msgid "Monthly"
+msgstr ""
+
+#: templates/page-schedules.php:256
+#: templates/page-schedules.php:343
+msgid "Start time"
+msgstr ""
+
+#: templates/page-schedules.php:263
+#: templates/page-schedules.php:350
+msgid "Keep the most recent (N) backups"
+msgstr ""
+
+#: templates/page-schedules.php:270
+#: templates/page-schedules.php:357
+msgid "Remove backups older than (days)"
+msgstr ""
+
+#: templates/page-schedules.php:277
+#: templates/page-schedules.php:364
+msgid "Notification email (optional)"
+msgstr ""
+
+#: templates/page-schedules.php:292
+msgid "Reset"
+msgstr ""
+
+#: templates/page-schedules.php:293
+msgid "Save Schedule"
+msgstr ""
+
+#: templates/page-schedules.php:309
+msgid "Builder"
+msgstr ""
+
+#: templates/page-schedules.php:310
+msgid "Design the perfect automated backup"
+msgstr ""
+
+#: templates/page-schedules.php:311
+msgid "Customize frequency, retention, and notifications. You can revisit these settings anytime."
+msgstr ""
+
+#: templates/page-schedules.php:380
+msgid "Cancel"
+msgstr ""
+
+#: templates/page-schedules.php:381
+msgid "Save"
+msgstr ""
+
+#: templates/page-settings.php:23
+msgid "External cron (DISABLE_WP_CRON enabled)"
+msgstr ""
+
+#: templates/page-settings.php:23
+msgid "Using WP-Cron"
+msgstr ""
+
+#: templates/page-settings.php:31
+msgid "Museder RestoreOne Settings"
+msgstr ""
+
+#: templates/page-settings.php:32
+msgid "Configure global preferences, AI modules, and system-level options."
+msgstr ""
+
+#: templates/page-settings.php:36
+msgid "View Logs"
+msgstr ""
+
+#: templates/page-settings.php:55
+msgid "Let AI analyze your site and suggest smarter backup & retention strategies. This feature is available in the Pro version."
+msgstr ""
+
+#: templates/page-settings.php:62
+msgid "General Settings"
+msgstr ""
+
+#: templates/page-settings.php:63
+msgid "Global preferences that apply to all Backup Lite / RestoreOne features."
+msgstr ""
+
+#: templates/page-settings.php:67
+msgid "Backup directory"
+msgstr ""
+
+#: templates/page-settings.php:69
+msgid "All generated backups will be stored here."
+msgstr ""
+
+#: templates/page-settings.php:72
+msgid "Notification email"
+msgstr ""
+
+#: templates/page-settings.php:74
+msgid "Receive completion summaries and alerts."
+msgstr ""
+
+#: templates/page-settings.php:77
+msgid "Minimum role required"
+msgstr ""
+
+#: templates/page-settings.php:85
+msgid "Only users with this role (or higher) can access Museder RestoreOne."
+msgstr ""
+
+#: templates/page-settings.php:88
+msgid "UI Theme"
+msgstr ""
+
+#: templates/page-settings.php:90
+msgid "Auto (match system)"
+msgstr ""
+
+#: templates/page-settings.php:91
+msgid "Light"
+msgstr ""
+
+#: templates/page-settings.php:92
+msgid "Dark"
+msgstr ""
+
+#: templates/page-settings.php:94
+msgid "Only affects Museder RestoreOne admin pages."
+msgstr ""
+
+#: templates/page-settings.php:99
+msgid "Debug Mode"
+msgstr ""
+
+#: templates/page-settings.php:102
+msgid "Log verbose restore/backup events for troubleshooting."
+msgstr ""
+
+#: templates/page-settings.php:110
+msgid "All changes here affect how Backup Lite behaves on this site."
+msgstr ""
+
+#: templates/page-settings.php:112
+msgid "Send Test Email"
+msgstr ""
+
+#: templates/page-settings.php:113
+msgid "Save Settings"
+msgstr ""
+
+#: templates/page-settings.php:119
+msgid "System Diagnostics"
+msgstr ""
+
+#: templates/page-settings.php:120
+msgid "Read-only checks to help you verify server compatibility."
+msgstr ""
+
+#: templates/page-settings.php:124
+msgid "PHP memory limit"
+msgstr ""
+
+#: templates/page-settings.php:128
+msgid "Server temp directory"
+msgstr ""
+
+#: templates/page-settings.php:131
+#: templates/page-settings.php:137
+#: templates/page-settings.php:143
+msgid "Writable"
+msgstr ""
+
+#: templates/page-settings.php:131
+msgid "Needs attention"
+msgstr ""
+
+#: templates/page-settings.php:135
+msgid "Backup directory writable"
+msgstr ""
+
+#: templates/page-settings.php:137
+#: templates/page-settings.php:143
+msgid "Check permissions"
+msgstr ""
+
+#: templates/page-settings.php:141
+msgid "Uploads directory writable"
+msgstr ""
+
+#: templates/page-settings.php:147
+msgid "Cron status"
+msgstr ""
+
+#: templates/page-settings.php:153
+msgid "These values are detected from your server environment. If something looks wrong, contact your hosting provider."
+msgstr ""
+
+#: templates/page-settings.php:158
+msgid "AI Settings (PRO)"
+msgstr ""
+
+#: templates/page-settings.php:161
+msgid "Configure OpenAI models and AI Backup Copilot in the Pro version."
+msgstr ""
+
+#: templates/page-settings.php:164
+msgid "This section is available in Museder RestoreOne Pro. Upgrade to enable AI-powered scheduling, restore impact summaries, and incident assistance."
+msgstr ""
+
+#: templates/page-settings.php:174
+msgid "Pro Modules"
+msgstr ""
+
+#: templates/page-settings.php:180
+msgid "Cloud Destinations"
+msgstr ""
+
+#: templates/page-settings.php:181
+msgid "Store backups on S3, Google Cloud, or other providers."
+msgstr ""
+
+#: templates/page-settings.php:191
+msgid "Exclude specific tables, paths, or file types."
+msgstr ""
+
+#: templates/page-settings.php:203
+msgid "License (PRO)"
+msgstr ""
+
+#: templates/page-settings.php:206
+msgid "Activate Museder RestoreOne Pro to unlock advanced features."
+msgstr ""
+
+#: templates/page-settings.php:209
+msgid "License key"
+msgstr ""
+
+#: templates/page-settings.php:213
+msgid "Validate License"
+msgstr ""
+
+#: templates/page-settings.php:215
+msgid "Get a Pro license"
+msgstr ""
+
+#: templates/page-settings.php:219
+msgid "Not activated"
+msgstr ""
+
+#: templates/page-settings.php:222
+msgid "Pro features are visible but inactive on this site. Once you have a license, you can activate them here."
+msgstr ""
+
+#: templates/page-settings.php:223
+msgid "Pro features are optional and not required to use basic backup and restore. You can keep using the free features without a license."
+msgstr ""
+
+#: templates/restore-page.php:12
+msgid "多階段驗證、Dry-run、正式還原與一鍵 Rollback。"
+msgstr ""
+
+#: templates/restore-page.php:13
+msgid "建議依序完成每個步驟，確保跨主機遷移與災難復原的最高成功率。"
+msgstr ""
+
+#: templates/restore-page.php:16
+msgid "Current Job"
+msgstr ""
+
+#: templates/restore-page.php:17
+msgid "尚未開始還原作業"
+msgstr ""
+
+#: templates/restore-page.php:26
+msgid "Source"
+msgstr ""
+
+#: templates/restore-page.php:31
+msgid "Safety"
+msgstr ""
+
+#: templates/restore-page.php:36
+msgid "Dry-Run"
+msgstr ""
+
+#: templates/restore-page.php:46
+msgid "Rollback"
+msgstr ""
+
+#: templates/restore-page.php:51
+msgid "Activity"
+msgstr ""
+
+#: templates/restore-page.php:60
+msgid "Step 1 · 選擇備份來源"
+msgstr ""
+
+#: templates/restore-page.php:61
+msgid "從現有備份中選擇一個 archive，建立還原作業並啟動安全驗證。"
+msgstr ""
+
+#: templates/restore-page.php:66
+msgid "建立還原作業並進行驗證"
+msgstr ""
+
+#: templates/restore-page.php:72
+msgid "選擇要還原的備份檔案，系統會自動建立還原作業並開始安全驗證流程。"
+msgstr ""
+
+#: templates/restore-page.php:79
+msgid "檔案名稱"
+msgstr ""
+
+#: templates/restore-page.php:80
+msgid "建立時間"
+msgstr ""
+
+#: templates/restore-page.php:81
+msgid "大小"
+msgstr ""
+
+#: templates/restore-page.php:87
+msgid "目前沒有備份檔案。"
+msgstr ""
+
+#: templates/restore-page.php:112
+msgid "Step 2 · 安全驗證"
+msgstr ""
+
+#: templates/restore-page.php:113
+msgid "比對 WordPress / PHP / 資料庫 / Domain 等資訊，提前預警潛在風險。"
+msgstr ""
+
+#: templates/restore-page.php:119
+msgid "尚未開始驗證。請先完成 Step 1。"
+msgstr ""
+
+#: templates/restore-page.php:128
+msgid "Step 3 · Dry-Run 模擬"
+msgstr ""
+
+#: templates/restore-page.php:129
+msgid "Dry-Run 不會修改現有站台，可預先模擬還原影響並產生報告。"
+msgstr ""
+
+#: templates/restore-page.php:134
+msgid "執行 Dry-Run"
+msgstr ""
+
+#: templates/restore-page.php:140
+msgid "尚未執行 Dry-Run。完成驗證後即可啟動模擬。"
+msgstr ""
+
+#: templates/restore-page.php:143
+msgid "下載 TXT 報告"
+msgstr ""
+
+#: templates/restore-page.php:144
+msgid "下載 JSON 報告"
+msgstr ""
+
+#: templates/restore-page.php:154
+msgid "Step 4 · 執行正式還原"
+msgstr ""
+
+#: templates/restore-page.php:155
+msgid "依照 Dry-Run 結果覆蓋現有站台。建議在執行前再次確認備份。"
+msgstr ""
+
+#: templates/restore-page.php:161
+msgid "注意："
+msgstr ""
+
+#: templates/restore-page.php:162
+msgid "此操作將覆蓋目前站台的檔案與資料庫，請確定已備份並了解跨網域差異。"
+msgstr ""
+
+#: templates/restore-page.php:166
+msgid "我已了解此操作會覆蓋目前站台資料，並已完成備份。"
+msgstr ""
+
+#: templates/restore-page.php:169
+msgid "執行還原（Execute Restore）"
+msgstr ""
+
+#: templates/restore-page.php:178
+msgid "Step 5 · Rollback 快照復原"
+msgstr ""
+
+#: templates/restore-page.php:179
+msgid "若尚有 Restore-Pre-Backup 快照，可立即回復到還原前狀態。"
+msgstr ""
+
+#: templates/restore-page.php:186
+msgid "警告："
+msgstr ""
+
+#: templates/restore-page.php:187
+msgid "Rollback 將覆蓋目前站台，請再次確認要回到 Restore-Pre-Backup 快照。"
+msgstr ""
+
+#: templates/restore-page.php:190
+msgid "目前沒有可用的預先快照。完成正式還原後才會建立。"
+msgstr ""
+
+#: templates/restore-page.php:194
+msgid "我已了解 Rollback 會覆蓋目前站台資料。"
+msgstr ""
+
+#: templates/restore-page.php:197
+msgid "執行 Rollback"
+msgstr ""
+
+#: templates/restore-page.php:207
+msgid "Step 6 · Activity Log"
+msgstr ""
+
+#: templates/restore-page.php:208
+msgid "完整記錄還原流程的每個階段與系統訊息。"
+msgstr ""
+
+#: templates/restore-page.php:213
+msgid "自動捲動到底"
+msgstr ""

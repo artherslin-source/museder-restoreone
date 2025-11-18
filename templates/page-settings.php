@@ -1,0 +1,226 @@
+<?php
+/**
+ * Museder RestoreOne settings page.
+ *
+ * @package BackupLite
+ */
+
+if ( ! defined( 'ABSPATH' ) ) {
+    exit;
+}
+
+$settings         = Backup_Lite_Settings::get_settings();
+$roles            = get_editable_roles();
+$logs_url         = admin_url( 'admin.php?page=backup-lite-logs' );
+$is_pro           = class_exists( 'Backup_Lite_Pro' ) && Backup_Lite_Pro::is_pro_active();
+$backup_dir       = backup_lite_get_backup_dir();
+$backup_writable  = wp_is_writable( $backup_dir );
+$temp_dir         = function_exists( 'get_temp_dir' ) ? get_temp_dir() : ( function_exists( 'sys_get_temp_dir' ) ? sys_get_temp_dir() : ABSPATH );
+$temp_writable    = wp_is_writable( $temp_dir );
+$uploads_dir      = wp_upload_dir();
+$uploads_writable = wp_is_writable( $uploads_dir['basedir'] );
+$cron_disabled    = defined( 'DISABLE_WP_CRON' ) && DISABLE_WP_CRON;
+$cron_status      = $cron_disabled ? __( 'External cron (DISABLE_WP_CRON enabled)', 'museder-restoreone' ) : __( 'Using WP-Cron', 'museder-restoreone' );
+$php_memory       = ini_get( 'memory_limit' );
+$selected_role    = isset( $settings['min_role'], $roles[ $settings['min_role'] ] ) ? $settings['min_role'] : 'administrator';
+?>
+
+<div class="wrap backup-lite-admin backup-lite-settings">
+    <div class="bl-page-header">
+        <div>
+            <h1 class="backup-lite-page-title"><?php esc_html_e( 'Museder RestoreOne Settings', 'museder-restoreone' ); ?></h1>
+            <p class="backup-lite-page-description"><?php esc_html_e( 'Configure global preferences, AI modules, and system-level options.', 'museder-restoreone' ); ?></p>
+        </div>
+        <div class="bl-page-actions">
+            <a class="bl-btn bl-btn--ghost" href="<?php echo esc_url( $logs_url ); ?>">
+                📜 <?php esc_html_e( 'View Logs', 'museder-restoreone' ); ?>
+            </a>
+            <span class="bl-badge" title="Plugin version" style="background: rgba(59,130,246,.12); color:#1d4ed8;"><?php echo esc_html( defined( 'BACKUP_LITE_VERSION' ) ? BACKUP_LITE_VERSION : '' ); ?></span>
+        </div>
+    </div>
+
+    <div id="bl-settings-message" class="backup-lite-messages" role="status" aria-live="polite"></div>
+
+    <div class="bl-card bl-card--pro bl-card--clickable js-bl-pro-locked" data-pro-feature="ai_copilot">
+        <div class="bl-card-heading">
+            <h3><span class="bl-card-icon">🤖</span><?php esc_html_e( 'AI Backup Copilot', 'museder-restoreone' ); ?></h3>
+            <div class="bl-card-actions">
+                <span class="bl-badge bl-badge--pro">PRO</span>
+                <button type="button" class="bl-btn bl-btn--primary bl-btn--disabled js-bl-pro-locked" data-pro-feature="ai_copilot" disabled>
+                    <?php esc_html_e( 'Run AI Setup Wizard', 'museder-restoreone' ); ?>
+                </button>
+            </div>
+        </div>
+        <p class="bl-card-description">
+            <?php esc_html_e( 'Let AI analyze your site and suggest smarter backup & retention strategies. This feature is available in the Pro version.', 'museder-restoreone' ); ?>
+        </p>
+    </div>
+
+    <form id="bl-settings-form" class="bl-container">
+        <div class="bl-card">
+            <div class="bl-card-heading">
+                <h3><span class="bl-icon-circle">🌐</span><?php esc_html_e( 'General Settings', 'museder-restoreone' ); ?></h3>
+                <p class="bl-card-subtitle"><?php esc_html_e( 'Global preferences that apply to all Backup Lite / RestoreOne features.', 'museder-restoreone' ); ?></p>
+            </div>
+            <div class="backup-lite-settings-grid">
+                <label class="bl-form-control">
+                    <span><?php esc_html_e( 'Backup directory', 'museder-restoreone' ); ?></span>
+                    <input type="text" id="bl-setting-backup-dir" value="<?php echo esc_attr( $settings['backup_directory'] ); ?>" />
+                    <small class="description"><?php esc_html_e( 'All generated backups will be stored here.', 'museder-restoreone' ); ?></small>
+                </label>
+                <label class="bl-form-control">
+                    <span><?php esc_html_e( 'Notification email', 'museder-restoreone' ); ?></span>
+                    <input type="email" id="bl-setting-notify-email" value="<?php echo esc_attr( $settings['notification_email'] ); ?>" />
+                    <small class="description"><?php esc_html_e( 'Receive completion summaries and alerts.', 'museder-restoreone' ); ?></small>
+                </label>
+                <label class="bl-form-control">
+                    <span><?php esc_html_e( 'Minimum role required', 'museder-restoreone' ); ?></span>
+                    <select id="bl-setting-role">
+                        <?php foreach ( $roles as $role_key => $role ) : ?>
+                            <option value="<?php echo esc_attr( $role_key ); ?>" <?php selected( $selected_role, $role_key ); ?>>
+                                <?php echo esc_html( translate_user_role( $role['name'] ) ); ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                    <small class="description"><?php esc_html_e( 'Only users with this role (or higher) can access Museder RestoreOne.', 'museder-restoreone' ); ?></small>
+                </label>
+                <label class="bl-form-control">
+                    <span><?php esc_html_e( 'UI Theme', 'museder-restoreone' ); ?></span>
+                    <select id="bl-setting-theme-mode">
+                        <option value="auto" <?php selected( $settings['ui_theme'], 'auto' ); ?>><?php esc_html_e( 'Auto (match system)', 'museder-restoreone' ); ?></option>
+                        <option value="light" <?php selected( $settings['ui_theme'], 'light' ); ?>><?php esc_html_e( 'Light', 'museder-restoreone' ); ?></option>
+                        <option value="dark" <?php selected( $settings['ui_theme'], 'dark' ); ?>><?php esc_html_e( 'Dark', 'museder-restoreone' ); ?></option>
+                    </select>
+                    <small class="description"><?php esc_html_e( 'Only affects Museder RestoreOne admin pages.', 'museder-restoreone' ); ?></small>
+                </label>
+                <label class="bl-toggle-row js-bl-pro-locked" data-pro-feature="debug_mode">
+                    <div>
+                        <span class="bl-toggle-title">
+                            <?php esc_html_e( 'Debug Mode', 'museder-restoreone' ); ?>
+                            <span class="bl-badge bl-badge--pro">PRO</span>
+                        </span>
+                        <p class="bl-toggle-description"><?php esc_html_e( 'Log verbose restore/backup events for troubleshooting.', 'museder-restoreone' ); ?></p>
+                    </div>
+                    <div class="bl-toggle bl-toggle--disabled">
+                        <input type="checkbox" id="bl-setting-debug-mode" disabled />
+                        <span class="bl-toggle-slider" aria-hidden="true"></span>
+                    </div>
+                </label>
+            </div>
+            <p class="bl-note bl-note--muted"><?php esc_html_e( 'All changes here affect how Backup Lite behaves on this site.', 'museder-restoreone' ); ?></p>
+            <div class="settings-actions">
+                <button type="button" class="bl-btn bl-btn--ghost" id="bl-test-email">📧 <?php esc_html_e( 'Send Test Email', 'museder-restoreone' ); ?></button>
+                <button type="submit" class="bl-btn bl-btn--primary" id="bl-settings-save"><?php esc_html_e( 'Save Settings', 'museder-restoreone' ); ?></button>
+            </div>
+        </div>
+
+        <div class="bl-card">
+            <div class="bl-card-heading">
+                <h3><span class="bl-icon-circle">🛠️</span><?php esc_html_e( 'System Diagnostics', 'museder-restoreone' ); ?></h3>
+                <p class="bl-card-subtitle"><?php esc_html_e( 'Read-only checks to help you verify server compatibility.', 'museder-restoreone' ); ?></p>
+            </div>
+            <div class="bl-diagnostics-grid">
+                <div class="bl-diagnostic-item">
+                    <span class="label"><?php esc_html_e( 'PHP memory limit', 'museder-restoreone' ); ?></span>
+                    <span class="bl-pill bl-pill--ok"><?php echo esc_html( $php_memory ? $php_memory : __( 'Unknown', 'museder-restoreone' ) ); ?></span>
+                </div>
+                <div class="bl-diagnostic-item">
+                    <span class="label"><?php esc_html_e( 'Server temp directory', 'museder-restoreone' ); ?></span>
+                    <code><?php echo esc_html( $temp_dir ); ?></code>
+                    <span class="bl-pill <?php echo $temp_writable ? 'bl-pill--ok' : 'bl-pill--warning'; ?>">
+                        <?php echo $temp_writable ? esc_html__( 'Writable', 'museder-restoreone' ) : esc_html__( 'Needs attention', 'museder-restoreone' ); ?>
+                    </span>
+                </div>
+                <div class="bl-diagnostic-item">
+                    <span class="label"><?php esc_html_e( 'Backup directory writable', 'museder-restoreone' ); ?></span>
+                    <span class="bl-pill <?php echo $backup_writable ? 'bl-pill--ok' : 'bl-pill--warning'; ?>">
+                        <?php echo $backup_writable ? esc_html__( 'Writable', 'museder-restoreone' ) : esc_html__( 'Check permissions', 'museder-restoreone' ); ?>
+                    </span>
+                </div>
+                <div class="bl-diagnostic-item">
+                    <span class="label"><?php esc_html_e( 'Uploads directory writable', 'museder-restoreone' ); ?></span>
+                    <span class="bl-pill <?php echo $uploads_writable ? 'bl-pill--ok' : 'bl-pill--warning'; ?>">
+                        <?php echo $uploads_writable ? esc_html__( 'Writable', 'museder-restoreone' ) : esc_html__( 'Check permissions', 'museder-restoreone' ); ?>
+                    </span>
+                </div>
+                <div class="bl-diagnostic-item">
+                    <span class="label"><?php esc_html_e( 'Cron status', 'museder-restoreone' ); ?></span>
+                    <span class="bl-pill <?php echo $cron_disabled ? 'bl-pill--warning' : 'bl-pill--ok'; ?>">
+                        <?php echo esc_html( $cron_status ); ?>
+                    </span>
+                </div>
+            </div>
+            <p class="bl-note bl-note--muted"><?php esc_html_e( 'These values are detected from your server environment. If something looks wrong, contact your hosting provider.', 'museder-restoreone' ); ?></p>
+        </div>
+
+        <div class="bl-card bl-card--pro bl-card--pro-overlay">
+            <div class="bl-card-heading">
+                <h3><span class="bl-icon-circle">🧠</span><?php esc_html_e( 'AI Settings (PRO)', 'museder-restoreone' ); ?></h3>
+                <span class="bl-badge bl-badge--pro">PRO</span>
+            </div>
+            <p class="bl-card-subtitle"><?php esc_html_e( 'Configure OpenAI models and AI Backup Copilot in the Pro version.', 'museder-restoreone' ); ?></p>
+            <div class="backup-lite-settings-grid">
+                <div class="bl-note bl-note--muted" style="grid-column: 1 / -1;">
+                    <?php esc_html_e( 'This section is available in Museder RestoreOne Pro. Upgrade to enable AI-powered scheduling, restore impact summaries, and incident assistance.', 'museder-restoreone' ); ?>
+                </div>
+            </div>
+            <a class="bl-btn bl-btn--primary" href="https://musederlabs.com/" target="_blank" rel="noopener noreferrer">
+                <?php esc_html_e( 'Upgrade to Pro', 'museder-restoreone' ); ?>
+            </a>
+        </div>
+
+        <div class="bl-card bl-card--pro">
+                <div class="bl-card-heading">
+                    <h3><span class="bl-icon-circle">🚀</span><?php esc_html_e( 'Pro Modules', 'museder-restoreone' ); ?></h3>
+                    <span class="bl-badge bl-badge--pro">PRO</span>
+                </div>
+                <div class="bl-toggle-group">
+                    <label class="bl-toggle-row js-bl-pro-locked" data-pro-feature="cloud_destinations">
+                        <div>
+                            <span class="bl-toggle-title"><?php esc_html_e( 'Cloud Destinations', 'museder-restoreone' ); ?></span>
+                            <p class="bl-toggle-description"><?php esc_html_e( 'Store backups on S3, Google Cloud, or other providers.', 'museder-restoreone' ); ?></p>
+                        </div>
+                        <div class="bl-toggle bl-toggle--disabled">
+                            <input type="checkbox" id="bl-feature-cloud" disabled />
+                            <span class="bl-toggle-slider" aria-hidden="true"></span>
+                        </div>
+                    </label>
+                    <label class="bl-toggle-row js-bl-pro-locked" data-pro-feature="advanced_filters">
+                        <div>
+                            <span class="bl-toggle-title"><?php esc_html_e( 'Advanced Filters', 'museder-restoreone' ); ?></span>
+                            <p class="bl-toggle-description"><?php esc_html_e( 'Exclude specific tables, paths, or file types.', 'museder-restoreone' ); ?></p>
+                        </div>
+                        <div class="bl-toggle bl-toggle--disabled">
+                            <input type="checkbox" id="bl-feature-advanced" disabled />
+                            <span class="bl-toggle-slider" aria-hidden="true"></span>
+                        </div>
+                    </label>
+                </div>
+        </div>
+
+        <div class="bl-card bl-card--pro bl-card--pro-overlay">
+            <div class="bl-card-heading">
+                <h3><span class="bl-icon-circle">🔑</span><?php esc_html_e( 'License (PRO)', 'museder-restoreone' ); ?></h3>
+                <span class="bl-badge bl-badge--pro">PRO</span>
+            </div>
+            <p class="bl-card-subtitle"><?php esc_html_e( 'Activate Museder RestoreOne Pro to unlock advanced features.', 'museder-restoreone' ); ?></p>
+            <div class="backup-lite-settings-grid">
+                <label class="bl-form-control">
+                    <span><?php esc_html_e( 'License key', 'museder-restoreone' ); ?></span>
+                    <div class="bl-license-row">
+                        <input type="text" id="bl-setting-license-key" value="" placeholder="XXXX-XXXX-XXXX-XXXX" class="js-bl-pro-locked" data-pro-feature="license" disabled />
+                        <button type="button" class="bl-btn bl-btn--primary bl-btn--disabled js-bl-pro-locked" data-pro-feature="license" id="bl-verify-license" disabled>
+                            <?php esc_html_e( 'Validate License', 'museder-restoreone' ); ?>
+                        </button>
+                        <a class="bl-btn bl-btn--ghost" href="https://musederlabs.com/" target="_blank" rel="noopener noreferrer"><?php esc_html_e( 'Get a Pro license', 'museder-restoreone' ); ?></a>
+                    </div>
+                </label>
+                <div class="bl-license-status">
+                    <span class="bl-pill bl-pill--error"><?php esc_html_e( 'Not activated', 'museder-restoreone' ); ?></span>
+                </div>
+            </div>
+            <p class="bl-note bl-note--muted"><?php esc_html_e( 'Pro features are visible but inactive on this site. Once you have a license, you can activate them here.', 'museder-restoreone' ); ?></p>
+            <p class="bl-note bl-note--muted"><?php esc_html_e( 'Pro features are optional and not required to use basic backup and restore. You can keep using the free features without a license.', 'museder-restoreone' ); ?></p>
+        </div>
+    </form>
+</div>

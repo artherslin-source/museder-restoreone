@@ -1,0 +1,2785 @@
+var backupJobContext = {
+    current: null,
+    timer: null,
+    lastNudge: 0
+};
+
+(function ($) {
+    'use strict';
+
+    const settings = window.BackupLite || {};
+    const strings = settings.strings || {};
+    function getString(key, fallback) {
+        if (strings && Object.prototype.hasOwnProperty.call(strings, key) && strings[key]) {
+            return strings[key];
+        }
+        return fallback || '';
+    }
+    const messages = $('#backup-lite-messages');
+    const spinnerMarkup = '<span class="spinner is-active"></span>';
+
+    function showMessage(type, title, text) {
+        messages.removeClass('is-success is-error').addClass('is-visible');
+
+        if (type === 'success') {
+            messages.addClass('is-success');
+        } else if (type === 'error') {
+            messages.addClass('is-error');
+        }
+
+        const titleHtml = title ? '<strong>' + title + '</strong>' : '';
+        const textHtml = text ? '<span>' + text + '</span>' : '';
+        messages.html(titleHtml + textHtml);
+    }
+
+    function handleError(response) {
+        const message = (response && response.message) ? response.message : (strings.errorGeneric || '');
+        showMessage('error', strings.errorTitle || '', message);
+    }
+
+    function showToast(message, type) {
+        if (!window.Toastify) {
+            return;
+        }
+
+        var background = '#3b82f6';
+        if (typeof type === 'string') {
+            var lower = type.toLowerCase();
+            if ('success' === lower) {
+                background = '#10b981';
+            } else if ('error' === lower) {
+                background = '#ef4444';
+            } else if ('warning' === lower) {
+                background = '#f59e0b';
+            } else if ('info' === lower) {
+                background = '#3b82f6';
+            } else if (lower.indexOf('#') === 0) {
+                background = type;
+            }
+        }
+
+        window.Toastify({
+            text: message,
+            gravity: 'top',
+            position: 'right',
+            backgroundColor: background,
+            duration: 3000
+        }).showToast();
+    }
+
+    function showCompletionOverlay(options) {
+        var config = options || {};
+        var icon = config.icon || '✅';
+        var title = config.title || strings.successTitle || 'Operation completed';
+        var message = config.message || '';
+        var actionHref = config.actionHref || '';
+        var actionText = config.actionText || strings.downloadLabel || 'Download';
+        var confirmText = config.confirmText || '';
+        var autoClose = typeof config.autoClose === 'number' ? config.autoClose : 0;
+
+        var existing = document.querySelector('.bl-completion-overlay');
+        if (existing && existing.parentNode) {
+            existing.parentNode.removeChild(existing);
+        }
+
+        var overlay = document.createElement('div');
+        overlay.className = 'bl-completion-overlay';
+        overlay.setAttribute('role', 'alertdialog');
+        overlay.setAttribute('aria-live', 'assertive');
+
+        var dialog = document.createElement('div');
+        dialog.className = 'bl-completion-dialog';
+
+        var closeBtn = document.createElement('button');
+        closeBtn.type = 'button';
+        closeBtn.className = 'bl-completion-close';
+        closeBtn.setAttribute('data-bl-completion-close', '1');
+        closeBtn.textContent = strings.close || 'Close';
+        dialog.appendChild(closeBtn);
+
+        var iconEl = document.createElement('div');
+        iconEl.className = 'bl-completion-icon';
+        iconEl.textContent = icon;
+        dialog.appendChild(iconEl);
+
+        var titleEl = document.createElement('div');
+        titleEl.className = 'bl-completion-title';
+        titleEl.textContent = title;
+        dialog.appendChild(titleEl);
+
+        if (message) {
+            var messageEl = document.createElement('div');
+            messageEl.className = 'bl-completion-message';
+            messageEl.textContent = message;
+            dialog.appendChild(messageEl);
+        }
+
+        if (actionHref || confirmText) {
+            var actionsEl = document.createElement('div');
+            actionsEl.className = 'bl-completion-actions';
+
+            if (actionHref) {
+                var actionBtn = document.createElement('a');
+                actionBtn.className = 'button button-primary';
+                actionBtn.href = actionHref;
+                actionBtn.textContent = actionText;
+                actionBtn.setAttribute('target', '_blank');
+                actionBtn.setAttribute('rel', 'noopener noreferrer');
+                actionsEl.appendChild(actionBtn);
+            }
+
+            if (confirmText) {
+                var confirmBtn = document.createElement('button');
+                confirmBtn.type = 'button';
+                confirmBtn.className = actionHref ? 'button' : 'button button-primary';
+                confirmBtn.textContent = confirmText;
+                confirmBtn.addEventListener('click', function () {
+                    teardown();
+                });
+                actionsEl.appendChild(confirmBtn);
+            }
+
+            dialog.appendChild(actionsEl);
+        }
+
+        overlay.appendChild(dialog);
+        document.body.appendChild(overlay);
+
+        function teardown() {
+            document.removeEventListener('keydown', onKeyDown);
+            if (overlay && overlay.parentNode) {
+                overlay.parentNode.removeChild(overlay);
+            }
+            // Refresh page when overlay is closed
+            if (typeof window.location !== 'undefined') {
+                window.location.reload();
+            }
+        }
+
+        function onKeyDown(event) {
+            if (event.key === 'Escape') {
+                teardown();
+            }
+        }
+
+        overlay.addEventListener('click', function (event) {
+            if (event.target === overlay || event.target.dataset.blCompletionClose !== undefined) {
+                teardown();
+            }
+        });
+
+        closeBtn.addEventListener('click', teardown);
+        document.addEventListener('keydown', onKeyDown);
+
+        window.requestAnimationFrame(function () {
+            overlay.classList.add('is-visible');
+        });
+
+        if (autoClose > 0) {
+            setTimeout(teardown, autoClose);
+        }
+    }
+
+    function renderLogTable(logs) {
+        var tableBody = document.getElementById('bl-log-table-body');
+        if (!tableBody) {
+            return false;
+        }
+
+        tableBody.innerHTML = '';
+
+        if (!logs.length) {
+            var emptyRow = document.createElement('tr');
+            emptyRow.className = 'bl-empty-row';
+            var emptyCell = document.createElement('td');
+            emptyCell.colSpan = 4;
+            emptyCell.textContent = strings.noLogs || 'No log entries yet.';
+            emptyRow.appendChild(emptyCell);
+            tableBody.appendChild(emptyRow);
+            return true;
+        }
+
+        logs.forEach(function (log) {
+            var row = document.createElement('tr');
+            row.dataset.log = log.name;
+
+            var nameCell = document.createElement('td');
+            nameCell.textContent = log.name;
+
+            var modifiedCell = document.createElement('td');
+            modifiedCell.textContent = log.modified || '';
+
+            var sizeCell = document.createElement('td');
+            sizeCell.textContent = log.size || '';
+
+            var actionsCell = document.createElement('td');
+            var menu = document.createElement('details');
+            menu.className = 'bl-actions-menu';
+
+            var trigger = document.createElement('summary');
+            trigger.className = 'bl-actions-trigger';
+            trigger.setAttribute('aria-label', 'Log actions');
+            trigger.textContent = '⋮';
+
+            var list = document.createElement('div');
+            list.className = 'bl-actions-list';
+
+            var viewBtn = document.createElement('button');
+            viewBtn.type = 'button';
+            viewBtn.className = 'button';
+            viewBtn.dataset.logAction = 'view';
+            viewBtn.dataset.log = log.name;
+            viewBtn.textContent = strings.viewLog || 'Preview';
+
+            var downloadLink = document.createElement('a');
+            downloadLink.className = 'button';
+            downloadLink.href = log.download_url;
+            downloadLink.textContent = strings.downloadLog || 'Download';
+
+            var deleteBtn = document.createElement('button');
+            deleteBtn.type = 'button';
+            deleteBtn.className = 'button';
+            deleteBtn.dataset.logAction = 'delete';
+            deleteBtn.dataset.log = log.name;
+            deleteBtn.textContent = strings.deleteLog || 'Delete';
+
+            list.appendChild(viewBtn);
+            list.appendChild(downloadLink);
+            list.appendChild(deleteBtn);
+
+            menu.appendChild(trigger);
+            menu.appendChild(list);
+            actionsCell.appendChild(menu);
+
+            row.appendChild(nameCell);
+            row.appendChild(modifiedCell);
+            row.appendChild(sizeCell);
+            row.appendChild(actionsCell);
+
+            tableBody.appendChild(row);
+        });
+
+        return true;
+    }
+
+    function refreshLogs() {
+        return $.post(settings.ajaxUrl, {
+            action: 'backup_lite_fetch_logs',
+            nonce: settings.nonce
+        }).done(function (resp) {
+            if (!resp.success) {
+                return;
+            }
+
+            const logs = resp.data.logs || [];
+
+            if (renderLogTable(logs)) {
+                return;
+            }
+
+            const list = $('.backup-lite-logs ul');
+            if (!list.length) {
+                return;
+            }
+
+            if (!logs.length) {
+                list.html('<li>' + (strings.noLogs || '') + '</li>');
+                return;
+            }
+
+            const items = logs.map(function (log) {
+                return '<li><a href="' + log.download_url + '">' + log.name + '</a></li>';
+            });
+
+            list.html(items.join(''));
+        });
+    }
+
+    window.BackupLiteUI = {
+        showMessage: showMessage,
+        handleError: handleError,
+        refreshLogs: refreshLogs,
+        settings: settings,
+        strings: strings,
+        spinner: spinnerMarkup,
+        showToast: showToast,
+        showCompletionOverlay: showCompletionOverlay
+    };
+
+    backupJobContext.pollDelay = Math.max(2500, (settings.jobPollingInterval || 3) * 1000);
+
+    var backupFormEl = null;
+    var backupProgressEl = document.getElementById('backup-progress-fill');
+    var backupProgressText = document.getElementById('backup-progress-text');
+    var backupSubmitBtn = null;
+    var backupCancelBtn = document.getElementById('bl-backup-cancel-btn');
+
+    function setBackupFormElements(formEl) {
+        backupFormEl = formEl;
+        backupSubmitBtn = backupFormEl ? backupFormEl.querySelector('button[type="submit"]') : null;
+        resetBackupProgress();
+        setBackupCancelable(false);
+    }
+
+    function resetBackupProgress() {
+        if (backupProgressEl) {
+            backupProgressEl.style.width = '0%';
+        }
+        if (backupProgressText) {
+            backupProgressText.textContent = '0%';
+        }
+    }
+
+    function updateBackupProgress(percent) {
+        if (!backupProgressEl) {
+            return;
+        }
+        var value = Math.max(0, Math.min(100, percent || 0));
+        backupProgressEl.style.width = value + '%';
+        if (backupProgressText) {
+            backupProgressText.textContent = value + '%';
+        }
+    }
+
+    function setBackupBusy(isBusy) {
+        if (!backupSubmitBtn) {
+            return;
+        }
+        if (!backupSubmitBtn.dataset.originalLabel) {
+            backupSubmitBtn.dataset.originalLabel = backupSubmitBtn.textContent;
+        }
+        backupSubmitBtn.disabled = !!isBusy;
+        backupSubmitBtn.textContent = isBusy
+            ? (strings.jobButtonBusy || backupSubmitBtn.dataset.originalLabel)
+            : (strings.jobButtonIdle || backupSubmitBtn.dataset.originalLabel);
+    }
+
+    function setBackupCancelable(active) {
+        if (!backupCancelBtn) {
+            return;
+        }
+        if (active) {
+            backupCancelBtn.style.display = '';
+            backupCancelBtn.disabled = false;
+        } else {
+            backupCancelBtn.style.display = 'none';
+            backupCancelBtn.disabled = true;
+        }
+    }
+
+    function cancelBackupJob() {
+        if (!backupJobContext.current || !backupJobContext.current.id || !settings.nonce) {
+            setBackupCancelable(false);
+            return;
+        }
+
+        if (backupCancelBtn) {
+            backupCancelBtn.disabled = true;
+        }
+
+        var payload = new FormData();
+        payload.append('action', 'backup_lite_cancel_backup_job');
+        payload.append('nonce', settings.nonce);
+        payload.append('job_id', backupJobContext.current.id);
+
+        fetch(settings.ajaxUrl, {
+            method: 'POST',
+            credentials: 'same-origin',
+            body: payload
+        }).then(function (response) {
+            return response.json();
+        }).then(function (json) {
+            if (!json || json.success !== true) {
+                throw json && json.data ? json.data : json;
+            }
+            stopBackupJobPolling();
+            setBackupBusy(false);
+            backupJobContext.current = null;
+            setBackupCancelable(false);
+            resetBackupProgress();
+            showToast(strings.jobCancelSuccess || 'Backup cancelled.', 'warning');
+        }).catch(function (error) {
+            var message = (error && error.message) ? error.message : (strings.jobCancelFailed || 'Unable to cancel backup.');
+            showToast(message, 'error');
+            setBackupCancelable(!!(backupJobContext.current && backupJobContext.current.id));
+        });
+    }
+
+    function appendBackupOptions(payload) {
+        if (!window.BackupLitePro || !window.BackupLitePro.isPro || !backupFormEl) {
+            return;
+        }
+
+        var labelField = backupFormEl.querySelector('#bl-backup-label');
+        if (labelField && labelField.value) {
+            payload.append('backup_label', labelField.value);
+        }
+
+        var encryptToggle = backupFormEl.querySelector('#bl-backup-encrypt');
+        if (encryptToggle && encryptToggle.checked) {
+            payload.append('backup_encrypt', '1');
+        }
+
+        var dualToggle = backupFormEl.querySelector('#bl-backup-dual');
+        if (dualToggle && dualToggle.checked) {
+            payload.append('backup_dual', '1');
+        }
+
+        var cloudSelect = backupFormEl.querySelector('#bl-backup-cloud');
+        if (cloudSelect && cloudSelect.options) {
+            var selected = Array.from(cloudSelect.selectedOptions || [])
+                .map(function (opt) { return opt.value; })
+                .filter(Boolean);
+            if (selected.length) {
+                payload.append('backup_cloud', JSON.stringify(selected));
+            }
+        }
+    }
+
+    function setBackupStatusMessage(message, type) {
+        if (!message) {
+            return;
+        }
+        var rendered = message;
+        if ('loading' === type) {
+            rendered += ' ' + spinnerMarkup;
+        }
+        showMessage('', strings.runningTitle || '', rendered);
+    }
+
+    function handleJobResponse(job) {
+        backupJobContext.current = job;
+        updateBackupProgress(job.percentage || 0);
+        setBackupCancelable(true);
+
+        if ('completed' === job.status) {
+            setBackupCancelable(false);
+            finishBackupJob(job);
+            return;
+        }
+
+        if ('failed' === job.status) {
+            stopBackupJobPolling();
+            setBackupBusy(false);
+            handleError({ message: job.message || strings.jobFailed || strings.errorGeneric });
+            backupJobContext.current = null;
+            setBackupCancelable(false);
+            return;
+        }
+
+        if ('cancelled' === job.status) {
+            stopBackupJobPolling();
+            setBackupBusy(false);
+            showMessage('', '', strings.jobCancelled || '');
+            backupJobContext.current = null;
+            setBackupCancelable(false);
+            return;
+        }
+
+        var stageMessage = strings.jobProcessing || strings.runningMessage || '';
+        if ('preparing' === job.stage || 'pending' === job.stage) {
+            stageMessage = strings.jobPreparing || stageMessage;
+        } else if ('packing' === job.stage) {
+            stageMessage = strings.jobProcessing || stageMessage;
+        } else if ('finalizing' === job.stage || 'completed' === job.stage) {
+            stageMessage = strings.jobFinalizing || stageMessage;
+        }
+        setBackupStatusMessage(stageMessage, 'loading');
+
+        if (!job.processing && job.id) {
+            maybeNudgeBackupJob(job.id);
+        }
+    }
+
+    function maybeNudgeBackupJob(jobId) {
+        var now = Date.now();
+        if (now - backupJobContext.lastNudge < backupJobContext.pollDelay) {
+            return;
+        }
+        backupJobContext.lastNudge = now;
+
+        var payload = new FormData();
+        payload.append('action', 'backup_lite_continue_backup_job');
+        payload.append('nonce', settings.nonce);
+        payload.append('job_id', jobId);
+
+        fetch(settings.ajaxUrl, {
+            method: 'POST',
+            credentials: 'same-origin',
+            body: payload
+        }).then(function (response) {
+            return response.json();
+        }).then(function (json) {
+            if (json && json.success && json.data && json.data.job) {
+                handleJobResponse(json.data.job);
+            }
+        }).catch(function () {
+            // Silent fallback – manual nudge is best effort.
+        });
+    }
+
+    function pollBackupJobStatus() {
+        if (!backupJobContext.current || !backupJobContext.current.id) {
+            stopBackupJobPolling();
+            return;
+        }
+
+        var payload = new FormData();
+        payload.append('action', 'backup_lite_get_job_status');
+        payload.append('nonce', settings.nonce);
+        payload.append('job_id', backupJobContext.current.id);
+
+        fetch(settings.ajaxUrl, {
+            method: 'POST',
+            credentials: 'same-origin',
+            body: payload
+        }).then(function (response) {
+            return response.json();
+        }).then(function (json) {
+            if (!json || !json.success || !json.data || !json.data.job) {
+                throw json && json.data ? json.data : json;
+            }
+            handleJobResponse(json.data.job);
+        }).catch(function (error) {
+            stopBackupJobPolling();
+            setBackupBusy(false);
+            handleError(error && error.message ? error : null);
+            backupJobContext.current = null;
+        });
+    }
+
+    function scheduleBackupJobPolling(immediate) {
+        stopBackupJobPolling();
+        backupJobContext.timer = window.setInterval(pollBackupJobStatus, backupJobContext.pollDelay);
+        if (immediate) {
+            pollBackupJobStatus();
+        }
+    }
+
+    function stopBackupJobPolling() {
+        if (backupJobContext.timer) {
+            window.clearInterval(backupJobContext.timer);
+            backupJobContext.timer = null;
+        }
+    }
+
+    function startBackupJobRequest(event) {
+        if (event && typeof event.preventDefault === 'function') {
+            event.preventDefault();
+        }
+
+        if (!backupFormEl) {
+            return false;
+        }
+
+        if (backupJobContext.current && backupJobContext.current.status && backupJobContext.current.status !== 'failed' && backupJobContext.current.status !== 'completed') {
+            showToast(strings.jobButtonBusy || 'Backup in progress…', 'info');
+            return false;
+        }
+
+        const payload = new FormData();
+        payload.append('action', 'backup_lite_start_backup_job');
+        payload.append('nonce', settings.nonce);
+        appendBackupOptions(payload);
+
+        setBackupBusy(true);
+        resetBackupProgress();
+        setBackupStatusMessage(strings.jobPreparing || strings.runningMessage || '', 'loading');
+
+        fetch(settings.ajaxUrl, {
+            method: 'POST',
+            credentials: 'same-origin',
+            body: payload
+        }).then(function (response) {
+            return response.json();
+        }).then(function (json) {
+            if (!json || !json.success || !json.data || !json.data.job) {
+                throw json && json.data ? json.data : json;
+            }
+            backupJobContext.current = json.data.job;
+            scheduleBackupJobPolling(true);
+        }).catch(function (error) {
+            setBackupBusy(false);
+            backupJobContext.current = null;
+            resetBackupProgress();
+            setBackupCancelable(false);
+            handleError(error && error.message ? error : null);
+        });
+
+        return false;
+    }
+
+    function finishBackupJob(job) {
+        stopBackupJobPolling();
+        setBackupBusy(false);
+        backupJobContext.current = null;
+        setBackupCancelable(false);
+        updateBackupProgress(100);
+
+        var overlayTitle = strings.backupOverlayTitle || strings.successTitle || 'Backup completed';
+        var overlayMessage = strings.jobComplete || strings.successBackup || 'Backup completed successfully.';
+
+        showMessage('success', strings.successTitle || '', strings.jobComplete || strings.successBackup || '');
+        refreshLogs();
+
+        var overlayFunc = window.BackupLiteUI && window.BackupLiteUI.showCompletionOverlay
+            ? window.BackupLiteUI.showCompletionOverlay
+            : showCompletionOverlay;
+
+        overlayFunc({
+            icon: '📦',
+            title: overlayTitle,
+            message: overlayMessage,
+            actionHref: job.download_url || '',
+            actionText: strings.downloadLabel || 'Download',
+            autoClose: job.download_url ? 0 : 4000
+        });
+    }
+
+    // Backup form submission handled in DOM ready block.
+
+    $(document).on('click', '.backup-lite-restore-existing', function (event) {
+        event.preventDefault();
+
+        const button = $(this);
+        const filename = button.data('filename');
+
+        if (!filename) {
+            handleError({ message: strings.noFileSelected || 'No backup file selected.' });
+            return;
+        }
+
+        if (!confirm(settings.confirmRestore || 'Are you sure you want to restore this backup? This will overwrite your current site.')) {
+            return;
+        }
+
+        button.prop('disabled', true);
+        showMessage('', strings.runningTitle || '', (strings.restoring || 'Restoring backup...') + spinnerMarkup);
+
+        const payload = new FormData();
+        payload.append('action', 'backup_lite_restore_existing');
+        payload.append('nonce', settings.nonce);
+        payload.append('filename', filename);
+
+        fetch(settings.ajaxUrl, {
+            method: 'POST',
+            credentials: 'same-origin',
+            body: payload
+        }).then(function (response) {
+            return response.json();
+        }).then(function (json) {
+            button.prop('disabled', false);
+
+            if (!json.success) {
+                handleError(json.data || json);
+                return;
+            }
+
+            const data = json.data || {};
+            const message = data.message || strings.successRestore || 'Restore completed successfully.';
+            showMessage('success', strings.successTitle || '', message);
+            refreshLogs();
+            showCompletionOverlay({
+                icon: '♻️',
+                title: strings.restoreOverlayTitle || strings.successTitle || 'Restore completed',
+                message: data.overlay_message || strings.successRestore || 'Restore completed successfully.',
+                autoClose: 3500
+            });
+            setTimeout(function () {
+                location.reload();
+            }, 3000);
+        }).catch(function () {
+            button.prop('disabled', false);
+            handleError();
+        });
+    });
+
+$(document).on('click', '.backup-lite-delete-backup', function (event) {
+        event.preventDefault();
+
+        const button = $(this);
+        const filename = button.data('filename');
+
+        if (!filename) {
+            handleError({ message: strings.noFileSelected || 'No backup file selected.' });
+            return;
+        }
+
+        if (!confirm(strings.confirmDelete || 'Are you sure you want to delete this backup? This action cannot be undone.')) {
+            return;
+        }
+
+        button.prop('disabled', true);
+
+        const payload = new FormData();
+        payload.append('action', 'backup_lite_delete_backup');
+        payload.append('nonce', settings.nonce);
+        payload.append('filename', filename);
+
+        fetch(settings.ajaxUrl, {
+            method: 'POST',
+            credentials: 'same-origin',
+            body: payload
+        }).then(function (response) {
+            return response.json();
+        }).then(function (json) {
+            button.prop('disabled', false);
+
+            if (!json.success) {
+                handleError(json.data || json);
+                return;
+            }
+
+            const data = json.data || {};
+            const message = data.message || 'Backup deleted successfully.';
+            showMessage('success', strings.successTitle || '', message);
+            
+            button.closest('tr').fadeOut(300, function () {
+                $(this).remove();
+            });
+        }).catch(function () {
+            button.prop('disabled', false);
+            handleError();
+        });
+});
+
+function initBackupLiteDomReady() {
+    var localizedSettings = window.BackupLite || {};
+    var strings = localizedSettings.strings || {};
+    var currentPage = localizedSettings.page || '';
+    var backupForm = document.getElementById('backup-lite-backup-form');
+    var backupProgress = document.getElementById('backup-progress-fill');
+    var restoreFormV2 = document.getElementById('backup-lite-restore-form-v2');
+    var uploadProgress = document.getElementById('upload-progress');
+    var uploadInterval = null;
+
+    var showToast = function () {
+        if (window.BackupLiteUI && typeof window.BackupLiteUI.showToast === 'function') {
+            return window.BackupLiteUI.showToast.apply(window.BackupLiteUI, arguments);
+        }
+        return undefined;
+    };
+
+    var showCompletionOverlay = function () {
+        if (window.BackupLiteUI && typeof window.BackupLiteUI.showCompletionOverlay === 'function') {
+            return window.BackupLiteUI.showCompletionOverlay.apply(window.BackupLiteUI, arguments);
+        }
+        return undefined;
+    };
+
+    function animateProgress(targetEl, step, delay, onComplete) {
+        if (!targetEl) {
+            return null;
+        }
+        targetEl.style.width = '0%';
+        var progressText = document.getElementById('backup-progress-text');
+        var width = 0;
+        var intervalId = window.setInterval(function () {
+            width = Math.min(100, width + step);
+            targetEl.style.width = width + '%';
+            if (progressText) {
+                progressText.textContent = Math.round(width) + '%';
+            }
+            if (width >= 100) {
+                width = 100;
+                targetEl.style.width = width + '%';
+                if (progressText) {
+                    progressText.textContent = '100%';
+                }
+                window.clearInterval(intervalId);
+                if (typeof onComplete === 'function') {
+                    // Small delay before calling onComplete to ensure visual completion
+                    setTimeout(onComplete, 200);
+                }
+            }
+        }, delay);
+        return intervalId;
+    }
+
+    if (backupForm) {
+        setBackupFormElements(backupForm);
+        backupForm.addEventListener('submit', startBackupJobRequest);
+    } else {
+        resetBackupProgress();
+    }
+
+    if (backupCancelBtn) {
+        backupCancelBtn.addEventListener('click', function () {
+            if (!backupJobContext.current || !backupJobContext.current.id) {
+                setBackupCancelable(false);
+                return;
+            }
+            var confirmMessage = strings.jobCancelConfirm || 'Cancel the running backup job?';
+            if (confirmMessage && !window.confirm(confirmMessage)) {
+                return;
+            }
+            cancelBackupJob();
+        });
+    }
+
+    if (localizedSettings.activeJob && localizedSettings.activeJob.id) {
+        backupJobContext.current = localizedSettings.activeJob;
+        setBackupBusy(true);
+        updateBackupProgress(localizedSettings.activeJob.percentage || 0);
+        setBackupStatusMessage(strings.jobResuming || strings.runningMessage || '', 'loading');
+        setBackupCancelable(true);
+        scheduleBackupJobPolling(true);
+    }
+
+    if (restoreFormV2 && uploadProgress) {
+        restoreFormV2.addEventListener('submit', function () {
+            if (uploadInterval) {
+                window.clearInterval(uploadInterval);
+            }
+            var strings = (window.BackupLite && window.BackupLite.strings) || {};
+            uploadInterval = animateProgress(uploadProgress, 5, 250, function () {
+                showToast('✅ ' + (strings.successRestore || 'Restore Successful!'), 'success');
+            });
+        });
+    }
+
+    function setupSearchReplaceToggle(toggleElement) {
+        if (!toggleElement) {
+            return;
+        }
+        var fields = toggleElement.closest('form').querySelector('.backup-lite-search-replace-fields');
+        if (!fields) {
+            var targetId = toggleElement.getAttribute('data-target');
+            if (targetId) {
+                fields = document.getElementById(targetId);
+            }
+        }
+        if (!fields) {
+            return;
+        }
+        toggleElement.addEventListener('change', function () {
+            fields.hidden = !toggleElement.checked;
+        });
+    }
+
+    function initRestoreCenter() {
+        var restoreData = window.BackupLiteRestore || {};
+        // Get ajaxUrl from BackupLiteRestore, BackupLite (main settings), or fallback
+        var ajaxUrl = restoreData.ajaxUrl 
+            || settings.ajaxUrl 
+            || (typeof window.ajaxurl !== 'undefined' ? window.ajaxurl : '');
+        // Get nonce from BackupLiteRestore, BackupLite (main settings), or fallback
+        var nonce = restoreData.ajaxNonce 
+            || settings.nonce 
+            || '';
+        if (!ajaxUrl) {
+            console.error('Backup Lite: ajaxUrl not found');
+            return;
+        }
+
+        var methodButtons = document.querySelectorAll('.restore-methods .method-tabs button');
+        var methodPanels = document.querySelectorAll('.method-panel');
+        var uploadInput = document.getElementById('restoreFile');
+        var uploadButton = document.getElementById('uploadRestore');
+        var existingSelect = document.getElementById('existingBackup');
+        var existingButton = document.getElementById('selectRestore');
+        var remoteInput = document.getElementById('remoteUrl');
+        var remoteButton = document.getElementById('downloadRestore');
+        var progressBar = document.querySelector('.restore-progress .progress-bar-fill');
+        var progressStatus = document.querySelector('.restore-progress .progress-status');
+        var startButton = document.getElementById('startRestore');
+        var overwriteToggle = document.getElementById('overwriteData');
+        var applyReplaceToggle = document.getElementById('applyReplace');
+        var skipConfigToggle = document.getElementById('skipConfig');
+        var autoBackupToggle = document.getElementById('autoBackup');
+        var historyTable = document.getElementById('restoreHistory');
+        var summaryContainer = document.getElementById('fileSummary');
+        var wizardSteps = {
+            upload: document.getElementById('restore-step-upload'),
+            review: document.getElementById('restore-step-review'),
+            execute: document.getElementById('restore-step-execute')
+        };
+        var stepStatusNodes = {
+            upload: document.getElementById('step-upload-status'),
+            review: document.getElementById('step-review-status'),
+            execute: document.getElementById('step-execute-status')
+        };
+        var stepCards = {
+            review: document.querySelector('[data-step-card="review"]'),
+            execute: document.querySelector('[data-step-card="execute"]')
+        };
+        var reviewCompleted = false;
+        var restoreCompletionShown = false;
+        var hasAnalyzed = !!(restoreData.summary && (restoreData.summary.name || restoreData.summary.size));
+        var restoreInProgress = false;
+        var restoreCompleted = !!(restoreData.progress && restoreData.progress.done);
+        var isAnalyzing = false;
+        var analysisError = false;
+        var stepStrings = {
+            uploadIdle: strings.stepUploadIdle || 'Choose a backup and run Step 1.',
+            uploadProcessing: strings.stepUploadProcessing || 'Analyzing backup…',
+            uploadDone: strings.stepUploadDone || 'Analysis complete. Continue to Step 2.',
+            uploadError: strings.stepUploadError || 'Analysis failed. Try again.',
+            reviewLocked: strings.stepReviewLocked || 'Complete Step 1 first to unlock these options.',
+            reviewReady: strings.stepReviewReady || 'Options unlocked. Adjust restore behavior.',
+            reviewDone: strings.stepReviewDone || 'Options saved. Continue to Step 3.',
+            executeLocked: strings.stepExecuteLocked || 'Complete Steps 1 & 2 before starting the restore.',
+            executeReady: strings.stepExecuteReady || 'Ready to start restore.',
+            executeProcessing: strings.stepExecuteProcessing || 'Restore running…',
+            executeDone: strings.stepExecuteDone || 'Restore finished. Review your site.'
+        };
+        var SIMPLE_UPLOAD_LIMIT = 10 * 1024 * 1024;
+        var CHUNK_SIZE_BYTES = 2 * 1024 * 1024;
+        var activeChunkSession = null;
+        var chunkStrings = {
+            preparing: strings.chunkPreparing || 'Preparing upload…',
+            uploading: strings.chunkUploading || 'Uploading %1$s of %2$s (%3$s%)…',
+            merging: strings.chunkMerging || 'Merging uploaded chunks…'
+        };
+
+        function notifyError(payload) {
+            if (typeof handleError === 'function') {
+                handleError(payload);
+            } else if (payload && payload.message) {
+                alert(payload.message);
+            } else {
+                console.error('Restore error', payload);
+            }
+        }
+        function formatString(template, values) {
+            if (!template) {
+                return '';
+            }
+            var output = template;
+            var list = Array.isArray(values) ? values : [values];
+            output = output.replace(/%([0-9]+)\$s/g, function (match, index) {
+                var i = parseInt(index, 10) - 1;
+                return typeof list[i] !== 'undefined' ? list[i] : match;
+            });
+            if (output.indexOf('%s') !== -1 && list.length) {
+                output = output.replace('%s', list[0]);
+            }
+            return output;
+        }
+        function updateUploadStatus(message) {
+            var node = stepStatusNodes.upload;
+            if (!node) {
+                return;
+            }
+            var textNode = node.querySelector('.status-text') || node;
+            textNode.textContent = message || '';
+        }
+        function ajaxRequest(formData) {
+            return fetch(ajaxUrl, {
+                method: 'POST',
+                credentials: 'same-origin',
+                body: formData
+            }).then(function (res) {
+                return res.text().then(function (text) {
+                    var json = {};
+                    if (text) {
+                        try {
+                            json = JSON.parse(text);
+                        } catch (error) {
+                            var parseError = new Error(strings.errorGeneric || 'An unexpected error occurred. Check logs for details.');
+                            parseError.payload = { message: text };
+                            throw parseError;
+                        }
+                    }
+                    if (!res.ok || (json && json.success === false)) {
+                        var payload = json && json.data ? json.data : json;
+                        var message = payload && payload.message ? payload.message : (strings.errorGeneric || 'An unexpected error occurred.');
+                        var requestError = new Error(message);
+                        requestError.payload = payload;
+                        throw requestError;
+                    }
+                    if (typeof json.success === 'undefined') {
+                        return { success: true, data: json };
+                    }
+                    return json;
+                });
+            });
+        }
+        function abortChunkSession(sessionId) {
+            if (!sessionId) {
+                return;
+            }
+            var abortForm = prepareFormData('backup_lite_restore_chunk_abort');
+            abortForm.append('session_id', sessionId);
+            ajaxRequest(abortForm).catch(function () {});
+        }
+        function runLocalUpload(file) {
+            if (!file) {
+                return Promise.reject(new Error(strings.noFileSelected || 'Please choose a backup file first.'));
+            }
+            if (file.size <= SIMPLE_UPLOAD_LIMIT) {
+                return runSimpleUpload(file);
+            }
+            return runChunkUpload(file);
+        }
+        function runSimpleUpload(file) {
+            var formData = prepareFormData('backup_lite_restore_upload');
+            formData.append('file', file);
+            return ajaxRequest(formData).then(function (json) {
+                handleSummaryResponse(json);
+            });
+        }
+        function runChunkUpload(file) {
+            var totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE_BYTES));
+            updateUploadStatus(chunkStrings.preparing);
+            var prepareForm = prepareFormData('backup_lite_restore_chunk_prepare');
+            prepareForm.append('filename', file.name);
+            prepareForm.append('filesize', file.size);
+            prepareForm.append('chunk_size', CHUNK_SIZE_BYTES);
+            prepareForm.append('total_chunks', totalChunks);
+            return ajaxRequest(prepareForm).then(function (json) {
+                var payload = getJsonPayload(json) || {};
+                var sessionId = payload.session_id;
+                if (!sessionId) {
+                    throw new Error(strings.errorGeneric || 'Unable to start chunk upload.');
+                }
+                activeChunkSession = sessionId;
+                updateRestoreCancelState();
+                var sequence = Promise.resolve();
+                for (var index = 0; index < totalChunks; index++) {
+                    (function (chunkIndex) {
+                        sequence = sequence.then(function () {
+                            var start = chunkIndex * CHUNK_SIZE_BYTES;
+                            var end = Math.min(start + CHUNK_SIZE_BYTES, file.size);
+                            var chunkBlob = file.slice(start, end);
+                            var percent = Math.min(100, Math.round(((chunkIndex + 1) / totalChunks) * 100));
+                            updateUploadStatus(formatString(chunkStrings.uploading, [chunkIndex + 1, totalChunks, percent]));
+                            var uploadForm = prepareFormData('backup_lite_restore_chunk_upload');
+                            uploadForm.append('session_id', sessionId);
+                            uploadForm.append('chunk_index', chunkIndex);
+                            uploadForm.append('chunk', chunkBlob, file.name + '.part');
+                            return ajaxRequest(uploadForm);
+                        });
+                    })(index);
+                }
+                return sequence.then(function () {
+                    updateUploadStatus(chunkStrings.merging);
+                    var finalizeForm = prepareFormData('backup_lite_restore_chunk_finalize');
+                    finalizeForm.append('session_id', sessionId);
+                    return ajaxRequest(finalizeForm).then(function (finalizeJson) {
+                        activeChunkSession = null;
+                        updateRestoreCancelState();
+                        handleSummaryResponse(finalizeJson);
+                    });
+                });
+            }).catch(function (error) {
+                if (activeChunkSession) {
+                    abortChunkSession(activeChunkSession);
+                    activeChunkSession = null;
+                    updateRestoreCancelState();
+                }
+                throw error;
+            });
+        }
+
+        function cancelRestoreProcess() {
+            if (!restoreCancelBtn) {
+                return;
+            }
+
+            restoreCancelBtn.disabled = true;
+
+            if (activeChunkSession) {
+                abortChunkSession(activeChunkSession);
+                activeChunkSession = null;
+            }
+
+            var cancelForm = prepareFormData('backup_lite_restore_cancel');
+
+            ajaxRequest(cancelForm).then(function (json) {
+                var payload = getJsonPayload(json) || {};
+                restoreCancelBtn.disabled = false;
+                renderSummary(null);
+                setProgress(0, strings.awaitingRestore || 'Awaiting restore.', false);
+                var progressContainer = document.getElementById('restore-progress-container');
+                var waitingMessage = document.getElementById('restore-waiting-message');
+                if (progressContainer) {
+                    progressContainer.style.display = 'none';
+                }
+                if (waitingMessage) {
+                    waitingMessage.style.display = 'block';
+                }
+                isAnalyzing = false;
+                analysisError = false;
+                hasAnalyzed = false;
+                restoreCompleted = false;
+                reviewCompleted = false;
+                restoreInProgress = false;
+                restoreCompletionShown = false;
+                if (startButton) {
+                    startButton.disabled = false;
+                }
+                syncWizard();
+                updateRestoreCancelState();
+                var message = (payload && payload.message) ? payload.message : (strings.restoreCancelSuccess || 'Restore process cancelled.');
+                showToast(message, 'warning');
+            }).catch(function (error) {
+                var message = (error && error.message) ? error.message : (strings.restoreCancelFailed || 'Unable to cancel restore.');
+                showToast(message, 'error');
+                restoreCancelBtn.disabled = false;
+                updateRestoreCancelState();
+            });
+        }
+        var startButton = document.getElementById('startRestore');
+
+        function setWizardNode(step, state) {
+            if (wizardSteps[step]) {
+                wizardSteps[step].dataset.blState = state;
+            }
+        }
+
+        function toggleReviewLock(locked) {
+            var card = stepCards.review;
+            if (!card) {
+                return;
+            }
+            card.classList.toggle('step-locked', locked);
+            var inputs = card.querySelectorAll('input, select, textarea');
+            inputs.forEach(function (input) {
+                input.disabled = locked;
+            });
+        }
+
+        function toggleExecuteLock(locked) {
+            if (startButton) {
+                startButton.disabled = locked;
+                startButton.classList.toggle('button-disabled', locked);
+            }
+        }
+
+        var restoreCancelBtn = document.getElementById('restore-cancel-btn');
+
+        function toggleRestoreCancelButton(active) {
+            if (!restoreCancelBtn) {
+                return;
+            }
+            if (active) {
+                restoreCancelBtn.style.display = '';
+                restoreCancelBtn.disabled = false;
+            } else {
+                restoreCancelBtn.style.display = 'none';
+                restoreCancelBtn.disabled = true;
+            }
+        }
+
+        function updateRestoreCancelState() {
+            var active = !!(restoreInProgress || isAnalyzing || activeChunkSession);
+            toggleRestoreCancelButton(active);
+        }
+
+        function setStepStatus(step, state, text) {
+            var node = stepStatusNodes[step];
+            if (!node) {
+                return;
+            }
+            node.dataset.status = state;
+            if (typeof text === 'string') {
+                var textNode = node.querySelector('.status-text');
+                if (textNode) {
+                    textNode.textContent = text;
+                }
+            }
+        }
+
+        function syncWizard() {
+            var uploadState = 'idle';
+            var uploadText = stepStrings.uploadIdle;
+            if (analysisError) {
+                uploadState = 'error';
+                uploadText = stepStrings.uploadError;
+            } else if (isAnalyzing) {
+                uploadState = 'processing';
+                uploadText = stepStrings.uploadProcessing;
+            } else if (hasAnalyzed) {
+                uploadState = 'done';
+                uploadText = stepStrings.uploadDone;
+            }
+            setWizardNode('upload', hasAnalyzed ? 'done' : 'active');
+            setStepStatus('upload', uploadState, uploadText);
+
+            var reviewLocked = !hasAnalyzed;
+            toggleReviewLock(reviewLocked);
+            var reviewState;
+            var reviewText;
+            var reviewNodeState = 'active';
+            if (reviewLocked) {
+                reviewState = 'locked';
+                reviewText = stepStrings.reviewLocked;
+                reviewNodeState = 'locked';
+            } else if (reviewCompleted) {
+                reviewState = 'done';
+                reviewText = stepStrings.reviewDone || stepStrings.reviewReady;
+                reviewNodeState = 'done';
+            } else {
+                reviewState = 'ready';
+                reviewText = stepStrings.reviewReady;
+            }
+            setWizardNode('review', reviewNodeState);
+            setStepStatus('review', reviewState, reviewText);
+
+            var executeState = 'locked';
+            var executeText = stepStrings.executeLocked;
+            var executeLocked = true;
+            if (restoreInProgress) {
+                executeState = 'processing';
+                executeText = stepStrings.executeProcessing;
+                executeLocked = true;
+            } else if (restoreCompleted) {
+                executeState = 'done';
+                executeText = stepStrings.executeDone;
+                executeLocked = false;
+            } else if (hasAnalyzed) {
+                executeState = 'ready';
+                executeText = stepStrings.executeReady;
+                executeLocked = false;
+            }
+            setWizardNode('execute', executeState === 'done' ? 'done' : (executeState === 'locked' ? 'locked' : 'active'));
+            setStepStatus('execute', executeState, executeText);
+            toggleExecuteLock(executeLocked);
+        }
+
+        function resetAnalysisState(options) {
+            var opts = options || {};
+            if (opts.processing) {
+                isAnalyzing = true;
+                analysisError = false;
+            } else if (opts.error) {
+                isAnalyzing = false;
+                analysisError = true;
+            } else {
+                isAnalyzing = false;
+                analysisError = false;
+            }
+            if (!opts.keepAnalysis) {
+                hasAnalyzed = false;
+                restoreCompleted = false;
+            }
+            if (!opts.keepReview) {
+                reviewCompleted = false;
+            }
+            if (opts.restoreInProgress !== undefined) {
+                restoreInProgress = opts.restoreInProgress;
+            }
+            syncWizard();
+            updateRestoreCancelState();
+        }
+
+        function reportError(payload) {
+            if (typeof handleError === 'function') {
+                handleError(payload);
+            } else {
+                var message = payload && payload.message ? payload.message : (strings.errorGeneric || 'Something went wrong.');
+                console.error(message, payload);
+                showToast(message, 'error');
+            }
+        }
+
+        syncWizard();
+        updateRestoreCancelState();
+
+        methodButtons.forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                methodButtons.forEach(function (button) {
+                    button.classList.remove('active');
+                });
+                btn.classList.add('active');
+                var method = btn.getAttribute('data-method');
+                methodPanels.forEach(function (panel) {
+                    panel.classList.remove('active');
+                });
+                var target = document.getElementById('restore-' + method);
+                if (target) {
+                    target.classList.add('active');
+                }
+            });
+        });
+
+        if (uploadInput) {
+            uploadInput.addEventListener('change', resetAnalysisState);
+        }
+        if (existingSelect) {
+            existingSelect.addEventListener('change', resetAnalysisState);
+        }
+        if (remoteInput) {
+            remoteInput.addEventListener('input', resetAnalysisState);
+        }
+
+        function setProgress(percent, message, done) {
+            var progressContainer = document.getElementById('restore-progress-container');
+            var waitingMessage = document.getElementById('restore-waiting-message');
+            var statusIcon = document.getElementById('restore-status-icon');
+            var statusTitle = document.getElementById('restore-status-title');
+            var statusMessage = document.getElementById('restore-status-message');
+            var progressFill = document.getElementById('restore-progress-fill');
+            var progressText = document.getElementById('restore-progress-text');
+            
+            var percentValue = Math.max(0, Math.min(100, percent || 0));
+            
+            if (progressBar) {
+                progressBar.style.width = percentValue + '%';
+            }
+            if (progressFill) {
+                progressFill.style.width = percentValue + '%';
+            }
+            if (progressText) {
+                progressText.textContent = Math.round(percentValue) + '%';
+            }
+            if (progressStatus) {
+                if (done) {
+                    progressStatus.textContent = message || strings.restoreCompleted || 'Restore Completed.';
+                } else if (message) {
+                    progressStatus.textContent = message;
+                } else {
+                    progressStatus.textContent = strings.awaitingRestore || 'Awaiting restore.';
+                }
+            }
+            if (statusMessage) {
+                statusMessage.textContent = message || '';
+            }
+            
+            // Show/hide progress container
+            if (percentValue > 0 || done) {
+                if (progressContainer) {
+                    progressContainer.style.display = 'block';
+                }
+                if (waitingMessage) {
+                    waitingMessage.style.display = 'none';
+                }
+            } else {
+                if (progressContainer) {
+                    progressContainer.style.display = 'none';
+                }
+                if (waitingMessage) {
+                    waitingMessage.style.display = 'block';
+                }
+            }
+            
+            // Update status based on progress
+            var statusIconInline = document.getElementById('restore-status-icon-inline');
+            var statusTitleText = document.getElementById('restore-status-title-text');
+            
+            if (done) {
+                if (statusIcon) {
+                    statusIcon.textContent = '✅';
+                }
+                if (statusIconInline) {
+                    statusIconInline.style.display = 'inline-block';
+                    statusIconInline.textContent = '✅';
+                }
+                if (statusTitle) {
+                    statusTitle.style.color = 'var(--bl-success)';
+                }
+                if (statusTitleText) {
+                    statusTitleText.textContent = strings.restoreCompleted || 'Restore Completed';
+                } else if (statusTitle) {
+                    statusTitle.textContent = strings.restoreCompleted || 'Restore Completed';
+                }
+            } else if (percentValue > 0) {
+                if (statusIcon) {
+                    statusIcon.textContent = '⚡';
+                }
+                if (statusIconInline) {
+                    statusIconInline.style.display = 'none';
+                }
+                if (statusTitle) {
+                    statusTitle.style.color = 'var(--bl-primary)';
+                }
+                if (statusTitleText) {
+                    statusTitleText.textContent = strings.restoreInProgress || 'Restore in Progress';
+                } else if (statusTitle) {
+                    statusTitle.textContent = strings.restoreInProgress || 'Restore in Progress';
+                }
+            }
+            
+            if (done) {
+                restoreInProgress = false;
+                restoreCompleted = true;
+                syncWizard();
+            } else if (percentValue > 0) {
+                restoreInProgress = true;
+                restoreCompleted = false;
+                syncWizard();
+            }
+            updateRestoreCancelState();
+        }
+
+        function renderSummary(summary) {
+            if (!summaryContainer) {
+                return;
+            }
+            if (!summary) {
+                summaryContainer.innerHTML = '<p>' + (strings.noFileSelected || 'No file selected yet.') + '</p>';
+                return;
+            }
+            var html = '';
+            html += '<p><strong>' + (strings.fileLabel || 'File:') + '</strong> ' + summary.name + '</p>';
+            html += '<p><strong>' + (strings.sizeLabel || 'Size:') + '</strong> ' + summary.size + '</p>';
+            if (summary.sha1) {
+                html += '<p><strong>SHA1:</strong> <code>' + summary.sha1 + '</code></p>';
+            }
+            if (summary.source) {
+                html += '<p><strong>' + (strings.sourceLabel || 'Source:') + '</strong> ' + summary.source + '</p>';
+            }
+            summaryContainer.innerHTML = html;
+        }
+
+        function renderHistory(history) {
+            if (!historyTable) {
+                return;
+            }
+            if (!history || !history.length) {
+                historyTable.innerHTML = '<tr><td colspan="4">' + (strings.noHistory || 'No restore history recorded yet.') + '</td></tr>';
+                return;
+            }
+            var downloadLabel = strings.downloadLog || 'Download';
+            historyTable.innerHTML = history.map(function (item) {
+                var result = item.result ? item.result.charAt(0).toUpperCase() + item.result.slice(1) : '';
+                var logCell = item.log_url ? '<a class=\"button button-small\" href=\"' + item.log_url + '\" target=\"_blank\" rel=\"noopener noreferrer\">' + downloadLabel + '</a>' : '<em>N/A</em>';
+                return '<tr><td>' + item.timestamp + '</td><td>' + item.file + '</td><td>' + result + '</td><td>' + logCell + '</td></tr>';
+            }).join('');
+        }
+
+        function getJsonPayload(response) {
+            if (!response) {
+                return null;
+            }
+            if (typeof response.success === 'boolean' && response.data !== undefined) {
+                return response.data;
+            }
+            return response;
+        }
+
+        function prepareFormData(action) {
+            var formData = new FormData();
+            formData.append('action', action);
+            formData.append('nonce', nonce);
+            return formData;
+        }
+
+        function handleSummaryResponse(json) {
+            if (!json) {
+                return;
+            }
+            var payload = getJsonPayload(json) || {};
+            if (json.success === false) {
+                isAnalyzing = false;
+                analysisError = true;
+                hasAnalyzed = false;
+                restoreCompleted = false;
+                syncWizard();
+                notifyError(payload);
+                return;
+            }
+            if (payload.summary) {
+                renderSummary(payload.summary);
+            }
+            if (payload.progress) {
+                setProgress(payload.progress.percent || 0, payload.progress.message || '', payload.progress.done);
+            }
+            showToast('✅ ' + (strings.messageReady || 'Backup ready for restore.'), 'info');
+            isAnalyzing = false;
+            analysisError = false;
+            hasAnalyzed = true;
+            reviewCompleted = false;
+            restoreCompleted = !!(payload.progress && payload.progress.done);
+            restoreInProgress = false;
+            restoreCompletionShown = false;
+            syncWizard();
+            updateRestoreCancelState();
+        }
+
+        if (restoreData.summary) {
+            renderSummary(restoreData.summary);
+        }
+        if (restoreData.progress) {
+            setProgress(restoreData.progress.percent || 0, restoreData.progress.message || '', restoreData.progress.done);
+        }
+        if (restoreData.history) {
+            renderHistory(restoreData.history);
+        }
+
+        syncWizard();
+
+        var reviewCard = stepCards.review;
+
+        function markReviewCompleted() {
+            if (!hasAnalyzed) {
+                return;
+            }
+            if (!reviewCompleted) {
+                reviewCompleted = true;
+                syncWizard();
+            }
+        }
+        if (reviewCard) {
+            reviewCard.addEventListener('change', function (event) {
+                var target = event.target;
+                if (target && (target.matches('input') || target.matches('select') || target.matches('textarea'))) {
+                    markReviewCompleted();
+                }
+            });
+        }
+
+        if (uploadButton) {
+            uploadButton.addEventListener('click', function () {
+                if (!uploadInput || !uploadInput.files || !uploadInput.files.length) {
+                    notifyError({ message: strings.noFileSelected || 'Please choose a backup file first.' });
+                    return;
+                }
+                var file = uploadInput.files[0];
+                uploadButton.disabled = true;
+                isAnalyzing = true;
+                analysisError = false;
+                hasAnalyzed = false;
+                restoreCompleted = false;
+                restoreInProgress = false;
+                syncWizard();
+                updateRestoreCancelState();
+                runLocalUpload(file).then(function () {
+                    uploadButton.disabled = false;
+                }).catch(function (error) {
+                    uploadButton.disabled = false;
+                    isAnalyzing = false;
+                    analysisError = true;
+                    hasAnalyzed = false;
+                    restoreCompleted = false;
+                    restoreInProgress = false;
+                    syncWizard();
+                    updateRestoreCancelState();
+                    var message = error && error.message ? error.message : (strings.errorGeneric || 'Upload failed. Please try again.');
+                    notifyError({ message: message });
+                });
+            });
+        }
+
+        if (existingButton) {
+            existingButton.addEventListener('click', function () {
+                var value = existingSelect ? existingSelect.value : '';
+                if (!value) {
+                    notifyError({ message: strings.noFileSelected || 'Please select a backup file first.' });
+                    return;
+                }
+                var formData = prepareFormData('backup_lite_restore_from_backup');
+                formData.append('filename', value);
+
+                existingButton.disabled = true;
+                isAnalyzing = true;
+                analysisError = false;
+                hasAnalyzed = false;
+                restoreCompleted = false;
+                reviewCompleted = false;
+                syncWizard();
+                updateRestoreCancelState();
+                ajaxRequest(formData).then(function (json) {
+                    existingButton.disabled = false;
+                    handleSummaryResponse(json);
+                }).catch(function (error) {
+                    existingButton.disabled = false;
+                    isAnalyzing = false;
+                    analysisError = true;
+                    hasAnalyzed = false;
+                    restoreCompleted = false;
+                    syncWizard();
+                    updateRestoreCancelState();
+                    notifyError({ message: (error && error.message) ? error.message : (strings.errorGeneric || 'Request failed. Please try again.') });
+                });
+            });
+        }
+
+        if (remoteButton) {
+            remoteButton.addEventListener('click', function () {
+                var value = remoteInput ? remoteInput.value.trim() : '';
+                if (!value) {
+                    notifyError({ message: strings.noRemoteUrl || 'Please enter a valid URL.' });
+                    return;
+                }
+                var formData = prepareFormData('backup_lite_restore_remote_url');
+                formData.append('url', value);
+
+                remoteButton.disabled = true;
+                isAnalyzing = true;
+                analysisError = false;
+                hasAnalyzed = false;
+                restoreCompleted = false;
+                reviewCompleted = false;
+                syncWizard();
+                updateRestoreCancelState();
+                ajaxRequest(formData).then(function (json) {
+                    remoteButton.disabled = false;
+                    handleSummaryResponse(json);
+                }).catch(function (error) {
+                    remoteButton.disabled = false;
+                    isAnalyzing = false;
+                    analysisError = true;
+                    hasAnalyzed = false;
+                    restoreCompleted = false;
+                    syncWizard();
+                    updateRestoreCancelState();
+                    notifyError({ message: (error && error.message) ? error.message : (strings.errorGeneric || 'Request failed. Please try again.') });
+                });
+            });
+        }
+
+        if (restoreCancelBtn) {
+            restoreCancelBtn.addEventListener('click', function () {
+                if (restoreCancelBtn.disabled) {
+                    return;
+                }
+                var confirmMessage = strings.restoreCancelConfirm || 'Cancel the current restore process?';
+                if (confirmMessage && !window.confirm(confirmMessage)) {
+                    return;
+                }
+                cancelRestoreProcess();
+            });
+        }
+
+        if (startButton) {
+            startButton.addEventListener('click', function () {
+                if (!overwriteToggle.checked) {
+                    var overwriteConfirm = getString('confirmOverwriteData', 'This will overwrite your site data. Continue?');
+                    if (!window.confirm('⚠️ ' + overwriteConfirm)) {
+                        return;
+                    }
+                }
+                markReviewCompleted();
+
+                var formData = prepareFormData('backup_lite_restore_confirm');
+                formData.append('overwrite', overwriteToggle.checked ? 'true' : 'false');
+                formData.append('autoBackup', autoBackupToggle && autoBackupToggle.checked ? 'true' : 'false');
+                formData.append('skipConfig', skipConfigToggle && skipConfigToggle.checked ? 'true' : 'false');
+                if (applyReplaceToggle && applyReplaceToggle.checked) {
+                    formData.append('searchReplace', JSON.stringify([]));
+                }
+
+                startButton.disabled = true;
+                restoreInProgress = true;
+                restoreCompleted = false;
+                syncWizard();
+                updateRestoreCancelState();
+                
+                // Immediately show progress container
+                var progressContainer = document.getElementById('restore-progress-container');
+                var waitingMessage = document.getElementById('restore-waiting-message');
+                if (progressContainer) {
+                    progressContainer.style.display = 'block';
+                }
+                if (waitingMessage) {
+                    waitingMessage.style.display = 'none';
+                }
+                
+                // Set initial progress state
+                setProgress(5, strings.runningMessage || 'Starting restore…', false);
+
+                fetch(ajaxUrl, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    body: formData
+                }).then(function (res) { return res.json(); })
+                    .then(function (json) {
+                        if (!json.success) {
+                            restoreInProgress = false;
+                            startButton.disabled = false;
+                            syncWizard();
+                            updateRestoreCancelState();
+                            notifyError(json.data || json);
+                            return;
+                        }
+                        var payload = getJsonPayload(json) || {};
+
+                        if (payload.progress) {
+                            setProgress(
+                                payload.progress.percent || 0,
+                                payload.progress.message || '',
+                                payload.progress.done
+                            );
+                            if (payload.progress.done) {
+                            showToast('✅ ' + (strings.successRestore || 'Restore Completed!'), 'success');
+                            if (!restoreCompletionShown) {
+                                restoreCompletionShown = true;
+                                showCompletionOverlay({
+                                    icon: '✅',
+                                    title: strings.restoreCompleted || 'Restore Completed',
+                                    message: strings.restoreOverlayMessage || strings.successRestore || 'Your site has been restored successfully.',
+                                    confirmText: strings.restoreOverlayConfirm || strings.close || 'Got it'
+                                });
+                            }
+                            }
+                        } else {
+                            setProgress(10, strings.runningMessage || 'Starting restore…', false);
+                        }
+
+                        if (payload.history) {
+                            renderHistory(payload.history);
+                        }
+
+                        restoreInProgress = false;
+                        startButton.disabled = false;
+                        if (payload.progress && payload.progress.done) {
+                            restoreCompleted = true;
+                        }
+                        syncWizard();
+                        updateRestoreCancelState();
+                    }).catch(function (error) {
+                        restoreInProgress = false;
+                        startButton.disabled = false;
+                        syncWizard();
+                        updateRestoreCancelState();
+                        console.error('Restore error:', error);
+                        notifyError({ message: strings.errorGeneric || 'An error occurred during restore.' });
+                    });
+            });
+        }
+    }
+
+    if (currentPage === 'backup-lite-restore') {
+        initRestoreCenter();
+    }
+
+    setupSearchReplaceToggle(document.getElementById('backup-lite-search-replace-toggle'));
+    setupSearchReplaceToggle(document.getElementById('backup-lite-search-replace-toggle-v2'));
+
+    var table = document.getElementById('backup-lite-table');
+    var masterCheckbox = document.getElementById('bl-master-checkbox');
+    var rowCheckboxes = [];
+    var selectAllBtn = document.getElementById('bl-select-all');
+    var clearSelectionBtn = document.getElementById('bl-clear-selection');
+    var downloadSelectedBtn = document.getElementById('bl-download-selected');
+    var deleteSelectedBtn = document.getElementById('bl-delete-selected');
+
+    function refreshRowCheckboxes() {
+        rowCheckboxes = table ? Array.prototype.slice.call(table.querySelectorAll('.bl-row-checkbox')) : [];
+    }
+
+    refreshRowCheckboxes();
+
+    function updateMasterCheckbox() {
+         if (!masterCheckbox || !rowCheckboxes.length) {
+             if (masterCheckbox) {
+                 masterCheckbox.indeterminate = false;
+                 masterCheckbox.checked = false;
+             }
+             return;
+         }
+         var total = rowCheckboxes.length;
+         var checked = 0;
+         rowCheckboxes.forEach(function (checkbox) {
+             if (checkbox.checked) {
+                 checked++;
+             }
+         });
+         masterCheckbox.indeterminate = checked > 0 && checked < total;
+         masterCheckbox.checked = checked === total;
+     }
+
+    function setAllRowSelection(state) {
+        refreshRowCheckboxes();
+        rowCheckboxes.forEach(function (checkbox) {
+            checkbox.checked = state;
+        });
+        updateMasterCheckbox();
+    }
+
+    if (masterCheckbox) {
+        masterCheckbox.addEventListener('change', function () {
+            setAllRowSelection(masterCheckbox.checked);
+        });
+    }
+
+    if (table) {
+        table.addEventListener('change', function (event) {
+            if (event.target && event.target.classList && event.target.classList.contains('bl-row-checkbox')) {
+                refreshRowCheckboxes();
+                updateMasterCheckbox();
+            }
+        });
+    }
+
+    if (selectAllBtn) {
+        selectAllBtn.addEventListener('click', function () {
+            setAllRowSelection(true);
+        });
+    }
+
+    if (clearSelectionBtn) {
+        clearSelectionBtn.addEventListener('click', function () {
+            setAllRowSelection(false);
+        });
+    }
+
+    function getSelectedRows() {
+        refreshRowCheckboxes();
+        var selected = [];
+        rowCheckboxes.forEach(function (checkbox) {
+            if (checkbox.checked) {
+                selected.push({ filename: checkbox.getAttribute('data-filename'), download: checkbox.getAttribute('data-download'), element: checkbox });
+            }
+        });
+        return selected;
+    }
+
+    if (downloadSelectedBtn) {
+        downloadSelectedBtn.addEventListener('click', function () {
+            var rows = getSelectedRows();
+        if (!rows.length) {
+            showToast('⚠️ ' + getString('selectAtLeastOneBackup', 'Please select at least one backup.'), 'warning');
+                return;
+            }
+        rows.forEach(function (row) {
+            if (row.download) {
+                window.open(row.download, '_blank');
+            }
+        });
+        var downloadingMessage = formatString(
+            getString('downloadingBackups', 'Downloading %s backup(s)...'),
+            rows.length
+        );
+        showToast('⬇️ ' + downloadingMessage, 'info');
+        });
+    }
+
+    if (deleteSelectedBtn) {
+        deleteSelectedBtn.addEventListener('click', function () {
+            var rows = getSelectedRows();
+        if (!rows.length) {
+            showToast('⚠️ ' + getString('selectAtLeastOneBackup', 'Please select at least one backup.'), 'warning');
+                return;
+            }
+        var confirmMessage = strings.confirmDeleteSelected || 'Are you sure you want to delete the selected backups? This action cannot be undone.';
+            if (!window.confirm(confirmMessage)) {
+                return;
+            }
+            var payload = new FormData();
+            payload.append('action', 'backup_lite_delete_backups');
+            payload.append('nonce', localizedSettings.nonce || '');
+            payload.append('filenames', JSON.stringify(rows.map(function (row) { return row.filename; })));
+
+            fetch(localizedSettings.ajaxUrl, {
+                method: 'POST',
+                credentials: 'same-origin',
+                body: payload
+            }).then(function (response) {
+                return response.json();
+            }).then(function (json) {
+                if (!json || json.success !== true) {
+                    throw json && json.data ? json.data : json;
+                }
+                var data = json.data || {};
+                var deleted = data.deleted || [];
+                var errors = data.errors || [];
+
+                if (deleted.length) {
+                    deleted.forEach(function (filename) {
+                        refreshRowCheckboxes();
+                        rowCheckboxes.forEach(function (checkbox) {
+                            if (checkbox.getAttribute('data-filename') === filename) {
+                                var row = checkbox.closest('tr');
+                                if (row) {
+                                    row.parentNode.removeChild(row);
+                                }
+                            }
+                        });
+                    });
+                    var deletedMessage = formatString(
+                        getString('deletedBackups', 'Deleted %s backup(s).'),
+                        deleted.length
+                    );
+                    showToast('🗑️ ' + deletedMessage, 'error');
+                }
+
+                if (errors.length) {
+                    var failedMessage = formatString(
+                        getString('failedDeleteBackups', 'Failed to delete %s backup(s). Check logs.'),
+                        errors.length
+                    );
+                    showToast('⚠️ ' + failedMessage, 'warning');
+                }
+
+                refreshRowCheckboxes();
+                updateMasterCheckbox();
+            }).catch(function (error) {
+                var message = 'Unable to delete selected backups.';
+                if (error && error.message) {
+                    message = error.message;
+                } else if (error && error.errors && error.errors.length && error.errors[0].message) {
+                    message = error.errors[0].message;
+                }
+                showToast('⚠️ ' + message, 'warning');
+            });
+        });
+    }
+    var scheduleBody = document.getElementById('backup-lite-schedule-body');
+    var newScheduleButtons = Array.prototype.slice.call(document.querySelectorAll('#bl-new-schedule, [data-bl-action="new-schedule"]'));
+    var scheduleModal = document.getElementById('bl-schedule-modal');
+    var scheduleModalTitle = document.getElementById('bl-modal-title');
+
+    function buildScheduleFormContext(formElement) {
+        if (!formElement) {
+            return null;
+        }
+        return {
+            form: formElement,
+            id: formElement.querySelector('[data-field="id"]'),
+            title: formElement.querySelector('[data-field="title"]'),
+            type: formElement.querySelector('[data-field="type"]'),
+            period: formElement.querySelector('[data-field="period"]'),
+            time: formElement.querySelector('[data-field="time"]'),
+            retain: formElement.querySelector('[data-field="retain"]'),
+            maxAge: formElement.querySelector('[data-field="max_age"]'),
+            notify: formElement.querySelector('[data-field="notify"]'),
+            status: formElement.querySelector('[data-field="status"]')
+        };
+    }
+
+    var modalFormContext = buildScheduleFormContext(document.getElementById('bl-schedule-form'));
+    var inlineFormContext = buildScheduleFormContext(document.getElementById('bl-inline-schedule-form'));
+    var scheduleForm = modalFormContext ? modalFormContext.form : null;
+    var inlineForm = inlineFormContext ? inlineFormContext.form : null;
+    var modalCloseElements = scheduleModal ? scheduleModal.querySelectorAll('[data-bl-modal-close]') : [];
+
+    if (modalFormContext) {
+        resetScheduleForm(modalFormContext);
+    }
+
+    if (inlineFormContext) {
+        resetScheduleForm(inlineFormContext, { type: 'backup', period: 'weekly', time: '02:00', retain: 5, max_age: 30, status: 'enabled' });
+    }
+
+    var schedules = [];
+
+    function ajaxRequest(action, payload) {
+        if (!localizedSettings.ajaxUrl) {
+            return Promise.reject({ message: 'AJAX URL missing.' });
+        }
+
+        var form = new FormData();
+        form.append('action', action);
+        form.append('nonce', localizedSettings.nonce || '');
+
+        if (payload) {
+            Object.keys(payload).forEach(function (key) {
+                form.append(key, payload[key]);
+            });
+        }
+
+        return fetch(localizedSettings.ajaxUrl, {
+            method: 'POST',
+            credentials: 'same-origin',
+            body: form
+        }).then(function (response) {
+            return response.json();
+        }).then(function (json) {
+            if (!json || json.success !== true) {
+                throw json && json.data ? json.data : json;
+            }
+            return json.data || {};
+        });
+    }
+
+    function fetchSchedules() {
+        ajaxRequest('backup_lite_fetch_schedules').then(function (data) {
+            schedules = data.schedules || [];
+            renderSchedules();
+        }).catch(function () {
+            schedules = [];
+            renderSchedules();
+        });
+    }
+
+    function renderSchedules() {
+        if (!scheduleBody) {
+            return;
+        }
+        scheduleBody.innerHTML = '';
+
+        if (!schedules.length) {
+            var emptyRow = document.createElement('tr');
+            emptyRow.className = 'bl-empty-row';
+            var emptyCell = document.createElement('td');
+            emptyCell.colSpan = 8;
+            emptyCell.textContent = strings.noSchedules || 'No schedules configured yet.';
+            emptyRow.appendChild(emptyCell);
+            scheduleBody.appendChild(emptyRow);
+            return;
+        }
+
+        schedules.forEach(function (schedule) {
+            var row = document.createElement('tr');
+
+            var nameCell = document.createElement('td');
+            nameCell.textContent = schedule.title || '(untitled)';
+            row.appendChild(nameCell);
+
+            var statusCell = document.createElement('td');
+            if (schedule.status === 'disabled') {
+                statusCell.className = 'bl-status-disabled';
+                statusCell.textContent = strings.scheduleDisabled || 'Disabled';
+            } else {
+                statusCell.className = 'bl-status-enabled';
+                statusCell.textContent = strings.scheduleEnabled || 'Enabled';
+            }
+            row.appendChild(statusCell);
+
+            var periodCell = document.createElement('td');
+            periodCell.textContent = (schedule.period || 'daily').charAt(0).toUpperCase() + (schedule.period || 'daily').slice(1);
+            row.appendChild(periodCell);
+
+            var timeCell = document.createElement('td');
+            timeCell.textContent = schedule.time || '00:00';
+            row.appendChild(timeCell);
+
+            var nextRunCell = document.createElement('td');
+            nextRunCell.textContent = formatDateTime(schedule.next_run);
+            row.appendChild(nextRunCell);
+
+            var lastResultCell = document.createElement('td');
+            lastResultCell.appendChild(buildResultBadge(schedule.last_result));
+            row.appendChild(lastResultCell);
+
+            var lastRunCell = document.createElement('td');
+            lastRunCell.textContent = formatDateTime(schedule.last_run);
+            row.appendChild(lastRunCell);
+
+            var actionCell = document.createElement('td');
+            var menu = document.createElement('details');
+            menu.className = 'bl-actions-menu';
+
+            var trigger = document.createElement('summary');
+            trigger.className = 'bl-actions-trigger';
+            trigger.setAttribute('aria-label', getString('scheduleActionsAria', 'Schedule actions'));
+            trigger.textContent = '⋮';
+            menu.appendChild(trigger);
+
+            var list = document.createElement('div');
+            list.className = 'bl-actions-list';
+            var startLabel = getString('scheduleActionStart', 'Start Now');
+            var editLabel = getString('scheduleActionEdit', 'Edit');
+            var deleteLabel = getString('scheduleActionDelete', 'Delete');
+            list.appendChild(createActionButton('▶️ ' + startLabel, function () {
+                handleStartSchedule(schedule.id);
+            }));
+            list.appendChild(createActionButton('✏️ ' + editLabel, function () {
+                openScheduleModal(schedule);
+            }));
+            list.appendChild(createActionButton('🗑️ ' + deleteLabel, function () {
+                handleDeleteSchedule(schedule.id);
+            }));
+
+            menu.appendChild(list);
+            actionCell.appendChild(menu);
+            row.appendChild(actionCell);
+
+            scheduleBody.appendChild(row);
+        });
+    }
+
+    function createActionButton(label, onClick) {
+        var button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'button';
+        button.textContent = label;
+        button.addEventListener('click', function (event) {
+            if (typeof onClick === 'function') {
+                onClick(event);
+            }
+            var menu = button.closest('details');
+            if (menu) {
+                menu.removeAttribute('open');
+            }
+        });
+        return button;
+    }
+
+    function formatDateTime(value) {
+        if (!value) {
+            return '—';
+        }
+        var parsed = null;
+        if (typeof value === 'number') {
+            parsed = new Date(value > 1e12 ? value : value * 1000);
+        } else if (typeof value === 'string') {
+            if (/^\d+$/.test(value)) {
+                var numeric = parseInt(value, 10);
+                parsed = new Date(numeric > 1e12 ? numeric : numeric * 1000);
+            } else {
+                parsed = new Date(value.replace(' ', 'T'));
+            }
+        }
+
+        if (parsed && !isNaN(parsed.getTime())) {
+            return parsed.toLocaleString();
+        }
+        return value;
+    }
+
+    function buildResultBadge(statusKey) {
+        var key = (statusKey || 'pending').toLowerCase();
+        var labels = {
+            success: { icon: '✅', text: strings.scheduleResultSuccess || 'Success', className: 'success' },
+            failed: { icon: '❌', text: strings.scheduleResultFailed || 'Failed', className: 'error' },
+            pending: { icon: '⏳', text: strings.scheduleResultPending || 'Pending', className: 'pending' }
+        };
+        var config = labels[key] || labels.pending;
+        var badge = document.createElement('span');
+        badge.className = 'bl-badge ' + config.className;
+        badge.textContent = config.icon + ' ' + config.text;
+        return badge;
+    }
+
+    function resetScheduleForm(context, defaults) {
+        if (!context) {
+            return;
+        }
+        var preset = defaults || {};
+        if (context.id) {
+            context.id.value = preset.id || '';
+        }
+        if (context.title) {
+            context.title.value = preset.title || '';
+        }
+        if (context.type) {
+            context.type.value = preset.type || 'backup';
+        }
+        if (context.period) {
+            context.period.value = preset.period || 'daily';
+        }
+        if (context.time) {
+            context.time.value = preset.time || '00:00';
+        }
+        if (context.retain) {
+            context.retain.value = typeof preset.retain !== 'undefined' ? preset.retain : 5;
+        }
+        if (context.maxAge) {
+            context.maxAge.value = typeof preset.max_age !== 'undefined' ? preset.max_age : 30;
+        }
+        if (context.notify) {
+            context.notify.value = preset.notify || '';
+        }
+        if (context.status) {
+            var statusValue = typeof preset.status !== 'undefined' ? preset.status : 'enabled';
+            context.status.checked = statusValue !== 'disabled';
+        }
+    }
+
+    function openScheduleModal(schedule) {
+        if (!scheduleModal) {
+            return;
+        }
+        resetScheduleForm(modalFormContext);
+
+        if (schedule) {
+            scheduleModalTitle.textContent = strings.editScheduleTitle || 'Edit Schedule';
+            if (modalFormContext.id) {
+                modalFormContext.id.value = schedule.id || '';
+            }
+            if (modalFormContext.title) {
+                modalFormContext.title.value = schedule.title || '';
+            }
+            if (modalFormContext.type) {
+                modalFormContext.type.value = schedule.type || 'backup';
+            }
+            if (modalFormContext.period) {
+                modalFormContext.period.value = schedule.period || 'daily';
+            }
+            if (modalFormContext.time) {
+                modalFormContext.time.value = schedule.time || '00:00';
+            }
+            if (modalFormContext.retain) {
+                modalFormContext.retain.value = schedule.retain || 5;
+            }
+            if (modalFormContext.maxAge) {
+                modalFormContext.maxAge.value = schedule.max_age || 30;
+            }
+            if (modalFormContext.notify) {
+                modalFormContext.notify.value = schedule.notify || '';
+            }
+            if (modalFormContext.status) {
+                modalFormContext.status.checked = schedule.status !== 'disabled';
+            }
+        } else {
+            scheduleModalTitle.textContent = strings.newScheduleTitle || 'New Schedule';
+        }
+
+        scheduleModal.classList.add('is-visible');
+        document.body.classList.add('bl-modal-open');
+    }
+
+    function closeScheduleModal() {
+        if (!scheduleModal) {
+            return;
+        }
+        scheduleModal.classList.remove('is-visible');
+        document.body.classList.remove('bl-modal-open');
+    }
+
+    function gatherScheduleForm(context) {
+        if (!context) {
+            return null;
+        }
+        return {
+            title: context.title ? context.title.value.trim() : '',
+            type: context.type ? context.type.value : 'backup',
+            period: context.period ? context.period.value : 'daily',
+            time: context.time ? (context.time.value || '00:00') : '00:00',
+            retain: context.retain ? (parseInt(context.retain.value, 10) || 0) : 0,
+            max_age: context.maxAge ? (parseInt(context.maxAge.value, 10) || 0) : 0,
+            notify: context.notify ? context.notify.value.trim() : '',
+            status: context.status && context.status.checked ? 'enabled' : 'disabled'
+        };
+    }
+
+    function upsertSchedule(schedule) {
+        var found = false;
+        schedules = schedules.map(function (item) {
+            if (item.id === schedule.id) {
+                found = true;
+                return schedule;
+            }
+            return item;
+        });
+        if (!found) {
+            schedules.push(schedule);
+        }
+        renderSchedules();
+    }
+
+    function findScheduleById(id) {
+        var match = null;
+        schedules.forEach(function (schedule) {
+            if (schedule.id === id) {
+                match = schedule;
+            }
+        });
+        return match;
+    }
+
+    function removeScheduleLocally(id) {
+        schedules = schedules.filter(function (schedule) {
+            return schedule.id !== id;
+        });
+        renderSchedules();
+    }
+
+    function handleDeleteSchedule(id) {
+        if (!window.confirm(getString('confirmDeleteSchedule', 'Delete this schedule?'))) {
+            return;
+        }
+        ajaxRequest('backup_lite_delete_schedule', { id: id }).then(function () {
+            removeScheduleLocally(id);
+            showToast('🗑️ ' + getString('scheduleDeleted', 'Schedule deleted.'), 'error');
+        }).catch(function (error) {
+            var message = (error && error.message) ? error.message : getString('unableDeleteSchedule', 'Unable to delete schedule.');
+            showToast('⚠️ ' + message, 'warning');
+        });
+    }
+
+    function handleStartSchedule(id) {
+        ajaxRequest('backup_lite_start_schedule', { id: id }).then(function (data) {
+            if (data.schedule) {
+                upsertSchedule(data.schedule);
+            }
+            showToast('✅ ' + getString('manualJobStarted', 'Backup job started manually.'), 'success');
+        }).catch(function (error) {
+            var message = (error && error.message) ? error.message : 'Unable to start schedule.';
+            showToast('⚠️ ' + message, 'warning');
+        });
+    }
+
+    if (newScheduleButtons.length) {
+        newScheduleButtons.forEach(function (button) {
+            button.addEventListener('click', function () {
+                openScheduleModal(null);
+            });
+        });
+    }
+
+    if (modalCloseElements && modalCloseElements.length) {
+        modalCloseElements.forEach(function (element) {
+            element.addEventListener('click', closeScheduleModal);
+        });
+    }
+
+    if (scheduleModal) {
+        scheduleModal.addEventListener('click', function (event) {
+            if (event.target && event.target.dataset && event.target.dataset.blModalClose !== undefined) {
+                closeScheduleModal();
+            }
+        });
+    }
+
+    if (scheduleForm) {
+        scheduleForm.addEventListener('submit', function (event) {
+            event.preventDefault();
+            var payload = gatherScheduleForm(modalFormContext);
+            if (!payload || !payload.title) {
+                showToast('⚠️ ' + getString('provideScheduleTitle', 'Please provide a schedule title.'), 'warning');
+                return;
+            }
+            var scheduleId = modalFormContext && modalFormContext.id ? modalFormContext.id.value : '';
+            var action = scheduleId ? 'backup_lite_update_schedule' : 'backup_lite_add_schedule';
+            var requestPayload = {
+                schedule: JSON.stringify(payload)
+            };
+            if (scheduleId) {
+                requestPayload.id = scheduleId;
+            }
+            ajaxRequest(action, requestPayload).then(function (data) {
+                if (data.schedule) {
+                    upsertSchedule(data.schedule);
+                }
+                closeScheduleModal();
+                showToast('💾 ' + (strings.scheduleSaved || 'Schedule saved successfully.'), 'success');
+            }).catch(function (error) {
+                var message = (error && error.message) ? error.message : 'Unable to save schedule.';
+                showToast('⚠️ ' + message, 'warning');
+            });
+        });
+    }
+
+    if (inlineForm) {
+        inlineForm.addEventListener('submit', function (event) {
+            event.preventDefault();
+            var payload = gatherScheduleForm(inlineFormContext);
+            if (!payload || !payload.title) {
+                showToast('⚠️ ' + getString('provideScheduleTitle', 'Please provide a schedule title.'), 'warning');
+                return;
+            }
+            ajaxRequest('backup_lite_add_schedule', { schedule: JSON.stringify(payload) }).then(function (data) {
+                if (data.schedule) {
+                    upsertSchedule(data.schedule);
+                } else {
+                    fetchSchedules();
+                }
+                resetScheduleForm(inlineFormContext, { type: 'backup', period: 'weekly', time: '02:00', retain: 5, max_age: 30, status: 'enabled' });
+                showToast('✅ ' + (strings.scheduleSaved || 'Schedule saved successfully.'), 'success');
+            }).catch(function (error) {
+                var message = (error && error.message) ? error.message : 'Unable to save schedule.';
+                showToast('⚠️ ' + message, 'warning');
+            });
+        });
+
+        inlineForm.addEventListener('reset', function () {
+            resetScheduleForm(inlineFormContext, { type: 'backup', period: 'weekly', time: '02:00', retain: 5, max_age: 30, status: 'enabled' });
+        });
+    }
+
+    var refreshLogsButton = document.getElementById('bl-refresh-logs');
+    var logTableBody = document.getElementById('bl-log-table-body');
+    var logPreviewTitle = document.getElementById('bl-log-preview-title');
+    var logPreviewContent = document.getElementById('bl-log-preview-content');
+    var logPreviewNote = document.getElementById('bl-log-preview-note');
+
+    function updateLogPreview(title, content, truncated) {
+        if (!logPreviewContent) {
+            return;
+        }
+        if (logPreviewTitle) {
+            logPreviewTitle.textContent = title ? '🪵 ' + title : '🪵 ' + (strings.logPreview || 'Preview');
+        }
+        var placeholder = strings.logPreviewPlaceholder || 'Select a log file to preview.';
+        logPreviewContent.textContent = content || placeholder;
+        if (logPreviewNote) {
+            logPreviewNote.textContent = truncated ? (strings.logTruncated || 'Showing last 200KB (truncated).') : '';
+        }
+    }
+
+    if (refreshLogsButton) {
+        refreshLogsButton.addEventListener('click', function () {
+            window.BackupLiteUI.refreshLogs().then(function () {
+                updateLogPreview('', '', false);
+                showToast(strings.logsRefreshed || 'Logs refreshed.', 'success');
+            });
+        });
+    }
+
+    document.addEventListener('click', function (event) {
+        var scheduleAction = event.target && event.target.dataset ? event.target.dataset.scheduleAction : null;
+        if (scheduleAction) {
+            var scheduleId = event.target.dataset.scheduleId || '';
+            var menu = event.target.closest('details');
+            if (menu) {
+                menu.removeAttribute('open');
+            }
+
+            if ('start' === scheduleAction && scheduleId) {
+                handleStartSchedule(scheduleId);
+                return;
+            }
+
+            if ('delete' === scheduleAction && scheduleId) {
+                handleDeleteSchedule(scheduleId);
+                return;
+            }
+
+            if ('edit' === scheduleAction) {
+                var existing = scheduleId ? findScheduleById(scheduleId) : null;
+                if (existing) {
+                    openScheduleModal(existing);
+                }
+                return;
+            }
+        }
+
+        var action = event.target && event.target.dataset ? event.target.dataset.logAction : null;
+        var logName = event.target && event.target.dataset ? event.target.dataset.log : null;
+        if (!action || !logName) {
+            return;
+        }
+
+        if (action === 'view') {
+            ajaxRequest('backup_lite_view_log', { log: logName }).then(function (data) {
+                if (data.log) {
+                    updateLogPreview(data.log.name, data.log.content, data.log.truncated);
+                }
+            }).catch(function (error) {
+                var message = (error && error.message) ? error.message : 'Unable to load log.';
+                showToast('⚠️ ' + message, 'warning');
+            });
+        }
+
+        if (action === 'delete') {
+            if (!window.confirm(strings.confirmDeleteLog || 'Delete this log file?')) {
+                return;
+            }
+            ajaxRequest('backup_lite_delete_log', { log: logName }).then(function () {
+                showToast('🗑️ ' + (strings.logDeleted || 'Log deleted.'), 'error');
+                window.BackupLiteUI.refreshLogs();
+                if (logPreviewTitle && logPreviewTitle.textContent && logPreviewTitle.textContent.indexOf(logName) !== -1) {
+                    updateLogPreview('', '', false);
+                }
+            }).catch(function (error) {
+                var message = (error && error.message) ? error.message : 'Unable to delete log.';
+                showToast('⚠️ ' + message, 'warning');
+            });
+        }
+    });
+
+    var settingsForm = document.getElementById('bl-settings-form');
+    var verifyLicenseBtn = document.getElementById('bl-verify-license');
+
+    // License verification
+    if (verifyLicenseBtn) {
+        verifyLicenseBtn.addEventListener('click', function () {
+            var licenseKey = document.getElementById('bl-setting-license-key');
+            if (!licenseKey || !licenseKey.value) {
+                alert(strings.errorGeneric || 'License key is required.');
+                return;
+            }
+
+            verifyLicenseBtn.disabled = true;
+            verifyLicenseBtn.textContent = strings.runningMessage || 'Verifying...';
+
+            fetch(ajaxUrl, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: new URLSearchParams({
+                    action: 'backup_lite_verify_license',
+                    nonce: settings.nonce,
+                    license_key: licenseKey.value,
+                }),
+            })
+            .then(function (response) {
+                return response.json();
+            })
+            .then(function (json) {
+                if (json.success) {
+                    showToast(json.data.message || 'License key saved successfully.', 'success');
+                } else {
+                    showToast(json.data.message || 'Failed to verify license key.', 'error');
+                }
+            })
+            .catch(function (error) {
+                console.error('Error verifying license:', error);
+            showToast(getString('licenseError', 'An error occurred while verifying the license.'), 'error');
+            })
+            .finally(function () {
+                verifyLicenseBtn.disabled = false;
+                verifyLicenseBtn.textContent = strings.verifyLicense || 'Verify License';
+            });
+        });
+    }
+    var settingsMessage = document.getElementById('bl-settings-message');
+    var testEmailButton = document.getElementById('bl-test-email');
+
+    function showSettingsMessage(message, type) {
+        if (!settingsMessage) {
+            if (message) {
+                showToast(message, type === 'error' ? 'error' : 'success');
+            }
+            return;
+        }
+        settingsMessage.className = 'backup-lite-messages';
+        settingsMessage.classList.add('is-visible');
+        if (type === 'error') {
+            settingsMessage.classList.add('is-error');
+        } else {
+            settingsMessage.classList.add('is-success');
+        }
+        settingsMessage.textContent = message;
+    }
+    function getCheckboxValue(id) {
+        var el = document.getElementById(id);
+        return !!(el && el.checked);
+    }
+
+    function gatherSettings() {
+        var settings = {
+            backup_directory: document.getElementById('bl-setting-backup-dir') ? document.getElementById('bl-setting-backup-dir').value.trim() : '',
+            notification_email: document.getElementById('bl-setting-notify-email') ? document.getElementById('bl-setting-notify-email').value.trim() : '',
+            min_role: document.getElementById('bl-setting-role') ? document.getElementById('bl-setting-role').value : 'administrator',
+            ui_theme: document.getElementById('bl-setting-theme-mode') ? document.getElementById('bl-setting-theme-mode').value : 'auto',
+            feature_restore_center_v2: getCheckboxValue('bl-feature-restore-center'),
+            feature_ui_animation: getCheckboxValue('bl-feature-ui-animation'),
+            feature_extended_log: getCheckboxValue('bl-feature-extended-log'),
+        };
+
+        var debugToggle = document.getElementById('bl-setting-debug-mode');
+        if (debugToggle) {
+            settings.debug_mode = debugToggle.checked;
+        }
+
+        var cloudToggle = document.getElementById('bl-feature-cloud');
+        if (cloudToggle) {
+            settings.feature_cloud_destinations = cloudToggle.checked;
+        }
+
+        var advancedToggle = document.getElementById('bl-feature-advanced');
+        if (advancedToggle) {
+            settings.feature_advanced_filters = advancedToggle.checked;
+        }
+
+        var aiKey = document.getElementById('bl-setting-ai-key');
+        if (aiKey) {
+            settings.ai_openai_key = aiKey.value.trim();
+        }
+        var aiModel = document.getElementById('bl-setting-ai-model');
+        if (aiModel) {
+            settings.ai_model = aiModel.value;
+        }
+        var aiTemp = document.getElementById('bl-setting-ai-temperature');
+        if (aiTemp) {
+            settings.ai_temperature = parseFloat(aiTemp.value) || 0.7;
+        }
+        var aiEnabled = document.getElementById('bl-setting-ai-enabled');
+        if (aiEnabled) {
+            settings.ai_enabled = aiEnabled.checked;
+        }
+        var aiLog = document.getElementById('bl-setting-ai-log');
+        if (aiLog) {
+            settings.ai_log_activity = aiLog.checked;
+        }
+
+        return settings;
+    }
+
+    if (settingsForm) {
+        settingsForm.addEventListener('submit', function (event) {
+            event.preventDefault();
+            var payload = gatherSettings();
+            ajaxRequest('backup_lite_save_settings', { settings: JSON.stringify(payload) }).then(function () {
+                showSettingsMessage(strings.settingsSaved || 'Settings saved successfully.', 'success');
+                showToast('⚙️ ' + (strings.settingsSaved || 'Settings saved successfully.'), 'success');
+            }).catch(function (error) {
+                var message = (error && error.message) ? error.message : 'Unable to save settings.';
+                showSettingsMessage(message, 'error');
+            });
+        });
+
+        ajaxRequest('backup_lite_fetch_settings').then(function (data) {
+            if (!data.settings) {
+                return;
+            }
+            var s = data.settings;
+            var backupDir = document.getElementById('bl-setting-backup-dir');
+            var email = document.getElementById('bl-setting-notify-email');
+            var role = document.getElementById('bl-setting-role');
+            var theme = document.getElementById('bl-setting-theme-mode');
+            if (backupDir) backupDir.value = s.backup_directory || backupDir.value;
+            if (email) email.value = s.notification_email || email.value;
+            if (role) role.value = s.min_role || role.value;
+            if (theme && s.ui_theme) theme.value = s.ui_theme;
+
+            var debugToggle = document.getElementById('bl-setting-debug-mode');
+            if (debugToggle) debugToggle.checked = !!s.debug_mode;
+
+            var restoreToggle = document.getElementById('bl-feature-restore-center');
+            if (restoreToggle) restoreToggle.checked = !!s.feature_restore_center_v2;
+            var animationToggle = document.getElementById('bl-feature-ui-animation');
+            if (animationToggle) animationToggle.checked = !!s.feature_ui_animation;
+            var logToggle = document.getElementById('bl-feature-extended-log');
+            if (logToggle) logToggle.checked = !!s.feature_extended_log;
+            var cloudToggle = document.getElementById('bl-feature-cloud');
+            if (cloudToggle) cloudToggle.checked = !!s.feature_cloud_destinations;
+            var advancedToggle = document.getElementById('bl-feature-advanced');
+            if (advancedToggle) advancedToggle.checked = !!s.feature_advanced_filters;
+
+            // PRO Settings
+            var aiKey = document.getElementById('bl-setting-ai-key');
+            if (aiKey && s.ai_openai_key !== undefined) {
+                aiKey.value = s.ai_openai_key || '';
+            }
+            var aiModel = document.getElementById('bl-setting-ai-model');
+            if (aiModel && s.ai_model !== undefined) {
+                aiModel.value = s.ai_model || 'gpt-4o-mini';
+            }
+            var aiTemp = document.getElementById('bl-setting-ai-temperature');
+            if (aiTemp && s.ai_temperature !== undefined) {
+                aiTemp.value = s.ai_temperature || 0.7;
+            }
+            var aiEnabled = document.getElementById('bl-setting-ai-enabled');
+            if (aiEnabled) {
+                aiEnabled.checked = !!s.ai_enabled;
+            }
+            var aiLog = document.getElementById('bl-setting-ai-log');
+            if (aiLog) {
+                aiLog.checked = !!s.ai_log_activity;
+            }
+
+            var licenseKey = document.getElementById('bl-setting-license-key');
+            if (licenseKey && s.pro_license_key !== undefined) {
+                licenseKey.value = s.pro_license_key || '';
+            }
+        }).catch(function () {
+            // ignore fetch errors
+        });
+    }
+
+    // Feature Toggles UI removed per request; live preview wiring disabled.
+
+    if (testEmailButton) {
+        testEmailButton.addEventListener('click', function () {
+            ajaxRequest('backup_lite_test_email').then(function () {
+                showToast(strings.testEmailSuccess || '✅ Test email sent successfully', 'success');
+            }).catch(function (error) {
+                var message = (error && error.message) ? error.message : 'Unable to send test email.';
+                showToast('❌ ' + message, 'error');
+            });
+        });
+    }
+
+    if (scheduleBody) {
+        fetchSchedules();
+    }
+
+    if (currentPage === 'backup-lite-logs' && window.BackupLiteUI && typeof window.BackupLiteUI.refreshLogs === 'function') {
+        window.BackupLiteUI.refreshLogs();
+    }
+
+    // Floating Actions Menu to avoid clipping under rounded/scrollable containers
+    (function initFloatingActionsMenu() {
+        var activePortal = null;
+        var sourceDetails = null;
+        var summaryRef = null;
+        var repositionHandler = null;
+
+        function removePortal() {
+            if (activePortal && activePortal.parentNode) {
+                activePortal.parentNode.removeChild(activePortal);
+            }
+            activePortal = null;
+            if (sourceDetails) {
+                sourceDetails.open = false;
+                sourceDetails = null;
+            }
+            if (repositionHandler) {
+                window.removeEventListener('scroll', repositionHandler, true);
+                window.removeEventListener('resize', repositionHandler, true);
+                repositionHandler = null;
+            }
+            document.removeEventListener('click', onDocClick, true);
+        }
+
+        function onDocClick(e) {
+            if (!activePortal) return;
+            if (activePortal.contains(e.target)) return;
+            if (summaryRef && summaryRef.contains(e.target)) return;
+            removePortal();
+        }
+
+        function positionPortal() {
+            if (!summaryRef || !activePortal) return;
+            var rect = summaryRef.getBoundingClientRect();
+            var width = activePortal.offsetWidth || 180;
+            var top = Math.round(rect.bottom + 6);
+            var left = Math.round(rect.right - width);
+            // Clamp to viewport
+            if (left < 8) left = 8;
+            if (left + width > window.innerWidth - 8) {
+                left = Math.max(8, Math.round(window.innerWidth - width - 8));
+            }
+            if (left < 8) left = 8;
+            if (top + activePortal.offsetHeight > window.innerHeight - 8) {
+                top = Math.max(8, Math.round(rect.top - activePortal.offsetHeight - 6));
+            }
+            activePortal.style.top = top + 'px';
+            activePortal.style.left = left + 'px';
+        }
+
+        document.addEventListener('toggle', function (e) {
+            var details = e.target;
+            if (!details || !details.classList || !details.classList.contains('bl-actions-menu')) {
+                return;
+            }
+            // Close any existing
+            removePortal();
+            if (!details.open) return;
+
+            var summary = details.querySelector('.bl-actions-trigger');
+            var list = details.querySelector('.bl-actions-list');
+            if (!summary || !list) return;
+
+            // Hide original list
+            list.style.display = 'none';
+
+            // Create portal clone
+            var portal = list.cloneNode(true);
+            portal.classList.add('bl-actions-list-floating');
+            portal.style.position = 'fixed';
+            portal.style.zIndex = '9999';
+            portal.style.display = 'flex';
+            // lock width close to original
+            var measured = list.offsetWidth || 180;
+            portal.style.minWidth = Math.max(160, Math.min(340, measured)) + 'px';
+            document.body.appendChild(portal);
+
+            // Delegate click to original buttons via shared data attributes
+            portal.addEventListener('click', function (evt) {
+                var btn = evt.target.closest('button');
+                if (!btn) return;
+                var action = btn.getAttribute('data-schedule-action') || btn.getAttribute('data-log-action') || '';
+                if (!action) return;
+                var original = list.querySelector('button[data-schedule-action=\"' + action + '\"]') ||
+                               list.querySelector('button[data-log-action=\"' + action + '\"]');
+                if (original) original.click();
+                removePortal();
+            });
+
+            activePortal = portal;
+            sourceDetails = details;
+            summaryRef = summary;
+            positionPortal();
+            repositionHandler = positionPortal;
+            window.addEventListener('scroll', repositionHandler, true);
+            window.addEventListener('resize', repositionHandler, true);
+            document.addEventListener('click', onDocClick, true);
+        }, true);
+    })();
+
+    document.querySelectorAll('.backup-lite-card').forEach(function (card) {
+        card.addEventListener('mouseenter', function () {
+            card.classList.add('active');
+        });
+        card.addEventListener('mouseleave', function () {
+            card.classList.remove('active');
+        });
+    });
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initBackupLiteDomReady);
+} else {
+    initBackupLiteDomReady();
+}
+})(jQuery);
