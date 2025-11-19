@@ -337,8 +337,17 @@ function backup_lite_safe_path_join( $base, $path ) {
 
 function backup_lite_ensure_directory( $dir ) {
     if ( ! file_exists( $dir ) ) {
-        wp_mkdir_p( $dir );
+        $result = wp_mkdir_p( $dir );
+        if ( ! $result ) {
+            backup_lite_log( 'error', 'ensure_directory_failed', [
+                'dir' => $dir,
+                'parent_exists' => file_exists( dirname( $dir ) ),
+                'parent_writable' => is_writable( dirname( $dir ) ),
+            ] );
+            return false;
+        }
     }
+    return true;
 }
 
 function backup_lite_maybe_protect_directory( $dir ) {
@@ -485,7 +494,7 @@ function backup_lite_get_download_url( $path ) {
     }
 
     if ( ! empty( $secret ) ) {
-        $expires = time() + apply_filters( 'backup_lite_download_ttl', 15 * MINUTE_IN_SECONDS, $path );
+        $expires = time() + apply_filters( 'backup_lite_download_ttl', 20 * MINUTE_IN_SECONDS, $path );
         $token   = hash_hmac( 'sha256', $filename . '|' . $expires, $secret );
         $handler = plugins_url( 'download-handler.php', BACKUP_LITE_PATH . 'download-handler.php' );
 

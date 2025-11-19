@@ -29,27 +29,6 @@ $chart_failed  = isset( $activity_stats['failed'] ) ? (int) $activity_stats['fai
     </div>
 
     <div class="backup-lite-grid">
-        <?php
-        // Site Backup Health Score (Pro) — Lite shows promo only, no score
-        $is_pro = Backup_Lite_Pro::is_pro_active();
-        ?>
-        <div class="backup-lite-card <?php echo $is_pro ? '' : 'pro-locked'; ?>" <?php echo $is_pro ? '' : 'data-upgrade=\"pro\"'; ?>>
-            <h2>
-                🏥 <?php esc_html_e( 'Site Backup Health Score (Pro)', 'museder-restoreone' ); ?>
-                <?php if ( ! $is_pro ) : ?>
-                    <span class="pro-badge">PRO</span>
-                <?php endif; ?>
-            </h2>
-            <p class="description" style="margin-top: 8px;">
-                <?php esc_html_e( 'Premium sites can see an overall backup health score based on schedules, recent activity, and storage hygiene.', 'museder-restoreone' ); ?>
-            </p>
-            <?php if ( ! $is_pro ) : ?>
-                <a href="<?php echo esc_url( admin_url( 'admin.php?page=backup-lite-pro' ) ); ?>" class="button button-primary" style="margin-top: 8px;">
-                    <?php esc_html_e( 'Upgrade to Pro', 'museder-restoreone' ); ?>
-                </a>
-            <?php endif; ?>
-        </div>
-
         <div class="backup-lite-card">
             <h2>⚙️ <?php esc_html_e( 'Environment Compatibility', 'museder-restoreone' ); ?></h2>
             <ul class="backup-lite-status-list">
@@ -189,6 +168,28 @@ $chart_failed  = isset( $activity_stats['failed'] ) ? (int) $activity_stats['fai
                         </li>
                     <?php endforeach; ?>
                 </ul>
+            <?php endif; ?>
+        </div>
+
+        <?php
+        // Site Backup Health Score (Pro) — Lite shows promo only, no score
+        // Moved to last position as it's a PRO feature and appears grayed out
+        $is_pro = Backup_Lite_Pro::is_pro_active();
+        ?>
+        <div class="backup-lite-card <?php echo $is_pro ? '' : 'pro-locked'; ?>" <?php echo $is_pro ? '' : 'data-upgrade=\"pro\"'; ?>>
+            <h2>
+                🏥 <?php esc_html_e( 'Site Backup Health Score (Pro)', 'museder-restoreone' ); ?>
+                <?php if ( ! $is_pro ) : ?>
+                    <span class="pro-badge">PRO</span>
+                <?php endif; ?>
+            </h2>
+            <p class="description" style="margin-top: 8px;">
+                <?php esc_html_e( 'Premium sites can see an overall backup health score based on schedules, recent activity, and storage hygiene.', 'museder-restoreone' ); ?>
+            </p>
+            <?php if ( ! $is_pro ) : ?>
+                <a href="<?php echo esc_url( admin_url( 'admin.php?page=backup-lite-pro' ) ); ?>" class="button button-primary" style="margin-top: 8px;">
+                    <?php esc_html_e( 'Upgrade to Pro', 'museder-restoreone' ); ?>
+                </a>
             <?php endif; ?>
         </div>
     </div>

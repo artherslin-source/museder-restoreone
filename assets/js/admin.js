@@ -76,6 +76,7 @@ var backupJobContext = {
         var actionText = config.actionText || strings.downloadLabel || 'Download';
         var confirmText = config.confirmText || '';
         var autoClose = typeof config.autoClose === 'number' ? config.autoClose : 0;
+        var type = config.type || 'success'; // 'success' or 'error'
 
         var existing = document.querySelector('.bl-completion-overlay');
         if (existing && existing.parentNode) {
@@ -89,6 +90,9 @@ var backupJobContext = {
 
         var dialog = document.createElement('div');
         dialog.className = 'bl-completion-dialog';
+        if (type === 'error') {
+            dialog.classList.add('bl-completion-error');
+        }
 
         var closeBtn = document.createElement('button');
         closeBtn.type = 'button';
@@ -125,6 +129,32 @@ var backupJobContext = {
                 actionBtn.textContent = actionText;
                 actionBtn.setAttribute('target', '_blank');
                 actionBtn.setAttribute('rel', 'noopener noreferrer');
+                
+                // Check if download link is expired before allowing download
+                actionBtn.addEventListener('click', function(e) {
+                    try {
+                        var url = new URL(actionHref);
+                        var expires = parseInt(url.searchParams.get('expires'), 10);
+                        if (expires && expires < Math.floor(Date.now() / 1000)) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            alert('您的下載已過期，請從備份庫下載');
+                            // Optionally redirect to backups page
+                            if (window.location.href.indexOf('page=backup-lite-backups') === -1) {
+                                var backupsUrl = window.location.href.replace(/page=[^&]*/, 'page=backup-lite-backups');
+                                if (backupsUrl === window.location.href) {
+                                    backupsUrl += (window.location.href.indexOf('?') === -1 ? '?' : '&') + 'page=backup-lite-backups';
+                                }
+                                window.location.href = backupsUrl;
+                            }
+                            return false;
+                        }
+                    } catch (err) {
+                        // If URL parsing fails, allow normal download
+                        console.warn('Could not parse download URL:', err);
+                    }
+                });
+                
                 actionsEl.appendChild(actionBtn);
             }
 
@@ -150,9 +180,19 @@ var backupJobContext = {
             if (overlay && overlay.parentNode) {
                 overlay.parentNode.removeChild(overlay);
             }
-            // Refresh page when overlay is closed
+            
+            // Reset progress bar and restore state when overlay is closed
+            // This ensures the UI is ready for the next restore
+            if (typeof window.BackupLiteUI !== 'undefined' && typeof window.BackupLiteUI.resetRestoreProgress === 'function') {
+                window.BackupLiteUI.resetRestoreProgress();
+            }
+            
+            // Refresh page when overlay is closed to ensure clean state
             if (typeof window.location !== 'undefined') {
-                window.location.reload();
+                // Small delay to allow reset function to execute
+                setTimeout(function() {
+                    window.location.reload();
+                }, 100);
             }
         }
 
@@ -295,6 +335,56 @@ var backupJobContext = {
         });
     }
 
+    // Function to reset restore progress bar and state
+    function resetRestoreProgress() {
+        // Reset progress bar to 0%
+        var progressBar = document.querySelector('.restore-progress .progress-bar-fill');
+        var progressFill = document.getElementById('restore-progress-fill');
+        var progressText = document.getElementById('restore-progress-text');
+        var progressContainer = document.getElementById('restore-progress-container');
+        var waitingMessage = document.getElementById('restore-waiting-message');
+        
+        if (progressFill) {
+            progressFill.style.width = '0%';
+        }
+        if (progressBar) {
+            progressBar.style.width = '0%';
+        }
+        if (progressText) {
+            progressText.textContent = '0%';
+        }
+        if (progressContainer) {
+            progressContainer.style.display = 'none';
+        }
+        if (waitingMessage) {
+            waitingMessage.style.display = 'block';
+        }
+        
+        // Reset status elements
+        var statusIcon = document.getElementById('restore-status-icon');
+        var statusTitle = document.getElementById('restore-status-title');
+        var statusTitleText = document.getElementById('restore-status-title-text');
+        var statusMessage = document.getElementById('restore-status-message');
+        var progressStatus = document.querySelector('.restore-progress .progress-status');
+        
+        if (statusIcon) {
+            statusIcon.textContent = '';
+        }
+        if (statusTitle) {
+            statusTitle.style.color = '';
+            statusTitle.textContent = '';
+        }
+        if (statusTitleText) {
+            statusTitleText.textContent = '';
+        }
+        if (statusMessage) {
+            statusMessage.textContent = '';
+        }
+        if (progressStatus) {
+            progressStatus.textContent = '';
+        }
+    }
+
     window.BackupLiteUI = {
         showMessage: showMessage,
         handleError: handleError,
@@ -303,7 +393,8 @@ var backupJobContext = {
         strings: strings,
         spinner: spinnerMarkup,
         showToast: showToast,
-        showCompletionOverlay: showCompletionOverlay
+        showCompletionOverlay: showCompletionOverlay,
+        resetRestoreProgress: resetRestoreProgress
     };
 
     backupJobContext.pollDelay = Math.max(2500, (settings.jobPollingInterval || 3) * 1000);
@@ -867,6 +958,7 @@ function initBackupLiteDomReady() {
         var nonce = restoreData.ajaxNonce 
             || settings.nonce 
             || '';
+        var refreshingNonce = null;
         if (!ajaxUrl) {
             console.error('Backup Lite: ajaxUrl not found');
             return;
@@ -881,6 +973,8 @@ function initBackupLiteDomReady() {
         var remoteInput = document.getElementById('remoteUrl');
         var remoteButton = document.getElementById('downloadRestore');
         var progressBar = document.querySelector('.restore-progress .progress-bar-fill');
+        var currentProgress = 0; // Track current displayed progress for smooth transitions
+        var progressAnimationId = null; // Track animation frame ID
         var progressStatus = document.querySelector('.restore-progress .progress-status');
         var startButton = document.getElementById('startRestore');
         var overwriteToggle = document.getElementById('overwriteData');
@@ -931,6 +1025,17 @@ function initBackupLiteDomReady() {
             uploading: strings.chunkUploading || 'Uploading %1$s of %2$s (%3$s%)…',
             merging: strings.chunkMerging || 'Merging uploaded chunks…'
         };
+        var activeRestoreJobId = null;
+        var restoreJobPollTimer = null;
+        var restoreJobPollStartTime = null;
+        var restoreJobReached100Time = null;
+        var restoreJobEstimatedProgress = null; // Estimated progress based on file size
+        var restoreJobProgressTimer = null; // Timer for simulated progress
+        var restoreJobFileSize = 0; // Backup file size in bytes
+        var restoreJobEstimatedDuration = 0; // Estimated duration in milliseconds
+        var restoreJobReached85Time = null; // Time when progress reached 85%
+        var RESTORE_JOB_POLL_TIMEOUT = 300000; // 5 minutes timeout
+        var RESTORE_JOB_100_POLL_LIMIT = 60000; // 1 minute after reaching 100%
 
         function notifyError(payload) {
             if (typeof handleError === 'function') {
@@ -978,6 +1083,8 @@ function initBackupLiteDomReady() {
                         } catch (error) {
                             var parseError = new Error(strings.errorGeneric || 'An unexpected error occurred. Check logs for details.');
                             parseError.payload = { message: text };
+                            parseError.status = res.status;
+                            parseError.responseText = text;
                             throw parseError;
                         }
                     }
@@ -986,6 +1093,8 @@ function initBackupLiteDomReady() {
                         var message = payload && payload.message ? payload.message : (strings.errorGeneric || 'An unexpected error occurred.');
                         var requestError = new Error(message);
                         requestError.payload = payload;
+                        requestError.status = res.status;
+                        requestError.responseText = text;
                         throw requestError;
                     }
                     if (typeof json.success === 'undefined') {
@@ -993,6 +1102,796 @@ function initBackupLiteDomReady() {
                     }
                     return json;
                 });
+            });
+        }
+
+        function refreshAjaxNonce() {
+            if (refreshingNonce) {
+                return refreshingNonce;
+            }
+            var fd = new FormData();
+            fd.append('action', 'backup_lite_refresh_nonce');
+            refreshingNonce = fetch(ajaxUrl, {
+                method: 'POST',
+                credentials: 'same-origin',
+                body: fd
+            }).then(function (res) {
+                return res.text().then(function (text) {
+                    var json = {};
+                    if (text) {
+                        try {
+                            json = JSON.parse(text);
+                        } catch (error) {
+                            var parseError = new Error(strings.errorGeneric || 'Unable to refresh session. Please reload the page.');
+                            parseError.responseText = text;
+                            throw parseError;
+                        }
+                    }
+                    if (!res.ok || !json || json.success !== true || !json.data || !json.data.nonce) {
+                        var refreshError = new Error(strings.errorGeneric || 'Unable to refresh session. Please reload the page.');
+                        refreshError.responseText = text;
+                        throw refreshError;
+                    }
+                    nonce = json.data.nonce;
+                    return nonce;
+                });
+            }).catch(function (error) {
+                console.error('Backup Lite: failed to refresh AJAX nonce.', error);
+                throw error;
+            }).finally(function () {
+                refreshingNonce = null;
+            });
+            return refreshingNonce;
+        }
+        
+        // Fallback function to check completion from history when AJAX fails
+        function checkRestoreCompletionFromHistory(jobId) {
+            if (!jobId) {
+                return;
+            }
+            
+            console.log('[Backup Lite] Checking completion from history as fallback', { jobId });
+            
+            // Try to get history directly via a simple fetch (without nonce if possible)
+            // Or use the job status endpoint with fresh nonce
+            var formData = prepareFormData('backup_lite_restore_job_status');
+            formData.append('job_id', jobId);
+            
+            ajaxRequest(formData).then(function (json) {
+                var payload = getJsonPayload(json) || {};
+                var job = payload.job || payload;
+                
+                // Check if job is complete
+                if (job && (job.status === 'success' || job.status === 'completed')) {
+                    console.log('[Backup Lite] Detected completion from history fallback check', { jobId, status: job.status, restoreCompletionShown });
+                    // Force show overlay even if restoreCompletionShown is true (in case overlay was removed)
+                    if (restoreCompletionShown) {
+                        var existingOverlay = document.querySelector('.bl-completion-overlay.is-visible');
+                        if (!existingOverlay) {
+                            console.log('[Backup Lite] Completion flag set but overlay not visible, resetting flag');
+                            restoreCompletionShown = false;
+                        }
+                    }
+                    markRestoreCompleted(job.message || (strings.restoreCompleted || 'Restore Completed.'));
+                    return;
+                }
+                
+                // Check if job failed
+                if (job && job.status === 'failed') {
+                    console.log('[Backup Lite] Detected failure from history fallback check', { jobId, status: job.status });
+                    stopRestoreJobMonitor();
+                    restoreInProgress = false;
+                    restoreCompleted = false;
+                    if (startButton) {
+                        startButton.disabled = false;
+                    }
+                    // Force progress to 100% to show completion
+                    if (currentProgress < 100) {
+                        if (progressAnimationId) {
+                            cancelAnimationFrame(progressAnimationId);
+                            progressAnimationId = null;
+                        }
+                        currentProgress = 100;
+                        var progressFillFailed = document.getElementById('restore-progress-fill');
+                        var progressTextFailed = document.getElementById('restore-progress-text');
+                        updateProgressDisplay(100, progressBar, progressFillFailed, progressTextFailed);
+                    }
+                    setProgress(100, job.message || (strings.errorGeneric || 'Restore failed.'), true);
+                    syncWizard();
+                    updateRestoreCancelState();
+                    showToast('❌ ' + (job.message || strings.errorGeneric || 'Restore failed.'), 'error');
+                    
+                    // Show failure overlay
+                    if (!restoreCompletionShown) {
+                        restoreCompletionShown = true;
+                        showCompletionOverlay({
+                            icon: '❌',
+                            title: strings.restoreFailed || 'Restore Failed',
+                            message: job.message || strings.errorGeneric || 'Restore failed. Please review the error log and try again.',
+                            confirmText: strings.restoreOverlayConfirm || strings.close || 'Got it',
+                            type: 'error'
+                        });
+                    }
+                    return;
+                }
+                
+                // Check history for success entry
+                if (payload.history && Array.isArray(payload.history) && payload.history.length > 0) {
+                    var latestHistory = payload.history[0];
+                    if (latestHistory && latestHistory.result === 'success') {
+                        var historyTimestamp = latestHistory.timestamp_raw || 0;
+                        var jobStartRaw = job && (job.started_at_raw || job.created_at_raw) || 0;
+                        if (!jobStartRaw || (historyTimestamp && historyTimestamp >= jobStartRaw)) {
+                            console.log('[Backup Lite] Detected completion from history entry', { jobId, historyTimestamp, jobStartRaw, restoreCompletionShown });
+                            // Force show overlay even if restoreCompletionShown is true (in case overlay was removed)
+                            if (restoreCompletionShown) {
+                                var existingOverlay = document.querySelector('.bl-completion-overlay.is-visible');
+                                if (!existingOverlay) {
+                                    console.log('[Backup Lite] Completion flag set but overlay not visible, resetting flag');
+                                    restoreCompletionShown = false;
+                                }
+                            }
+                            markRestoreCompleted(job && job.message || (strings.restoreCompleted || 'Restore Completed.'));
+                            return;
+                        }
+                    } else if (latestHistory && latestHistory.result === 'failed') {
+                        // History shows failure
+                        console.log('[Backup Lite] Detected failure from history entry', { jobId, latestHistory });
+                        stopRestoreJobMonitor();
+                        restoreInProgress = false;
+                        restoreCompleted = false;
+                        if (startButton) {
+                            startButton.disabled = false;
+                        }
+                        // Force progress to 100% to show completion
+                        if (currentProgress < 100) {
+                            if (progressAnimationId) {
+                                cancelAnimationFrame(progressAnimationId);
+                                progressAnimationId = null;
+                            }
+                            currentProgress = 100;
+                            var progressFillFailed3 = document.getElementById('restore-progress-fill');
+                            var progressTextFailed3 = document.getElementById('restore-progress-text');
+                            updateProgressDisplay(100, progressBar, progressFillFailed3, progressTextFailed3);
+                        }
+                        setProgress(100, latestHistory.message || (strings.errorGeneric || 'Restore failed.'), true);
+                        syncWizard();
+                        updateRestoreCancelState();
+                        showToast('❌ ' + (latestHistory.message || strings.errorGeneric || 'Restore failed.'), 'error');
+                        
+                        // Show failure overlay
+                        if (!restoreCompletionShown) {
+                            restoreCompletionShown = true;
+                            showCompletionOverlay({
+                                icon: '❌',
+                                title: strings.restoreFailed || 'Restore Failed',
+                                message: latestHistory.message || strings.errorGeneric || 'Restore failed. Please review the error log and try again.',
+                                confirmText: strings.restoreOverlayConfirm || strings.close || 'Got it',
+                                type: 'error'
+                            });
+                        }
+                        return;
+                    }
+                }
+            }).catch(function (error) {
+                console.warn('[Backup Lite] History fallback check also failed:', error);
+                // If history check also fails, and we've been polling for a while, assume we should reset
+                // This prevents stuck progress when all requests fail
+                if (restoreJobPollStartTime && (Date.now() - restoreJobPollStartTime) > 120000) {
+                    // If we've been polling for more than 2 minutes and all requests fail, reset state
+                    console.warn('[Backup Lite] All status checks failed for 2+ minutes, resetting state to prevent stuck progress');
+                    stopRestoreJobMonitor();
+                    restoreInProgress = false;
+                    restoreCompleted = false;
+                    if (startButton) {
+                        startButton.disabled = false;
+                    }
+                    setProgress(0, '', false);
+                    syncWizard();
+                    updateRestoreCancelState();
+                }
+            });
+        }
+        
+        function markRestoreCompleted(message) {
+            // Check if overlay is actually visible in the DOM
+            var existingOverlay = document.querySelector('.bl-completion-overlay.is-visible');
+            var overlayExists = existingOverlay && existingOverlay.parentNode;
+            
+            // If overlay is already visible, only update state if needed
+            if (restoreCompletionShown && overlayExists) {
+                // Overlay is already shown and visible - only update state if needed
+                if (!restoreCompleted || restoreInProgress) {
+                    restoreInProgress = false;
+                    restoreCompleted = true;
+                    setProgress(100, message || strings.restoreCompleted || 'Restore Completed.', true);
+                    stopRestoreJobMonitor();
+                    if (startButton) {
+                        startButton.disabled = false;
+                    }
+                    syncWizard();
+                    updateRestoreCancelState();
+                }
+                console.log('[Backup Lite] Completion overlay already visible, skipping duplicate display');
+                return;
+            }
+            
+            // If restoreCompletionShown is true but overlay doesn't exist, reset the flag
+            // This handles cases where overlay was removed or failed to show
+            if (restoreCompletionShown && !overlayExists) {
+                console.log('[Backup Lite] Completion flag set but overlay not visible, resetting and showing overlay');
+                restoreCompletionShown = false;
+            }
+            
+            // Mark completion and show overlay
+            console.log('[Backup Lite] Marking restore as completed', { message, restoreInProgress, restoreCompleted, activeRestoreJobId, overlayExists });
+            setProgress(100, message || strings.restoreCompleted || 'Restore Completed.', true);
+            stopRestoreJobMonitor();
+            restoreInProgress = false;
+            restoreCompleted = true;
+            activeRestoreJobId = null; // Clear active job ID to allow new restore
+            if (startButton) {
+                startButton.disabled = false;
+            }
+            syncWizard();
+            updateRestoreCancelState();
+            showToast('✅ ' + (strings.successRestore || 'Restore Completed!'), 'success');
+            
+            // Always show overlay when marking completion
+            restoreCompletionShown = true;
+            try {
+                showCompletionOverlay({
+                    icon: '✅',
+                    title: strings.restoreCompleted || 'Restore Completed',
+                    message: strings.restoreOverlayMessage || strings.successRestore || 'Your site has been restored successfully.',
+                    confirmText: strings.restoreOverlayConfirm || strings.close || 'Got it'
+                });
+                console.log('[Backup Lite] Completion overlay shown');
+                
+                // Verify overlay was actually added to DOM
+                setTimeout(function() {
+                    var verifyOverlay = document.querySelector('.bl-completion-overlay.is-visible');
+                    if (!verifyOverlay) {
+                        console.warn('[Backup Lite] Completion overlay not found in DOM after show, retrying...');
+                        restoreCompletionShown = false;
+                        // Retry once
+                        try {
+                            showCompletionOverlay({
+                                icon: '✅',
+                                title: strings.restoreCompleted || 'Restore Completed',
+                                message: strings.restoreOverlayMessage || strings.successRestore || 'Your site has been restored successfully.',
+                                confirmText: strings.restoreOverlayConfirm || strings.close || 'Got it'
+                            });
+                            restoreCompletionShown = true;
+                            console.log('[Backup Lite] Completion overlay shown on retry');
+                        } catch (retryError) {
+                            console.error('[Backup Lite] Failed to show completion overlay on retry:', retryError);
+                            restoreCompletionShown = false;
+                        }
+                    }
+                }, 100);
+            } catch (error) {
+                console.error('[Backup Lite] Failed to show completion overlay:', error);
+                // Reset flag so we can try again
+                restoreCompletionShown = false;
+            }
+        }
+        
+        function startRestoreJobMonitor(job, fileSize) {
+            if (!job || !job.id) {
+                return;
+            }
+            activeRestoreJobId = job.id;
+            restoreInProgress = true;
+            restoreJobPollStartTime = Date.now();
+            restoreJobReached100Time = null;
+            restoreJobReached85Time = null;
+            restoreCompletionShown = false;
+            restoreJobEstimatedProgress = 5; // Start at 5%
+            restoreJobFileSize = fileSize || 0;
+            
+            // Calculate estimated duration based on file size
+            // Estimate: ~10-50 MB/s processing speed (conservative estimate)
+            // For 1GB file: ~20-100 seconds, use 60 seconds as baseline
+            // Scale based on file size
+            var baseSize = 100 * 1024 * 1024; // 100 MB baseline
+            var baseDuration = 30000; // 30 seconds for 100 MB
+            if (restoreJobFileSize > 0) {
+                restoreJobEstimatedDuration = Math.max(60000, Math.min(600000, (restoreJobFileSize / baseSize) * baseDuration));
+            } else {
+                restoreJobEstimatedDuration = 180000; // Default 3 minutes if size unknown
+            }
+            
+            var progressContainer = document.getElementById('restore-progress-container');
+            var waitingMessage = document.getElementById('restore-waiting-message');
+            if (progressContainer) {
+                progressContainer.style.display = 'block';
+            }
+            if (waitingMessage) {
+                waitingMessage.style.display = 'none';
+            }
+            syncWizard();
+            updateRestoreCancelState();
+            setProgress(5, job.message || (strings.runningMessage || 'Starting restore…'), false);
+            
+            // Start simulated progress from 5% to 85%
+            startSimulatedProgress();
+            
+            // If job status is 'pending', try to trigger it immediately
+            if (job.status === 'pending') {
+                // Trigger cron execution immediately via AJAX
+                var triggerFormData = prepareFormData('backup_lite_trigger_restore_job');
+                triggerFormData.append('job_id', job.id);
+                ajaxRequest(triggerFormData).catch(function(err) {
+                    // If trigger fails, continue with normal polling
+                    console.warn('Could not trigger restore job immediately:', err);
+                });
+            }
+            
+            pollRestoreJob(job.id, true);
+            if (restoreJobPollTimer) {
+                clearInterval(restoreJobPollTimer);
+            }
+            restoreJobPollTimer = window.setInterval(function () {
+                pollRestoreJob(job.id, false);
+            }, 5000);
+            
+            // Keep WordPress session alive during long restore operations
+            // Use WordPress heartbeat API to prevent session expiration
+            if (typeof window.wp !== 'undefined' && window.wp.heartbeat) {
+                // Increase heartbeat interval to keep session alive
+                var heartbeatInterval = setInterval(function() {
+                    if (activeRestoreJobId === job.id && restoreInProgress) {
+                        // Trigger heartbeat to keep session alive
+                        if (window.wp.heartbeat && window.wp.heartbeat.connectNow) {
+                            window.wp.heartbeat.connectNow();
+                        } else if (window.wp && window.wp.heartbeat && typeof window.wp.heartbeat === 'function') {
+                            // Fallback: try to trigger heartbeat manually
+                            try {
+                                var heartbeatData = { 'wp_autosave': false };
+                                if (typeof jQuery !== 'undefined' && jQuery.heartbeat) {
+                                    jQuery.heartbeat.enqueue('backup_lite_keep_alive', heartbeatData);
+                                }
+                            } catch (e) {
+                                // Ignore heartbeat errors
+                            }
+                        }
+                    } else {
+                        // Stop heartbeat when restore is complete
+                        clearInterval(heartbeatInterval);
+                    }
+                }, 30000); // Every 30 seconds
+                
+                // Store interval ID for cleanup
+                if (!window.backupLiteHeartbeatInterval) {
+                    window.backupLiteHeartbeatInterval = heartbeatInterval;
+                }
+            }
+        }
+        
+        function startSimulatedProgress() {
+            if (restoreJobProgressTimer) {
+                clearInterval(restoreJobProgressTimer);
+            }
+            
+            var startTime = Date.now();
+            var startProgress = 5;
+            var targetProgress = 85;
+            var duration = restoreJobEstimatedDuration * 0.8; // Use 80% of estimated time to reach 85%
+            
+            restoreJobProgressTimer = window.setInterval(function() {
+                if (!restoreInProgress || !activeRestoreJobId) {
+                    clearInterval(restoreJobProgressTimer);
+                    restoreJobProgressTimer = null;
+                    return;
+                }
+                
+                var elapsed = Date.now() - startTime;
+                var progress = Math.min(targetProgress, startProgress + ((elapsed / duration) * (targetProgress - startProgress)));
+                
+                // Use ease-out cubic for smooth animation
+                var t = Math.min(1, elapsed / duration);
+                var eased = 1 - Math.pow(1 - t, 3);
+                progress = startProgress + (eased * (targetProgress - startProgress));
+                
+                restoreJobEstimatedProgress = Math.min(85, progress);
+                
+                // Only update if we haven't reached 85% yet
+                if (restoreJobEstimatedProgress < 85) {
+                    setProgress(restoreJobEstimatedProgress, strings.restoreInProgress || 'Restore in Progress', false);
+                } else if (restoreJobEstimatedProgress >= 85 && !restoreJobReached85Time) {
+                    restoreJobReached85Time = Date.now();
+                    setProgress(85, strings.restoreFinalizing || 'Finalizing restore…', false);
+                    // Stop simulated progress, wait for actual job status
+                    clearInterval(restoreJobProgressTimer);
+                    restoreJobProgressTimer = null;
+                }
+            }, 100); // Update every 100ms for smooth animation
+        }
+        function stopRestoreJobMonitor() {
+            if (restoreJobPollTimer) {
+                clearInterval(restoreJobPollTimer);
+                restoreJobPollTimer = null;
+            }
+            if (restoreJobProgressTimer) {
+                clearInterval(restoreJobProgressTimer);
+                restoreJobProgressTimer = null;
+            }
+            // Stop heartbeat interval if running
+            if (window.backupLiteHeartbeatInterval) {
+                clearInterval(window.backupLiteHeartbeatInterval);
+                window.backupLiteHeartbeatInterval = null;
+            }
+            activeRestoreJobId = null;
+            restoreJobPollStartTime = null;
+            restoreJobReached100Time = null;
+            restoreJobReached85Time = null;
+            restoreJobEstimatedProgress = null;
+            restoreJobFileSize = 0;
+            restoreJobEstimatedDuration = 0;
+        }
+        function pollRestoreJob(jobId, silent) {
+            if (!jobId) {
+                return;
+            }
+            
+            // Check for timeout
+            if (restoreJobPollStartTime && (Date.now() - restoreJobPollStartTime) > RESTORE_JOB_POLL_TIMEOUT) {
+                stopRestoreJobMonitor();
+                restoreInProgress = false;
+                restoreCompleted = false;
+                if (startButton) {
+                    startButton.disabled = false;
+                }
+                syncWizard();
+                updateRestoreCancelState();
+                notifyError({ message: strings.errorGeneric || 'Restore operation timed out. Please refresh the page to check the status.' });
+                return;
+            }
+            
+            var formData = prepareFormData('backup_lite_restore_job_status');
+            formData.append('job_id', jobId);
+            ajaxRequest(formData).then(function (json) {
+                var payload = getJsonPayload(json) || {};
+                var job = payload.job || payload;
+                
+                // Check if nonce expired flag is set
+                if (payload.nonce_expired) {
+                    // Nonce expired but we got job status - refresh nonce and continue
+                    refreshAjaxNonce().then(function() {
+                        // Continue polling with fresh nonce
+                        if (activeRestoreJobId === jobId) {
+                            pollRestoreJob(jobId, silent);
+                        }
+                    }).catch(function(refreshError) {
+                        console.warn('[Backup Lite] Failed to refresh nonce, continuing with current status:', refreshError);
+                    });
+                }
+                
+                if (!job) {
+                    return;
+                }
+                
+                var progress = job.progress || 0;
+                var status = job.status || '';
+                
+                // If job is still pending after 10 seconds, try to trigger it again
+                if (status === 'pending' && restoreJobPollStartTime) {
+                    var timeSinceStart = Date.now() - restoreJobPollStartTime;
+                    if (timeSinceStart > 10000) {
+                        // Job has been pending for more than 10 seconds, try to trigger it
+                        var triggerFormData = prepareFormData('backup_lite_trigger_restore_job');
+                        triggerFormData.append('job_id', job.id);
+                        ajaxRequest(triggerFormData).catch(function(err) {
+                            console.warn('Could not trigger restore job:', err);
+                        });
+                    }
+                }
+                
+                // Use simulated progress if we haven't reached 85% yet
+                // Once we reach 85%, use actual job progress
+                var displayProgress = restoreJobEstimatedProgress || 5;
+                var isComplete = status === 'success' || status === 'completed';
+                var isFailed = status === 'failed';
+                
+                // If we've reached 85% or job is complete/failed, use actual progress
+                if (restoreJobReached85Time || isComplete || isFailed) {
+                    displayProgress = Math.min(100, Math.max(85, progress));
+                } else {
+                    // Still using simulated progress, but don't exceed 85%
+                    displayProgress = Math.min(85, displayProgress);
+                }
+                
+                // Track when progress first reaches 100%
+                if (displayProgress >= 100 && !restoreJobReached100Time) {
+                    restoreJobReached100Time = Date.now();
+                }
+                
+                // If job is complete or failed, force to 100% immediately
+                if (isComplete || isFailed) {
+                    displayProgress = 100;
+                    // Stop simulated progress if still running
+                    if (restoreJobProgressTimer) {
+                        clearInterval(restoreJobProgressTimer);
+                        restoreJobProgressTimer = null;
+                    }
+                    // Force progress to 100% immediately
+                    if (currentProgress < 100) {
+                        if (progressAnimationId) {
+                            cancelAnimationFrame(progressAnimationId);
+                            progressAnimationId = null;
+                        }
+                        currentProgress = 100;
+                        var progressFill = document.getElementById('restore-progress-fill');
+                        var progressText = document.getElementById('restore-progress-text');
+                        updateProgressDisplay(100, progressBar, progressFill, progressText);
+                    }
+                }
+                
+                setProgress(displayProgress, job.message || (strings.runningMessage || ''), isComplete || isFailed);
+                
+                if (payload.history) {
+                    renderHistory(payload.history);
+                    
+                    var latestHistory = payload.history.length ? payload.history[0] : null;
+                    if (!isComplete && !isFailed && latestHistory && latestHistory.result === 'success') {
+                        var historyTimestamp = latestHistory.timestamp_raw || 0;
+                        var jobStartRaw = job.started_at_raw || job.created_at_raw || 0;
+                        if (!jobStartRaw || (historyTimestamp && historyTimestamp >= jobStartRaw)) {
+                            console.log('[Backup Lite] History shows success, marking as completed', { 
+                                historyTimestamp, 
+                                jobStartRaw, 
+                                latestHistory 
+                            });
+                            markRestoreCompleted(job.message || (strings.restoreCompleted || 'Restore Completed.'));
+                            return;
+                        }
+                    }
+                }
+                
+                // Check for completion conditions
+                // Priority 1: Explicit success/completed status
+                if (status === 'success' || status === 'completed') {
+                    console.log('[Backup Lite] Job status is success/completed, marking as completed', { status, progress, jobId, restoreCompletionShown });
+                    // Force show overlay even if restoreCompletionShown is true (in case overlay was removed)
+                    if (restoreCompletionShown) {
+                        var existingOverlay = document.querySelector('.bl-completion-overlay.is-visible');
+                        if (!existingOverlay) {
+                            console.log('[Backup Lite] Completion flag set but overlay not visible, resetting flag');
+                            restoreCompletionShown = false;
+                        }
+                    }
+                    markRestoreCompleted(job.message || (strings.restoreCompleted || 'Restore Completed.'));
+                    return; // Stop polling
+                } 
+                // Priority 2: Progress is 100% - check history or wait for status update
+                else if (progress >= 100) {
+                    // Progress is 100% - check if we should wait for status update or assume completion
+                    // Ensure progress bar shows 100%
+                    if (currentProgress < 100) {
+                        currentProgress = 100;
+                        var progressFill3 = document.getElementById('restore-progress-fill');
+                        var progressText3 = document.getElementById('restore-progress-text');
+                        updateProgressDisplay(100, progressBar, progressFill3, progressText3);
+                    }
+                    
+                    if (status === 'running' || status === '' || !status) {
+                        // Status hasn't been updated yet - wait a bit for it to catch up
+                        // Update UI to show "Finalizing" instead of "Restore running" when at 100%
+                        var statusIcon = document.getElementById('restore-status-icon');
+                        var statusTitle = document.getElementById('restore-status-title');
+                        var statusTitleText = document.getElementById('restore-status-title-text');
+                        var statusMessage = document.getElementById('restore-status-message');
+                        
+                        // Change status to "Finalizing" when at 100% but status still running
+                        if (statusIcon) {
+                            statusIcon.textContent = '⏳';
+                        }
+                        if (statusTitle) {
+                            statusTitle.style.color = 'var(--bl-primary)';
+                        }
+                        if (statusTitleText) {
+                            statusTitleText.textContent = strings.restoreFinalizing || 'Finalizing restore...';
+                        } else if (statusTitle) {
+                            statusTitle.textContent = strings.restoreFinalizing || 'Finalizing restore...';
+                        }
+                        if (statusMessage) {
+                            statusMessage.textContent = strings.restoreFinalizingMessage || 'Completing final steps...';
+                        }
+                        
+                        if (restoreJobReached100Time) {
+                            var timeAt100 = Date.now() - restoreJobReached100Time;
+                            // If we've been at 100% for more than 5 seconds, assume completion
+                            // Reduced from 10 seconds for faster feedback
+                            if (timeAt100 > 5000) {
+                                // Assume completion after 5 seconds at 100%
+                                console.log('[Backup Lite] Progress at 100% for 5+ seconds, assuming completion', { 
+                                    timeAt100, 
+                                    status, 
+                                    progress 
+                                });
+                                // Before assuming completion, try to check history one more time
+                                checkRestoreCompletionFromHistory(jobId);
+                                // Then mark as completed
+                                // Force show overlay even if restoreCompletionShown is true (in case overlay was removed)
+                                if (restoreCompletionShown) {
+                                    var existingOverlay = document.querySelector('.bl-completion-overlay.is-visible');
+                                    if (!existingOverlay) {
+                                        console.log('[Backup Lite] Completion flag set but overlay not visible, resetting flag');
+                                        restoreCompletionShown = false;
+                                    }
+                                }
+                                markRestoreCompleted(job.message || (strings.restoreCompleted || 'Restore Completed.'));
+                                return;
+                            }
+                        } else {
+                            // First time reaching 100%, record the time
+                            restoreJobReached100Time = Date.now();
+                            console.log('[Backup Lite] Progress reached 100%, waiting for status update', { status, progress });
+                            // Also check history when we first reach 100%
+                            checkRestoreCompletionFromHistory(jobId);
+                        }
+                    }
+                    // Continue polling to catch status update
+                    return;
+                } else if (status === 'failed') {
+                    // Stop simulated progress if still running
+                    if (restoreJobProgressTimer) {
+                        clearInterval(restoreJobProgressTimer);
+                        restoreJobProgressTimer = null;
+                    }
+                    // Force progress to 100% to show completion
+                    if (currentProgress < 100) {
+                        if (progressAnimationId) {
+                            cancelAnimationFrame(progressAnimationId);
+                            progressAnimationId = null;
+                        }
+                        currentProgress = 100;
+                        var progressFillFailed = document.getElementById('restore-progress-fill');
+                        var progressTextFailed = document.getElementById('restore-progress-text');
+                        updateProgressDisplay(100, progressBar, progressFillFailed, progressTextFailed);
+                    }
+                    
+                    // Update status UI to show failure
+                    var statusIcon = document.getElementById('restore-status-icon');
+                    var statusTitle = document.getElementById('restore-status-title');
+                    var statusTitleText = document.getElementById('restore-status-title-text');
+                    var statusMessage = document.getElementById('restore-status-message');
+                    
+                    if (statusIcon) {
+                        statusIcon.textContent = '❌';
+                    }
+                    if (statusTitle) {
+                        statusTitle.style.color = 'var(--bl-error, #dc3232)';
+                    }
+                    if (statusTitleText) {
+                        statusTitleText.textContent = strings.restoreFailed || 'Restore Failed';
+                    } else if (statusTitle) {
+                        statusTitle.textContent = strings.restoreFailed || 'Restore Failed';
+                    }
+                    if (statusMessage) {
+                        statusMessage.textContent = job.message || (strings.errorGeneric || 'Restore failed.');
+                    }
+                    
+                    stopRestoreJobMonitor();
+                    restoreInProgress = false;
+                    restoreCompleted = false;
+                    if (startButton) {
+                        startButton.disabled = false;
+                    }
+                    syncWizard();
+                    updateRestoreCancelState();
+                    
+                    // Show error toast
+                    showToast('❌ ' + (job.message || strings.errorGeneric || 'Restore failed.'), 'error');
+                    
+                    // Show failure overlay
+                    if (!restoreCompletionShown) {
+                        restoreCompletionShown = true;
+                        showCompletionOverlay({
+                            icon: '❌',
+                            title: strings.restoreFailed || 'Restore Failed',
+                            message: job.message || strings.errorGeneric || 'Restore failed. Please review the error log and try again.',
+                            confirmText: strings.restoreOverlayConfirm || strings.close || 'Got it',
+                            type: 'error'
+                        });
+                    } else {
+                        // If overlay was already shown, at least show error notification
+                        notifyError({ message: job.message || (strings.errorGeneric || 'Restore failed.') });
+                    }
+                } else if (status === 'cancelled') {
+                    stopRestoreJobMonitor();
+                    restoreInProgress = false;
+                    restoreCompleted = false;
+                    if (startButton) {
+                        startButton.disabled = false;
+                    }
+                    syncWizard();
+                    updateRestoreCancelState();
+                    showToast(strings.restoreCancelSuccess || 'Restore cancelled.', 'warning');
+                }
+            }).catch(function (error) {
+                // Handle nonce expiration (invalid_nonce or 400/403 errors)
+                var isNonceError = false;
+                if (error && error.payload && error.payload.code === 'invalid_nonce') {
+                    isNonceError = true;
+                } else if (error && (error.status === 400 || error.status === 403)) {
+                    // Check if response indicates nonce expiration
+                    if (error.responseText) {
+                        try {
+                            var errorJson = JSON.parse(error.responseText);
+                            if (errorJson && (errorJson.data && errorJson.data.code === 'invalid_nonce' || errorJson.code === 'invalid_nonce')) {
+                                isNonceError = true;
+                            }
+                        } catch (e) {
+                            // Not JSON, check for nonce-related text
+                            if (error.responseText.indexOf('nonce') !== -1 || error.responseText.indexOf('nonces_expired') !== -1) {
+                                isNonceError = true;
+                            }
+                        }
+                    }
+                }
+                
+                if (isNonceError) {
+                    console.log('[Backup Lite] Nonce expired, refreshing and retrying...', { jobId, error });
+                    refreshAjaxNonce().then(function () {
+                        if (activeRestoreJobId === jobId) {
+                            // After refreshing nonce, immediately check job status again
+                            // Also check history as fallback to detect completion
+                            pollRestoreJob(jobId, silent);
+                            
+                            // Additional fallback: check history directly after nonce refresh
+                            setTimeout(function() {
+                                if (activeRestoreJobId === jobId) {
+                                    checkRestoreCompletionFromHistory(jobId);
+                                }
+                            }, 1000);
+                            
+                            // Also check history immediately if we've been polling for a while
+                            // This handles the case where restore completed during nonce expiration
+                            if (restoreJobPollStartTime && (Date.now() - restoreJobPollStartTime) > 60000) {
+                                // If we've been polling for more than 1 minute, check history immediately
+                                checkRestoreCompletionFromHistory(jobId);
+                            }
+                        }
+                    }).catch(function (refreshError) {
+                        console.error('Backup Lite: unable to refresh nonce after failure.', refreshError);
+                        // Even if refresh fails, try to check completion from history
+                        if (activeRestoreJobId === jobId) {
+                            checkRestoreCompletionFromHistory(jobId);
+                        }
+                    });
+                    return;
+                }
+                
+                // For other errors, still try to check completion from history as fallback
+                if (activeRestoreJobId === jobId) {
+                    if (!silent) {
+                        console.warn('[Backup Lite] Restore job status failed, checking history as fallback:', error);
+                    }
+                    // Always try to check history, even if silent
+                    // This is important because errors might prevent status updates, but restore might have completed
+                    checkRestoreCompletionFromHistory(jobId);
+                } else {
+                    // No active job, but we got an error - might be a stale request
+                    // Reset state to prevent stuck progress
+                    if (!silent) {
+                        console.warn('[Backup Lite] Restore job status failed and no active job, resetting state:', error);
+                    }
+                    stopRestoreJobMonitor();
+                    restoreInProgress = false;
+                    restoreCompleted = false;
+                    if (startButton) {
+                        startButton.disabled = false;
+                    }
+                    setProgress(0, '', false);
+                    syncWizard();
+                    updateRestoreCancelState();
+                }
+                
+                if (!silent) {
+                    console.error('Restore job status failed:', error);
+                }
             });
         }
         function abortChunkSession(sessionId) {
@@ -1084,12 +1983,18 @@ function initBackupLiteDomReady() {
                 activeChunkSession = null;
             }
 
-            var cancelForm = prepareFormData('backup_lite_restore_cancel');
+            var cancelForm = prepareFormData(activeRestoreJobId ? 'backup_lite_restore_job_cancel' : 'backup_lite_restore_cancel');
+            if (activeRestoreJobId) {
+                cancelForm.append('job_id', activeRestoreJobId);
+            }
 
             ajaxRequest(cancelForm).then(function (json) {
                 var payload = getJsonPayload(json) || {};
                 restoreCancelBtn.disabled = false;
+                stopRestoreJobMonitor();
                 renderSummary(null);
+                // Reset progress tracking when cancelling
+                currentProgress = 0;
                 setProgress(0, strings.awaitingRestore || 'Awaiting restore.', false);
                 var progressContainer = document.getElementById('restore-progress-container');
                 var waitingMessage = document.getElementById('restore-waiting-message');
@@ -1114,10 +2019,34 @@ function initBackupLiteDomReady() {
                 var message = (payload && payload.message) ? payload.message : (strings.restoreCancelSuccess || 'Restore process cancelled.');
                 showToast(message, 'warning');
             }).catch(function (error) {
-                var message = (error && error.message) ? error.message : (strings.restoreCancelFailed || 'Unable to cancel restore.');
-                showToast(message, 'error');
+                // Better error handling for cancel operation
+                var errorMessage = strings.restoreCancelFailed || 'Unable to cancel restore.';
+                if (error) {
+                    if (error.message) {
+                        errorMessage = error.message;
+                    } else if (error.payload && error.payload.message) {
+                        errorMessage = error.payload.message;
+                    } else if (typeof error === 'string') {
+                        errorMessage = error;
+                    }
+                }
+                
+                // Still reset the UI state even if cancel request failed
                 restoreCancelBtn.disabled = false;
+                stopRestoreJobMonitor();
+                restoreInProgress = false;
+                restoreCompleted = false;
+                if (startButton) {
+                    startButton.disabled = false;
+                }
+                syncWizard();
                 updateRestoreCancelState();
+                
+                // Show error message
+                showToast(errorMessage, 'error');
+                
+                // Log error for debugging
+                console.error('Cancel restore error:', error);
             });
         }
         var startButton = document.getElementById('startRestore');
@@ -1228,7 +2157,8 @@ function initBackupLiteDomReady() {
                 executeState = 'done';
                 executeText = stepStrings.executeDone;
                 executeLocked = false;
-            } else if (hasAnalyzed) {
+            } else if (reviewCompleted) {
+                // Only unlock step 3 if step 2 (review) is completed
                 executeState = 'ready';
                 executeText = stepStrings.executeReady;
                 executeLocked = false;
@@ -1291,14 +2221,58 @@ function initBackupLiteDomReady() {
                 if (target) {
                     target.classList.add('active');
                 }
+                
+                // Load backups list when switching to "existing" method
+                if (method === 'existing' && existingSelect) {
+                    loadBackupsList();
+                }
             });
         });
+        
+        // Function to load backups list via AJAX
+        function loadBackupsList() {
+            if (!existingSelect) {
+                return;
+            }
+            
+            // Show loading state
+            existingSelect.disabled = true;
+            var originalHTML = existingSelect.innerHTML;
+            existingSelect.innerHTML = '<option value="">' + (strings.loadingBackups || 'Loading backups...') + '</option>';
+            
+            var formData = prepareFormData('backup_lite_get_backups_list');
+            
+            ajaxRequest(formData).then(function (json) {
+                existingSelect.disabled = false;
+                if (json && json.success && json.data && json.data.backups) {
+                    var backups = json.data.backups;
+                    existingSelect.innerHTML = '<option value="">' + (strings.selectBackup || 'Select a backup…') + '</option>';
+                    backups.forEach(function (backup) {
+                        var option = document.createElement('option');
+                        option.value = backup.name;
+                        option.textContent = backup.name + ' (' + backup.size_human + ')';
+                        existingSelect.appendChild(option);
+                    });
+                } else {
+                    existingSelect.innerHTML = '<option value="">' + (strings.noBackups || 'No backups available.') + '</option>';
+                }
+            }).catch(function (error) {
+                existingSelect.disabled = false;
+                existingSelect.innerHTML = '<option value="">' + (strings.errorLoadingBackups || 'Error loading backups.') + '</option>';
+                console.error('Failed to load backups list:', error);
+                if (error && error.message) {
+                    notifyError({ message: error.message });
+                }
+            });
+        }
 
         if (uploadInput) {
             uploadInput.addEventListener('change', resetAnalysisState);
         }
         if (existingSelect) {
             existingSelect.addEventListener('change', resetAnalysisState);
+            // Load backups once on page load so the dropdown is always current
+            loadBackupsList();
         }
         if (remoteInput) {
             remoteInput.addEventListener('input', resetAnalysisState);
@@ -1313,16 +2287,30 @@ function initBackupLiteDomReady() {
             var progressFill = document.getElementById('restore-progress-fill');
             var progressText = document.getElementById('restore-progress-text');
             
-            var percentValue = Math.max(0, Math.min(100, percent || 0));
+            var targetPercent = Math.max(0, Math.min(100, percent || 0));
             
-            if (progressBar) {
-                progressBar.style.width = percentValue + '%';
+            // Cancel any existing animation
+            if (progressAnimationId) {
+                cancelAnimationFrame(progressAnimationId);
+                progressAnimationId = null;
             }
-            if (progressFill) {
-                progressFill.style.width = percentValue + '%';
+            
+            // Get progress bar elements if not already available
+            if (!progressBar) {
+                progressBar = document.querySelector('.restore-progress .progress-bar-fill');
             }
-            if (progressText) {
-                progressText.textContent = Math.round(percentValue) + '%';
+            
+            // If done or target is 100%, update immediately (no animation delay for completion)
+            // Also update immediately if target is less than current (backwards progress)
+            if (done || targetPercent >= 100 || targetPercent <= currentProgress) {
+                currentProgress = targetPercent;
+                updateProgressDisplay(currentProgress, progressBar, progressFill, progressText);
+            } else {
+                // Animate progress smoothly from current to target
+                // But use shorter duration for large jumps to avoid long waits
+                var progressDiff = Math.abs(targetPercent - currentProgress);
+                var duration = progressDiff > 30 ? 600 : 800; // Faster for large jumps
+                animateProgress(currentProgress, targetPercent, progressBar, progressFill, progressText, duration);
             }
             if (progressStatus) {
                 if (done) {
@@ -1338,7 +2326,7 @@ function initBackupLiteDomReady() {
             }
             
             // Show/hide progress container
-            if (percentValue > 0 || done) {
+            if (targetPercent > 0 || done) {
                 if (progressContainer) {
                     progressContainer.style.display = 'block';
                 }
@@ -1358,7 +2346,10 @@ function initBackupLiteDomReady() {
             var statusIconInline = document.getElementById('restore-status-icon-inline');
             var statusTitleText = document.getElementById('restore-status-title-text');
             
-            if (done) {
+            // Only show "Restore Completed" if done is true AND we're actually in a restore operation
+            // Don't show completion status during step 1 (file analysis)
+            if (done && restoreInProgress) {
+                // This is a real restore completion
                 if (statusIcon) {
                     statusIcon.textContent = '✅';
                 }
@@ -1374,7 +2365,26 @@ function initBackupLiteDomReady() {
                 } else if (statusTitle) {
                     statusTitle.textContent = strings.restoreCompleted || 'Restore Completed';
                 }
-            } else if (percentValue > 0) {
+                restoreCompleted = true;
+                syncWizard();
+            } else if (done && !restoreInProgress) {
+                // done=true but not in restore - this shouldn't happen, but reset to avoid showing completion
+                if (statusIcon) {
+                    statusIcon.textContent = '';
+                }
+                if (statusIconInline) {
+                    statusIconInline.style.display = 'none';
+                }
+                if (statusTitle) {
+                    statusTitle.style.color = '';
+                }
+                if (statusTitleText) {
+                    statusTitleText.textContent = '';
+                } else if (statusTitle) {
+                    statusTitle.textContent = '';
+                }
+            } else if (targetPercent > 0 && restoreInProgress) {
+                // Only show "Restore in Progress" if we're actually in a restore operation
                 if (statusIcon) {
                     statusIcon.textContent = '⚡';
                 }
@@ -1389,18 +2399,113 @@ function initBackupLiteDomReady() {
                 } else if (statusTitle) {
                     statusTitle.textContent = strings.restoreInProgress || 'Restore in Progress';
                 }
+            } else if (targetPercent > 0 && !restoreInProgress) {
+                // Progress > 0 but not in restore - this is likely step 1 analysis
+                // Don't show restore status, just clear it
+                if (statusIcon) {
+                    statusIcon.textContent = '';
+                }
+                if (statusIconInline) {
+                    statusIconInline.style.display = 'none';
+                }
+                if (statusTitle) {
+                    statusTitle.style.color = '';
+                }
+                if (statusTitleText) {
+                    statusTitleText.textContent = '';
+                } else if (statusTitle) {
+                    statusTitle.textContent = '';
+                }
             }
             
-            if (done) {
+            // Update restoreCompleted flag - only set to true if done AND in restore operation
+            // Don't set restoreCompleted during step 1 (file analysis)
+            if (done && restoreInProgress) {
+                // This is a real restore completion
                 restoreInProgress = false;
                 restoreCompleted = true;
                 syncWizard();
-            } else if (percentValue > 0) {
-                restoreInProgress = true;
+            } else if (targetPercent > 0 && restoreInProgress) {
+                // If we have an active restore job, keep restoreInProgress true
+                // This ensures the state is maintained during restore operations
+                if (activeRestoreJobId) {
+                    restoreInProgress = true;
+                    restoreCompleted = false;
+                } else if (restoreInProgress) {
+                    // If already in progress, maintain the state
+                    restoreCompleted = false;
+                }
+                syncWizard();
+            } else if (targetPercent === 0 && !done) {
+                // If progress is reset to 0 and not done, only clear restoreInProgress if no active job
+                if (!activeRestoreJobId) {
+                    restoreInProgress = false;
+                    restoreCompleted = false;
+                }
+                syncWizard();
+            } else if (done && !restoreInProgress) {
+                // done=true but not in restore - this shouldn't happen, but ensure we don't set restoreCompleted
+                // This handles cases where step 1 might incorrectly pass done=true
                 restoreCompleted = false;
                 syncWizard();
             }
             updateRestoreCancelState();
+        }
+
+        /**
+         * Update progress bar display immediately
+         */
+        function updateProgressDisplay(percent, progressBarEl, progressFillEl, progressTextEl) {
+            var roundedPercent = Math.round(percent);
+            if (progressBarEl) {
+                progressBarEl.style.width = percent + '%';
+                progressBarEl.style.transition = 'width 0.3s ease-out';
+            }
+            if (progressFillEl) {
+                progressFillEl.style.width = percent + '%';
+                progressFillEl.style.transition = 'width 0.3s ease-out';
+            }
+            if (progressTextEl) {
+                progressTextEl.textContent = roundedPercent + '%';
+            }
+        }
+
+        /**
+         * Animate progress bar smoothly from current to target value
+         */
+        function animateProgress(from, to, progressBarEl, progressFillEl, progressTextEl, duration) {
+            duration = duration || 800; // Default 800ms if not specified
+            var startTime = null;
+            var startValue = from;
+            var endValue = to;
+            
+            // Use easing function for smooth animation (ease-out cubic)
+            function easeOutCubic(t) {
+                return 1 - Math.pow(1 - t, 3);
+            }
+            
+            function animate(currentTime) {
+                if (startTime === null) {
+                    startTime = currentTime;
+                }
+                
+                var elapsed = currentTime - startTime;
+                var progress = Math.min(elapsed / duration, 1);
+                var eased = easeOutCubic(progress);
+                
+                currentProgress = startValue + (endValue - startValue) * eased;
+                updateProgressDisplay(currentProgress, progressBarEl, progressFillEl, progressTextEl);
+                
+                if (progress < 1) {
+                    progressAnimationId = requestAnimationFrame(animate);
+                } else {
+                    currentProgress = endValue;
+                    updateProgressDisplay(currentProgress, progressBarEl, progressFillEl, progressTextEl);
+                    progressAnimationId = null;
+                }
+            }
+            
+            progressAnimationId = requestAnimationFrame(animate);
         }
 
         function renderSummary(summary) {
@@ -1466,6 +2571,10 @@ function initBackupLiteDomReady() {
                 analysisError = true;
                 hasAnalyzed = false;
                 restoreCompleted = false;
+                // Only reset restoreInProgress if not currently restoring
+                if (!restoreInProgress) {
+                    restoreInProgress = false;
+                }
                 syncWizard();
                 notifyError(payload);
                 return;
@@ -1474,15 +2583,24 @@ function initBackupLiteDomReady() {
                 renderSummary(payload.summary);
             }
             if (payload.progress) {
-                setProgress(payload.progress.percent || 0, payload.progress.message || '', payload.progress.done);
+                // When step 1 completes, we should NOT set done=true for the progress
+                // This is just file analysis, not restore completion
+                var progressDone = false; // Always false for step 1 completion
+                setProgress(payload.progress.percent || 0, payload.progress.message || '', progressDone);
             }
             showToast('✅ ' + (strings.messageReady || 'Backup ready for restore.'), 'info');
             isAnalyzing = false;
             analysisError = false;
             hasAnalyzed = true;
             reviewCompleted = false;
-            restoreCompleted = !!(payload.progress && payload.progress.done);
-            restoreInProgress = false;
+            // Step 1 completion should NEVER set restoreCompleted to true
+            // restoreCompleted should only be true after Step 3 (restore execution) completes
+            restoreCompleted = false;
+            // Only reset restoreInProgress if not currently restoring
+            // This prevents resetting the state during an active restore operation
+            if (!restoreInProgress && !activeRestoreJobId) {
+                restoreInProgress = false;
+            }
             restoreCompletionShown = false;
             syncWizard();
             updateRestoreCancelState();
@@ -1491,11 +2609,59 @@ function initBackupLiteDomReady() {
         if (restoreData.summary) {
             renderSummary(restoreData.summary);
         }
-        if (restoreData.progress) {
-            setProgress(restoreData.progress.percent || 0, restoreData.progress.message || '', restoreData.progress.done);
-        }
         if (restoreData.history) {
             renderHistory(restoreData.history);
+        }
+        
+        // Check for active or completed restore job
+        if (restoreData.job && restoreData.job.id) {
+            if (startButton) {
+                startButton.disabled = true;
+            }
+            var fileSize = (restoreData.summary && restoreData.summary.size) ? restoreData.summary.size : 0;
+            var jobStatus = restoreData.job.status || '';
+            
+            // Check if job is already complete on page load (e.g., after re-login)
+            if (jobStatus === 'success' || jobStatus === 'completed') {
+                console.log('[Backup Lite] Job already complete on page load, marking as completed', { jobId: restoreData.job.id, status: jobStatus });
+                // Use setTimeout to ensure all functions are initialized
+                setTimeout(function() {
+                    markRestoreCompleted(restoreData.job.message || (strings.restoreCompleted || 'Restore Completed.'));
+                }, 500);
+            } else if (jobStatus === 'failed') {
+                // Job failed, reset progress and state
+                console.log('[Backup Lite] Job failed on page load, resetting state', { jobId: restoreData.job.id, status: jobStatus });
+                stopRestoreJobMonitor();
+                restoreInProgress = false;
+                restoreCompleted = false;
+                if (startButton) {
+                    startButton.disabled = false;
+                }
+                setProgress(0, '', false);
+                syncWizard();
+                updateRestoreCancelState();
+            } else {
+                // Job is still running or pending, start monitoring
+                startRestoreJobMonitor(restoreData.job, fileSize);
+            }
+        } else {
+            // No active job - reset progress to 0 if it's showing 100%
+            // This handles the case where page was reloaded after restore completed
+            if (restoreData.progress && restoreData.progress.done) {
+                // Progress shows as done, but no active job - reset to initial state
+                console.log('[Backup Lite] No active job but progress shows done, resetting to initial state');
+                restoreInProgress = false;
+                restoreCompleted = false;
+                restoreCompletionShown = false;
+                setProgress(0, '', false);
+            } else if (restoreData.progress) {
+                // Progress exists but not done - only set if there's an active restore
+                // Otherwise reset to 0
+                setProgress(0, '', false);
+            } else {
+                // No progress data - ensure we're at 0%
+                setProgress(0, '', false);
+            }
         }
 
         syncWizard();
@@ -1643,7 +2809,7 @@ function initBackupLiteDomReady() {
                 }
                 markReviewCompleted();
 
-                var formData = prepareFormData('backup_lite_restore_confirm');
+                var formData = prepareFormData('backup_lite_restore_enqueue');
                 formData.append('overwrite', overwriteToggle.checked ? 'true' : 'false');
                 formData.append('autoBackup', autoBackupToggle && autoBackupToggle.checked ? 'true' : 'false');
                 formData.append('skipConfig', skipConfigToggle && skipConfigToggle.checked ? 'true' : 'false');
@@ -1670,69 +2836,93 @@ function initBackupLiteDomReady() {
                 // Set initial progress state
                 setProgress(5, strings.runningMessage || 'Starting restore…', false);
 
-                fetch(ajaxUrl, {
-                    method: 'POST',
-                    credentials: 'same-origin',
-                    body: formData
-                }).then(function (res) { return res.json(); })
-                    .then(function (json) {
-                        if (!json.success) {
-                            restoreInProgress = false;
-                            startButton.disabled = false;
-                            syncWizard();
-                            updateRestoreCancelState();
-                            notifyError(json.data || json);
+                ajaxRequest(formData).then(function (json) {
+                    var payload = getJsonPayload(json) || {};
+                    var job = payload.job || payload;
+                    var fileSize = payload.file_size || 0;
+
+                    if (payload.history) {
+                        renderHistory(payload.history);
+                    }
+
+                    if (job && job.id) {
+                        // Check if job is already complete before starting monitor
+                        var jobStatus = job.status || '';
+                        var isJobComplete = jobStatus === 'success' || jobStatus === 'completed';
+                        var isJobFailed = jobStatus === 'failed';
+                        
+                        // If job is already complete, mark as completed immediately
+                        if (isJobComplete) {
+                            markRestoreCompleted(job.message || (strings.restoreCompleted || 'Restore Completed.'));
                             return;
                         }
-                        var payload = getJsonPayload(json) || {};
-
-                        if (payload.progress) {
-                            setProgress(
-                                payload.progress.percent || 0,
-                                payload.progress.message || '',
-                                payload.progress.done
-                            );
-                            if (payload.progress.done) {
-                            showToast('✅ ' + (strings.successRestore || 'Restore Completed!'), 'success');
-                            if (!restoreCompletionShown) {
-                                restoreCompletionShown = true;
-                                showCompletionOverlay({
-                                    icon: '✅',
-                                    title: strings.restoreCompleted || 'Restore Completed',
-                                    message: strings.restoreOverlayMessage || strings.successRestore || 'Your site has been restored successfully.',
-                                    confirmText: strings.restoreOverlayConfirm || strings.close || 'Got it'
-                                });
+                        
+                        // If job failed, show error
+                        if (isJobFailed) {
+                            stopRestoreJobMonitor();
+                            restoreInProgress = false;
+                            restoreCompleted = false;
+                            if (startButton) {
+                                startButton.disabled = false;
                             }
-                            }
-                        } else {
-                            setProgress(10, strings.runningMessage || 'Starting restore…', false);
+                            syncWizard();
+                            updateRestoreCancelState();
+                            notifyError({ message: job.message || (strings.errorGeneric || 'Restore failed.') });
+                            return;
                         }
-
-                        if (payload.history) {
-                            renderHistory(payload.history);
-                        }
-
-                        restoreInProgress = false;
-                        startButton.disabled = false;
-                        if (payload.progress && payload.progress.done) {
-                            restoreCompleted = true;
-                        }
-                        syncWizard();
-                        updateRestoreCancelState();
-                    }).catch(function (error) {
-                        restoreInProgress = false;
-                        startButton.disabled = false;
-                        syncWizard();
-                        updateRestoreCancelState();
-                        console.error('Restore error:', error);
-                        notifyError({ message: strings.errorGeneric || 'An error occurred during restore.' });
-                    });
+                        
+                        // Start monitoring the job
+                        startRestoreJobMonitor(job, fileSize);
+                    } else if (payload.progress) {
+                        setProgress(
+                            payload.progress.percent || 5,
+                            payload.progress.message || (strings.runningMessage || 'Starting restore…'),
+                            payload.progress.done
+                        );
+                    }
+                }).catch(function (error) {
+                    stopRestoreJobMonitor();
+                    restoreInProgress = false;
+                    restoreCompleted = false;
+                    startButton.disabled = false;
+                    syncWizard();
+                    updateRestoreCancelState();
+                    console.error('Restore enqueue error:', error);
+                    notifyError({ message: (error && error.message) ? error.message : (strings.errorGeneric || 'An error occurred during restore.') });
+                });
             });
         }
     }
 
     if (currentPage === 'backup-lite-restore') {
         initRestoreCenter();
+        
+        // Check for completed restore job on page load (e.g., after re-login)
+        // This handles the case where restore completed while user was logged out
+        var restoreData = window.BackupLiteRestore || {};
+        if (restoreData && restoreData.job && restoreData.job.id) {
+            var jobId = restoreData.job.id;
+            var jobStatus = restoreData.job.status || '';
+            
+            // If job is already complete, mark as completed immediately
+            if (jobStatus === 'success' || jobStatus === 'completed') {
+                console.log('[Backup Lite] Detected completed job on page load', { jobId, status: jobStatus });
+                // Use setTimeout to ensure initRestoreCenter has finished
+                setTimeout(function() {
+                    if (typeof markRestoreCompleted === 'function') {
+                        markRestoreCompleted(restoreData.job.message || 'Restore Completed.');
+                    }
+                }, 500);
+            } else if (jobStatus === 'running' || jobStatus === 'pending') {
+                // Job is still running, check history for completion
+                console.log('[Backup Lite] Job still running on page load, checking history', { jobId, status: jobStatus });
+                setTimeout(function() {
+                    if (typeof checkRestoreCompletionFromHistory === 'function') {
+                        checkRestoreCompletionFromHistory(jobId);
+                    }
+                }, 1000);
+            }
+        }
     }
 
     setupSearchReplaceToggle(document.getElementById('backup-lite-search-replace-toggle'));

@@ -836,6 +836,19 @@ body.bl-restore-v2-off .restore-stepper {
     pointer-events: auto;
 }
 
+.bl-completion-dialog.bl-completion-error {
+    border-color: var(--bl-danger, #dc3232);
+    background: linear-gradient(135deg, rgba(220, 50, 50, 0.1) 0%, rgba(255, 255, 255, 0.95) 100%);
+}
+
+.bl-completion-dialog.bl-completion-error .bl-completion-icon {
+    color: var(--bl-danger, #dc3232);
+}
+
+.bl-completion-dialog.bl-completion-error .bl-completion-title {
+    color: var(--bl-danger, #dc3232);
+}
+
 .bl-completion-dialog {
     background: rgba(255, 255, 255, 0.92);
     border-radius: 20px;
@@ -846,7 +859,20 @@ body.bl-restore-v2-off .restore-stepper {
     transition: transform 0.2s ease;
 }
 
-.bl-completion-overlay.is-visible .bl-completion-dialog {
+.bl-completion-overlay.is-visible .bl-completion-dialog.bl-completion-error {
+    border-color: var(--bl-danger, #dc3232);
+    background: linear-gradient(135deg, rgba(220, 50, 50, 0.1) 0%, rgba(255, 255, 255, 0.95) 100%);
+}
+
+.bl-completion-dialog.bl-completion-error .bl-completion-icon {
+    color: var(--bl-danger, #dc3232);
+}
+
+.bl-completion-dialog.bl-completion-error .bl-completion-title {
+    color: var(--bl-danger, #dc3232);
+}
+
+.bl-completion-dialog {
     transform: translateY(0);
 }
 
@@ -1828,6 +1854,19 @@ body.bl-modal-open {
     pointer-events: auto;
 }
 
+.bl-completion-dialog.bl-completion-error {
+    border-color: var(--bl-danger, #dc3232);
+    background: linear-gradient(135deg, rgba(220, 50, 50, 0.1) 0%, rgba(255, 255, 255, 0.95) 100%);
+}
+
+.bl-completion-dialog.bl-completion-error .bl-completion-icon {
+    color: var(--bl-danger, #dc3232);
+}
+
+.bl-completion-dialog.bl-completion-error .bl-completion-title {
+    color: var(--bl-danger, #dc3232);
+}
+
 .bl-completion-dialog {
     position: relative;
     max-width: 420px;
@@ -1841,7 +1880,20 @@ body.bl-modal-open {
     transition: transform 0.25s ease;
 }
 
-.bl-completion-overlay.is-visible .bl-completion-dialog {
+.bl-completion-overlay.is-visible .bl-completion-dialog.bl-completion-error {
+    border-color: var(--bl-danger, #dc3232);
+    background: linear-gradient(135deg, rgba(220, 50, 50, 0.1) 0%, rgba(255, 255, 255, 0.95) 100%);
+}
+
+.bl-completion-dialog.bl-completion-error .bl-completion-icon {
+    color: var(--bl-danger, #dc3232);
+}
+
+.bl-completion-dialog.bl-completion-error .bl-completion-title {
+    color: var(--bl-danger, #dc3232);
+}
+
+.bl-completion-dialog {
     transform: translateY(0);
 }
 

@@ -40,15 +40,24 @@ class Backup_Lite_Backup {
             ];
         }
 
-        $timestamp    = backup_lite_local_time( 'Y-m-d-His' );
-        $label_suffix = '';
+        // Generate backup filename: 网址+西元年月日+时分+乱数编码
+        $site_url = parse_url( home_url(), PHP_URL_HOST );
+        if ( empty( $site_url ) ) {
+            $site_url = 'site';
+        }
+        // Sanitize domain name for filename
+        $site_url = sanitize_file_name( $site_url );
         
+        $date_time = backup_lite_local_time( 'YmdHis' );
+        $random_code = wp_generate_password( 6, false, false );
+        
+        $label_suffix = '';
         // PRO: Backup label
         if ( ! empty( $options['label'] ) && Backup_Lite_Pro::is_pro_active() ) {
             $label_suffix = '-' . sanitize_file_name( $options['label'] );
         }
         
-        $archive_name = sprintf( 'museder-restoreone-%s%s.zip', $timestamp, $label_suffix );
+        $archive_name = sprintf( '%s-%s-%s%s.zip', $site_url, $date_time, $random_code, $label_suffix );
         $archive_path = $backup_dir . $archive_name;
 
         $temp_dir = backup_lite_create_temp_dir( 'build' );
@@ -402,13 +411,23 @@ class Backup_Lite_Backup {
             throw new RuntimeException( __( 'Backup directory is not writable.', 'museder-restoreone' ) );
         }
 
-        $timestamp    = backup_lite_local_time( 'Y-m-d-His' );
+        // Generate backup filename: 网址+西元年月日+时分+乱数编码
+        $site_url = parse_url( home_url(), PHP_URL_HOST );
+        if ( empty( $site_url ) ) {
+            $site_url = 'site';
+        }
+        // Sanitize domain name for filename
+        $site_url = sanitize_file_name( $site_url );
+        
+        $date_time = backup_lite_local_time( 'YmdHis' );
+        $random_code = wp_generate_password( 6, false, false );
+        
         $label_suffix = '';
         if ( Backup_Lite_Pro::is_pro_active() && ! empty( $options['label'] ) ) {
             $label_suffix = '-' . sanitize_file_name( $options['label'] );
         }
 
-        $archive_name = sprintf( 'museder-restoreone-%s%s.zip', $timestamp, $label_suffix );
+        $archive_name = sprintf( '%s-%s-%s%s.zip', $site_url, $date_time, $random_code, $label_suffix );
         $archive_path = $backup_dir . $archive_name;
         $temp_dir     = backup_lite_create_temp_dir( 'build' );
         $sql_path     = trailingslashit( $temp_dir ) . 'database.sql';

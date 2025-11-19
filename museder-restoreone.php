@@ -3,7 +3,7 @@
 Plugin Name: Museder RestoreOne – Backup & One-Click Restore
 Plugin URI: https://musederlabs.com/
 Description: A lightweight WordPress backup & restore plugin focused on compatibility, single-file site snapshots, and clean restore workflows.
-Version: 2.6.39
+Version: 2.6.90
 Author: Museder Labs
 Author URI: https://musederlabs.com/
 License: GPLv2 or later
@@ -13,7 +13,7 @@ Domain Path: /languages
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-define( 'BACKUP_LITE_VERSION', '2.6.39' );
+define( 'BACKUP_LITE_VERSION', '2.6.90' );
 define( 'BACKUP_LITE_PATH', plugin_dir_path( __FILE__ ) );
 define( 'BACKUP_LITE_URL', plugin_dir_url( __FILE__ ) );
 
@@ -23,6 +23,7 @@ require_once BACKUP_LITE_PATH . 'includes/class-upload-secret.php';
 require_once BACKUP_LITE_PATH . 'includes/class-backup.php';
 require_once BACKUP_LITE_PATH . 'includes/class-backup-jobs.php';
 require_once BACKUP_LITE_PATH . 'includes/class-restore.php';
+require_once BACKUP_LITE_PATH . 'includes/class-restore-jobs.php';
 require_once BACKUP_LITE_PATH . 'includes/class-ui.php';
 require_once BACKUP_LITE_PATH . 'includes/class-restore-handler.php';
 require_once BACKUP_LITE_PATH . 'includes/class-restore-service.php';
@@ -37,38 +38,23 @@ require_once BACKUP_LITE_PATH . 'includes/class-settings.php';
 require_once BACKUP_LITE_PATH . 'includes/class-chunk-handler.php';
 require_once BACKUP_LITE_PATH . 'includes/class-chunk-handler-v2.php';
 
-// PRO Features (load only when PRO is active to ensure Lite never triggers AI/PRO HTTP calls)
-if ( class_exists( 'Backup_Lite_Pro' ) && Backup_Lite_Pro::is_pro_active() ) {
-	require_once BACKUP_LITE_PATH . 'includes/pro/ai-service.php';
-	require_once BACKUP_LITE_PATH . 'includes/pro/ai-controller.php';
-	require_once BACKUP_LITE_PATH . 'includes/pro/smart-retention.php';
-	require_once BACKUP_LITE_PATH . 'includes/pro/advanced-filters.php';
-	require_once BACKUP_LITE_PATH . 'includes/pro/health-score.php';
-	require_once BACKUP_LITE_PATH . 'includes/pro/cloud-storage.php';
-	require_once BACKUP_LITE_PATH . 'includes/pro/reports-service.php';
-	require_once BACKUP_LITE_PATH . 'includes/pro/reports-controller.php';
-}
+// PRO Features will be loaded in backup_lite_bootstrap() after WordPress is fully loaded
+// This prevents errors during activation when get_option() may not be available
 
 register_activation_hook( __FILE__, 'backup_lite_activate' );
 
 function backup_lite_activate() {
-    backup_lite_get_backup_dir();
-    backup_lite_get_log_dir();
-    backup_lite_get_temp_dir();
-    backup_lite_ensure_access_controls();
-    Backup_Lite_Upload_Secret::init();
-    Backup_Lite_Schedule_Handler::synchronise_cron_events();
-
-    // Create PRO directories if PRO is active
-    if ( class_exists( 'Backup_Lite_Pro' ) && Backup_Lite_Pro::is_pro_active() ) {
-        backup_lite_get_pro_jobs_dir();
-        backup_lite_get_pro_reports_dir();
-        backup_lite_ensure_access_controls();
-    }
-
-    if ( ! wp_next_scheduled( 'backup_lite_cleanup_cron' ) ) {
+    // Minimal activation - defer most operations to plugins_loaded hook
+    // This prevents errors during activation when WordPress functions may not be fully available
+    
+    // Schedule cleanup cron if not already scheduled
+    if ( function_exists( 'wp_next_scheduled' ) && ! wp_next_scheduled( 'backup_lite_cleanup_cron' ) ) {
         wp_schedule_event( time(), 'daily', 'backup_lite_cleanup_cron' );
     }
+    
+    // Set a flag to run full initialization on next page load
+    // This ensures all directories and settings are created when WordPress is fully loaded
+    update_option( 'backup_lite_needs_init', true );
 }
 
 add_action( 'plugins_loaded', 'museder_restoreone_load_textdomain' );
@@ -83,11 +69,53 @@ function museder_restoreone_load_textdomain() {
 }
 
 function backup_lite_bootstrap() {
+    // Check if we need to run post-activation initialization
+    if ( get_option( 'backup_lite_needs_init', false ) ) {
+        // Run initialization tasks that were deferred from activation hook
+        if ( function_exists( 'backup_lite_get_backup_dir' ) ) {
+            try {
+                backup_lite_get_backup_dir();
+                backup_lite_get_log_dir();
+                backup_lite_get_temp_dir();
+                backup_lite_ensure_access_controls();
+                
+                if ( class_exists( 'Backup_Lite_Upload_Secret' ) ) {
+                    Backup_Lite_Upload_Secret::init();
+                }
+                
+                // Only synchronise cron events if class is available and method exists
+                if ( class_exists( 'Backup_Lite_Schedule_Handler' ) && method_exists( 'Backup_Lite_Schedule_Handler', 'synchronise_cron_events' ) ) {
+                    Backup_Lite_Schedule_Handler::synchronise_cron_events();
+                }
+
+                // Create PRO directories if PRO is active
+                if ( class_exists( 'Backup_Lite_Pro' ) && method_exists( 'Backup_Lite_Pro', 'is_pro_active' ) && Backup_Lite_Pro::is_pro_active() ) {
+                    if ( function_exists( 'backup_lite_get_pro_jobs_dir' ) ) {
+                        backup_lite_get_pro_jobs_dir();
+                    }
+                    if ( function_exists( 'backup_lite_get_pro_reports_dir' ) ) {
+                        backup_lite_get_pro_reports_dir();
+                    }
+                    backup_lite_ensure_access_controls();
+                }
+            } catch ( Exception $e ) {
+                // Log error but continue
+                if ( function_exists( 'backup_lite_log' ) ) {
+                    backup_lite_log( 'error', 'Post-activation initialization error: ' . $e->getMessage() );
+                }
+            }
+        }
+        
+        // Clear the flag
+        delete_option( 'backup_lite_needs_init' );
+    }
+    
     backup_lite_ensure_access_controls();
     Backup_Lite_Pro::init();
     Backup_Lite_Upload_Secret::init();
     Backup_Lite_UI::init();
     Backup_Lite_Backup_Jobs::init();
+    Backup_Lite_Restore_Jobs::init();
     Backup_Lite_Restore_Handler::init();
     Backup_Lite_Restore_Controller::init();
     Backup_Lite_Schedule_Handler::init();
@@ -98,16 +126,52 @@ function backup_lite_bootstrap() {
     Backup_Lite_Chunk_Handler::init();
     Backup_Lite_Chunk_V2::init();
 
-    // PRO Features initialization
-    if ( Backup_Lite_Pro::is_pro_active() ) {
-        Backup_Lite_AI_Service::init();
-        Backup_Lite_AI_Controller::init();
-        Backup_Lite_Smart_Retention::init();
-        Backup_Lite_Advanced_Filters::init();
-        Backup_Lite_Health_Score::init();
-        Backup_Lite_Cloud_Storage::init();
-        Backup_Lite_Reports_Service::init();
-        Backup_Lite_Reports_Controller::init();
+    // Load PRO features if PRO is active (deferred from file loading to prevent activation errors)
+    if ( class_exists( 'Backup_Lite_Pro' ) && method_exists( 'Backup_Lite_Pro', 'is_pro_active' ) && Backup_Lite_Pro::is_pro_active() ) {
+        // Load PRO feature files
+        $pro_files = [
+            'includes/pro/ai-service.php',
+            'includes/pro/ai-controller.php',
+            'includes/pro/smart-retention.php',
+            'includes/pro/advanced-filters.php',
+            'includes/pro/health-score.php',
+            'includes/pro/cloud-storage.php',
+            'includes/pro/reports-service.php',
+            'includes/pro/reports-controller.php',
+        ];
+        
+        foreach ( $pro_files as $file ) {
+            $path = BACKUP_LITE_PATH . $file;
+            if ( file_exists( $path ) ) {
+                require_once $path;
+            }
+        }
+        
+        // Initialize PRO features
+        if ( class_exists( 'Backup_Lite_AI_Service' ) ) {
+            Backup_Lite_AI_Service::init();
+        }
+        if ( class_exists( 'Backup_Lite_AI_Controller' ) ) {
+            Backup_Lite_AI_Controller::init();
+        }
+        if ( class_exists( 'Backup_Lite_Smart_Retention' ) ) {
+            Backup_Lite_Smart_Retention::init();
+        }
+        if ( class_exists( 'Backup_Lite_Advanced_Filters' ) ) {
+            Backup_Lite_Advanced_Filters::init();
+        }
+        if ( class_exists( 'Backup_Lite_Health_Score' ) ) {
+            Backup_Lite_Health_Score::init();
+        }
+        if ( class_exists( 'Backup_Lite_Cloud_Storage' ) ) {
+            Backup_Lite_Cloud_Storage::init();
+        }
+        if ( class_exists( 'Backup_Lite_Reports_Service' ) ) {
+            Backup_Lite_Reports_Service::init();
+        }
+        if ( class_exists( 'Backup_Lite_Reports_Controller' ) ) {
+            Backup_Lite_Reports_Controller::init();
+        }
     }
 
     if ( ! wp_next_scheduled( 'backup_lite_cleanup_cron' ) ) {
@@ -214,6 +278,11 @@ function backup_lite_render_restore_page() {
         wp_die( __( 'You do not have permission to access this page.', 'museder-restoreone' ) );
     }
 
+    $summary = Backup_Lite_Restore_Handler::current_summary();
+    $progress = Backup_Lite_Restore_Handler::current_progress();
+    $history  = Backup_Lite_Restore_Handler::history_for_js( 10 );
+    $active_job = Backup_Lite_Restore_Jobs::has_active_job();
+
     $backups = array_map(
         function ( $item ) {
             $size = isset( $item['size'] ) ? (int) $item['size'] : 0;
@@ -254,6 +323,10 @@ function backup_lite_render_restore_page() {
             'uploads' => trailingslashit( backup_lite_get_storage_root()['path'] ),
             'cap'     => current_user_can( 'manage_options' ),
             'backups' => $backups,
+            'summary' => $summary,
+            'progress'=> $progress,
+            'history' => $history,
+            'job'     => $active_job ? Backup_Lite_Restore_Jobs::prepare_job_response( $active_job ) : null,
             'labels'  => [
                 'noBackups'    => __( 'No backups available.', 'museder-restoreone' ),
                 'noValidation' => __( 'Validation results will appear here once the job is prepared.', 'museder-restoreone' ),

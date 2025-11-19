@@ -3,11 +3,6 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-if ( ob_get_level() ) {
-    ob_end_clean();
-}
-header_remove( 'Set-Cookie' );
-header_remove( 'X-Powered-By' );
 @ini_set( 'display_errors', 0 );
 @error_reporting( E_ALL & ~E_NOTICE & ~E_WARNING );
 
@@ -57,6 +52,7 @@ class Backup_Lite_Chunk_V2 {
     }
 
     public static function prepare( WP_REST_Request $request ) {
+        self::prepare_request_environment();
         $body          = $request->get_json_params();
         $body          = is_array( $body ) ? $body : [];
         $headers       = self::normalize_headers( $request );
@@ -119,6 +115,7 @@ class Backup_Lite_Chunk_V2 {
     }
 
     public static function upload_chunk( WP_REST_Request $request ) {
+        self::prepare_request_environment();
         $headers      = self::normalize_headers( $request );
         $upload_id    = self::pull_value( $headers, $request, [ 'x-backup-lite-upload-id', 'x-upload-id' ], [ 'upload_id' ] );
         $chunk_index  = self::pull_value( $headers, $request, [ 'x-chunk-index' ], [ 'chunk_index' ] );
@@ -244,6 +241,7 @@ class Backup_Lite_Chunk_V2 {
     }
 
     public static function abort( WP_REST_Request $request ) {
+        self::prepare_request_environment();
         $upload_id = sanitize_text_field( $request->get_param( 'upload_id' ) );
         if ( $upload_id ) {
             self::cleanup_upload( $upload_id );
@@ -279,6 +277,7 @@ class Backup_Lite_Chunk_V2 {
     /* -------------------------------------------------------------------- */
 
     public static function route_finalize( WP_REST_Request $req ) {
+        self::prepare_request_environment();
         $upload_id   = sanitize_text_field( $req->get_header( 'X-Backup-Lite-Upload-Id' ) ?: $req->get_param( 'upload_id' ) );
         $client_sha1 = strtolower( sanitize_text_field( $req->get_header( 'X-File-Sha1' ) ?: $req->get_param( 'file_sha1' ) ) );
 
@@ -435,6 +434,20 @@ class Backup_Lite_Chunk_V2 {
         }
 
         return true;
+    }
+
+    /**
+     * Make sure no stray output or cookies leak into REST responses.
+     */
+    private static function prepare_request_environment() {
+        if ( ob_get_level() ) {
+            @ob_end_clean();
+        }
+
+        if ( function_exists( 'header_remove' ) && ! headers_sent() ) {
+            @header_remove( 'Set-Cookie' );
+            @header_remove( 'X-Powered-By' );
+        }
     }
 
     private static function rest_success( array $data = [], $status = 200 ) {

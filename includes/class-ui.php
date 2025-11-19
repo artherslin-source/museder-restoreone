@@ -19,12 +19,14 @@ class Backup_Lite_UI {
         add_action( 'wp_ajax_backup_lite_run_backup', [ __CLASS__, 'handle_backup_request' ] );
         add_action( 'wp_ajax_backup_lite_run_restore', [ __CLASS__, 'handle_restore_request' ] );
         add_action( 'wp_ajax_backup_lite_restore_existing', [ __CLASS__, 'handle_restore_existing' ] );
+        add_action( 'wp_ajax_backup_lite_get_backups_list', [ __CLASS__, 'handle_get_backups_list' ] );
         add_action( 'wp_ajax_backup_lite_delete_backup', [ __CLASS__, 'handle_delete_backup' ] );
         add_action( 'wp_ajax_backup_lite_delete_backups', [ __CLASS__, 'handle_delete_backups' ] );
         add_action( 'wp_ajax_backup_lite_start_backup_job', [ __CLASS__, 'ajax_start_backup_job' ] );
         add_action( 'wp_ajax_backup_lite_get_job_status', [ __CLASS__, 'ajax_get_backup_job_status' ] );
         add_action( 'wp_ajax_backup_lite_continue_backup_job', [ __CLASS__, 'ajax_continue_backup_job' ] );
         add_action( 'wp_ajax_backup_lite_cancel_backup_job', [ __CLASS__, 'ajax_cancel_backup_job' ] );
+        add_action( 'wp_ajax_backup_lite_refresh_nonce', [ __CLASS__, 'ajax_refresh_nonce' ] );
 
         add_action( 'admin_post_backup_lite_download_log', [ __CLASS__, 'handle_log_download' ] );
         add_action( 'admin_post_backup_lite_download_backup', [ __CLASS__, 'handle_backup_download' ] );
@@ -235,6 +237,9 @@ class Backup_Lite_UI {
                 'stepExecuteReady'      => __( 'Ready to start restore.', 'museder-restoreone' ),
                 'stepExecuteProcessing' => __( 'Restore running…', 'museder-restoreone' ),
                 'stepExecuteDone'       => __( 'Restore finished. Review your site.', 'museder-restoreone' ),
+                'restoreFinalizing'     => __( 'Finalizing restore…', 'museder-restoreone' ),
+                'restoreFinalizingMessage' => __( 'Completing final steps…', 'museder-restoreone' ),
+                'restoreFailed'         => __( 'Restore Failed', 'museder-restoreone' ),
                 'restoreOverlayMessage' => __( 'Museder RestoreOne has finished restoring your site.', 'museder-restoreone' ),
                 'restoreOverlayConfirm' => __( 'Got it', 'museder-restoreone' ),
                 'selectAtLeastOneBackup' => __( 'Please select at least one backup.', 'museder-restoreone' ),
@@ -481,6 +486,29 @@ class Backup_Lite_UI {
         wp_send_json_error( $response );
     }
 
+    /**
+     * AJAX handler to get list of available backups.
+     */
+    public static function handle_get_backups_list() {
+        self::verify_ajax_request();
+
+        $backups = self::get_backups_list();
+        $formatted = array_map(
+            function ( $item ) {
+                $size = isset( $item['size'] ) ? (int) $item['size'] : 0;
+                return [
+                    'name'       => $item['name'],
+                    'size'       => $size,
+                    'size_human' => size_format( $size, 2 ),
+                    'created'    => $item['created'],
+                ];
+            },
+            $backups
+        );
+
+        wp_send_json_success( [ 'backups' => $formatted ] );
+    }
+
     public static function handle_delete_backup() {
         self::verify_ajax_request();
 
@@ -679,18 +707,38 @@ class Backup_Lite_UI {
             wp_send_json_error( [ 'message' => __( 'Unauthorized.', 'museder-restoreone' ) ], 403 );
         }
 
-        check_ajax_referer( self::NONCE, 'nonce' );
+        $nonce = isset( $_REQUEST['nonce'] ) ? sanitize_text_field( wp_unslash( $_REQUEST['nonce'] ) ) : '';
+        if ( empty( $nonce ) || ! wp_verify_nonce( $nonce, self::NONCE ) ) {
+            wp_send_json_error(
+                [
+                    'code'    => 'invalid_nonce',
+                    'message' => __( 'Your session has expired. Refreshing security token…', 'museder-restoreone' ),
+                ],
+                403
+            );
+        }
+    }
+
+    public static function ajax_refresh_nonce() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( [ 'message' => __( 'Unauthorized.', 'museder-restoreone' ) ], 403 );
+        }
+
+        wp_send_json_success(
+            [
+                'nonce' => wp_create_nonce( self::NONCE ),
+            ]
+        );
     }
 
     public static function get_backups_list( $limit = 0 ) {
         $dir = trailingslashit( backup_lite_get_backup_dir() );
         
-        // Support both old (backup-lite-*) and new (museder-restoreone-*) prefixes for backward compatibility
-        $old_backups = glob( $dir . 'backup-lite-*.{zip,wpress}', GLOB_BRACE );
-        $new_backups = glob( $dir . 'museder-restoreone-*.{zip,wpress}', GLOB_BRACE );
-        
-        // Merge and remove duplicates, then sort by filename (newest first)
-        $glob = array_unique( array_merge( (array) $old_backups, (array) $new_backups ) );
+        // Support all ZIP/WPRESS backups regardless of naming convention.
+        // Older versions created names like backup-lite-*.zip or museder-restoreone-*.zip,
+        // while the new format uses domain-YYYYMMDDHHmmss-random.zip.
+        // Matching on *.zip/*.wpress ensures future naming changes still work.
+        $glob = glob( $dir . '*.{zip,wpress}', GLOB_BRACE );
         
         if ( empty( $glob ) ) {
             return [];

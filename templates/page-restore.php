@@ -128,10 +128,9 @@ $backups      = isset( $backups ) && is_array( $backups ) ? $backups : [];
                     <?php esc_html_e( 'Please wait while we restore your site...', 'museder-restoreone' ); ?>
                 </div>
             </div>
-            <div class="progress-bar" style="height: 24px; background: rgba(0, 0, 0, 0.05); border-radius: 12px; overflow: hidden; margin-bottom: 12px;">
-                <div id="restore-progress-fill" class="progress-bar-fill" style="width:0%; height: 100%; background: linear-gradient(90deg, var(--bl-primary) 0%, var(--bl-primary-alt) 100%); transition: width 0.3s ease; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 600; font-size: 12px;">
-                    <span id="restore-progress-text">0%</span>
-                </div>
+            <div class="progress-bar" style="height: 24px; background: rgba(0, 0, 0, 0.05); border-radius: 12px; overflow: hidden; margin-bottom: 12px; position: relative;">
+                <div id="restore-progress-fill" class="progress-bar-fill" style="width:0%; height: 100%; background: linear-gradient(90deg, var(--bl-primary) 0%, var(--bl-primary-alt) 100%); transition: width 0.3s ease;"></div>
+                <span id="restore-progress-text" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #fff; font-weight: 600; font-size: 12px; pointer-events: none; text-align: center; width: 100%;">0%</span>
             </div>
             <p id="restore-progress-status" class="progress-status" style="text-align: center; font-size: 13px; color: var(--bl-text-muted); margin: 0;">
                 <?php echo esc_html( isset( $progress['message'] ) ? $progress['message'] : __( 'Waiting for action...', 'museder-restoreone' ) ); ?>

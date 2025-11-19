@@ -16,16 +16,55 @@ $file = isset($_GET['file']) ? (string) $_GET['file'] : '';
 $expires = isset($_GET['expires']) ? (int) $_GET['expires'] : 0;
 $token = isset($_GET['token']) ? (string) $_GET['token'] : '';
 
-if ($file === '' || $token === '' || $expires <= time()) {
-    $respond(403, ['ok' => false, 'code' => 'invalid_signature', 'message' => 'Download signature invalid or expired.']);
+if ($file === '' || $token === '') {
+    $respond(403, ['ok' => false, 'code' => 'invalid_signature', 'message' => '您的下載已過期，請從備份庫下載']);
+}
+
+// Allow a small grace period (30 seconds) for clock skew and network delays
+$current_time = time();
+if ($expires <= 0 || $expires < ($current_time - 30)) {
+    $respond(403, ['ok' => false, 'code' => 'download_expired', 'message' => '您的下載已過期，請從備份庫下載']);
 }
 
 $file = basename($file);
 
-$wp_content_dir = dirname(__DIR__, 2);
-$uploads_root = $wp_content_dir . '/uploads/museder-restoreone';
-$backup_dir = $uploads_root . '/backups';
-$secret_path = $uploads_root . '/upload-secret.php';
+// Try to load WordPress to get the correct storage path
+$wp_load_paths = [
+    dirname(__DIR__, 2) . '/wp-load.php',
+    dirname(__DIR__, 3) . '/wp-load.php',
+    dirname(__DIR__, 4) . '/wp-load.php',
+];
+
+$wp_loaded = false;
+foreach ($wp_load_paths as $wp_load) {
+    if (file_exists($wp_load)) {
+        require_once $wp_load;
+        $wp_loaded = true;
+        break;
+    }
+}
+
+// Load plugin helpers if WordPress is loaded
+if ($wp_loaded && defined('BACKUP_LITE_PATH')) {
+    $helpers_path = BACKUP_LITE_PATH . 'includes/helpers.php';
+    if (file_exists($helpers_path)) {
+        require_once $helpers_path;
+    }
+}
+
+// Determine storage path
+if ($wp_loaded && function_exists('backup_lite_get_storage_root')) {
+    // Use WordPress function to get correct path
+    $storage_root = backup_lite_get_storage_root();
+    $backup_dir = wp_normalize_path(trailingslashit($storage_root['path']) . 'backups');
+    $secret_path = wp_normalize_path(trailingslashit($storage_root['path']) . 'upload-secret.php');
+} else {
+    // Fallback to hardcoded path if WordPress is not available
+    $wp_content_dir = dirname(__DIR__, 2);
+    $uploads_root = $wp_content_dir . '/uploads/museder-restoreone';
+    $backup_dir = $uploads_root . '/backups';
+    $secret_path = $uploads_root . '/upload-secret.php';
+}
 
 if (!is_file($secret_path)) {
     $respond(500, ['ok' => false, 'code' => 'missing_secret', 'message' => 'Secret file missing.']);
@@ -46,7 +85,7 @@ if (!is_string($secret) || $secret === '') {
 
 $expected = hash_hmac('sha256', $file . '|' . $expires, $secret);
 if (!hash_equals($expected, $token)) {
-    $respond(403, ['ok' => false, 'code' => 'signature_mismatch', 'message' => 'Signature mismatch.']);
+    $respond(403, ['ok' => false, 'code' => 'signature_mismatch', 'message' => '您的下載已過期，請從備份庫下載']);
 }
 
 $base_dir = realpath($backup_dir);

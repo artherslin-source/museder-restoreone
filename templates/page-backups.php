@@ -19,40 +19,6 @@ $backups = isset( $backups ) ? $backups : Backup_Lite_UI::get_backups_list();
 
     <div id="backup-lite-messages" class="backup-lite-messages" role="status" aria-live="polite"></div>
 
-    <div class="backup-lite-card">
-        <h2>⚙️ <?php esc_html_e( 'Environment Compatibility', 'museder-restoreone' ); ?></h2>
-        <ul class="backup-lite-status-list">
-            <li>
-                <span class="badge <?php echo ! empty( $status['shell'] ) ? 'success' : 'pending'; ?>">
-                    <?php echo ! empty( $status['shell'] )
-                        ? esc_html__( 'Shell commands available', 'museder-restoreone' )
-                        : esc_html__( 'Shell commands disabled (fallback active)', 'museder-restoreone' ); ?>
-                </span>
-            </li>
-            <li>
-                <span class="badge <?php echo ! empty( $status['mysqldump'] ) ? 'success' : 'pending'; ?>">
-                    <?php echo ! empty( $status['mysqldump'] )
-                        ? esc_html__( 'mysqldump detected', 'museder-restoreone' )
-                        : esc_html__( 'mysqldump unavailable (using PHP export)', 'museder-restoreone' ); ?>
-                </span>
-            </li>
-            <li>
-                <span class="badge <?php echo ! empty( $status['mysql_cli'] ) ? 'success' : 'pending'; ?>">
-                    <?php echo ! empty( $status['mysql_cli'] )
-                        ? esc_html__( 'mysql client detected', 'museder-restoreone' )
-                        : esc_html__( 'mysql client unavailable (using PHP import)', 'museder-restoreone' ); ?>
-                </span>
-            </li>
-            <li>
-                <span class="badge <?php echo ! empty( $status['ziparchive'] ) ? 'success' : 'pending'; ?>">
-                    <?php echo ! empty( $status['ziparchive'] )
-                        ? esc_html__( 'ZipArchive available', 'museder-restoreone' )
-                        : esc_html__( 'ZipArchive missing (using PclZip)', 'museder-restoreone' ); ?>
-                </span>
-            </li>
-        </ul>
-    </div>
-
     <?php
     $is_pro = Backup_Lite_Pro::is_pro_active();
     ?>
@@ -221,6 +187,40 @@ $backups = isset( $backups ) ? $backups : Backup_Lite_UI::get_backups_list();
                 </tbody>
             </table>
         <?php endif; ?>
+    </div>
+
+    <div class="backup-lite-card">
+        <h2>⚙️ <?php esc_html_e( 'Environment Compatibility', 'museder-restoreone' ); ?></h2>
+        <ul class="backup-lite-status-list">
+            <li>
+                <span class="badge <?php echo ! empty( $status['shell'] ) ? 'success' : 'pending'; ?>">
+                    <?php echo ! empty( $status['shell'] )
+                        ? esc_html__( 'Shell commands available', 'museder-restoreone' )
+                        : esc_html__( 'Shell commands disabled (fallback active)', 'museder-restoreone' ); ?>
+                </span>
+            </li>
+            <li>
+                <span class="badge <?php echo ! empty( $status['mysqldump'] ) ? 'success' : 'pending'; ?>">
+                    <?php echo ! empty( $status['mysqldump'] )
+                        ? esc_html__( 'mysqldump detected', 'museder-restoreone' )
+                        : esc_html__( 'mysqldump unavailable (using PHP export)', 'museder-restoreone' ); ?>
+                </span>
+            </li>
+            <li>
+                <span class="badge <?php echo ! empty( $status['mysql_cli'] ) ? 'success' : 'pending'; ?>">
+                    <?php echo ! empty( $status['mysql_cli'] )
+                        ? esc_html__( 'mysql client detected', 'museder-restoreone' )
+                        : esc_html__( 'mysql client unavailable (using PHP import)', 'museder-restoreone' ); ?>
+                </span>
+            </li>
+            <li>
+                <span class="badge <?php echo ! empty( $status['ziparchive'] ) ? 'success' : 'pending'; ?>">
+                    <?php echo ! empty( $status['ziparchive'] )
+                        ? esc_html__( 'ZipArchive available', 'museder-restoreone' )
+                        : esc_html__( 'ZipArchive missing (using PclZip)', 'museder-restoreone' ); ?>
+                </span>
+            </li>
+        </ul>
     </div>
 </div>
 

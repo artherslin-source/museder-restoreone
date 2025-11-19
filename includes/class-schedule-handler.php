@@ -57,17 +57,30 @@ class Backup_Lite_Schedule_Handler {
      * Ensures cron events exist for enabled schedules.
      */
     public static function synchronise_cron_events() {
-        $schedules = self::get_schedules();
+        try {
+            $schedules = self::get_schedules();
 
-        if ( empty( $schedules ) ) {
-            return;
-        }
+            if ( empty( $schedules ) || ! is_array( $schedules ) ) {
+                return;
+            }
 
-        foreach ( $schedules as $schedule ) {
-            if ( self::is_schedule_enabled( $schedule ) ) {
-                self::ensure_event_exists( $schedule );
-            } else {
-                self::clear_event( $schedule['id'] );
+            foreach ( $schedules as $schedule ) {
+                if ( ! is_array( $schedule ) ) {
+                    continue;
+                }
+                
+                if ( self::is_schedule_enabled( $schedule ) ) {
+                    self::ensure_event_exists( $schedule );
+                } else {
+                    if ( isset( $schedule['id'] ) ) {
+                        self::clear_event( $schedule['id'] );
+                    }
+                }
+            }
+        } catch ( Exception $e ) {
+            // Silently fail during activation to prevent blocking plugin activation
+            if ( function_exists( 'backup_lite_log' ) ) {
+                backup_lite_log( 'error', 'Failed to synchronise cron events: ' . $e->getMessage() );
             }
         }
     }
@@ -607,7 +620,15 @@ class Backup_Lite_Schedule_Handler {
         }
 
         foreach ( $stored as $id => $schedule ) {
-            $stored[ $id ] = self::normalise_schedule( $schedule );
+            if ( ! is_array( $schedule ) ) {
+                continue;
+            }
+            try {
+                $stored[ $id ] = self::normalise_schedule( $schedule );
+            } catch ( Exception $e ) {
+                // Skip invalid schedule entries
+                unset( $stored[ $id ] );
+            }
         }
 
         return $stored;
@@ -803,7 +824,10 @@ class Backup_Lite_Schedule_Handler {
      * @param array $schedule Schedule array.
      * @return array
      */
-    private static function normalise_schedule( array $schedule ) {
+    private static function normalise_schedule( $schedule ) {
+        if ( ! is_array( $schedule ) ) {
+            $schedule = [];
+        }
         if ( ! isset( $schedule['last_run'] ) ) {
             $schedule['last_run'] = '';
         }
@@ -825,7 +849,7 @@ class Backup_Lite_Schedule_Handler {
         }
 
         // PRO features defaults
-        if ( Backup_Lite_Pro::is_pro_active() ) {
+        if ( class_exists( 'Backup_Lite_Pro' ) && method_exists( 'Backup_Lite_Pro', 'is_pro_active' ) && Backup_Lite_Pro::is_pro_active() ) {
             if ( ! isset( $schedule['cron_pattern'] ) ) {
                 $schedule['cron_pattern'] = '';
             }

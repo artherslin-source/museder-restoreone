@@ -9,12 +9,13 @@ class Backup_Lite_Restore {
     /**
      * Restore a site from a unified backup archive.
      *
-     * @param string $archive_file
-     * @param array  $options      Optional restore options (search_replace)
+     * @param string   $archive_file
+     * @param array    $options      Optional restore options (search_replace)
+     * @param callable $progress_cb  Optional progress callback function( $percent, $message )
      *
      * @return array{success:bool,message:string,log?:string,code?:string}
      */
-    public static function restore_site( $archive_file, $options = [] ) {
+    public static function restore_site( $archive_file, $options = [], $progress_cb = null ) {
         $archive_file = wp_normalize_path( $archive_file );
         $result   = [
             'success' => false,
@@ -36,9 +37,64 @@ class Backup_Lite_Restore {
             'method'  => 'auto',
         ] );
 
+        if ( is_callable( $progress_cb ) ) {
+            call_user_func( $progress_cb, 5, __( 'Preparing restore environment…', 'museder-restoreone' ) );
+        }
+
         $temp_dir = backup_lite_create_temp_dir( 'restore' );
 
-        $extract_result = self::extract_archive( $archive_file, $temp_dir );
+        if ( is_callable( $progress_cb ) ) {
+            call_user_func( $progress_cb, 15, __( 'Extracting backup archive…', 'museder-restoreone' ) );
+        }
+
+        // Wrap extraction in try-catch to handle PclZip exceptions
+        // Even if PclZip throws an exception, extraction may have partially succeeded
+        try {
+            $extract_result = self::extract_archive( $archive_file, $temp_dir );
+        } catch ( Throwable $extract_exception ) {
+            // Check if any files were extracted despite the exception
+            $extracted_count = 0;
+            if ( is_dir( $temp_dir ) ) {
+                try {
+                    $iterator = new RecursiveIteratorIterator(
+                        new RecursiveDirectoryIterator( $temp_dir, FilesystemIterator::SKIP_DOTS ),
+                        RecursiveIteratorIterator::LEAVES_ONLY
+                    );
+                    $extracted_count = iterator_count( $iterator );
+                } catch ( Exception $e ) {
+                    // Ignore iterator errors
+                }
+            }
+            
+            backup_lite_log( 'warning', 'extract_archive_exception', [
+                'archive' => $archive_file,
+                'exception' => $extract_exception->getMessage(),
+                'extracted_files' => $extracted_count,
+            ] );
+            
+            // If files were extracted, continue with restore
+            // PclZip may throw exceptions even when extraction succeeds
+            if ( $extracted_count > 0 ) {
+                backup_lite_log( 'info', 'Extraction completed despite exception, continuing with restore.', [
+                    'extracted_files' => $extracted_count,
+                ] );
+                $extract_result = [ 'success' => true, 'had_exception' => true ];
+            } else {
+                // No files extracted, return failure
+                backup_lite_log( 'error', 'Extraction failed with exception and no files extracted.', [
+                    'archive' => $archive_file,
+                    'exception' => $extract_exception->getMessage(),
+                ] );
+                backup_lite_delete_directory( $temp_dir );
+                return [
+                    'success' => false,
+                    'message' => __( 'Unable to extract backup archive. Check logs for details.', 'museder-restoreone' ),
+                    'log'     => $log,
+                    'code'    => 'zip_extract_exception',
+                    'error'   => $extract_exception->getMessage(),
+                ];
+            }
+        }
 
         if ( empty( $extract_result['success'] ) ) {
             backup_lite_log( 'error', 'Failed to extract archive for restore.', [
@@ -56,6 +112,10 @@ class Backup_Lite_Restore {
             ];
         }
 
+        if ( is_callable( $progress_cb ) ) {
+            call_user_func( $progress_cb, 30, __( 'Locating database file…', 'museder-restoreone' ) );
+        }
+
         $sql_path = self::locate_database_dump( $temp_dir );
         if ( ! $sql_path ) {
             backup_lite_log( 'error', 'database.sql missing in archive.', [ 'archive' => $archive_file ] );
@@ -69,10 +129,27 @@ class Backup_Lite_Restore {
             ];
         }
 
-        $db_result = self::import_database( $sql_path );
+        if ( is_callable( $progress_cb ) ) {
+            call_user_func( $progress_cb, 40, __( 'Preparing database import…', 'museder-restoreone' ) );
+        }
+
+        $db_result = self::import_database( $sql_path, $progress_cb );
         if ( empty( $db_result['success'] ) ) {
             backup_lite_delete_directory( $temp_dir );
             return $db_result;
+        }
+
+        // Store active_plugins from SQL file for later restoration
+        if ( ! empty( $db_result['active_plugins'] ) && is_array( $db_result['active_plugins'] ) ) {
+            // Store in a temporary option that will be used after restore
+            update_option( 'backup_lite_restored_active_plugins', $db_result['active_plugins'], false );
+            backup_lite_log( 'info', 'Stored active_plugins from SQL file for restoration.', [
+                'count' => count( $db_result['active_plugins'] ),
+            ] );
+        }
+
+        if ( is_callable( $progress_cb ) ) {
+            call_user_func( $progress_cb, 70, __( 'Restoring files from backup…', 'museder-restoreone' ) );
         }
 
         $files_result = self::restore_files_from_extract( $temp_dir );
@@ -82,7 +159,14 @@ class Backup_Lite_Restore {
         }
 
         if ( ! empty( $options['search_replace'] ) && is_array( $options['search_replace'] ) ) {
+            if ( is_callable( $progress_cb ) ) {
+                call_user_func( $progress_cb, 85, __( 'Applying URL search & replace…', 'museder-restoreone' ) );
+            }
             self::run_search_replace( $options['search_replace'] );
+        }
+
+        if ( is_callable( $progress_cb ) ) {
+            call_user_func( $progress_cb, 90, __( 'Cleaning up temporary files…', 'museder-restoreone' ) );
         }
 
         backup_lite_delete_directory( $temp_dir );
@@ -101,7 +185,7 @@ class Backup_Lite_Restore {
      *
      * @param string $sql_file
      */
-    public static function import_database( $sql_file ) {
+    public static function import_database( $sql_file, $progress_cb = null ) {
         $sql_file = wp_normalize_path( $sql_file );
         $result   = [
             'success' => false,
@@ -116,29 +200,60 @@ class Backup_Lite_Restore {
             return $result;
         }
 
+        if ( is_callable( $progress_cb ) ) {
+            call_user_func( $progress_cb, 45, __( 'Preparing database SQL file…', 'museder-restoreone' ) );
+        }
+
+        // Extract active_plugins from SQL file before import
+        $active_plugins_from_sql = self::extract_active_plugins_from_sql( $sql_file );
+        if ( ! empty( $active_plugins_from_sql ) ) {
+            $result['active_plugins'] = $active_plugins_from_sql;
+            backup_lite_log( 'info', 'Extracted active_plugins from SQL file before import.', [
+                'count' => count( $active_plugins_from_sql ),
+            ] );
+        }
+
+        $prepared_sql = self::prepare_sql_for_import( $sql_file );
+        $sql_to_import = $prepared_sql['path'];
+
         $method = backup_lite_can_use_mysql_cli() ? 'mysql-cli' : 'php';
-        $log    = backup_lite_log( 'info', 'Database restore started.', [ 'method' => $method, 'path' => $sql_file ] );
+        $log    = backup_lite_log( 'info', 'Database restore started.', [ 'method' => $method, 'path' => $sql_to_import ] );
 
-        if ( backup_lite_can_use_mysql_cli() ) {
-            $success = self::import_database_with_cli( $sql_file );
-            $php_details = [];
-        } else {
-            $php_details = self::import_database_with_php( $sql_file );
-            $success     = isset( $php_details['success'] ) ? $php_details['success'] : false;
+        if ( is_callable( $progress_cb ) ) {
+            $method_text = backup_lite_can_use_mysql_cli() ? __( 'Importing database via MySQL CLI…', 'museder-restoreone' ) : __( 'Importing database via PHP…', 'museder-restoreone' );
+            call_user_func( $progress_cb, 50, $method_text );
         }
 
-        if ( ! $success ) {
-            backup_lite_log( 'error', 'Database restore failed.', [ 'path' => $sql_file ] );
-            $result['message'] = __( 'Database restore encountered an error. Check logs.', 'museder-restoreone' );
-            $result['log']     = $log;
-            if ( ! empty( $php_details['line'] ) ) {
-                $result['line'] = $php_details['line'];
+        try {
+            if ( backup_lite_can_use_mysql_cli() ) {
+                $success     = self::import_database_with_cli( $sql_to_import );
+                $php_details = [];
+            } else {
+                $php_details = self::import_database_with_php( $sql_to_import, $progress_cb );
+                $success     = isset( $php_details['success'] ) ? $php_details['success'] : false;
             }
-            $result['code'] = isset( $php_details['code'] ) ? $php_details['code'] : 'database_error';
-            return $result;
+
+            if ( is_callable( $progress_cb ) && $success ) {
+                call_user_func( $progress_cb, 65, __( 'Database import completed.', 'museder-restoreone' ) );
+            }
+
+            if ( ! $success ) {
+                backup_lite_log( 'error', 'Database restore failed.', [ 'path' => $sql_to_import ] );
+                $result['message'] = __( 'Database restore encountered an error. Check logs.', 'museder-restoreone' );
+                $result['log']     = $log;
+                if ( ! empty( $php_details['line'] ) ) {
+                    $result['line'] = $php_details['line'];
+                }
+                $result['code'] = isset( $php_details['code'] ) ? $php_details['code'] : 'database_error';
+                return $result;
+            }
+        } finally {
+            if ( $prepared_sql['temporary'] && file_exists( $prepared_sql['path'] ) ) {
+                @unlink( $prepared_sql['path'] );
+            }
         }
 
-        backup_lite_log( 'info', 'Database restore completed.', [ 'path' => $sql_file ] );
+        backup_lite_log( 'info', 'Database restore completed.', [ 'path' => $sql_to_import ] );
 
         $result['success'] = true;
         $result['message'] = __( 'Database restore completed successfully.', 'museder-restoreone' );
@@ -148,30 +263,245 @@ class Backup_Lite_Restore {
         return $result;
     }
 
-    private static function restore_files_from_extract( $extract_dir ) {
-        $wp_content_source = trailingslashit( $extract_dir ) . 'wp-content';
-        $targets = [];
+    private static function prepare_sql_for_import( $sql_file ) {
+        $default = [
+            'path'      => $sql_file,
+            'temporary' => false,
+        ];
 
-        if ( is_dir( $wp_content_source ) ) {
+        if ( ! file_exists( $sql_file ) || ! is_readable( $sql_file ) ) {
+            return $default;
+        }
+
+        $placeholder = 'SERVMASK_PREFIX_';
+        $needs_normalize = false;
+
+        $handle = fopen( $sql_file, 'rb' );
+        if ( $handle ) {
+            $sample = fread( $handle, 1048576 ); // 1MB sample.
+            if ( false !== strpos( $sample, $placeholder ) ) {
+                $needs_normalize = true;
+            }
+            fclose( $handle );
+        }
+
+        if ( ! $needs_normalize ) {
+            return $default;
+        }
+
+        self::cleanup_servmask_tables();
+
+        global $wpdb;
+        $prefix = isset( $wpdb->prefix ) ? (string) $wpdb->prefix : '';
+        if ( '' === $prefix ) {
+            backup_lite_log( 'warning', 'Detected SERVMASK_PREFIX in SQL but database prefix is unknown. Proceeding without normalization.' );
+            return $default;
+        }
+
+        $normalized = $sql_file . '.normalized.sql';
+        $in         = fopen( $sql_file, 'rb' );
+        $out        = fopen( $normalized, 'wb' );
+
+        if ( ! $in || ! $out ) {
+            if ( $in ) {
+                fclose( $in );
+            }
+            if ( $out ) {
+                fclose( $out );
+            }
+            backup_lite_log( 'warning', 'Unable to create normalized SQL file for SERVMASK export.', [ 'source' => $sql_file ] );
+            return $default;
+        }
+
+        // Detect file size to choose optimal strategy
+        $file_size = filesize( $sql_file );
+        $is_large_file = $file_size >= 1073741824; // 1GB or larger
+        
+        // For large files (1GB+), use larger chunks and more aggressive overlap
+        $chunk_size = $is_large_file ? 10485760 : 1048576; // 10MB for large files, 1MB for smaller
+        $placeholder_len = strlen( $placeholder );
+        // Use 3x placeholder length for large files to ensure no cross-boundary issues
+        $overlap    = $is_large_file ? ( $placeholder_len * 3 ) : ( $placeholder_len * 2 );
+        $buffer     = '';
+
+        // First pass: streaming replacement with overlap buffer
+        while ( ! feof( $in ) ) {
+            $chunk = fread( $in, $chunk_size );
+            if ( false === $chunk ) {
+                break;
+            }
+
+            // Prepend previous buffer to handle cross-chunk placeholders
+            $chunk = $buffer . $chunk;
+
+            // Ensure we have enough data to safely extract a chunk
+            if ( strlen( $chunk ) > $overlap ) {
+                $buffer        = substr( $chunk, -$overlap );
+                $chunk_to_write = substr( $chunk, 0, -$overlap );
+            } else {
+                // Not enough data yet, accumulate in buffer
+                $buffer = $chunk;
+                continue;
+            }
+
+            // Replace placeholder in the chunk we're about to write
+            $chunk_to_write = str_replace( $placeholder, $prefix, $chunk_to_write );
+            fwrite( $out, $chunk_to_write );
+        }
+
+        // Write remaining buffer
+        if ( $buffer !== '' ) {
+            $buffer = str_replace( $placeholder, $prefix, $buffer );
+            fwrite( $out, $buffer );
+        }
+
+        fclose( $in );
+        fclose( $out );
+
+        // For large files (1GB+), always do a second pass to ensure 100% replacement
+        // This is necessary because even with large overlap, edge cases can occur
+        if ( $is_large_file ) {
+            backup_lite_log( 'info', 'Large SQL file detected, performing second normalization pass for safety.', [ 
+                'file' => basename( $normalized ),
+                'size' => round( $file_size / 1073741824, 2 ) . 'GB'
+            ] );
+            
+            $temp_file = $normalized . '.tmp';
+            if ( rename( $normalized, $temp_file ) ) {
+                $in2 = fopen( $temp_file, 'rb' );
+                $out2 = fopen( $normalized, 'wb' );
+                
+                if ( $in2 && $out2 ) {
+                    $second_buffer = '';
+                    $second_chunk_size = $chunk_size; // Use same chunk size
+                    
+                    while ( ! feof( $in2 ) ) {
+                        $chunk2 = fread( $in2, $second_chunk_size );
+                        if ( false === $chunk2 ) {
+                            break;
+                        }
+                        
+                        // Prepend buffer to handle cross-boundary placeholders
+                        $chunk2 = $second_buffer . $chunk2;
+                        
+                        if ( strlen( $chunk2 ) > $overlap ) {
+                            $second_buffer = substr( $chunk2, -$overlap );
+                            $chunk_to_write2 = substr( $chunk2, 0, -$overlap );
+                        } else {
+                            $second_buffer = $chunk2;
+                            continue;
+                        }
+                        
+                        // Replace any remaining placeholders
+                        $chunk_to_write2 = str_replace( $placeholder, $prefix, $chunk_to_write2 );
+                        fwrite( $out2, $chunk_to_write2 );
+                    }
+                    
+                    // Write remaining buffer
+                    if ( $second_buffer !== '' ) {
+                        $second_buffer = str_replace( $placeholder, $prefix, $second_buffer );
+                        fwrite( $out2, $second_buffer );
+                    }
+                    
+                    fclose( $in2 );
+                    fclose( $out2 );
+                    @unlink( $temp_file );
+                    
+                    backup_lite_log( 'info', 'Second normalization pass completed for large file.', [ 'file' => basename( $normalized ) ] );
+                }
+            }
+        } else {
+            // For smaller files, verify and do second pass only if needed
+            $normalized_size = filesize( $normalized );
+            if ( $normalized_size > 0 && $normalized_size < 52428800 ) { // < 50MB
+                $verify_content = file_get_contents( $normalized );
+                if ( false !== $verify_content && false !== strpos( $verify_content, $placeholder ) ) {
+                    backup_lite_log( 'warning', 'SERVMASK placeholder still found after first pass, running second normalization pass.', [ 'file' => basename( $normalized ) ] );
+                    
+                    $verify_content = str_replace( $placeholder, $prefix, $verify_content );
+                    file_put_contents( $normalized, $verify_content );
+                }
+            }
+        }
+
+        backup_lite_log(
+            'info',
+            'Normalized SERVMASK SQL prefix.',
+            [
+                'source'     => basename( $sql_file ),
+                'normalized' => basename( $normalized ),
+                'prefix'     => $prefix,
+            ]
+        );
+
+        return [
+            'path'      => $normalized,
+            'temporary' => true,
+        ];
+    }
+
+    /**
+     * Drop leftover SERVMASK placeholder tables created by All-in-One WP Migration imports.
+     */
+    private static function cleanup_servmask_tables() {
+        global $wpdb;
+
+        $tables = $wpdb->get_col( "SHOW TABLES LIKE 'SERVMASK\\_PREFIX\\_%'" );
+        if ( empty( $tables ) ) {
+            return;
+        }
+
+        $dropped = [];
+
+        foreach ( $tables as $table ) {
+            $safe = preg_replace( '/[^A-Za-z0-9_]/', '', $table );
+            if ( empty( $safe ) ) {
+                continue;
+            }
+
+            $query = "DROP TABLE IF EXISTS `{$safe}`";
+            $wpdb->query( $query ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.DirectQuery
+            $dropped[] = $safe;
+        }
+
+        if ( ! empty( $dropped ) ) {
+            backup_lite_log(
+                'info',
+                'Removed SERVMASK placeholder tables before restore.',
+                [
+                    'tables' => $dropped,
+                ]
+            );
+        }
+    }
+
+    private static function restore_files_from_extract( $extract_dir ) {
+        $targets = [];
+        $wp_content_source = self::find_directory_by_name( $extract_dir, 'wp-content' );
+
+        if ( $wp_content_source && is_dir( $wp_content_source ) ) {
             $targets[] = [ $wp_content_source, WP_CONTENT_DIR ];
         } else {
             $fallbacks = [
-                'themes'  => WP_CONTENT_DIR . '/themes',
-                'plugins' => WP_CONTENT_DIR . '/plugins',
-                'uploads' => WP_CONTENT_DIR . '/uploads',
+                'themes'     => WP_CONTENT_DIR . '/themes',
+                'plugins'    => WP_CONTENT_DIR . '/plugins',
+                'uploads'    => WP_CONTENT_DIR . '/uploads',
                 'mu-plugins' => WP_CONTENT_DIR . '/mu-plugins',
             ];
 
             foreach ( $fallbacks as $dir => $destination ) {
-                $source = trailingslashit( $extract_dir ) . $dir;
-                if ( is_dir( $source ) ) {
+                $source = self::find_directory_by_name( $extract_dir, $dir );
+                if ( $source && is_dir( $source ) ) {
                     $targets[] = [ $source, $destination ];
                 }
             }
         }
 
         if ( empty( $targets ) ) {
-            backup_lite_log( 'warning', 'No wp-content data found in archive.' );
+            backup_lite_log( 'warning', 'No wp-content data found in archive.', [
+                'extract_dir' => wp_normalize_path( $extract_dir ),
+                'top_level'   => self::summarize_extract_contents( $extract_dir ),
+            ] );
             return [
                 'success' => true,
                 'message' => __( 'Database restored, but no wp-content data found in archive.', 'museder-restoreone' ),
@@ -220,6 +550,8 @@ class Backup_Lite_Restore {
             }
         }
 
+        // Try PclZip only if ZipArchive failed completely
+        // PclZip has compatibility issues with some WordPress versions
         $pcl_result = self::extract_with_pclzip( $archive, $destination );
         if ( ! empty( $pcl_result['success'] ) ) {
             return [
@@ -232,6 +564,13 @@ class Backup_Lite_Restore {
         if ( isset( $pcl_result['error_code'] ) ) {
             $zip_error_code = $zip_error_code ?? $pcl_result['error_code'];
         }
+
+        // If both methods failed, return error
+        backup_lite_log( 'error', 'Both ZipArchive and PclZip extraction failed', [
+            'archive'    => $archive,
+            'zip_error_code' => $zip_error_code,
+            'pclzip_error' => isset( $pcl_result['error'] ) ? $pcl_result['error'] : '',
+        ] );
 
         return [
             'success'        => false,
@@ -340,11 +679,51 @@ class Backup_Lite_Restore {
 
         self::$pclzip_destination = wp_normalize_path( $destination );
 
-        $zip    = new PclZip( $archive );
-        $result = $zip->extract(
-            PCLZIP_OPT_PATH, self::$pclzip_destination,
-            PCLZIP_CB_PRE_EXTRACT, [ __CLASS__, 'pclzip_pre_extract' ]
-        );
+        $zip = new PclZip( $archive );
+        
+        // Use individual parameters instead of array to avoid PclZip parsing issues
+        // Some WordPress versions have PclZip that doesn't handle option arrays correctly
+        // We'll extract without callback first, then filter suspicious files after extraction
+        // Wrap in try-catch to handle exceptions that PclZip may throw
+        try {
+            $result = $zip->extract(
+                PCLZIP_OPT_PATH, self::$pclzip_destination
+            );
+        } catch ( Throwable $e ) {
+            // PclZip may throw exceptions for certain errors
+            // Check if any files were extracted before declaring failure
+            $extracted_files = 0;
+            if ( is_dir( self::$pclzip_destination ) ) {
+                $iterator = new RecursiveIteratorIterator(
+                    new RecursiveDirectoryIterator( self::$pclzip_destination, FilesystemIterator::SKIP_DOTS ),
+                    RecursiveIteratorIterator::LEAVES_ONLY
+                );
+                $extracted_files = iterator_count( $iterator );
+            }
+            
+            backup_lite_log( 'warning', 'pclzip_extract_exception', [
+                'archive'    => $archive,
+                'exception'   => $e->getMessage(),
+                'extracted_files' => $extracted_files,
+            ] );
+            
+            // If some files were extracted, consider it partially successful
+            // The extraction may have completed despite the exception
+            if ( $extracted_files > 0 ) {
+                backup_lite_log( 'info', 'PclZip extraction completed despite exception, continuing with restore.', [
+                    'extracted_files' => $extracted_files,
+                ] );
+                // Return success with a note that we had an exception but files were extracted
+                return [ 'success' => true, 'entries' => $extracted_files, 'had_exception' => true ];
+            }
+            
+            // No files extracted, return failure
+            return [
+                'success'    => false,
+                'error_code' => 'pclzip_exception',
+                'error'      => $e->getMessage(),
+            ];
+        }
 
         if ( 0 === $result ) {
             $error_code = method_exists( $zip, 'errorCode' ) ? $zip->errorCode() : 'pclzip_error';
@@ -361,6 +740,58 @@ class Backup_Lite_Restore {
                 'error_code' => $error_code,
                 'error'      => $error_info,
             ];
+        }
+
+        // After extraction, filter out suspicious files that would have been caught by callback
+        // PclZip extract() may return an array of entries or just a count, handle both cases
+        if ( is_array( $result ) && count( $result ) > 0 ) {
+            $removed_count = 0;
+            foreach ( $result as $entry ) {
+                // Handle both array format and potential string format
+                if ( ! is_array( $entry ) ) {
+                    continue;
+                }
+                
+                $entry_path = null;
+                if ( isset( $entry['stored_filename'] ) && is_string( $entry['stored_filename'] ) ) {
+                    $entry_path = $entry['stored_filename'];
+                } elseif ( isset( $entry['filename'] ) && is_string( $entry['filename'] ) ) {
+                    $entry_path = $entry['filename'];
+                }
+                
+                if ( ! $entry_path ) {
+                    continue;
+                }
+                
+                if ( self::is_suspicious_zip_entry( $entry_path ) ) {
+                    $target = backup_lite_safe_path_join( self::$pclzip_destination, $entry_path );
+                    if ( $target && file_exists( $target ) ) {
+                        @unlink( $target );
+                        $removed_count++;
+                        backup_lite_log( 'warning', 'zip_entry_removed_after_extraction', [
+                            'entry' => $entry_path,
+                            'reason' => 'suspicious_path',
+                        ] );
+                    }
+                } else {
+                    // Also check for unsafe path joins
+                    $target = backup_lite_safe_path_join( self::$pclzip_destination, $entry_path );
+                    if ( ! $target && isset( $entry['filename'] ) && is_string( $entry['filename'] ) ) {
+                        $full_path = trailingslashit( self::$pclzip_destination ) . $entry['filename'];
+                        if ( file_exists( $full_path ) ) {
+                            @unlink( $full_path );
+                            $removed_count++;
+                            backup_lite_log( 'warning', 'zip_entry_removed_after_extraction', [
+                                'entry' => $entry_path,
+                                'reason' => 'unsafe_join',
+                            ] );
+                        }
+                    }
+                }
+            }
+            if ( $removed_count > 0 ) {
+                backup_lite_log( 'info', 'zip_entries_filtered_after_extraction', [ 'count' => $removed_count ] );
+            }
         }
 
         return [ 'success' => true, 'entries' => $result ];
@@ -408,11 +839,38 @@ class Backup_Lite_Restore {
         $destination = rtrim( wp_normalize_path( $destination ), '/' );
 
         if ( ! is_dir( $source ) ) {
+            backup_lite_log( 'error', 'copy_directory_source_not_dir', [
+                'source' => $source,
+                'destination' => $destination,
+            ] );
+            return false;
+        }
+
+        if ( ! is_readable( $source ) ) {
+            backup_lite_log( 'error', 'copy_directory_source_not_readable', [
+                'source' => $source,
+                'destination' => $destination,
+            ] );
             return false;
         }
 
         if ( ! file_exists( $destination ) ) {
-            backup_lite_ensure_directory( $destination );
+            if ( ! backup_lite_ensure_directory( $destination ) ) {
+                backup_lite_log( 'error', 'copy_directory_dest_create_failed', [
+                    'source' => $source,
+                    'destination' => $destination,
+                ] );
+                return false;
+            }
+        }
+
+        if ( ! is_writable( $destination ) ) {
+            backup_lite_log( 'error', 'copy_directory_dest_not_writable', [
+                'source' => $source,
+                'destination' => $destination,
+                'dest_perms' => file_exists( $destination ) ? substr( sprintf( '%o', fileperms( $destination ) ), -4 ) : 'N/A',
+            ] );
+            return false;
         }
 
         $iterator = new RecursiveIteratorIterator(
@@ -420,24 +878,104 @@ class Backup_Lite_Restore {
             RecursiveIteratorIterator::SELF_FIRST
         );
 
+        $copied_count = 0;
+        $failed_count = 0;
+        $first_failure = null;
+
         foreach ( $iterator as $item ) {
             $target_path = $destination . substr( wp_normalize_path( $item->getPathname() ), strlen( $source ) );
 
             if ( $item->isDir() ) {
                 if ( ! file_exists( $target_path ) ) {
-                    backup_lite_ensure_directory( $target_path );
+                    if ( ! backup_lite_ensure_directory( $target_path ) ) {
+                        $failed_count++;
+                        if ( ! $first_failure ) {
+                            $first_failure = [
+                                'type' => 'directory',
+                                'path' => $target_path,
+                                'error' => 'Failed to create directory',
+                            ];
+                        }
+                        // Continue trying other files even if directory creation fails
+                        continue;
+                    }
                 }
             } else {
                 $dir = dirname( $target_path );
                 if ( ! file_exists( $dir ) ) {
-                    backup_lite_ensure_directory( $dir );
+                    if ( ! backup_lite_ensure_directory( $dir ) ) {
+                        $failed_count++;
+                        if ( ! $first_failure ) {
+                            $first_failure = [
+                                'type' => 'directory',
+                                'path' => $dir,
+                                'error' => 'Failed to create parent directory',
+                            ];
+                        }
+                        continue;
+                    }
                 }
 
                 if ( ! @copy( $item->getPathname(), $target_path ) ) {
-                    return false;
+                    $failed_count++;
+                    // Log detailed error information for debugging
+                    $error = error_get_last();
+                    $error_details = [
+                        'source' => $item->getPathname(),
+                        'destination' => $target_path,
+                        'error' => $error ? $error['message'] : 'Unknown error',
+                        'source_readable' => is_readable( $item->getPathname() ),
+                        'source_exists' => file_exists( $item->getPathname() ),
+                        'dest_dir_writable' => is_writable( dirname( $target_path ) ),
+                        'dest_dir_exists' => file_exists( dirname( $target_path ) ),
+                        'dest_dir_perms' => file_exists( dirname( $target_path ) ) ? substr( sprintf( '%o', fileperms( dirname( $target_path ) ) ), -4 ) : 'N/A',
+                    ];
+                    
+                    if ( ! $first_failure ) {
+                        $first_failure = array_merge( [ 'type' => 'file' ], $error_details );
+                    }
+                    
+                    backup_lite_log( 'error', 'copy_file_failed', $error_details );
+                    
+                    // If too many files fail, abort to avoid wasting time
+                    if ( $failed_count > 10 && $copied_count === 0 ) {
+                        backup_lite_log( 'error', 'copy_directory_aborted_too_many_failures', [
+                            'source' => $source,
+                            'destination' => $destination,
+                            'failed_count' => $failed_count,
+                            'copied_count' => $copied_count,
+                            'first_failure' => $first_failure,
+                        ] );
+                        return false;
+                    }
+                } else {
+                    $copied_count++;
                 }
             }
         }
+
+        // If we copied some files but had failures, log a warning but continue
+        if ( $failed_count > 0 ) {
+            backup_lite_log( 'warning', 'copy_directory_partial_success', [
+                'source' => $source,
+                'destination' => $destination,
+                'copied_count' => $copied_count,
+                'failed_count' => $failed_count,
+                'first_failure' => $first_failure,
+            ] );
+            
+            // If we copied nothing, consider it a failure
+            if ( $copied_count === 0 ) {
+                return false;
+            }
+        }
+
+        backup_lite_log( 'info', 'copy_directory_completed', [
+            'source' => $source,
+            'destination' => $destination,
+            'copied_count' => $copied_count,
+            'failed_count' => $failed_count,
+        ] );
 
         return true;
     }
@@ -462,7 +1000,7 @@ class Backup_Lite_Restore {
         return $success;
     }
 
-    private static function import_database_with_php( $sql_file ) {
+    private static function import_database_with_php( $sql_file, $progress_cb = null ) {
         global $wpdb;
 
         $handle = fopen( $sql_file, 'r' );
@@ -477,6 +1015,9 @@ class Backup_Lite_Restore {
         $query    = '';
         $success  = true;
         $line_num = 0;
+        $file_size = filesize( $sql_file );
+        $last_progress_report = 0;
+        $progress_report_interval = max( 1, floor( $file_size / 20 ) ); // Report progress ~20 times
 
         self::run_database_primers();
 
@@ -490,6 +1031,17 @@ class Backup_Lite_Restore {
 
             $query .= $line;
 
+            // Report progress periodically during import
+            if ( is_callable( $progress_cb ) && $file_size > 0 ) {
+                $current_pos = ftell( $handle );
+                $progress_percent = min( 100, floor( ( $current_pos / $file_size ) * 100 ) );
+                if ( $progress_percent >= $last_progress_report + 5 ) { // Report every 5%
+                    $mapped_percent = 50 + ( $progress_percent * 0.15 ); // Map to 50-65% range
+                    call_user_func( $progress_cb, $mapped_percent, __( 'Importing database…', 'museder-restoreone' ) );
+                    $last_progress_report = $progress_percent;
+                }
+            }
+
             if ( ';' === substr( rtrim( $line ), -1 ) ) {
                 $prepared = trim( $query );
                 if ( ! empty( $prepared ) ) {
@@ -502,6 +1054,7 @@ class Backup_Lite_Restore {
                             'line'  => $line_num,
                             'error' => $error,
                         ] );
+                        fclose( $handle );
                         return [
                             'success' => false,
                             'message' => __( 'Database restore encountered an error. Check logs.', 'museder-restoreone' ),
@@ -535,6 +1088,66 @@ class Backup_Lite_Restore {
     private static function restore_database_constraints() {
         global $wpdb;
         $wpdb->query( 'SET foreign_key_checks = 1' );
+    }
+
+    /**
+     * Extract active_plugins value from SQL file before import.
+     * This is needed because All-in-One WP Migration may have deactivated plugins during backup.
+     *
+     * @param string $sql_file Path to SQL file.
+     * @return array Array of active plugin file paths, or empty array if not found.
+     */
+    private static function extract_active_plugins_from_sql( $sql_file ) {
+        if ( ! file_exists( $sql_file ) || ! is_readable( $sql_file ) ) {
+            return [];
+        }
+
+        $active_plugins = [];
+        $handle = fopen( $sql_file, 'rb' );
+        if ( ! $handle ) {
+            return [];
+        }
+
+        // Search for active_plugins in the SQL file
+        // Pattern: INSERT INTO `SERVMASK_PREFIX_options` VALUES (...,'active_plugins','a:XX:{...}',...)
+        // We need to handle nested serialized arrays, so we'll use a more robust approach
+        $buffer = '';
+        $chunk_size = 1048576; // 1MB chunks
+        $found = false;
+
+        while ( ! feof( $handle ) && ! $found ) {
+            $chunk = fread( $handle, $chunk_size );
+            if ( false === $chunk ) {
+                break;
+            }
+
+            $buffer .= $chunk;
+
+            // Look for active_plugins pattern
+            // Match: 'active_plugins' followed by a quoted value
+            // We need to handle the full VALUES format: VALUES (id,'active_plugins','serialized_value','yes')
+            // The serialized value can contain quotes, so we need to parse carefully
+            if ( preg_match( "/'active_plugins'[,\s]+'((?:[^'\\\\]|\\\\.|'')*)'/s", $buffer, $matches ) ) {
+                $serialized_value = str_replace( "''", "'", $matches[1] ); // Unescape SQL quotes
+                
+                // Try to unserialize
+                $unserialized = @unserialize( $serialized_value );
+                if ( is_array( $unserialized ) ) {
+                    $active_plugins = $unserialized;
+                    $found = true;
+                    break;
+                }
+            }
+
+            // Keep last 2MB in buffer to catch cross-chunk matches
+            if ( strlen( $buffer ) > 2097152 ) {
+                $buffer = substr( $buffer, -1048576 );
+            }
+        }
+
+        fclose( $handle );
+
+        return $active_plugins;
     }
 
     private static function run_search_replace( $pairs ) {
@@ -627,5 +1240,84 @@ class Backup_Lite_Restore {
         }
 
         return false;
+    }
+
+    /**
+     * Recursively search for a directory by name within the extract directory.
+     *
+     * @param string $base_dir   Root directory to search within.
+     * @param string $target     Directory name to locate.
+     * @param int    $max_depth  Maximum depth to scan.
+     * @return string Path if found, empty string otherwise.
+     */
+    private static function find_directory_by_name( $base_dir, $target, $max_depth = 4 ) {
+        $base_dir = wp_normalize_path( $base_dir );
+        if ( ! is_dir( $base_dir ) ) {
+            return '';
+        }
+
+        $queue = [
+            [
+                'path'  => $base_dir,
+                'depth' => 0,
+            ],
+        ];
+
+        while ( ! empty( $queue ) ) {
+            $current = array_shift( $queue );
+            $current_path  = $current['path'];
+            $current_depth = (int) $current['depth'];
+
+            if ( $current_depth > $max_depth ) {
+                continue;
+            }
+
+            $children = glob( trailingslashit( $current_path ) . '*', GLOB_ONLYDIR );
+            if ( empty( $children ) ) {
+                continue;
+            }
+
+            foreach ( $children as $child ) {
+                $child_path = wp_normalize_path( $child );
+                if ( basename( $child_path ) === $target ) {
+                    return $child_path;
+                }
+
+                if ( $current_depth + 1 <= $max_depth ) {
+                    $queue[] = [
+                        'path'  => $child_path,
+                        'depth' => $current_depth + 1,
+                    ];
+                }
+            }
+        }
+
+        return '';
+    }
+
+    /**
+     * List top-level directories/files inside the extract folder for logging.
+     *
+     * @param string $base_dir Extract directory.
+     * @return array
+     */
+    private static function summarize_extract_contents( $base_dir ) {
+        $base_dir = wp_normalize_path( $base_dir );
+        if ( ! is_dir( $base_dir ) ) {
+            return [];
+        }
+
+        $entries = glob( trailingslashit( $base_dir ) . '*', GLOB_NOSORT );
+        if ( empty( $entries ) ) {
+            return [];
+        }
+
+        $summary = [];
+        foreach ( array_slice( $entries, 0, 15 ) as $entry ) {
+            $type = is_dir( $entry ) ? 'dir' : 'file';
+            $summary[] = $type . ':' . basename( $entry );
+        }
+
+        return $summary;
     }
 }

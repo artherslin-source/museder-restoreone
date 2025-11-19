@@ -518,8 +518,13 @@ class Backup_Lite_Restore_Service {
         }
 
         $pcl = new PclZip( $archive_path );
-        $result = $pcl->extract( PCLZIP_OPT_PATH, $destination, PCLZIP_OPT_REPLACE_NEWER );
-        return [ 'success' => ( false !== $result ) ];
+        // Use array format for options to avoid PclZip parsing issues
+        $options = [
+            PCLZIP_OPT_PATH => $destination,
+            PCLZIP_OPT_REPLACE_NEWER => true,
+        ];
+        $result = $pcl->extract( $options );
+        return [ 'success' => ( false !== $result && 0 !== $result ) ];
     }
 
     protected static function import_database_from_extract( $extract_dir, array $meta ) {
@@ -747,7 +752,82 @@ class Backup_Lite_Restore_Service {
             }
         }
 
+        // Restore plugin activation status from backup
+        self::restore_plugin_status();
+
         backup_lite_log( 'info', 'Post-restore cleanup completed.', [] );
+    }
+
+    /**
+     * Restore plugin activation status from the backup database.
+     * This ensures plugins are activated/deactivated according to the original site state.
+     */
+    protected static function restore_plugin_status() {
+        // Get the active_plugins option from the restored database
+        $active_plugins = get_option( 'active_plugins', [] );
+        
+        if ( ! is_array( $active_plugins ) || empty( $active_plugins ) ) {
+            backup_lite_log( 'info', 'No active plugins found in restored database, skipping plugin status restoration.', [] );
+            return;
+        }
+
+        // Get all installed plugins
+        if ( ! function_exists( 'get_plugins' ) ) {
+            require_once ABSPATH . 'wp-admin/includes/plugin.php';
+        }
+        
+        $all_plugins = get_plugins();
+        $plugins_dir = WP_PLUGIN_DIR;
+        
+        // Filter active plugins to only include those that actually exist
+        $valid_active_plugins = [];
+        $missing_plugins = [];
+        
+        foreach ( $active_plugins as $plugin_file ) {
+            $plugin_path = wp_normalize_path( trailingslashit( $plugins_dir ) . $plugin_file );
+            
+            // Check if plugin file exists
+            if ( file_exists( $plugin_path ) && isset( $all_plugins[ $plugin_file ] ) ) {
+                $valid_active_plugins[] = $plugin_file;
+            } else {
+                $missing_plugins[] = $plugin_file;
+            }
+        }
+        
+        // Log missing plugins
+        if ( ! empty( $missing_plugins ) ) {
+            backup_lite_log( 'warning', 'Some plugins from backup are missing and will not be activated.', [
+                'missing' => $missing_plugins,
+            ] );
+        }
+        
+        // Get currently active plugins
+        $current_active = get_option( 'active_plugins', [] );
+        
+        // Only update if there's a difference
+        if ( $valid_active_plugins !== $current_active ) {
+            // Update active_plugins option
+            update_option( 'active_plugins', $valid_active_plugins );
+            
+            // Also handle network-active plugins if multisite
+            if ( is_multisite() ) {
+                $network_active = get_site_option( 'active_sitewide_plugins', [] );
+                // For multisite, we might need to handle network plugins differently
+                // For now, we'll just log it
+                if ( ! empty( $network_active ) ) {
+                    backup_lite_log( 'info', 'Multisite network plugins detected, manual activation may be needed.', [
+                        'network_plugins' => array_keys( $network_active ),
+                    ] );
+                }
+            }
+            
+            backup_lite_log( 'info', 'Plugin activation status restored from backup.', [
+                'restored_count' => count( $valid_active_plugins ),
+                'missing_count' => count( $missing_plugins ),
+            ] );
+        } else {
+            backup_lite_log( 'info', 'Plugin activation status already matches backup, no changes needed.', [] );
+        }
     }
 
     protected static function restore_from_snapshot( array $snapshot ) {
