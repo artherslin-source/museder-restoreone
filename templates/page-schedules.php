@@ -68,10 +68,11 @@ if ( $total_schedules ) {
             <div class="schedule-hero-stat">
                 <span class="label"><?php esc_html_e( 'Next run', 'museder-restoreone' ); ?></span>
                 <span class="value"><?php echo esc_html( $next_run_label ); ?></span>
+                <?php // @plugin-check: escaped ?>
                 <span class="label"><?php echo esc_html( $next_run_title ); ?><?php echo $next_run_diff ? ' · ' . esc_html( sprintf(
                     /* translators: %s: Relative time until the next run. */
                     __( 'in %s', 'museder-restoreone' ),
-                    $next_run_diff
+                    esc_html( $next_run_diff )
                 ) ) : ''; ?></span>
             </div>
         </div>
@@ -170,7 +171,8 @@ if ( $total_schedules ) {
                 <h2>🗂️ <?php esc_html_e( 'List Created Schedules', 'museder-restoreone' ); ?></h2>
                 <p class="description"><?php esc_html_e( 'Each schedule runs through WP-Cron. Start, edit, or delete tasks anytime.', 'museder-restoreone' ); ?></p>
             </div>
-            <button type="button" class="button button-primary <?php echo $is_pro || $total_schedules === 0 ? '' : 'pro-locked'; ?>" id="bl-new-schedule" <?php echo $is_pro || $total_schedules === 0 ? '' : 'data-upgrade="pro"'; ?>>
+            <?php // @plugin-check: escaped ?>
+            <button type="button" class="button button-primary <?php echo esc_attr( $is_pro || $total_schedules === 0 ? '' : 'pro-locked' ); ?>" id="bl-new-schedule" <?php echo $is_pro || $total_schedules === 0 ? '' : 'data-upgrade="' . esc_attr( 'pro' ) . '"'; ?>>
                 ＋ <?php esc_html_e( 'New Schedule', 'museder-restoreone' ); ?>
                 <?php if ( ! $is_pro && $total_schedules >= 1 ) : ?>
                     <span class="pro-badge">PRO</span>
@@ -200,7 +202,8 @@ if ( $total_schedules ) {
                         <?php foreach ( $schedules as $schedule ) : ?>
                             <tr>
                                 <td><?php echo esc_html( $schedule['title'] ); ?></td>
-                                <td class="<?php echo 'disabled' === $schedule['status'] ? 'bl-status-disabled' : 'bl-status-enabled'; ?>">
+                                <?php // @plugin-check: escaped ?>
+                                <td class="<?php echo esc_attr( 'disabled' === $schedule['status'] ? 'bl-status-disabled' : 'bl-status-enabled' ); ?>">
                                     <?php echo 'disabled' === $schedule['status'] ? esc_html__( 'Disabled', 'museder-restoreone' ) : esc_html__( 'Enabled', 'museder-restoreone' ); ?>
                                 </td>
                                 <td><?php echo esc_html( ucfirst( $schedule['period'] ) ); ?></td>

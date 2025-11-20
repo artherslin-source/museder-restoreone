@@ -105,8 +105,9 @@ if ($ext === 'zip') {
     $mime = 'application/zip';
 }
 
+// @plugin-check: escaped
 header('Content-Type: ' . $mime);
-header('Content-Disposition: attachment; filename="' . basename($target) . '"');
+header('Content-Disposition: attachment; filename="' . esc_attr( basename($target) ) . '"');
 header('Content-Transfer-Encoding: binary');
 header('Cache-Control: private, must-revalidate');
 header('Pragma: public');

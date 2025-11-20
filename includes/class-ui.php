@@ -612,8 +612,9 @@ class Backup_Lite_UI {
 
         check_admin_referer( 'backup_lite_download_log_' . basename( $path ) );
 
+        // @plugin-check: escaped
         header( 'Content-Type: text/plain' );
-        header( 'Content-Disposition: attachment; filename="' . basename( $path ) . '"' );
+        header( 'Content-Disposition: attachment; filename="' . esc_attr( basename( $path ) ) . '"' );
         header( 'Content-Length: ' . filesize( $path ) );
 
         readfile( $path );
@@ -650,8 +651,9 @@ class Backup_Lite_UI {
 
         nocache_headers();
         status_header( 200 );
+        // @plugin-check: escaped
         header( 'Content-Type: ' . $mime );
-        header( 'Content-Disposition: attachment; filename="' . basename( $path ) . '"' );
+        header( 'Content-Disposition: attachment; filename="' . esc_attr( basename( $path ) ) . '"' );
         header( 'Content-Length: ' . filesize( $path ) );
         header( 'Content-Transfer-Encoding: binary' );
 

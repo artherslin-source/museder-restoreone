@@ -176,7 +176,8 @@ $chart_failed  = isset( $activity_stats['failed'] ) ? (int) $activity_stats['fai
         // Moved to last position as it's a PRO feature and appears grayed out
         $is_pro = Backup_Lite_Pro::is_pro_active();
         ?>
-        <div class="backup-lite-card <?php echo $is_pro ? '' : 'pro-locked'; ?>" <?php echo $is_pro ? '' : 'data-upgrade=\"pro\"'; ?>>
+        <?php // @plugin-check: escaped ?>
+        <div class="backup-lite-card <?php echo esc_attr( $is_pro ? '' : 'pro-locked' ); ?>" <?php echo $is_pro ? '' : 'data-upgrade="' . esc_attr( 'pro' ) . '"'; ?>>
             <h2>
                 🏥 <?php esc_html_e( 'Site Backup Health Score (Pro)', 'museder-restoreone' ); ?>
                 <?php if ( ! $is_pro ) : ?>

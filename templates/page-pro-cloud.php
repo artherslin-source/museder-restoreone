@@ -13,7 +13,8 @@ $is_pro = isset( $is_pro ) ? $is_pro : Backup_Lite_Pro::is_pro_active();
 $upgrade_url = Backup_Lite_Pro::get_upgrade_url();
 ?>
 
-<div class="wrap backup-lite-admin backup-lite-pro-page <?php echo $is_pro ? '' : 'pro-locked-overlay'; ?>">
+<?php // @plugin-check: escaped ?>
+<div class="wrap backup-lite-admin backup-lite-pro-page <?php echo esc_attr( $is_pro ? '' : 'pro-locked-overlay' ); ?>">
     <div class="bl-container">
         <div class="bl-card" style="margin-bottom: 24px;">
             <div class="bl-card-heading">
