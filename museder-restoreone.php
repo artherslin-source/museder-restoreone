@@ -3,17 +3,21 @@
 Plugin Name: Museder RestoreOne – Backup & One-Click Restore
 Plugin URI: https://musederlabs.com/
 Description: A lightweight WordPress backup & restore plugin focused on compatibility, single-file site snapshots, and clean restore workflows.
-Version: 2.6.90
+Version: 2.6.93
+Requires at least: 6.8
+Tested up to: 6.8.3
+Requires PHP: 7.4
 Author: Museder Labs
 Author URI: https://musederlabs.com/
 License: GPLv2 or later
+License URI: https://www.gnu.org/licenses/gpl-2.0.html
 Text Domain: museder-restoreone
 Domain Path: /languages
 */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-define( 'BACKUP_LITE_VERSION', '2.6.90' );
+define( 'BACKUP_LITE_VERSION', '2.6.93' );
 define( 'BACKUP_LITE_PATH', plugin_dir_path( __FILE__ ) );
 define( 'BACKUP_LITE_URL', plugin_dir_url( __FILE__ ) );
 
@@ -223,7 +227,7 @@ function backup_lite_render_dashboard() {
 
     wp_enqueue_script(
         'chartjs',
-        'https://cdn.jsdelivr.net/npm/chart.js',
+        BACKUP_LITE_URL . 'assets/vendor/chart.4.4.4.min.js',
         [],
         '4.4.4',
         true
@@ -425,7 +429,7 @@ function backup_lite_render_pro_reports() {
     // Enqueue Chart.js for trend charts
     wp_enqueue_script(
         'chartjs',
-        'https://cdn.jsdelivr.net/npm/chart.js',
+        BACKUP_LITE_URL . 'assets/vendor/chart.4.4.4.min.js',
         [],
         '4.4.4',
         true

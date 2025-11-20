@@ -17,13 +17,13 @@ $expires = isset($_GET['expires']) ? (int) $_GET['expires'] : 0;
 $token = isset($_GET['token']) ? (string) $_GET['token'] : '';
 
 if ($file === '' || $token === '') {
-    $respond(403, ['ok' => false, 'code' => 'invalid_signature', 'message' => '您的下載已過期，請從備份庫下載']);
+    $respond(403, ['ok' => false, 'code' => 'invalid_signature', 'message' => 'Your download link has expired. Please download from the backup library.']);
 }
 
 // Allow a small grace period (30 seconds) for clock skew and network delays
 $current_time = time();
 if ($expires <= 0 || $expires < ($current_time - 30)) {
-    $respond(403, ['ok' => false, 'code' => 'download_expired', 'message' => '您的下載已過期，請從備份庫下載']);
+    $respond(403, ['ok' => false, 'code' => 'download_expired', 'message' => 'Your download link has expired. Please download from the backup library.']);
 }
 
 $file = basename($file);
@@ -85,7 +85,7 @@ if (!is_string($secret) || $secret === '') {
 
 $expected = hash_hmac('sha256', $file . '|' . $expires, $secret);
 if (!hash_equals($expected, $token)) {
-    $respond(403, ['ok' => false, 'code' => 'signature_mismatch', 'message' => '您的下載已過期，請從備份庫下載']);
+    $respond(403, ['ok' => false, 'code' => 'signature_mismatch', 'message' => 'Your download link has expired. Please download from the backup library.']);
 }
 
 $base_dir = realpath($backup_dir);

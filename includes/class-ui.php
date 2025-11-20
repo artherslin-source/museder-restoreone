@@ -61,16 +61,16 @@ class Backup_Lite_UI {
 
         wp_enqueue_style(
             'toastify-css',
-            'https://cdn.jsdelivr.net/npm/toastify-js/src/toastify.min.css',
+            BACKUP_LITE_URL . 'assets/vendor/toastify.min.css',
             [],
-            null
+            '1.12.0'
         );
 
         wp_enqueue_script(
             'toastify',
-            'https://cdn.jsdelivr.net/npm/toastify-js',
+            BACKUP_LITE_URL . 'assets/vendor/toastify.min.js',
             [],
-            null,
+            '1.12.0',
             true
         );
 

@@ -138,7 +138,7 @@ var backupJobContext = {
                         if (expires && expires < Math.floor(Date.now() / 1000)) {
                             e.preventDefault();
                             e.stopPropagation();
-                            alert('您的下載已過期，請從備份庫下載');
+                            alert('Your download link has expired. Please download from the backup library.');
                             // Optionally redirect to backups page
                             if (window.location.href.indexOf('page=backup-lite-backups') === -1) {
                                 var backupsUrl = window.location.href.replace(/page=[^&]*/, 'page=backup-lite-backups');

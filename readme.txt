@@ -1,10 +1,10 @@
 === Museder RestoreOne – Backup & One-Click Restore ===
 Contributors: artherslin
 Tags: backup, migration, restore, site-backup, database-backup
-Requires at least: 6.8.3
+Requires at least: 6.8
 Tested up to: 6.8.3
 Requires PHP: 7.4
-Stable tag: 2.6.90
+Stable tag: 2.6.93
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -82,6 +82,10 @@ You can view or download the latest logs directly from the **Logs** page in the 
 
 No. The Lite version runs entirely on your server and does not send backup contents or site data to any external API or cloud service.
 
+= Does this plugin expose my backup files publicly? =
+
+No. Backup download and upload endpoints are protected by time-limited tokens and secret keys generated inside your WordPress site. Only users with access to your WordPress admin can generate valid links, and each link expires after a short period of time.
+
 == Screenshots ==
 
 1. Dashboard with environment compatibility, recent backups, and schedule overview.
@@ -92,6 +96,19 @@ No. The Lite version runs entirely on your server and does not send backup conte
 6. Settings page with general options and system diagnostics.
 
 == Changelog ==
+
+= 2.6.93 =
+* WordPress.org compliance: Replaced all CDN references with local vendor files. Chart.js (4.4.4) and Toastify-js (1.12.0) are now loaded from plugin's assets/vendor directory instead of external CDN.
+* Improved reliability: Plugin functionality no longer depends on external CDN availability, ensuring consistent performance even when CDN services are unavailable.
+
+= 2.6.92 =
+* Fixed WordPress version requirement: Changed "Requires at least" from 6.8.3 to 6.8 for better compatibility with WordPress 6.8.x installations.
+
+= 2.6.91 =
+* WordPress.org compliance improvements: Added complete plugin header information (Requires at least, Tested up to, Requires PHP, License URI) to match readme.txt standards.
+* Security enhancement: Removed `sslverify => false` from wp_remote_post calls to use WordPress default SSL verification.
+* Documentation: Added Security/Privacy FAQ entry explaining backup file protection mechanisms (time-limited tokens and secret keys).
+* All changes maintain backward compatibility and do not modify core functionality.
 
 = 2.6.78 =
 * Added an authenticated AJAX endpoint to refresh the security nonce without reloading the page; long-running restore sessions now automatically obtain a fresh nonce when the original expires.

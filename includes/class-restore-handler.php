@@ -333,7 +333,6 @@ class Backup_Lite_Restore_Handler {
             wp_remote_post( $cron_url, [
                 'timeout'  => 0.01,
                 'blocking' => false,
-                'sslverify' => false,
             ] );
         }
 
