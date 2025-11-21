@@ -324,7 +324,7 @@ class Backup_Lite_AI_Service {
                     $anomalies[] = [
                         'type'    => 'large_backup',
                         /* translators: 1: Backup file name, 2: Backup size. */
-                        'message' => sprintf( __( 'Backup %1$s is unusually large (%2$s)', 'museder-restoreone' ), basename( $backup['name'] ), size_format( $backup['size'] ) ),
+                        'message' => sprintf( esc_html__( 'Backup %1$s is unusually large (%2$s)', 'museder-restoreone' ), esc_html( basename( $backup['name'] ) ), esc_html( size_format( $backup['size'] ) ) ),
                         'severity' => 'medium',
                     ];
                 }
@@ -539,7 +539,7 @@ class Backup_Lite_AI_Service {
             $warnings[] = [
                 'type'    => 'php_version',
                 /* translators: %s: Current PHP version number. */
-                'message' => sprintf( __( 'PHP version %s is outdated. Consider upgrading.', 'museder-restoreone' ), $php_version ),
+                'message' => sprintf( esc_html__( 'PHP version %s is outdated. Consider upgrading.', 'museder-restoreone' ), esc_html( $php_version ) ),
                 'severity' => 'medium',
             ];
         }

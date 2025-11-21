@@ -179,6 +179,7 @@ class Backup_Lite_Settings {
     public static function ajax_save_settings() {
         Backup_Lite_UI::verify_ajax_request();
 
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing -- admin-only tool, access protected by capability checks in verify_ajax_request()
         $data = isset( $_POST['settings'] ) ? wp_unslash( $_POST['settings'] ) : '';
 
         if ( ! $data ) {

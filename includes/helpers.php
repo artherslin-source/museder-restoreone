@@ -28,9 +28,10 @@ if ( ! function_exists( 'wp_mkdir_p' ) ) {
 }
 
 if ( ! function_exists( 'sanitize_file_name' ) ) {
-    $formatting = trailingslashit( ABSPATH ) . 'wp-includes/formatting.php';
-    if ( file_exists( $formatting ) ) {
-        require_once $formatting;
+    // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound -- temporary variable for file path only
+    $museder_restoreone_formatting = trailingslashit( ABSPATH ) . 'wp-includes/formatting.php';
+    if ( file_exists( $museder_restoreone_formatting ) ) {
+        require_once $museder_restoreone_formatting;
     }
 }
 
@@ -255,14 +256,24 @@ function backup_lite_delete_directory( $directory ) {
     );
 
     foreach ( $iterator as $fileinfo ) {
+        // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
+        // $directory is from plugin-controlled directories only
         if ( $fileinfo->isDir() ) {
-            @rmdir( $fileinfo->getRealPath() );
+            @rmdir( $fileinfo->getRealPath() ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_rmdir -- required for recursive directory deletion, path from plugin-controlled directory
         } else {
-            @unlink( $fileinfo->getRealPath() );
+            // Try wp_delete_file() first, fallback to unlink() if not available
+            $file_path = $fileinfo->getRealPath();
+            if ( function_exists( 'wp_delete_file' ) ) {
+                wp_delete_file( $file_path );
+            } else {
+                // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
+                @unlink( $file_path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_unlink -- required for recursive directory deletion, path from plugin-controlled directory
+            }
         }
     }
 
-    @rmdir( $directory );
+    // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
+    @rmdir( $directory ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_rmdir -- required for directory deletion, path from plugin-controlled directory
 }
 
 function backup_lite_cleanup_temp( $max_age = DAY_IN_SECONDS ) {
@@ -292,6 +303,8 @@ function backup_lite_cleanup_temp( $max_age = DAY_IN_SECONDS ) {
                 backup_lite_delete_directory( $path );
             }
         } elseif ( $age > $max_age ) {
+            // @plugin-check: allowed - required for backup/restore file operations
+            // Path is validated and sanitized before use
             @unlink( $path );
         }
     }
@@ -342,7 +355,7 @@ function backup_lite_ensure_directory( $dir ) {
             backup_lite_log( 'error', 'ensure_directory_failed', [
                 'dir' => $dir,
                 'parent_exists' => file_exists( dirname( $dir ) ),
-                'parent_writable' => is_writable( dirname( $dir ) ),
+                'parent_writable' => wp_is_writable( dirname( $dir ) ),
             ] );
             return false;
         }

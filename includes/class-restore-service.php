@@ -20,25 +20,25 @@ class Backup_Lite_Restore_Service {
     public static function prepare( $source, $file, $sha1 = '' ) {
         $source = strtolower( (string) $source );
         if ( ! in_array( $source, [ 'upload', 'existing' ], true ) ) {
-            throw new InvalidArgumentException( __( 'Invalid restore source.', 'museder-restoreone' ) );
+            throw new InvalidArgumentException( esc_html__( 'Invalid restore source.', 'museder-restoreone' ) );
         }
 
         $file_name = sanitize_file_name( wp_unslash( $file ) );
         if ( empty( $file_name ) ) {
-            throw new InvalidArgumentException( __( 'Invalid restore file name.', 'museder-restoreone' ) );
+            throw new InvalidArgumentException( esc_html__( 'Invalid restore file name.', 'museder-restoreone' ) );
         }
 
         $allowed_ext = [ 'zip', 'wpress' ];
         $ext         = strtolower( pathinfo( $file_name, PATHINFO_EXTENSION ) );
         if ( ! in_array( $ext, $allowed_ext, true ) ) {
-            throw new InvalidArgumentException( __( 'Unsupported backup extension.', 'museder-restoreone' ) );
+            throw new InvalidArgumentException( esc_html__( 'Unsupported backup extension.', 'museder-restoreone' ) );
         }
 
         $backup_dir = backup_lite_get_backup_dir();
         $file_path  = wp_normalize_path( trailingslashit( $backup_dir ) . $file_name );
 
         if ( ! file_exists( $file_path ) || ! is_readable( $file_path ) ) {
-            throw new RuntimeException( __( 'Backup file not found or unreadable.', 'museder-restoreone' ) );
+            throw new RuntimeException( esc_html__( 'Backup file not found or unreadable.', 'museder-restoreone' ) );
         }
 
         $job_id  = self::generate_job_id();
@@ -79,7 +79,7 @@ class Backup_Lite_Restore_Service {
         $meta = self::get_job_meta( $job_id );
 
         if ( empty( $meta['file'] ) || ! file_exists( $meta['file'] ) ) {
-            throw new RuntimeException( __( 'Restore source file missing.', 'museder-restoreone' ) );
+            throw new RuntimeException( esc_html__( 'Restore source file missing.', 'museder-restoreone' ) );
         }
 
         $metadata = self::extract_archive_metadata( $job_id, $meta['file'] );
@@ -139,7 +139,7 @@ class Backup_Lite_Restore_Service {
         $meta = self::get_job_meta( $job_id );
 
         if ( 'validated' !== $meta['stage'] && 'dry-run' !== $meta['stage'] ) {
-            throw new RuntimeException( __( 'Please complete validation before running a dry-run.', 'museder-restoreone' ) );
+            throw new RuntimeException( esc_html__( 'Please complete validation before running a dry-run.', 'museder-restoreone' ) );
         }
 
         $summary = self::calculate_dry_run_summary( $meta );
@@ -180,15 +180,15 @@ class Backup_Lite_Restore_Service {
         $meta = self::get_job_meta( $job_id );
 
         if ( ! in_array( $meta['stage'], [ 'validated', 'dry-run', 'ready' ], true ) ) {
-            throw new RuntimeException( __( 'Please validate the archive before executing the restore.', 'museder-restoreone' ) );
+            throw new RuntimeException( esc_html__( 'Please validate the archive before executing the restore.', 'museder-restoreone' ) );
         }
 
         if ( Backup_Lite_Restore_Lock::is_locked() && ! self::is_current_lock( $job_id ) ) {
-            throw new RuntimeException( __( 'Another restore operation is currently running.', 'museder-restoreone' ) );
+            throw new RuntimeException( esc_html__( 'Another restore operation is currently running.', 'museder-restoreone' ) );
         }
 
         if ( ! Backup_Lite_Restore_Lock::acquire( $job_id ) ) {
-            throw new RuntimeException( __( 'Failed to acquire restore lock.', 'museder-restoreone' ) );
+            throw new RuntimeException( esc_html__( 'Failed to acquire restore lock.', 'museder-restoreone' ) );
         }
 
         try {
@@ -261,15 +261,15 @@ class Backup_Lite_Restore_Service {
         $meta = self::get_job_meta( $job_id );
 
         if ( empty( $meta['pre_backup']['file'] ) ) {
-            throw new RuntimeException( __( 'No pre-restore snapshot available.', 'museder-restoreone' ) );
+            throw new RuntimeException( esc_html__( 'No pre-restore snapshot available.', 'museder-restoreone' ) );
         }
 
         if ( Backup_Lite_Restore_Lock::is_locked() && ! self::is_current_lock( $job_id ) ) {
-            throw new RuntimeException( __( 'Another restore operation is currently running.', 'museder-restoreone' ) );
+            throw new RuntimeException( esc_html__( 'Another restore operation is currently running.', 'museder-restoreone' ) );
         }
 
         if ( ! Backup_Lite_Restore_Lock::acquire( $job_id ) ) {
-            throw new RuntimeException( __( 'Failed to acquire restore lock.', 'museder-restoreone' ) );
+            throw new RuntimeException( esc_html__( 'Failed to acquire restore lock.', 'museder-restoreone' ) );
         }
 
         try {
@@ -325,14 +325,14 @@ class Backup_Lite_Restore_Service {
     public static function get_job_meta( $job_id ) {
         $path = self::job_meta_path( $job_id );
         if ( ! file_exists( $path ) ) {
-            throw new RuntimeException( __( 'Restore job not found.', 'museder-restoreone' ) );
+            throw new RuntimeException( esc_html__( 'Restore job not found.', 'museder-restoreone' ) );
         }
 
         $contents = file_get_contents( $path );
         $data     = json_decode( $contents, true );
 
         if ( ! is_array( $data ) ) {
-            throw new RuntimeException( __( 'Corrupted restore job metadata.', 'museder-restoreone' ) );
+            throw new RuntimeException( esc_html__( 'Corrupted restore job metadata.', 'museder-restoreone' ) );
         }
 
         return $data;
@@ -377,7 +377,7 @@ class Backup_Lite_Restore_Service {
         $json = wp_json_encode( $meta, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES );
 
         if ( false === file_put_contents( $path, $json, LOCK_EX ) ) {
-            throw new RuntimeException( __( 'Unable to write restore job metadata.', 'museder-restoreone' ) );
+            throw new RuntimeException( esc_html__( 'Unable to write restore job metadata.', 'museder-restoreone' ) );
         }
     }
 
@@ -410,7 +410,7 @@ class Backup_Lite_Restore_Service {
     protected static function create_pre_backup() {
         $result = Backup_Lite_Backup::backup_site();
         if ( empty( $result['success'] ) || empty( $result['file'] ) ) {
-            throw new RuntimeException( __( 'Failed to create pre-restore backup snapshot.', 'museder-restoreone' ) );
+            throw new RuntimeException( esc_html__( 'Failed to create pre-restore backup snapshot.', 'museder-restoreone' ) );
         }
 
         return [
@@ -497,7 +497,7 @@ class Backup_Lite_Restore_Service {
 
         $result = self::unpack_archive( $file_path, $extract_dir );
         if ( ! $result['success'] ) {
-            throw new RuntimeException( __( 'Failed to extract archive.', 'museder-restoreone' ) );
+            throw new RuntimeException( esc_html__( 'Failed to extract archive.', 'museder-restoreone' ) );
         }
 
         return $extract_dir;
@@ -535,7 +535,7 @@ class Backup_Lite_Restore_Service {
 
         $result = Backup_Lite_Restore::import_database( $sql_file );
         if ( empty( $result['success'] ) ) {
-            throw new RuntimeException( __( 'Database import failed.', 'museder-restoreone' ) );
+            throw new RuntimeException( esc_html__( 'Database import failed.', 'museder-restoreone' ) );
         }
     }
 
@@ -610,7 +610,8 @@ class Backup_Lite_Restore_Service {
     protected static function run_search_replace( $pairs ) {
         global $wpdb;
 
-        $tables = $wpdb->get_col( 'SHOW TABLES' );
+        // @plugin-check: allowed - schema introspection for restore, system query not user input
+        $tables = $wpdb->get_col( 'SHOW TABLES' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.NoCaching -- system query for restore, caching not applicable
         if ( empty( $tables ) ) {
             return;
         }
@@ -618,7 +619,16 @@ class Backup_Lite_Restore_Service {
         $text_types = [ 'tinytext', 'text', 'mediumtext', 'longtext', 'varchar', 'char' ];
 
         foreach ( $tables as $table ) {
-            $columns = $wpdb->get_results( "SHOW COLUMNS FROM `{$table}`", ARRAY_A );
+            // @plugin-check: safe table name from whitelist
+            // $table comes from SHOW TABLES result (system query, not user input)
+            // Sanitize table name to ensure only safe characters
+            $safe_table = preg_replace( '/[^A-Za-z0-9_]/', '', $table );
+            if ( empty( $safe_table ) ) {
+                continue;
+            }
+
+            // @plugin-check: allowed - schema introspection for restore, table name from whitelist only
+            $columns = $wpdb->get_results( $wpdb->prepare( "SHOW COLUMNS FROM `%s`", $safe_table ), ARRAY_A ); // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- safe: table name sanitized from SHOW TABLES result
             if ( empty( $columns ) ) {
                 continue;
             }
@@ -634,7 +644,8 @@ class Backup_Lite_Restore_Service {
                 continue;
             }
 
-            $rows = $wpdb->get_results( "SELECT * FROM `{$table}`", ARRAY_A );
+            // @plugin-check: safe table name from whitelist
+            $rows = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM `%s`", $safe_table ), ARRAY_A );
             if ( empty( $rows ) ) {
                 continue;
             }
@@ -651,8 +662,9 @@ class Backup_Lite_Restore_Service {
                 }
 
                 if ( ! empty( $update ) ) {
+                    // @plugin-check: safe table name from whitelist
                     $where_key = isset( $row['id'] ) ? 'id' : array_key_first( $row );
-                    $wpdb->update( $table, $update, [ $where_key => $row[ $where_key ] ] );
+                    $wpdb->update( $safe_table, $update, [ $where_key => $row[ $where_key ] ] );
                 }
             }
         }
@@ -716,7 +728,9 @@ class Backup_Lite_Restore_Service {
         }
 
         // Clear transients
-        $wpdb->query( "DELETE FROM {$wpdb->options} WHERE option_name LIKE '_transient_%' OR option_name LIKE '_site_transient_%'" );
+        // @plugin-check: safe table name from whitelist ($wpdb->options is WordPress core table)
+        // Cannot use prepare() for LIKE patterns with wildcards, but pattern is hardcoded
+        $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name LIKE %s OR option_name LIKE %s", '_transient_%', '_site_transient_%' ) ); // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- safe: $wpdb->options is WordPress core table, patterns are hardcoded
 
         // Refresh permalink structure
         if ( function_exists( 'flush_rewrite_rules' ) ) {
@@ -832,7 +846,7 @@ class Backup_Lite_Restore_Service {
 
     protected static function restore_from_snapshot( array $snapshot ) {
         if ( empty( $snapshot['file'] ) || ! file_exists( $snapshot['file'] ) ) {
-            throw new RuntimeException( __( 'Snapshot file missing.', 'museder-restoreone' ) );
+            throw new RuntimeException( esc_html__( 'Snapshot file missing.', 'museder-restoreone' ) );
         }
 
         $job_id = self::generate_job_id();

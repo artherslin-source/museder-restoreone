@@ -487,23 +487,82 @@
         console.log(`[Finalize] All ${totalChunks} chunks uploaded. Starting finalize...`);
         const finalizeData = await finalizeUpload({ uploadId, fileSha1Hex, totalChunks, fileName: file.name, fileSize: file.size, searchReplacePayload });
 
-        updateStatus(ui.strings && ui.strings.successRestore ? ui.strings.successRestore : 'Restore completed!');
         updateSha1Display(finalizeData.sha1 || finalizeData.server_sha1 || '', fileSha1Hex, finalizeData.sha1_mismatch);
 
-        const message = finalizeData.message || (ui.strings && ui.strings.successRestore ? ui.strings.successRestore : 'Restore completed!');
-        showMessage('success', ui.strings && ui.strings.successTitle ? ui.strings.successTitle : '', message);
-        if (typeof ui.showCompletionOverlay === 'function') {
-            ui.showCompletionOverlay({
-                icon: '♻️',
-                title: ui.strings && ui.strings.restoreOverlayTitle ? ui.strings.restoreOverlayTitle : (ui.strings && ui.strings.successTitle ? ui.strings.successTitle : 'Restore completed'),
-                message: message,
-                autoClose: 3500
-            });
+        // If summary and progress are returned, handle the analysis response
+        if (finalizeData.summary && finalizeData.progress) {
+            console.log('[Finalize] Analysis completed, updating UI with summary', { summary: finalizeData.summary, progress: finalizeData.progress });
+            updateStatus(ui.strings && ui.strings.analysisComplete ? ui.strings.analysisComplete : 'Analysis complete!');
+            
+            // Try to call handleSummaryResponse from admin.js via window or ui object
+            var handled = false;
+            
+            // Method 1: Check if it's available on window.BackupLiteUI
+            if (typeof window.BackupLiteUI !== 'undefined' && typeof window.BackupLiteUI.handleSummaryResponse === 'function') {
+                console.log('[Finalize] Calling handleSummaryResponse via window.BackupLiteUI');
+                window.BackupLiteUI.handleSummaryResponse({
+                    success: true,
+                    data: {
+                        summary: finalizeData.summary,
+                        progress: finalizeData.progress
+                    }
+                });
+                handled = true;
+            }
+            
+            // Method 2: Check if it's available on ui object
+            if (!handled && typeof ui.handleSummaryResponse === 'function') {
+                console.log('[Finalize] Calling handleSummaryResponse via ui object');
+                ui.handleSummaryResponse({
+                    success: true,
+                    data: {
+                        summary: finalizeData.summary,
+                        progress: finalizeData.progress
+                    }
+                });
+                handled = true;
+            }
+            
+            // Method 3: Dispatch custom event for admin.js to handle
+            if (!handled) {
+                console.log('[Finalize] Dispatching custom event for summary response');
+                var event = new CustomEvent('backup-lite-summary-ready', {
+                    detail: {
+                        success: true,
+                        data: {
+                            summary: finalizeData.summary,
+                            progress: finalizeData.progress
+                        }
+                    }
+                });
+                document.dispatchEvent(event);
+                handled = true;
+            }
+            
+            // Fallback: reload page to show analysis results
+            if (!handled) {
+                console.log('[Finalize] No handler found, reloading page to show analysis results');
+                setTimeout(() => {
+                    window.location.reload();
+                }, 1000);
+            }
+        } else if (finalizeData.warning) {
+            // Analysis failed but upload succeeded
+            console.warn('[Finalize] Analysis warning:', finalizeData.warning);
+            updateStatus(finalizeData.warning);
+            showMessage('warning', ui.strings && ui.strings.warningTitle ? ui.strings.warningTitle : 'Warning', finalizeData.warning);
+            setTimeout(() => {
+                window.location.reload();
+            }, 3000);
+        } else {
+            // No summary returned, just show success and reload
+            console.log('[Finalize] No summary returned, reloading page');
+            updateStatus(ui.strings && ui.strings.uploadComplete ? ui.strings.uploadComplete : 'Upload complete!');
+            showMessage('success', ui.strings && ui.strings.successTitle ? ui.strings.successTitle : '', ui.strings && ui.strings.uploadComplete ? ui.strings.uploadComplete : 'Upload complete!');
+            setTimeout(() => {
+                window.location.reload();
+            }, 2000);
         }
-
-        setTimeout(() => {
-            window.location.reload();
-        }, 3200);
     }
 
     form.addEventListener('submit', async function (event) {

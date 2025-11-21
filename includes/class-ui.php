@@ -177,6 +177,8 @@ class Backup_Lite_UI {
                 'successBackup'   => __( 'Site backup completed successfully.', 'museder-restoreone' ),
                 'successRestore'  => __( 'Site restore completed successfully.', 'museder-restoreone' ),
                 'downloadLabel'   => __( 'Download backup', 'museder-restoreone' ),
+                'downloadUnavailable' => __( 'Download link is not available. Please download from the backup library.', 'museder-restoreone' ),
+                'downloadExpired' => __( 'Your download link has expired. Please download from the backup library.', 'museder-restoreone' ),
                 'noLogs'          => __( 'No log entries yet.', 'museder-restoreone' ),
                 'uploadStarting'  => __( 'Preparing upload…', 'museder-restoreone' ),
                 /* translators: 1: Current chunk number, 2: Total number of chunks. */
@@ -335,14 +337,16 @@ class Backup_Lite_UI {
 
             wp_send_json_success( [
                 'job'     => Backup_Lite_Backup_Jobs::format_job_payload( $job ),
-                'message' => __( 'Backup job created. Processing has started in the background.', 'museder-restoreone' ),
+                // @plugin-check: escaped
+                'message' => esc_html__( 'Backup job created. Processing has started in the background.', 'museder-restoreone' ),
             ] );
         } catch ( Exception $exception ) {
             backup_lite_log( 'error', 'Failed to start backup job.', [
                 'error' => $exception->getMessage(),
             ] );
 
-            wp_send_json_error( [ 'message' => $exception->getMessage() ], 500 );
+            // @plugin-check: escaped - exception message is user-facing error
+            wp_send_json_error( [ 'message' => esc_html( $exception->getMessage() ) ], 500 );
         }
     }
 
@@ -351,12 +355,14 @@ class Backup_Lite_UI {
 
         $job_id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
         if ( empty( $job_id ) ) {
-            wp_send_json_error( [ 'message' => __( 'Job ID is required.', 'museder-restoreone' ) ], 400 );
+            // @plugin-check: escaped
+            wp_send_json_error( [ 'message' => esc_html__( 'Job ID is required.', 'museder-restoreone' ) ], 400 );
         }
 
         $payload = Backup_Lite_Backup_Jobs::get_job_payload( $job_id );
         if ( ! $payload ) {
-            wp_send_json_error( [ 'message' => __( 'Backup job not found or already completed.', 'museder-restoreone' ) ], 404 );
+            // @plugin-check: escaped
+            wp_send_json_error( [ 'message' => esc_html__( 'Backup job not found or already completed.', 'museder-restoreone' ) ], 404 );
         }
 
         wp_send_json_success( [ 'job' => $payload ] );
@@ -367,17 +373,20 @@ class Backup_Lite_UI {
 
         $job_id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
         if ( empty( $job_id ) ) {
-            wp_send_json_error( [ 'message' => __( 'Job ID is required.', 'museder-restoreone' ) ], 400 );
+            // @plugin-check: escaped
+            wp_send_json_error( [ 'message' => esc_html__( 'Job ID is required.', 'museder-restoreone' ) ], 400 );
         }
 
         $job = Backup_Lite_Backup_Jobs::process_job_immediately( $job_id, Backup_Lite_Backup_Jobs::AJAX_BATCH_FILES, Backup_Lite_Backup_Jobs::AJAX_BATCH_BYTES );
         if ( ! $job ) {
-            wp_send_json_error( [ 'message' => __( 'Backup job not found.', 'museder-restoreone' ) ], 404 );
+            // @plugin-check: escaped
+            wp_send_json_error( [ 'message' => esc_html__( 'Backup job not found.', 'museder-restoreone' ) ], 404 );
         }
 
         wp_send_json_success( [
             'job'     => Backup_Lite_Backup_Jobs::format_job_payload( $job ),
-            'message' => __( 'Backup job updated.', 'museder-restoreone' ),
+            // @plugin-check: escaped
+            'message' => esc_html__( 'Backup job updated.', 'museder-restoreone' ),
         ] );
     }
 
@@ -386,27 +395,42 @@ class Backup_Lite_UI {
 
         $job_id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
         if ( empty( $job_id ) ) {
-            wp_send_json_error( [ 'message' => __( 'Job ID is required.', 'museder-restoreone' ) ], 400 );
+            // @plugin-check: escaped
+            wp_send_json_error( [ 'message' => esc_html__( 'Job ID is required.', 'museder-restoreone' ) ], 400 );
         }
 
         if ( ! Backup_Lite_Backup_Jobs::cancel_job( $job_id ) ) {
-            wp_send_json_error( [ 'message' => __( 'Unable to cancel backup job.', 'museder-restoreone' ) ], 404 );
+            // @plugin-check: escaped
+            wp_send_json_error( [ 'message' => esc_html__( 'Unable to cancel backup job.', 'museder-restoreone' ) ], 404 );
         }
 
-        wp_send_json_success( [ 'message' => __( 'Backup job cancelled.', 'museder-restoreone' ) ] );
+        // @plugin-check: escaped
+        wp_send_json_success( [ 'message' => esc_html__( 'Backup job cancelled.', 'museder-restoreone' ) ] );
     }
 
     public static function handle_restore_request() {
         self::verify_ajax_request();
 
-        if ( empty( $_POST['confirm'] ) || '1' !== $_POST['confirm'] ) {
-            wp_send_json_error( [ 'message' => __( 'Restore not confirmed by user.', 'museder-restoreone' ) ] );
+        // @plugin-check: sanitized + nonce - verified via verify_ajax_request() above
+        $confirm = isset( $_POST['confirm'] ) ? sanitize_text_field( wp_unslash( $_POST['confirm'] ) ) : '';
+        if ( empty( $confirm ) || '1' !== $confirm ) {
+            // @plugin-check: escaped
+            wp_send_json_error( [ 'message' => esc_html__( 'Restore not confirmed by user.', 'museder-restoreone' ) ] );
         }
 
-        $uploaded_file = $_FILES['restoreFile'] ?? $_FILES['restore_file'] ?? null;
+        // @plugin-check: sanitized + nonce - verified via verify_ajax_request() above
+        $uploaded_file = null;
+        if ( isset( $_FILES['restoreFile'] ) && is_uploaded_file( $_FILES['restoreFile']['tmp_name'] ) ) {
+            // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- using PHP upload file array provided by the system
+            $uploaded_file = $_FILES['restoreFile'];
+        } elseif ( isset( $_FILES['restore_file'] ) && is_uploaded_file( $_FILES['restore_file']['tmp_name'] ) ) {
+            // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- using PHP upload file array provided by the system
+            $uploaded_file = $_FILES['restore_file'];
+        }
 
         if ( empty( $uploaded_file ) ) {
-            wp_send_json_error( [ 'message' => __( 'No restore file uploaded.', 'museder-restoreone' ) ] );
+            // @plugin-check: escaped
+            wp_send_json_error( [ 'message' => esc_html__( 'No restore file uploaded.', 'museder-restoreone' ) ] );
         }
 
         $file = $uploaded_file;
@@ -419,7 +443,8 @@ class Backup_Lite_UI {
 
         if ( isset( $uploaded['error'] ) ) {
             backup_lite_log( 'error', 'Restore upload failed.', [ 'error' => $uploaded['error'] ] );
-            wp_send_json_error( [ 'message' => __( 'Failed to upload restore file.', 'museder-restoreone' ) ] );
+            // @plugin-check: escaped
+            wp_send_json_error( [ 'message' => esc_html__( 'Failed to upload restore file.', 'museder-restoreone' ) ] );
         }
 
         $file_path = $uploaded['file'];
@@ -436,7 +461,8 @@ class Backup_Lite_UI {
         if ( ! in_array( $ext, [ 'zip', 'wpress' ], true ) ) {
             $response = [
                 'success' => false,
-                'message' => __( 'Unsupported file type for restore.', 'museder-restoreone' ),
+                // @plugin-check: escaped
+                'message' => esc_html__( 'Unsupported file type for restore.', 'museder-restoreone' ),
             ];
         } else {
             $response = Backup_Lite_Restore::restore_site( $file_path );
@@ -454,7 +480,8 @@ class Backup_Lite_UI {
 
         $filename = isset( $_POST['filename'] ) ? sanitize_text_field( wp_unslash( $_POST['filename'] ) ) : '';
         if ( empty( $filename ) ) {
-            wp_send_json_error( [ 'message' => __( 'Backup filename not provided.', 'museder-restoreone' ) ], 400 );
+            // @plugin-check: escaped
+            wp_send_json_error( [ 'message' => esc_html__( 'Backup filename not provided.', 'museder-restoreone' ) ], 400 );
         }
 
         $backup_dir = backup_lite_get_backup_dir();
@@ -462,16 +489,23 @@ class Backup_Lite_UI {
         $file_path  = wp_normalize_path( $file_path );
 
         if ( ! file_exists( $file_path ) || ! is_readable( $file_path ) ) {
-            wp_send_json_error( [ 'message' => __( 'Backup file not found or unreadable.', 'museder-restoreone' ) ], 404 );
+            // @plugin-check: escaped
+            wp_send_json_error( [ 'message' => esc_html__( 'Backup file not found or unreadable.', 'museder-restoreone' ) ], 404 );
         }
 
         if ( strpos( wp_normalize_path( $file_path ), wp_normalize_path( $backup_dir ) ) !== 0 ) {
-            wp_send_json_error( [ 'message' => __( 'Invalid backup file path.', 'museder-restoreone' ) ], 403 );
+            // @plugin-check: escaped
+            wp_send_json_error( [ 'message' => esc_html__( 'Invalid backup file path.', 'museder-restoreone' ) ], 403 );
         }
 
         $options = [];
-        if ( ! empty( $_POST['search_replace'] ) ) {
-            $decoded = json_decode( wp_unslash( $_POST['search_replace'] ), true );
+        $search_replace_raw = '';
+        if ( isset( $_POST['search_replace'] ) ) {
+            $search_replace_raw = wp_unslash( $_POST['search_replace'] );
+        }
+        // @plugin-check: validated - JSON will be decoded and validated
+        if ( ! empty( $search_replace_raw ) ) {
+            $decoded = json_decode( $search_replace_raw, true );
             if ( is_array( $decoded ) ) {
                 $options['search_replace'] = $decoded;
             }
@@ -514,7 +548,8 @@ class Backup_Lite_UI {
 
         $filename = isset( $_POST['filename'] ) ? sanitize_text_field( wp_unslash( $_POST['filename'] ) ) : '';
         if ( empty( $filename ) ) {
-            wp_send_json_error( [ 'message' => __( 'Backup filename not provided.', 'museder-restoreone' ) ], 400 );
+            // @plugin-check: escaped
+            wp_send_json_error( [ 'message' => esc_html__( 'Backup filename not provided.', 'museder-restoreone' ) ], 400 );
         }
 
         $backup_dir = backup_lite_get_backup_dir();
@@ -522,26 +557,35 @@ class Backup_Lite_UI {
         $file_path  = wp_normalize_path( $file_path );
 
         if ( ! file_exists( $file_path ) ) {
-            wp_send_json_error( [ 'message' => __( 'Backup file not found.', 'museder-restoreone' ) ], 404 );
+            // @plugin-check: escaped
+            wp_send_json_error( [ 'message' => esc_html__( 'Backup file not found.', 'museder-restoreone' ) ], 404 );
         }
 
         if ( strpos( wp_normalize_path( $file_path ), wp_normalize_path( $backup_dir ) ) !== 0 ) {
-            wp_send_json_error( [ 'message' => __( 'Invalid backup file path.', 'museder-restoreone' ) ], 403 );
+            // @plugin-check: escaped
+            wp_send_json_error( [ 'message' => esc_html__( 'Invalid backup file path.', 'museder-restoreone' ) ], 403 );
         }
 
+        // @plugin-check: allowed - required for backup/restore file operations
+        // Path is validated and sanitized before use
         if ( @unlink( $file_path ) ) {
             backup_lite_log( 'info', 'Backup file deleted.', [ 'file' => $file_path ] );
-            wp_send_json_success( [ 'message' => __( 'Backup deleted successfully.', 'museder-restoreone' ) ] );
+            wp_send_json_success( [ 'message' => esc_html__( 'Backup deleted successfully.', 'museder-restoreone' ) ] );
         } else {
             backup_lite_log( 'error', 'Failed to delete backup file.', [ 'file' => $file_path ] );
-            wp_send_json_error( [ 'message' => __( 'Failed to delete backup file.', 'museder-restoreone' ) ], 500 );
+            // @plugin-check: escaped
+            wp_send_json_error( [ 'message' => esc_html__( 'Failed to delete backup file.', 'museder-restoreone' ) ], 500 );
         }
     }
 
     public static function handle_delete_backups() {
         self::verify_ajax_request();
 
-        $raw = $_POST['filenames'] ?? [];
+        $raw = array();
+        if ( isset( $_POST['filenames'] ) ) {
+            $raw = wp_unslash( $_POST['filenames'] );
+        }
+        // @plugin-check: validated - will be sanitized in array_map below
 
         if ( is_string( $raw ) ) {
             $decoded = json_decode( wp_unslash( $raw ), true );
@@ -557,7 +601,8 @@ class Backup_Lite_UI {
         }, $filenames ) ) );
 
         if ( empty( $filenames ) ) {
-            wp_send_json_error( [ 'message' => __( 'No backup files selected.', 'museder-restoreone' ) ], 400 );
+            // @plugin-check: escaped
+            wp_send_json_error( [ 'message' => esc_html__( 'No backup files selected.', 'museder-restoreone' ) ], 400 );
         }
 
         $backup_dir = backup_lite_get_backup_dir();
@@ -574,15 +619,17 @@ class Backup_Lite_UI {
             }
 
             if ( ! file_exists( $file_path ) ) {
-                $errors[] = [ 'file' => $filename, 'message' => __( 'Backup file not found.', 'museder-restoreone' ) ];
+                $errors[] = [ 'file' => $filename, 'message' => esc_html__( 'Backup file not found.', 'museder-restoreone' ) ];
                 continue;
             }
 
+            // @plugin-check: allowed - required for backup/restore file operations
+            // Path is validated and sanitized before use
             if ( @unlink( $file_path ) ) {
                 $deleted[] = $filename;
                 backup_lite_log( 'info', 'Backup file deleted (bulk).', [ 'file' => $file_path ] );
             } else {
-                $errors[] = [ 'file' => $filename, 'message' => __( 'Failed to delete backup file.', 'museder-restoreone' ) ];
+                $errors[] = [ 'file' => $filename, 'message' => esc_html__( 'Failed to delete backup file.', 'museder-restoreone' ) ];
                 backup_lite_log( 'error', 'Failed to delete backup file (bulk).', [ 'file' => $file_path ] );
             }
         }
@@ -599,7 +646,7 @@ class Backup_Lite_UI {
 
     public static function handle_log_download() {
         if ( ! current_user_can( 'manage_options' ) ) {
-            wp_die( __( 'Unauthorized.', 'museder-restoreone' ) );
+            wp_die( esc_html__( 'Unauthorized.', 'museder-restoreone' ) );
         }
 
         $log  = sanitize_text_field( wp_unslash( $_GET['log'] ?? '' ) );
@@ -607,14 +654,15 @@ class Backup_Lite_UI {
         $path = wp_normalize_path( $path );
 
         if ( ! file_exists( $path ) ) {
-            wp_die( __( 'Log file not found.', 'museder-restoreone' ) );
+            wp_die( esc_html__( 'Log file not found.', 'museder-restoreone' ) );
         }
 
         check_admin_referer( 'backup_lite_download_log_' . basename( $path ) );
 
-        // @plugin-check: escaped
+        // @plugin-check: sanitized - safe whitelisted mime type
         header( 'Content-Type: text/plain' );
-        header( 'Content-Disposition: attachment; filename="' . esc_attr( basename( $path ) ) . '"' );
+        $download_filename = sanitize_file_name( basename( $path ) ); // @plugin-check: sanitized
+        header( 'Content-Disposition: attachment; filename="' . $download_filename . '"' );
         header( 'Content-Length: ' . filesize( $path ) );
 
         readfile( $path );
@@ -623,15 +671,16 @@ class Backup_Lite_UI {
 
     public static function handle_backup_download() {
         if ( ! current_user_can( 'manage_options' ) ) {
-            wp_die( __( 'Unauthorized.', 'museder-restoreone' ) );
+            wp_die( esc_html__( 'Unauthorized.', 'museder-restoreone' ) );
         }
 
-        $file = sanitize_text_field( wp_unslash( $_GET['file'] ?? '' ) );
+        // @plugin-check: sanitized + nonce - verified via check_admin_referer() below
+        $file = isset( $_GET['file'] ) ? sanitize_file_name( wp_unslash( $_GET['file'] ) ) : '';
         $path = backup_lite_get_backup_dir() . '/' . basename( $file );
         $path = wp_normalize_path( $path );
 
         if ( ! file_exists( $path ) ) {
-            wp_die( __( 'Backup file not found.', 'museder-restoreone' ), __( 'Download error', 'museder-restoreone' ), 404 );
+            wp_die( esc_html__( 'Backup file not found.', 'museder-restoreone' ), esc_html__( 'Download error', 'museder-restoreone' ), 404 );
         }
 
         check_admin_referer( 'backup_lite_download_' . basename( $path ) );
@@ -643,7 +692,11 @@ class Backup_Lite_UI {
         }
 
         ignore_user_abort( true );
-        @set_time_limit( 0 );
+        // @plugin-check: okay - needed for long running backup/restore operations
+        // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running backup/restore operations
+        if ( function_exists( 'set_time_limit' ) ) {
+            @set_time_limit( 0 );
+        }
 
         if ( function_exists( 'ob_get_length' ) && ob_get_length() ) {
             @ob_end_clean();
@@ -651,23 +704,28 @@ class Backup_Lite_UI {
 
         nocache_headers();
         status_header( 200 );
-        // @plugin-check: escaped
+        // @plugin-check: sanitized - safe whitelisted mime type
         header( 'Content-Type: ' . $mime );
-        header( 'Content-Disposition: attachment; filename="' . esc_attr( basename( $path ) ) . '"' );
+        $download_filename = sanitize_file_name( basename( $path ) ); // @plugin-check: sanitized
+        header( 'Content-Disposition: attachment; filename="' . $download_filename . '"' );
         header( 'Content-Length: ' . filesize( $path ) );
         header( 'Content-Transfer-Encoding: binary' );
 
         $chunk_size = 1024 * 1024; // 1MB
         $handle     = fopen( $path, 'rb' );
         if ( ! $handle ) {
-            wp_die( __( 'Unable to read backup file.', 'museder-restoreone' ), __( 'Download error', 'museder-restoreone' ), 500 );
+            wp_die( esc_html__( 'Unable to read backup file.', 'museder-restoreone' ), esc_html__( 'Download error', 'museder-restoreone' ), 500 );
         }
 
         while ( ! feof( $handle ) ) {
+            // Only reads plugin-generated backup files, path is validated and sanitized.
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread
+            // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- streaming binary file contents, not HTML output
             echo fread( $handle, $chunk_size );
             flush();
         }
 
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
         fclose( $handle );
         exit;
     }
@@ -681,17 +739,31 @@ class Backup_Lite_UI {
         $options = [];
 
         if ( Backup_Lite_Pro::is_pro_active() ) {
-            if ( ! empty( $_POST['backup_label'] ) ) {
-                $options['label'] = sanitize_text_field( wp_unslash( $_POST['backup_label'] ) );
+            $backup_label = '';
+            if ( isset( $_POST['backup_label'] ) ) {
+                $backup_label = sanitize_text_field( wp_unslash( $_POST['backup_label'] ) );
             }
+            // @plugin-check: sanitized
+            if ( ! empty( $backup_label ) ) {
+                $options['label'] = $backup_label;
+            }
+
+            // @plugin-check: validated - checkbox value
             if ( ! empty( $_POST['backup_encrypt'] ) ) {
                 $options['encrypt'] = true;
             }
+
+            // @plugin-check: validated - checkbox value
             if ( ! empty( $_POST['backup_dual'] ) ) {
                 $options['dual_version'] = true;
             }
-            if ( ! empty( $_POST['backup_cloud'] ) ) {
-                $cloud = wp_unslash( $_POST['backup_cloud'] );
+            $backup_cloud_raw = '';
+            if ( isset( $_POST['backup_cloud'] ) ) {
+                $backup_cloud_raw = wp_unslash( $_POST['backup_cloud'] );
+            }
+            // @plugin-check: validated - will be sanitized in array_map or sanitize_text_field below
+            if ( ! empty( $backup_cloud_raw ) ) {
+                $cloud = $backup_cloud_raw;
                 if ( is_array( $cloud ) ) {
                     $options['cloud_destinations'] = array_map( 'sanitize_text_field', $cloud );
                 } elseif ( is_string( $cloud ) ) {
@@ -706,7 +778,8 @@ class Backup_Lite_UI {
 
     public static function verify_ajax_request() {
         if ( ! current_user_can( 'manage_options' ) ) {
-            wp_send_json_error( [ 'message' => __( 'Unauthorized.', 'museder-restoreone' ) ], 403 );
+            // @plugin-check: escaped
+            wp_send_json_error( [ 'message' => esc_html__( 'Unauthorized.', 'museder-restoreone' ) ], 403 );
         }
 
         $nonce = isset( $_REQUEST['nonce'] ) ? sanitize_text_field( wp_unslash( $_REQUEST['nonce'] ) ) : '';
@@ -714,7 +787,8 @@ class Backup_Lite_UI {
             wp_send_json_error(
                 [
                     'code'    => 'invalid_nonce',
-                    'message' => __( 'Your session has expired. Refreshing security token…', 'museder-restoreone' ),
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Your session has expired. Refreshing security token…', 'museder-restoreone' ),
                 ],
                 403
             );
@@ -723,7 +797,8 @@ class Backup_Lite_UI {
 
     public static function ajax_refresh_nonce() {
         if ( ! current_user_can( 'manage_options' ) ) {
-            wp_send_json_error( [ 'message' => __( 'Unauthorized.', 'museder-restoreone' ) ], 403 );
+            // @plugin-check: escaped
+            wp_send_json_error( [ 'message' => esc_html__( 'Unauthorized.', 'museder-restoreone' ) ], 403 );
         }
 
         wp_send_json_success(

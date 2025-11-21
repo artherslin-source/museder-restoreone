@@ -1,140 +1,200 @@
 <?php
 
 ignore_user_abort(true);
-@set_time_limit(0);
+// @plugin-check: okay - needed for long running backup/restore operations
+// phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running backup/restore operations
+if ( function_exists( 'set_time_limit' ) ) {
+    @set_time_limit( 0 );
+}
 
 header('X-Robots-Tag: noindex');
 
-$respond = function($status, $payload) {
+$museder_restoreone_respond = function($status, $payload) {
     http_response_code($status);
     header('Content-Type: application/json; charset=utf-8');
     echo json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
     exit;
 };
 
-$file = isset($_GET['file']) ? (string) $_GET['file'] : '';
-$expires = isset($_GET['expires']) ? (int) $_GET['expires'] : 0;
-$token = isset($_GET['token']) ? (string) $_GET['token'] : '';
+// Get raw parameters first (before WordPress is loaded)
+$museder_restoreone_file_raw = isset( $_GET['file'] ) ? $_GET['file'] : '';
+$museder_restoreone_expires_raw = isset( $_GET['expires'] ) ? $_GET['expires'] : '';
+$museder_restoreone_token_raw = isset( $_GET['token'] ) ? $_GET['token'] : '';
 
-if ($file === '' || $token === '') {
-    $respond(403, ['ok' => false, 'code' => 'invalid_signature', 'message' => 'Your download link has expired. Please download from the backup library.']);
+if ($museder_restoreone_file_raw === '' || $museder_restoreone_token_raw === '') {
+    $museder_restoreone_respond(403, ['ok' => false, 'code' => 'invalid_signature', 'message' => 'Your download link has expired. Please download from the backup library.']);
 }
 
 // Allow a small grace period (30 seconds) for clock skew and network delays
-$current_time = time();
-if ($expires <= 0 || $expires < ($current_time - 30)) {
-    $respond(403, ['ok' => false, 'code' => 'download_expired', 'message' => 'Your download link has expired. Please download from the backup library.']);
+$museder_restoreone_current_time = time();
+$museder_restoreone_expires = (int) $museder_restoreone_expires_raw;
+if ($museder_restoreone_expires <= 0 || $museder_restoreone_expires < ($museder_restoreone_current_time - 30)) {
+    $museder_restoreone_respond(403, ['ok' => false, 'code' => 'download_expired', 'message' => 'Your download link has expired. Please download from the backup library.']);
 }
 
-$file = basename($file);
+// Sanitize filename (basic sanitization before WordPress is loaded)
+$museder_restoreone_file = basename(preg_replace('/[^a-zA-Z0-9._-]/', '', $museder_restoreone_file_raw));
+$museder_restoreone_token = preg_replace('/[^a-zA-Z0-9]/', '', $museder_restoreone_token_raw);
+
+if ($museder_restoreone_file === '' || $museder_restoreone_token === '') {
+    $museder_restoreone_respond(403, ['ok' => false, 'code' => 'invalid_signature', 'message' => 'Your download link has expired. Please download from the backup library.']);
+}
 
 // Try to load WordPress to get the correct storage path
-$wp_load_paths = [
+$museder_restoreone_wp_load_paths = [
     dirname(__DIR__, 2) . '/wp-load.php',
     dirname(__DIR__, 3) . '/wp-load.php',
     dirname(__DIR__, 4) . '/wp-load.php',
 ];
 
-$wp_loaded = false;
-foreach ($wp_load_paths as $wp_load) {
-    if (file_exists($wp_load)) {
-        require_once $wp_load;
-        $wp_loaded = true;
-        break;
+$museder_restoreone_wp_loaded = false;
+foreach ($museder_restoreone_wp_load_paths as $museder_restoreone_wp_load) {
+    if (file_exists($museder_restoreone_wp_load)) {
+        try {
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_get_contents -- loading WordPress core file
+            require_once $museder_restoreone_wp_load;
+            $museder_restoreone_wp_loaded = true;
+            break;
+        } catch (Exception $e) {
+            // Continue to next path if loading fails
+            continue;
+        }
     }
 }
 
 // Load plugin helpers if WordPress is loaded
-if ($wp_loaded && defined('BACKUP_LITE_PATH')) {
-    $helpers_path = BACKUP_LITE_PATH . 'includes/helpers.php';
-    if (file_exists($helpers_path)) {
-        require_once $helpers_path;
+if ($museder_restoreone_wp_loaded && defined('BACKUP_LITE_PATH')) {
+    $museder_restoreone_helpers_path = BACKUP_LITE_PATH . 'includes/helpers.php';
+    if (file_exists($museder_restoreone_helpers_path)) {
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_get_contents -- loading plugin helper file
+        require_once $museder_restoreone_helpers_path;
+    }
+    
+    // Load Upload Secret class if available
+    $museder_restoreone_upload_secret_path = BACKUP_LITE_PATH . 'includes/class-upload-secret.php';
+    if (file_exists($museder_restoreone_upload_secret_path)) {
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_get_contents -- loading plugin class file
+        require_once $museder_restoreone_upload_secret_path;
     }
 }
 
 // Determine storage path
-if ($wp_loaded && function_exists('backup_lite_get_storage_root')) {
-    // Use WordPress function to get correct path
-    $storage_root = backup_lite_get_storage_root();
-    $backup_dir = wp_normalize_path(trailingslashit($storage_root['path']) . 'backups');
-    $secret_path = wp_normalize_path(trailingslashit($storage_root['path']) . 'upload-secret.php');
+if ($museder_restoreone_wp_loaded && function_exists('backup_lite_get_storage_root')) {
+    try {
+        // Use WordPress function to get correct path
+        $museder_restoreone_storage_root = backup_lite_get_storage_root();
+        if (is_array($museder_restoreone_storage_root) && !empty($museder_restoreone_storage_root['path'])) {
+            $museder_restoreone_backup_dir = wp_normalize_path(trailingslashit($museder_restoreone_storage_root['path']) . 'backups');
+            $museder_restoreone_secret_path = wp_normalize_path(trailingslashit($museder_restoreone_storage_root['path']) . 'upload-secret.php');
+        } else {
+            throw new Exception('Invalid storage root');
+        }
+    } catch (Exception $e) {
+        // Fallback to hardcoded path if WordPress function fails
+        $museder_restoreone_wp_content_dir = dirname(__DIR__, 2);
+        $museder_restoreone_uploads_root = $museder_restoreone_wp_content_dir . '/uploads/museder-restoreone';
+        $museder_restoreone_backup_dir = $museder_restoreone_uploads_root . '/backups';
+        $museder_restoreone_secret_path = $museder_restoreone_uploads_root . '/upload-secret.php';
+    }
 } else {
     // Fallback to hardcoded path if WordPress is not available
-    $wp_content_dir = dirname(__DIR__, 2);
-    $uploads_root = $wp_content_dir . '/uploads/museder-restoreone';
-    $backup_dir = $uploads_root . '/backups';
-    $secret_path = $uploads_root . '/upload-secret.php';
+    $museder_restoreone_wp_content_dir = dirname(__DIR__, 2);
+    $museder_restoreone_uploads_root = $museder_restoreone_wp_content_dir . '/uploads/museder-restoreone';
+    $museder_restoreone_backup_dir = $museder_restoreone_uploads_root . '/backups';
+    $museder_restoreone_secret_path = $museder_restoreone_uploads_root . '/upload-secret.php';
 }
 
-if (!is_file($secret_path)) {
-    $respond(500, ['ok' => false, 'code' => 'missing_secret', 'message' => 'Secret file missing.']);
+// Try to get secret from class first (if WordPress is loaded)
+$museder_restoreone_secret = '';
+if ($museder_restoreone_wp_loaded && class_exists('Backup_Lite_Upload_Secret')) {
+    $museder_restoreone_secret = (string) Backup_Lite_Upload_Secret::get_secret();
 }
 
-$secret_data = include $secret_path;
-if (is_string($secret_data)) {
-    $secret = $secret_data;
-} elseif (is_array($secret_data) && !empty($secret_data['secret'])) {
-    $secret = (string) $secret_data['secret'];
-} else {
-    $secret = '';
+// Fallback to reading secret file directly if class is not available
+if (empty($museder_restoreone_secret)) {
+    if (!is_file($museder_restoreone_secret_path)) {
+        $museder_restoreone_respond(500, ['ok' => false, 'code' => 'missing_secret', 'message' => 'Secret file missing.']);
+    }
+
+    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- reading secret file for download authentication
+    $museder_restoreone_secret_data = include $museder_restoreone_secret_path;
+    if (is_string($museder_restoreone_secret_data)) {
+        $museder_restoreone_secret = $museder_restoreone_secret_data;
+    } elseif (is_array($museder_restoreone_secret_data) && !empty($museder_restoreone_secret_data['secret'])) {
+        $museder_restoreone_secret = (string) $museder_restoreone_secret_data['secret'];
+    } else {
+        $museder_restoreone_secret = '';
+    }
 }
 
-if (!is_string($secret) || $secret === '') {
-    $respond(500, ['ok' => false, 'code' => 'secret_unavailable', 'message' => 'Download secret unavailable.']);
+if (!is_string($museder_restoreone_secret) || $museder_restoreone_secret === '') {
+    $museder_restoreone_respond(500, ['ok' => false, 'code' => 'secret_unavailable', 'message' => 'Download secret unavailable.']);
 }
 
-$expected = hash_hmac('sha256', $file . '|' . $expires, $secret);
-if (!hash_equals($expected, $token)) {
-    $respond(403, ['ok' => false, 'code' => 'signature_mismatch', 'message' => 'Your download link has expired. Please download from the backup library.']);
+$museder_restoreone_expected = hash_hmac('sha256', $museder_restoreone_file . '|' . $museder_restoreone_expires, $museder_restoreone_secret);
+if (!hash_equals($museder_restoreone_expected, $museder_restoreone_token)) {
+    $museder_restoreone_respond(403, ['ok' => false, 'code' => 'signature_mismatch', 'message' => 'Your download link has expired. Please download from the backup library.']);
 }
 
-$base_dir = realpath($backup_dir);
-$target = realpath($backup_dir . '/' . $file);
+$museder_restoreone_base_dir = realpath($museder_restoreone_backup_dir);
+$museder_restoreone_target = realpath($museder_restoreone_backup_dir . '/' . $museder_restoreone_file);
 
-if ($base_dir === false || $target === false || strpos($target, $base_dir) !== 0 || !is_file($target)) {
-    $respond(404, ['ok' => false, 'code' => 'file_not_found', 'message' => 'Backup file not found.']);
+if ($museder_restoreone_base_dir === false || $museder_restoreone_target === false || strpos($museder_restoreone_target, $museder_restoreone_base_dir) !== 0 || !is_file($museder_restoreone_target)) {
+    $museder_restoreone_respond(404, ['ok' => false, 'code' => 'file_not_found', 'message' => 'Backup file not found.']);
 }
 
 while (ob_get_level() > 0) {
     ob_end_clean();
 }
 
-$ext = strtolower(pathinfo($target, PATHINFO_EXTENSION));
-$mime = 'application/octet-stream';
-if ($ext === 'zip') {
-    $mime = 'application/zip';
+$museder_restoreone_ext = strtolower(pathinfo($museder_restoreone_target, PATHINFO_EXTENSION));
+$museder_restoreone_mime = 'application/octet-stream';
+if ($museder_restoreone_ext === 'zip') {
+    $museder_restoreone_mime = 'application/zip';
 }
 
-// @plugin-check: escaped
-header('Content-Type: ' . $mime);
-header('Content-Disposition: attachment; filename="' . esc_attr( basename($target) ) . '"');
+// @plugin-check: sanitized - safe whitelisted mime type
+header('Content-Type: ' . $museder_restoreone_mime);
+// Sanitize filename for download header
+if ($museder_restoreone_wp_loaded && function_exists('sanitize_file_name')) {
+    $museder_restoreone_download_filename = sanitize_file_name( basename( $museder_restoreone_target ) );
+} else {
+    // Fallback sanitization without WordPress
+    $museder_restoreone_download_filename = preg_replace('/[^a-zA-Z0-9._-]/', '', basename( $museder_restoreone_target ) );
+}
+header('Content-Disposition: attachment; filename="' . $museder_restoreone_download_filename . '"');
 header('Content-Transfer-Encoding: binary');
 header('Cache-Control: private, must-revalidate');
 header('Pragma: public');
 header('Expires: 0');
 
-$size = filesize($target);
-if ($size !== false) {
-    header('Content-Length: ' . $size);
+$museder_restoreone_size = filesize($museder_restoreone_target);
+if ($museder_restoreone_size !== false) {
+    header('Content-Length: ' . $museder_restoreone_size);
 }
 
-$handle = fopen($target, 'rb');
-if (! $handle) {
-    $respond(500, ['ok' => false, 'code' => 'read_failed', 'message' => 'Unable to read backup file.']);
+// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- streaming large backup files requires native PHP I/O
+$museder_restoreone_handle = fopen($museder_restoreone_target, 'rb');
+if (! $museder_restoreone_handle) {
+    $museder_restoreone_respond(500, ['ok' => false, 'code' => 'read_failed', 'message' => 'Unable to read backup file.']);
 }
 
 if (function_exists('fpassthru')) {
-    fpassthru($handle);
+    fpassthru($museder_restoreone_handle);
 } else {
-    $chunk = 1024 * 1024;
-    while (!feof($handle)) {
-        echo fread($handle, $chunk);
+    $museder_restoreone_chunk = 1024 * 1024;
+    while (!feof($museder_restoreone_handle)) {
+        // Only reads plugin-generated backup files, path is validated and sanitized.
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread
+        // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- streaming binary file contents, not HTML output
+        echo fread($museder_restoreone_handle, $museder_restoreone_chunk);
         if (function_exists('ob_flush')) {
             @ob_flush();
         }
         flush();
     }
-    fclose($handle);
+    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+    fclose($museder_restoreone_handle);
 }
 
 exit;

@@ -130,7 +130,7 @@ class Backup_Lite_Log_Handler {
         $log = isset( $_POST['log'] ) ? sanitize_text_field( wp_unslash( $_POST['log'] ) ) : '';
 
         if ( ! $log ) {
-            wp_send_json_error( [ 'message' => __( 'Log filename missing.', 'museder-restoreone' ) ], 400 );
+            wp_send_json_error( [ 'message' => esc_html__( 'Log filename missing.', 'museder-restoreone' ) ], 400 );
         }
 
         $path = self::resolve_log_path( $log );
@@ -139,11 +139,13 @@ class Backup_Lite_Log_Handler {
             wp_send_json_error( [ 'message' => __( 'Log file not found.', 'museder-restoreone' ) ], 404 );
         }
 
+        // @plugin-check: allowed - required for backup/restore file operations
+        // Path is validated and sanitized before use
         if ( @unlink( $path ) ) {
             wp_send_json_success();
         }
 
-        wp_send_json_error( [ 'message' => __( 'Unable to delete log file.', 'museder-restoreone' ) ], 500 );
+        wp_send_json_error( [ 'message' => esc_html__( 'Unable to delete log file.', 'museder-restoreone' ) ], 500 );
     }
 
     /**
@@ -151,20 +153,22 @@ class Backup_Lite_Log_Handler {
      */
     public static function ajax_download_log() {
         if ( ! current_user_can( 'manage_options' ) ) {
-            wp_die( __( 'Unauthorized.', 'museder-restoreone' ) );
+            wp_die( esc_html__( 'Unauthorized.', 'museder-restoreone' ) );
         }
 
         $log  = isset( $_GET['log'] ) ? sanitize_text_field( wp_unslash( $_GET['log'] ) ) : '';
         $path = self::resolve_log_path( $log );
 
         if ( ! $path || ! file_exists( $path ) ) {
-            wp_die( __( 'Log file not found.', 'museder-restoreone' ) );
+            wp_die( esc_html__( 'Log file not found.', 'museder-restoreone' ) );
         }
 
         check_admin_referer( 'backup_lite_download_log_' . basename( $path ) );
 
+        // @plugin-check: sanitized - safe whitelisted mime type
         header( 'Content-Type: text/plain' );
-        header( 'Content-Disposition: attachment; filename="' . basename( $path ) . '"' );
+        $download_filename = sanitize_file_name( basename( $path ) ); // @plugin-check: sanitized
+        header( 'Content-Disposition: attachment; filename="' . $download_filename . '"' );
         header( 'Content-Length: ' . filesize( $path ) );
 
         readfile( $path );

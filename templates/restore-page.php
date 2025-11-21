@@ -3,7 +3,7 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-$backups = isset( $backups ) && is_array( $backups ) ? $backups : [];
+$museder_restoreone_backups = isset( $museder_restoreone_backups ) && is_array( $museder_restoreone_backups ) ? $museder_restoreone_backups : [];
 ?>
 <div class="wrap backup-lite-restore bl-container">
     <header class="bl-card bl-restore-header">
@@ -82,19 +82,19 @@ $backups = isset( $backups ) && is_array( $backups ) ? $backups : [];
                         </tr>
                     </thead>
                     <tbody id="bl-restore-backup-list">
-                        <?php if ( empty( $backups ) ) : ?>
+                        <?php if ( empty( $museder_restoreone_backups ) ) : ?>
                             <tr>
                                 <td colspan="4"><?php esc_html_e( '目前沒有備份檔案。', 'museder-restoreone' ); ?></td>
                             </tr>
                         <?php else : ?>
-                            <?php foreach ( $backups as $backup ) : ?>
-                                <tr data-backup-name="<?php echo esc_attr( $backup['name'] ); ?>">
+                            <?php foreach ( $museder_restoreone_backups as $museder_restoreone_backup ) : ?>
+                                <tr data-backup-name="<?php echo esc_attr( $museder_restoreone_backup['name'] ); ?>">
                                     <td class="bl-restore-backup-radio">
-                                        <input type="radio" name="restore_backup" value="<?php echo esc_attr( $backup['name'] ); ?>" />
+                                        <input type="radio" name="restore_backup" value="<?php echo esc_attr( $museder_restoreone_backup['name'] ); ?>" />
                                     </td>
-                                    <td><strong><?php echo esc_html( $backup['name'] ); ?></strong></td>
-                                    <td><?php echo esc_html( $backup['created'] ); ?></td>
-                                    <td><?php echo esc_html( isset( $backup['size_human'] ) ? $backup['size_human'] : size_format( $backup['size'], 2 ) ); ?></td>
+                                    <td><strong><?php echo esc_html( $museder_restoreone_backup['name'] ); ?></strong></td>
+                                    <td><?php echo esc_html( $museder_restoreone_backup['created'] ); ?></td>
+                                    <td><?php echo esc_html( isset( $museder_restoreone_backup['size_human'] ) ? $museder_restoreone_backup['size_human'] : size_format( $museder_restoreone_backup['size'], 2 ) ); ?></td>
                                 </tr>
                             <?php endforeach; ?>
                         <?php endif; ?>

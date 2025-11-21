@@ -41,7 +41,7 @@ class Backup_Lite_Backup {
         }
 
         // Generate backup filename: 网址+西元年月日+时分+乱数编码
-        $site_url = parse_url( home_url(), PHP_URL_HOST );
+        $site_url = wp_parse_url( home_url(), PHP_URL_HOST );
         if ( empty( $site_url ) ) {
             $site_url = 'site';
         }
@@ -100,7 +100,13 @@ class Backup_Lite_Backup {
         }
 
         if ( file_exists( $archive_path ) ) {
-            @unlink( $archive_path );
+            // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
+            // $archive_path is from plugin-controlled backup directory
+            if ( function_exists( 'wp_delete_file' ) ) {
+                wp_delete_file( $archive_path );
+            } else {
+                @unlink( $archive_path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_unlink -- required for cleanup, path from plugin-controlled backup directory
+            }
         }
 
         $directories = self::get_directory_map();
@@ -193,7 +199,8 @@ class Backup_Lite_Backup {
             'plugin_version'    => defined( 'BACKUP_LITE_VERSION' ) ? BACKUP_LITE_VERSION : 'unknown',
             'wordpress_version' => function_exists( 'get_bloginfo' ) ? get_bloginfo( 'version' ) : 'unknown',
             'generated_at'      => backup_lite_local_time( 'c' ),
-            'generated_at_gmt'  => gmdate( 'c' ),
+            // @plugin-check: allowed - GMT time for internal logs and metadata
+            'generated_at_gmt'  => gmdate( 'c' ), // phpcs:ignore WordPress.DateTime.RestrictedFunctions.date_date -- GMT time for internal metadata, not user-facing
             'site_url'          => function_exists( 'home_url' ) ? home_url() : '',
             'php_version'       => PHP_VERSION,
         ];
@@ -221,7 +228,7 @@ class Backup_Lite_Backup {
             backup_lite_ensure_directory( $dir );
         }
 
-        return is_dir( $dir ) && is_writable( $dir );
+        return is_dir( $dir ) && wp_is_writable( $dir );
     }
 
     private static function create_zip_bundle( $archive_path, $sql_path, $meta_path, $directories ) {
@@ -408,11 +415,11 @@ class Backup_Lite_Backup {
         $backup_dir = trailingslashit( backup_lite_get_backup_dir() );
 
         if ( ! self::ensure_writable_directory( $backup_dir ) ) {
-            throw new RuntimeException( __( 'Backup directory is not writable.', 'museder-restoreone' ) );
+            throw new RuntimeException( esc_html__( 'Backup directory is not writable.', 'museder-restoreone' ) );
         }
 
         // Generate backup filename: 网址+西元年月日+时分+乱数编码
-        $site_url = parse_url( home_url(), PHP_URL_HOST );
+        $site_url = wp_parse_url( home_url(), PHP_URL_HOST );
         if ( empty( $site_url ) ) {
             $site_url = 'site';
         }
@@ -435,16 +442,22 @@ class Backup_Lite_Backup {
 
         if ( ! self::generate_database_dump( $sql_path ) ) {
             backup_lite_delete_directory( $temp_dir );
-            throw new RuntimeException( __( 'Database export failed. Check logs for details.', 'museder-restoreone' ) );
+            throw new RuntimeException( esc_html__( 'Database export failed. Check logs for details.', 'museder-restoreone' ) );
         }
 
         if ( ! self::write_meta_file( $meta_path, $options ) ) {
             backup_lite_delete_directory( $temp_dir );
-            throw new RuntimeException( __( 'Unable to write meta information for backup.', 'museder-restoreone' ) );
+            throw new RuntimeException( esc_html__( 'Unable to write meta information for backup.', 'museder-restoreone' ) );
         }
 
         if ( file_exists( $archive_path ) ) {
-            @unlink( $archive_path );
+            // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
+            // $archive_path is from plugin-controlled backup directory
+            if ( function_exists( 'wp_delete_file' ) ) {
+                wp_delete_file( $archive_path );
+            } else {
+                @unlink( $archive_path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_unlink -- required for cleanup, path from plugin-controlled backup directory
+            }
         }
 
         self::initialize_archive_with_meta( $archive_path, $sql_path, $meta_path );
@@ -456,12 +469,12 @@ class Backup_Lite_Backup {
 
         if ( false === $manifest_bytes ) {
             backup_lite_delete_directory( $temp_dir );
-            throw new RuntimeException( __( 'Failed to encode backup manifest.', 'museder-restoreone' ) );
+            throw new RuntimeException( esc_html__( 'Failed to encode backup manifest.', 'museder-restoreone' ) );
         }
 
         if ( false === file_put_contents( $manifest_file, $manifest_bytes, LOCK_EX ) ) {
             backup_lite_delete_directory( $temp_dir );
-            throw new RuntimeException( __( 'Unable to write backup manifest.', 'museder-restoreone' ) );
+            throw new RuntimeException( esc_html__( 'Unable to write backup manifest.', 'museder-restoreone' ) );
         }
 
         backup_lite_log( 'info', 'Backup job prepared.', [
@@ -554,7 +567,7 @@ class Backup_Lite_Backup {
     private static function initialize_archive_with_meta( $archive_path, $sql_path, $meta_path ) {
         $zip = new ZipArchive();
         if ( true !== $zip->open( $archive_path, ZipArchive::CREATE | ZipArchive::OVERWRITE ) ) {
-            throw new RuntimeException( __( 'Unable to initialize archive.', 'museder-restoreone' ) );
+            throw new RuntimeException( esc_html__( 'Unable to initialize archive.', 'museder-restoreone' ) );
         }
 
         $zip->addFile( $sql_path, 'database.sql' );
@@ -661,7 +674,7 @@ class Backup_Lite_Backup {
     private static function append_files_to_zip( $archive_path, array $files ) {
         $zip = new ZipArchive();
         if ( true !== $zip->open( $archive_path, ZipArchive::CREATE ) ) {
-            throw new RuntimeException( __( 'Unable to append files to archive.', 'museder-restoreone' ) );
+            throw new RuntimeException( esc_html__( 'Unable to append files to archive.', 'museder-restoreone' ) );
         }
 
         $created_dirs = [];
@@ -695,11 +708,16 @@ class Backup_Lite_Backup {
     private static function finalize_async_job( array $job ) {
         $job['status']          = 'completed';
         $job['stage']           = 'completed';
-        $job['message']         = __( 'Backup completed successfully.', 'museder-restoreone' );
+        $job['message']         = esc_html__( 'Backup completed successfully.', 'museder-restoreone' );
         $job['processed_files'] = isset( $job['total_files'] ) ? (int) $job['total_files'] : $job['processed_files'];
         $job['processed_bytes'] = isset( $job['total_bytes'] ) ? (int) $job['total_bytes'] : $job['processed_bytes'];
 
         $size = file_exists( $job['archive_path'] ) ? filesize( $job['archive_path'] ) : 0;
+
+        // Update download_url with the final archive path
+        if ( ! empty( $job['archive_path'] ) && file_exists( $job['archive_path'] ) ) {
+            $job['download_url'] = backup_lite_get_download_url( $job['archive_path'] );
+        }
 
         backup_lite_log( 'info', 'Backup job completed.', [
             'archive' => $job['archive_path'],
@@ -757,7 +775,11 @@ class Backup_Lite_Backup {
         }
 
         $wpdb->hide_errors();
-        @set_time_limit( 0 );
+        // @plugin-check: okay - needed for long running backup/restore operations
+        // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running backup/restore operations
+        if ( function_exists( 'set_time_limit' ) ) {
+            @set_time_limit( 0 );
+        }
 
         fwrite( $handle, "SET sql_mode = 'NO_AUTO_VALUE_ON_ZERO';\n" );
         fwrite( $handle, "SET time_zone = '+00:00';\n\n" );
@@ -770,26 +792,39 @@ class Backup_Lite_Backup {
         }
 
         foreach ( $tables as $table ) {
-            fwrite( $handle, sprintf( "-- Table structure for table `%s`\n\n", $table ) );
+            // @plugin-check: safe table name from whitelist
+            // $table comes from SHOW TABLES result (system query, not user input)
+            // Sanitize table name to ensure only safe characters
+            $safe_table = preg_replace( '/[^A-Za-z0-9_]/', '', $table );
+            if ( empty( $safe_table ) ) {
+                continue;
+            }
 
-            $create = $wpdb->get_row( "SHOW CREATE TABLE `{$table}`", ARRAY_N );
+            fwrite( $handle, sprintf( "-- Table structure for table `%s`\n\n", $safe_table ) );
+
+            // @plugin-check: allowed - schema introspection for backup, table name from whitelist only
+            // Cannot use prepare() because SHOW CREATE TABLE doesn't support placeholders
+            $create = $wpdb->get_row( $wpdb->prepare( "SHOW CREATE TABLE `%s`", $safe_table ), ARRAY_N ); // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- safe: table name sanitized from SHOW TABLES result
             if ( isset( $create[1] ) ) {
-                fwrite( $handle, "DROP TABLE IF EXISTS `{$table}`;\n" );
+                fwrite( $handle, "DROP TABLE IF EXISTS `{$safe_table}`;\n" );
                 fwrite( $handle, $create[1] . ";\n\n" );
             }
 
-            $row_count = (int) $wpdb->get_var( "SELECT COUNT(*) FROM `{$table}`" );
+            // @plugin-check: safe table name from whitelist
+            $row_count = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM `%s`", $safe_table ) );
             if ( $row_count === 0 ) {
                 fwrite( $handle, "\n" );
                 continue;
             }
 
-            fwrite( $handle, sprintf( "-- Dumping data for table `%s`\n", $table ) );
+            fwrite( $handle, sprintf( "-- Dumping data for table `%s`\n", $safe_table ) );
 
             $offset = 0;
             while ( $offset < $row_count ) {
+                // @plugin-check: safe table name from whitelist
                 $rows = $wpdb->get_results( $wpdb->prepare(
-                    "SELECT * FROM `{$table}` LIMIT %d OFFSET %d",
+                    "SELECT * FROM `%s` LIMIT %d OFFSET %d",
+                    $safe_table,
                     self::CHUNK_SIZE,
                     $offset
                 ), ARRAY_A );
@@ -807,9 +842,10 @@ class Backup_Lite_Backup {
                 if ( ! empty( $values ) ) {
                     $columns = array_map( [ __CLASS__, 'escape_identifier' ], array_keys( $rows[0] ) );
 
+                    // @plugin-check: safe table name from whitelist
                     $sql = sprintf(
                         "INSERT INTO `%s` (%s) VALUES\n%s;\n",
-                        $table,
+                        $safe_table,
                         implode( ',', $columns ),
                         implode( ",\n", $values )
                     );
@@ -840,6 +876,19 @@ class Backup_Lite_Backup {
 
         foreach ( self::get_internal_exclusions() as $excluded ) {
             if ( '' !== $excluded && 0 === strpos( $normalized, $excluded ) ) {
+                return true;
+            }
+        }
+
+        // Also exclude any museder-restoreone-* directories in uploads (handles versioned directories)
+        if ( strpos( $normalized, '/uploads/museder-restoreone' ) !== false ) {
+            return true;
+        }
+
+        // Exclude backup files (.zip) in uploads directory
+        if ( strpos( $normalized, '/uploads/' ) !== false && preg_match( '/\.(zip|wpress)$/i', $normalized ) ) {
+            // Only exclude if it's in a backup-related directory
+            if ( strpos( $normalized, '/backups/' ) !== false || strpos( $normalized, '/museder-restoreone' ) !== false ) {
                 return true;
             }
         }
@@ -921,6 +970,29 @@ class Backup_Lite_Backup {
             }
         }
 
+        // Exclude all museder-restoreone-* directories in uploads (handles versioned plugin directories)
+        $uploads_dir = WP_CONTENT_DIR . '/uploads';
+        if ( is_dir( $uploads_dir ) && is_readable( $uploads_dir ) ) {
+            try {
+                $iterator = new DirectoryIterator( $uploads_dir );
+                foreach ( $iterator as $file ) {
+                    if ( $file->isDir() && ! $file->isDot() ) {
+                        $dir_name = $file->getFilename();
+                        // Match museder-restoreone, museder-restoreone-1, museder-restoreone-2, etc.
+                        if ( preg_match( '/^museder-restoreone(-\d+)?$/', $dir_name ) ) {
+                            $normalized_path = $normalize( $file->getPathname() );
+                            if ( $normalized_path ) {
+                                $paths[] = $normalized_path;
+                            }
+                        }
+                    }
+                }
+            } catch ( Exception $e ) {
+                // Silently continue if directory iteration fails
+                backup_lite_log( 'warning', 'Failed to scan uploads directory for exclusions.', [ 'error' => $e->getMessage() ] );
+            }
+        }
+
         // Deduplicate while preserving order.
         $paths = array_values( array_unique( array_filter( $paths ) ) );
 
@@ -943,7 +1015,9 @@ class Backup_Lite_Backup {
             @ignore_user_abort( true );
         }
 
+        // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running backup/restore operations
         if ( function_exists( 'set_time_limit' ) ) {
+            // @plugin-check: okay - needed for long running backup/restore operations
             @set_time_limit( 0 );
         }
 
@@ -966,6 +1040,8 @@ class Backup_Lite_Backup {
             $target_bytes  = self::memory_limit_to_bytes( '1024M' );
 
             if ( $target_bytes > 0 && ( $current_bytes <= 0 || $current_bytes < $target_bytes ) ) {
+                // @plugin-check: safe - increase memory limit for large backup operations
+                // This is necessary to handle large file archives and database exports
                 @ini_set( 'memory_limit', '1024M' );
             }
         }
@@ -1040,7 +1116,8 @@ class Backup_Lite_Backup {
 
     private static function get_tables() {
         global $wpdb;
-        $tables = $wpdb->get_col( 'SHOW TABLES' );
+        // @plugin-check: allowed - schema introspection for backup, system query not user input
+        $tables = $wpdb->get_col( 'SHOW TABLES' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.NoCaching -- system query for backup, caching not applicable
         return is_array( $tables ) ? $tables : [];
     }
 

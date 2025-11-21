@@ -3,9 +3,9 @@
 Plugin Name: Museder RestoreOne – Backup & One-Click Restore
 Plugin URI: https://musederlabs.com/
 Description: A lightweight WordPress backup & restore plugin focused on compatibility, single-file site snapshots, and clean restore workflows.
-Version: 2.6.93
+Version: 2.6.124
 Requires at least: 6.8
-Tested up to: 6.8.3
+Tested up to: 6.8
 Requires PHP: 7.4
 Author: Museder Labs
 Author URI: https://musederlabs.com/
@@ -17,7 +17,7 @@ Domain Path: /languages
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-define( 'BACKUP_LITE_VERSION', '2.6.93' );
+define( 'BACKUP_LITE_VERSION', '2.6.124' );
 define( 'BACKUP_LITE_PATH', plugin_dir_path( __FILE__ ) );
 define( 'BACKUP_LITE_URL', plugin_dir_url( __FILE__ ) );
 
@@ -61,8 +61,10 @@ function backup_lite_activate() {
     update_option( 'backup_lite_needs_init', true );
 }
 
+// Text domain loading removed: WordPress.org automatically loads .mo files for this text domain.
+// If manual loading is needed for development, uncomment the function and action below:
+/*
 add_action( 'plugins_loaded', 'museder_restoreone_load_textdomain' );
-add_action( 'plugins_loaded', 'backup_lite_bootstrap' );
 
 function museder_restoreone_load_textdomain() {
     load_plugin_textdomain(
@@ -71,6 +73,9 @@ function museder_restoreone_load_textdomain() {
         basename( __DIR__ ) . '/languages/'
     );
 }
+*/
+
+add_action( 'plugins_loaded', 'backup_lite_bootstrap' );
 
 function backup_lite_bootstrap() {
     // Check if we need to run post-activation initialization
@@ -216,7 +221,7 @@ function backup_lite_register_menu() {
 
 function backup_lite_render_dashboard() {
     if ( ! current_user_can( 'manage_options' ) ) {
-        wp_die( __( 'You do not have permission to access this page.', 'museder-restoreone' ) );
+        wp_die( esc_html__( 'You do not have permission to access this page.', 'museder-restoreone' ) );
     }
 
     $status                   = Backup_Lite_UI::get_environment_status();
@@ -268,7 +273,7 @@ function backup_lite_render_dashboard() {
 
 function backup_lite_render_backups() {
     if ( ! current_user_can( 'manage_options' ) ) {
-        wp_die( __( 'You do not have permission to access this page.', 'museder-restoreone' ) );
+        wp_die( esc_html__( 'You do not have permission to access this page.', 'museder-restoreone' ) );
     }
 
     $status  = Backup_Lite_UI::get_environment_status();
@@ -279,21 +284,21 @@ function backup_lite_render_backups() {
 
 function backup_lite_render_restore_page() {
     if ( ! current_user_can( 'manage_options' ) ) {
-        wp_die( __( 'You do not have permission to access this page.', 'museder-restoreone' ) );
+        wp_die( esc_html__( 'You do not have permission to access this page.', 'museder-restoreone' ) );
     }
 
-    $summary = Backup_Lite_Restore_Handler::current_summary();
-    $progress = Backup_Lite_Restore_Handler::current_progress();
-    $history  = Backup_Lite_Restore_Handler::history_for_js( 10 );
-    $active_job = Backup_Lite_Restore_Jobs::has_active_job();
+    $museder_restoreone_summary = Backup_Lite_Restore_Handler::current_summary();
+    $museder_restoreone_progress = Backup_Lite_Restore_Handler::current_progress();
+    $museder_restoreone_history  = Backup_Lite_Restore_Handler::history_for_js( 10 );
+    $museder_restoreone_active_job = Backup_Lite_Restore_Jobs::has_active_job();
 
-    $backups = array_map(
+    $museder_restoreone_backups = array_map(
         function ( $item ) {
-            $size = isset( $item['size'] ) ? (int) $item['size'] : 0;
+            $museder_restoreone_size = isset( $item['size'] ) ? (int) $item['size'] : 0;
             return [
                 'name'    => $item['name'],
-                'size'    => $size,
-                'size_human' => size_format( $size, 2 ),
+                'size'    => $museder_restoreone_size,
+                'size_human' => size_format( $museder_restoreone_size, 2 ),
                 'created' => $item['created'],
             ];
         },
@@ -326,11 +331,11 @@ function backup_lite_render_restore_page() {
             'siteURL' => home_url(),
             'uploads' => trailingslashit( backup_lite_get_storage_root()['path'] ),
             'cap'     => current_user_can( 'manage_options' ),
-            'backups' => $backups,
-            'summary' => $summary,
-            'progress'=> $progress,
-            'history' => $history,
-            'job'     => $active_job ? Backup_Lite_Restore_Jobs::prepare_job_response( $active_job ) : null,
+            'backups' => $museder_restoreone_backups,
+            'summary' => $museder_restoreone_summary,
+            'progress'=> $museder_restoreone_progress,
+            'history' => $museder_restoreone_history,
+            'job'     => $museder_restoreone_active_job ? Backup_Lite_Restore_Jobs::prepare_job_response( $museder_restoreone_active_job ) : null,
             'labels'  => [
                 'noBackups'    => __( 'No backups available.', 'museder-restoreone' ),
                 'noValidation' => __( 'Validation results will appear here once the job is prepared.', 'museder-restoreone' ),
@@ -345,7 +350,7 @@ function backup_lite_render_restore_page() {
 
 function backup_lite_render_schedules() {
     if ( ! current_user_can( 'manage_options' ) ) {
-        wp_die( __( 'You do not have permission to access this page.', 'museder-restoreone' ) );
+        wp_die( esc_html__( 'You do not have permission to access this page.', 'museder-restoreone' ) );
     }
 
     $schedules = Backup_Lite_Schedule_Handler::list_schedules();
@@ -355,7 +360,7 @@ function backup_lite_render_schedules() {
 
 function backup_lite_render_logs() {
     if ( ! current_user_can( 'manage_options' ) ) {
-        wp_die( __( 'You do not have permission to access this page.', 'museder-restoreone' ) );
+        wp_die( esc_html__( 'You do not have permission to access this page.', 'museder-restoreone' ) );
     }
 
     $logs = Backup_Lite_Log_Handler::get_logs();
@@ -365,7 +370,7 @@ function backup_lite_render_logs() {
 
 function backup_lite_render_settings() {
     if ( ! current_user_can( 'manage_options' ) ) {
-        wp_die( __( 'You do not have permission to access this page.', 'museder-restoreone' ) );
+        wp_die( esc_html__( 'You do not have permission to access this page.', 'museder-restoreone' ) );
     }
 
     $settings = Backup_Lite_Settings::get_settings();
@@ -376,55 +381,55 @@ function backup_lite_render_settings() {
 
 function backup_lite_render_pro_features() {
     if ( ! current_user_can( 'manage_options' ) ) {
-        wp_die( __( 'You do not have permission to access this page.', 'museder-restoreone' ) );
+        wp_die( esc_html__( 'You do not have permission to access this page.', 'museder-restoreone' ) );
     }
 
-    $is_pro = Backup_Lite_Pro::is_pro_active();
+    $museder_restoreone_is_pro = Backup_Lite_Pro::is_pro_active();
     include BACKUP_LITE_PATH . 'templates/page-pro-features.php';
 }
 
 function backup_lite_render_pro_ai() {
     if ( ! current_user_can( 'manage_options' ) ) {
-        wp_die( __( 'You do not have permission to access this page.', 'museder-restoreone' ) );
+        wp_die( esc_html__( 'You do not have permission to access this page.', 'museder-restoreone' ) );
     }
 
-    $is_pro = Backup_Lite_Pro::is_pro_active();
+    $museder_restoreone_is_pro = Backup_Lite_Pro::is_pro_active();
     include BACKUP_LITE_PATH . 'templates/page-pro-ai.php';
 }
 
 function backup_lite_render_pro_cloud() {
     if ( ! current_user_can( 'manage_options' ) ) {
-        wp_die( __( 'You do not have permission to access this page.', 'museder-restoreone' ) );
+        wp_die( esc_html__( 'You do not have permission to access this page.', 'museder-restoreone' ) );
     }
 
-    $is_pro = Backup_Lite_Pro::is_pro_active();
+    $museder_restoreone_is_pro = Backup_Lite_Pro::is_pro_active();
     include BACKUP_LITE_PATH . 'templates/page-pro-cloud.php';
 }
 
 function backup_lite_render_pro_filters() {
     if ( ! current_user_can( 'manage_options' ) ) {
-        wp_die( __( 'You do not have permission to access this page.', 'museder-restoreone' ) );
+        wp_die( esc_html__( 'You do not have permission to access this page.', 'museder-restoreone' ) );
     }
 
-    $is_pro = Backup_Lite_Pro::is_pro_active();
+    $museder_restoreone_is_pro = Backup_Lite_Pro::is_pro_active();
     include BACKUP_LITE_PATH . 'templates/page-pro-filters.php';
 }
 
 function backup_lite_render_pro_retention() {
     if ( ! current_user_can( 'manage_options' ) ) {
-        wp_die( __( 'You do not have permission to access this page.', 'museder-restoreone' ) );
+        wp_die( esc_html__( 'You do not have permission to access this page.', 'museder-restoreone' ) );
     }
 
-    $is_pro = Backup_Lite_Pro::is_pro_active();
+    $museder_restoreone_is_pro = Backup_Lite_Pro::is_pro_active();
     include BACKUP_LITE_PATH . 'templates/page-pro-retention.php';
 }
 
 function backup_lite_render_pro_reports() {
     if ( ! current_user_can( 'manage_options' ) ) {
-        wp_die( __( 'You do not have permission to access this page.', 'museder-restoreone' ) );
+        wp_die( esc_html__( 'You do not have permission to access this page.', 'museder-restoreone' ) );
     }
 
-    $is_pro = Backup_Lite_Pro::is_pro_active();
+    $museder_restoreone_is_pro = Backup_Lite_Pro::is_pro_active();
     
     // Enqueue Chart.js for trend charts
     wp_enqueue_script(

@@ -41,23 +41,48 @@ class Backup_Lite_Chunk_Handler {
 
     protected static function verify_permissions() {
         if ( ! current_user_can( 'manage_options' ) ) {
-            wp_send_json_error( [ 'code' => 'unauthorized', 'message' => __( 'Unauthorized.', 'museder-restoreone' ) ], 403 );
+            // @plugin-check: escaped
+            wp_send_json_error( [ 'code' => 'unauthorized', 'message' => esc_html__( 'Unauthorized.', 'museder-restoreone' ) ], 403 );
         }
 
         check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
     }
 
     protected static function respond_with_exception( Backup_Lite_Chunk_Exception $exception ) {
-        wp_send_json_error( $exception->get_error_data(), $exception->get_status() );
+        $error_data = $exception->get_error_data();
+        // Ensure message is escaped if present in error data.
+        if ( isset( $error_data['message'] ) ) {
+            $error_data['message'] = esc_html( $error_data['message'] );
+        }
+        // @plugin-check: escaped
+        wp_send_json_error( $error_data, $exception->get_status() );
     }
 
     public static function handle_prepare_upload() {
         self::verify_permissions();
-        @set_time_limit( 60 );
+        // @plugin-check: okay - needed for long running backup/restore operations
+        // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running backup/restore operations
+        if ( function_exists( 'set_time_limit' ) ) {
+            @set_time_limit( 60 );
+        }
 
-        $file_name    = isset( $_POST['file_name'] ) ? sanitize_text_field( wp_unslash( $_POST['file_name'] ) ) : '';
-        $file_size    = isset( $_POST['file_size'] ) ? intval( $_POST['file_size'] ) : 0;
-        $total_chunks = isset( $_POST['total_chunks'] ) ? intval( $_POST['total_chunks'] ) : 0;
+        $file_name = '';
+        if ( isset( $_POST['file_name'] ) ) {
+            $file_name = sanitize_file_name( wp_unslash( $_POST['file_name'] ) );
+        }
+        // @plugin-check: sanitized
+
+        $file_size = 0;
+        if ( isset( $_POST['file_size'] ) ) {
+            $file_size = absint( wp_unslash( $_POST['file_size'] ) );
+        }
+        // @plugin-check: validated
+
+        $total_chunks = 0;
+        if ( isset( $_POST['total_chunks'] ) ) {
+            $total_chunks = absint( wp_unslash( $_POST['total_chunks'] ) );
+        }
+        // @plugin-check: validated
 
         try {
             $session = self::create_session( $file_name, $file_size, $total_chunks );
@@ -70,20 +95,53 @@ class Backup_Lite_Chunk_Handler {
 
     public static function handle_chunk_upload() {
         self::verify_permissions();
-        @set_time_limit( 60 );
+        // @plugin-check: okay - needed for long running backup/restore operations
+        // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running backup/restore operations
+        if ( function_exists( 'set_time_limit' ) ) {
+            @set_time_limit( 60 );
+        }
 
-        $upload_id   = isset( $_POST['upload_id'] ) ? wp_unslash( $_POST['upload_id'] ) : '';
-        $token       = isset( $_POST['upload_token'] ) ? wp_unslash( $_POST['upload_token'] ) : '';
-        $index       = isset( $_POST['chunk_index'] ) ? intval( $_POST['chunk_index'] ) : -1;
-        $total       = isset( $_POST['total_chunks'] ) ? intval( $_POST['total_chunks'] ) : 0;
-        $size        = isset( $_POST['chunk_size'] ) ? intval( $_POST['chunk_size'] ) : 0;
-        $chunk_sha1  = isset( $_POST['chunk_sha1'] ) ? sanitize_text_field( wp_unslash( $_POST['chunk_sha1'] ) ) : '';
+        $upload_id = '';
+        if ( isset( $_POST['upload_id'] ) ) {
+            $upload_id = sanitize_key( wp_unslash( $_POST['upload_id'] ) );
+        }
+        // @plugin-check: sanitized
+
+        $token = '';
+        if ( isset( $_POST['upload_token'] ) ) {
+            $token = sanitize_text_field( wp_unslash( $_POST['upload_token'] ) );
+        }
+        // @plugin-check: sanitized
+
+        $index = -1;
+        if ( isset( $_POST['chunk_index'] ) ) {
+            $index = absint( wp_unslash( $_POST['chunk_index'] ) );
+        }
+        // @plugin-check: validated
+
+        $total = 0;
+        if ( isset( $_POST['total_chunks'] ) ) {
+            $total = absint( wp_unslash( $_POST['total_chunks'] ) );
+        }
+        // @plugin-check: validated
+
+        $size = 0;
+        if ( isset( $_POST['chunk_size'] ) ) {
+            $size = absint( wp_unslash( $_POST['chunk_size'] ) );
+        }
+        // @plugin-check: validated
+
+        $chunk_sha1 = '';
+        if ( isset( $_POST['chunk_sha1'] ) ) {
+            $chunk_sha1 = sanitize_text_field( wp_unslash( $_POST['chunk_sha1'] ) );
+        }
+        // @plugin-check: sanitized
 
         try {
             $meta = self::ensure_session_token( $upload_id, $token );
 
             if ( $index < 0 || $index >= intval( $meta['total_chunks'] ) ) {
-                throw new Backup_Lite_Chunk_Exception( 'invalid_chunk_index', __( 'Chunk index out of range.', 'museder-restoreone' ), [], 400 );
+                throw new Backup_Lite_Chunk_Exception( 'invalid_chunk_index', esc_html__( 'Chunk index out of range.', 'museder-restoreone' ), [], 400 );
             }
 
             $chunks_dir = $meta['_chunks_dir'];
@@ -91,37 +149,54 @@ class Backup_Lite_Chunk_Handler {
             $chunk_path = backup_lite_safe_path_join( $chunks_dir, $chunk_name );
 
             if ( ! $chunk_path ) {
-                throw new Backup_Lite_Chunk_Exception( 'invalid_path', __( 'Chunk path rejected.', 'museder-restoreone' ), [], 400 );
+                throw new Backup_Lite_Chunk_Exception( 'invalid_path', esc_html__( 'Chunk path rejected.', 'museder-restoreone' ), [], 400 );
             }
 
+            // @plugin-check: sanitized + nonce - verified via verify_permissions() above
             $uploaded_file = null;
             if ( isset( $_FILES['file'] ) && is_uploaded_file( $_FILES['file']['tmp_name'] ) ) {
+                // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- using PHP upload tmp_name provided by the system
                 $uploaded_file = $_FILES['file']['tmp_name'];
             } elseif ( isset( $_FILES['chunk'] ) && is_uploaded_file( $_FILES['chunk']['tmp_name'] ) ) {
+                // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- using PHP upload tmp_name provided by the system
                 $uploaded_file = $_FILES['chunk']['tmp_name'];
             }
 
             if ( ! $uploaded_file ) {
-                throw new Backup_Lite_Chunk_Exception( 'no_upload', __( 'No chunk file uploaded.', 'museder-restoreone' ), [], 400 );
+                throw new Backup_Lite_Chunk_Exception( 'no_upload', esc_html__( 'No chunk file uploaded.', 'museder-restoreone' ), [], 400 );
             }
 
-            if ( ! move_uploaded_file( $uploaded_file, $chunk_path ) ) {
+            // @plugin-check: allowed - required for chunked backup upload, path and filename sanitized
+            // $chunk_path is from plugin-controlled temp directory, $uploaded_file is verified via is_uploaded_file() check
+            if ( ! move_uploaded_file( $uploaded_file, $chunk_path ) ) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_move_uploaded_file -- required for chunked backup upload, path and filename sanitized
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- direct fopen is required for large backup streaming, paths are validated by our helper.
                 $input  = fopen( $uploaded_file, 'rb' );
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- direct fopen is required for large backup streaming, paths are validated by our helper.
                 $output = fopen( $chunk_path, 'wb' );
 
                 if ( ! $input || ! $output ) {
+                    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen.
                     if ( $input ) fclose( $input );
+                    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen.
                     if ( $output ) fclose( $output );
-                    throw new Backup_Lite_Chunk_Exception( 'fileopen_failed', __( 'Unable to open chunk file for writing.', 'museder-restoreone' ), [], 500 );
+                    throw new Backup_Lite_Chunk_Exception( 'fileopen_failed', esc_html__( 'Unable to open chunk file for writing.', 'museder-restoreone' ), [], 500 );
                 }
 
                 $copied = stream_copy_to_stream( $input, $output );
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen.
                 fclose( $input );
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen.
                 fclose( $output );
 
                 if ( false === $copied ) {
-                    @unlink( $chunk_path );
-                    throw new Backup_Lite_Chunk_Exception( 'stream_copy_failed', __( 'Failed to write chunk data.', 'museder-restoreone' ), [], 500 );
+                    // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
+                    // $chunk_path is from plugin-controlled temp directory
+                    if ( function_exists( 'wp_delete_file' ) ) {
+                        wp_delete_file( $chunk_path );
+                    } else {
+                        @unlink( $chunk_path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_unlink -- required for cleanup, path from plugin-controlled temp directory
+                    }
+                    throw new Backup_Lite_Chunk_Exception( 'stream_copy_failed', esc_html__( 'Failed to write chunk data.', 'museder-restoreone' ), [], 500 );
                 }
             }
 
@@ -129,15 +204,42 @@ class Backup_Lite_Chunk_Handler {
             $written = filesize( $chunk_path );
 
             if ( $size > 0 && $written !== $size ) {
-                @unlink( $chunk_path );
-                throw new Backup_Lite_Chunk_Exception( 'size_mismatch', __( 'Chunk size mismatch.', 'museder-restoreone' ), [ 'expected' => $size, 'actual' => $written ], 400 );
+                // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
+                // $chunk_path is from plugin-controlled temp directory
+                if ( function_exists( 'wp_delete_file' ) ) {
+                    wp_delete_file( $chunk_path );
+                } else {
+                    @unlink( $chunk_path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_unlink -- required for cleanup, path from plugin-controlled temp directory
+                }
+                throw new Backup_Lite_Chunk_Exception( 'size_mismatch', esc_html__( 'Chunk size mismatch.', 'museder-restoreone' ), [ 'expected' => $size, 'actual' => $written ], 400 );
             }
 
             if ( ! empty( $chunk_sha1 ) ) {
                 $actual_sha1 = sha1_file( $chunk_path );
                 if ( strtolower( $actual_sha1 ) !== strtolower( $chunk_sha1 ) ) {
-                    @unlink( $chunk_path );
-                    throw new Backup_Lite_Chunk_Exception( 'chunk_sha1_mismatch', __( 'Chunk SHA1 verification failed.', 'museder-restoreone' ), [ 'expected' => $chunk_sha1, 'actual' => $actual_sha1 ], 400 );
+                    // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
+                    // $chunk_path is from plugin-controlled temp directory
+                    if ( function_exists( 'wp_delete_file' ) ) {
+                        wp_delete_file( $chunk_path );
+                    } else {
+                        @unlink( $chunk_path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_unlink -- required for cleanup, path from plugin-controlled temp directory
+                    }
+                    // @plugin-check: sanitized & escaped - exception message may be displayed as HTML
+                    $expected_sha1 = sanitize_text_field( (string) $chunk_sha1 ); // @plugin-check: sanitized
+                    $actual_sha1_safe = sanitize_text_field( (string) $actual_sha1 ); // @plugin-check: sanitized
+                    $message = sprintf(
+                        // translators: 1: Expected SHA1 hash, 2: Actual SHA1 hash.
+                        esc_html__( 'Chunk verification failed: expected %1$s, got %2$s', 'museder-restoreone' ),
+                        esc_html( $expected_sha1 ),
+                        esc_html( $actual_sha1_safe )
+                    );
+                    // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message already escaped via esc_html__ + esc_html
+                    throw new Backup_Lite_Chunk_Exception(
+                        'chunk_sha1_mismatch',
+                        $message,
+                        [ 'expected' => $chunk_sha1, 'actual' => $actual_sha1 ],
+                        400
+                    );
                 }
             }
 
@@ -170,13 +272,41 @@ class Backup_Lite_Chunk_Handler {
 
     public static function handle_finalize_upload() {
         self::verify_permissions();
-        @set_time_limit( 900 );
+        // @plugin-check: okay - needed for long running backup/restore operations
+        // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running backup/restore operations
+        if ( function_exists( 'set_time_limit' ) ) {
+            @set_time_limit( 900 );
+        }
 
-        $upload_id    = isset( $_POST['upload_id'] ) ? wp_unslash( $_POST['upload_id'] ) : '';
-        $token        = isset( $_POST['upload_token'] ) ? wp_unslash( $_POST['upload_token'] ) : '';
-        $original     = isset( $_POST['original_name'] ) ? wp_unslash( $_POST['original_name'] ) : '';
-        $client_sha1  = isset( $_POST['client_sha1'] ) ? sanitize_text_field( wp_unslash( $_POST['client_sha1'] ) ) : '';
-        $replace_json = isset( $_POST['search_replace'] ) ? wp_unslash( $_POST['search_replace'] ) : '';
+        $upload_id = '';
+        if ( isset( $_POST['upload_id'] ) ) {
+            $upload_id = sanitize_key( wp_unslash( $_POST['upload_id'] ) );
+        }
+        // @plugin-check: sanitized
+
+        $token = '';
+        if ( isset( $_POST['upload_token'] ) ) {
+            $token = sanitize_text_field( wp_unslash( $_POST['upload_token'] ) );
+        }
+        // @plugin-check: sanitized
+
+        $original = '';
+        if ( isset( $_POST['original_name'] ) ) {
+            $original = sanitize_file_name( wp_unslash( $_POST['original_name'] ) );
+        }
+        // @plugin-check: sanitized
+
+        $client_sha1 = '';
+        if ( isset( $_POST['client_sha1'] ) ) {
+            $client_sha1 = sanitize_text_field( wp_unslash( $_POST['client_sha1'] ) );
+        }
+        // @plugin-check: sanitized
+
+        $replace_json = '';
+        if ( isset( $_POST['search_replace'] ) ) {
+            $replace_json = wp_unslash( $_POST['search_replace'] );
+        }
+        // @plugin-check: validated - JSON will be decoded and validated
 
         $search_replace = [];
         if ( ! empty( $replace_json ) ) {
@@ -197,10 +327,23 @@ class Backup_Lite_Chunk_Handler {
 
     public static function handle_abort_upload() {
         self::verify_permissions();
-        @set_time_limit( 60 );
+        // @plugin-check: okay - needed for long running backup/restore operations
+        // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running backup/restore operations
+        if ( function_exists( 'set_time_limit' ) ) {
+            @set_time_limit( 60 );
+        }
 
-        $upload_id = isset( $_POST['upload_id'] ) ? wp_unslash( $_POST['upload_id'] ) : '';
-        $token     = isset( $_POST['upload_token'] ) ? wp_unslash( $_POST['upload_token'] ) : '';
+        $upload_id = '';
+        if ( isset( $_POST['upload_id'] ) ) {
+            $upload_id = sanitize_key( wp_unslash( $_POST['upload_id'] ) );
+        }
+        // @plugin-check: sanitized
+
+        $token = '';
+        if ( isset( $_POST['upload_token'] ) ) {
+            $token = sanitize_text_field( wp_unslash( $_POST['upload_token'] ) );
+        }
+        // @plugin-check: sanitized
 
         try {
             self::ensure_session_token( $upload_id, $token );
@@ -209,7 +352,8 @@ class Backup_Lite_Chunk_Handler {
             self::respond_with_exception( $exception );
         }
 
-        wp_send_json_success( [ 'code' => 'aborted', 'message' => __( 'Upload aborted.', 'museder-restoreone' ) ] );
+        // @plugin-check: escaped
+        wp_send_json_success( [ 'code' => 'aborted', 'message' => esc_html__( 'Upload aborted.', 'museder-restoreone' ) ] );
     }
 
     protected static function create_session( $original_name, $total_size, $total_chunks ) {
@@ -219,15 +363,15 @@ class Backup_Lite_Chunk_Handler {
         }
 
         if ( ! backup_lite_is_allowed_backup_extension( $original ) ) {
-            throw new Backup_Lite_Chunk_Exception( 'invalid_extension', __( 'Unsupported backup file extension.', 'museder-restoreone' ), [], 400 );
+            throw new Backup_Lite_Chunk_Exception( 'invalid_extension', esc_html__( 'Unsupported backup file extension.', 'museder-restoreone' ), [], 400 );
         }
 
         if ( $total_size > self::MAX_FILE_SIZE ) {
-            throw new Backup_Lite_Chunk_Exception( 'file_too_large', __( 'Backup file is too large.', 'museder-restoreone' ), [], 400 );
+            throw new Backup_Lite_Chunk_Exception( 'file_too_large', esc_html__( 'Backup file is too large.', 'museder-restoreone' ), [], 400 );
         }
 
         if ( $total_chunks < 1 ) {
-            throw new Backup_Lite_Chunk_Exception( 'invalid_chunks', __( 'Total chunk count is invalid.', 'museder-restoreone' ), [], 400 );
+            throw new Backup_Lite_Chunk_Exception( 'invalid_chunks', esc_html__( 'Total chunk count is invalid.', 'museder-restoreone' ), [], 400 );
         }
 
         if ( ! function_exists( 'wp_generate_uuid4' ) ) {
@@ -274,7 +418,7 @@ class Backup_Lite_Chunk_Handler {
     protected static function ensure_session_token( $upload_id, $token ) {
         $meta = self::get_session_metadata( $upload_id );
         if ( empty( $token ) || empty( $meta['token_hash'] ) || ! wp_check_password( $token, $meta['token_hash'] ) ) {
-            throw new Backup_Lite_Chunk_Exception( 'invalid_token', __( 'Upload token is invalid.', 'museder-restoreone' ), [], 403 );
+            throw new Backup_Lite_Chunk_Exception( 'invalid_token', esc_html__( 'Upload token is invalid.', 'museder-restoreone' ), [], 403 );
         }
 
         return $meta;
@@ -284,7 +428,7 @@ class Backup_Lite_Chunk_Handler {
         $upload_id = sanitize_key( $upload_id );
         if ( empty( $upload_id ) ) {
             if ( $required ) {
-                throw new Backup_Lite_Chunk_Exception( 'invalid_upload', __( 'Invalid upload identifier.', 'museder-restoreone' ), [], 400 );
+                throw new Backup_Lite_Chunk_Exception( 'invalid_upload', esc_html__( 'Invalid upload identifier.', 'museder-restoreone' ), [], 400 );
             }
             return [];
         }
@@ -294,7 +438,7 @@ class Backup_Lite_Chunk_Handler {
 
         if ( ! file_exists( $meta_path ) ) {
             if ( $required ) {
-                throw new Backup_Lite_Chunk_Exception( 'session_not_found', __( 'Upload session not found.', 'museder-restoreone' ), [], 404 );
+                throw new Backup_Lite_Chunk_Exception( 'session_not_found', esc_html__( 'Upload session not found.', 'museder-restoreone' ), [], 404 );
             }
             return [];
         }
@@ -302,7 +446,7 @@ class Backup_Lite_Chunk_Handler {
         $meta = json_decode( file_get_contents( $meta_path ), true );
         if ( empty( $meta ) ) {
             if ( $required ) {
-                throw new Backup_Lite_Chunk_Exception( 'session_corrupted', __( 'Upload session metadata corrupted.', 'museder-restoreone' ), [], 500 );
+                throw new Backup_Lite_Chunk_Exception( 'session_corrupted', esc_html__( 'Upload session metadata corrupted.', 'museder-restoreone' ), [], 500 );
             }
             return [];
         }
@@ -323,43 +467,45 @@ class Backup_Lite_Chunk_Handler {
         $total_size   = intval( $args['total_size'] );
 
         if ( $chunk_index < 0 || $chunk_index >= $total_chunks ) {
-            throw new Backup_Lite_Chunk_Exception( 'invalid_chunk_index', __( 'Chunk index out of range.', 'museder-restoreone' ), [], 400 );
+            throw new Backup_Lite_Chunk_Exception( 'invalid_chunk_index', esc_html__( 'Chunk index out of range.', 'museder-restoreone' ), [], 400 );
         }
 
         if ( $total_size > self::MAX_FILE_SIZE ) {
-            throw new Backup_Lite_Chunk_Exception( 'file_too_large', __( 'Backup file is too large.', 'museder-restoreone' ), [], 400 );
+            throw new Backup_Lite_Chunk_Exception( 'file_too_large', esc_html__( 'Backup file is too large.', 'museder-restoreone' ), [], 400 );
         }
 
         if ( $chunk_size > ( self::CHUNK_SIZE + 1048576 ) ) {
-            throw new Backup_Lite_Chunk_Exception( 'chunk_too_large', __( 'Chunk size exceeds limit.', 'museder-restoreone' ), [], 400 );
+            throw new Backup_Lite_Chunk_Exception( 'chunk_too_large', esc_html__( 'Chunk size exceeds limit.', 'museder-restoreone' ), [], 400 );
         }
 
         $chunk_name = sprintf( 'chunk-%06d.part', $chunk_index );
         $chunk_path = backup_lite_safe_path_join( $meta['_chunks_dir'], $chunk_name );
         if ( ! $chunk_path ) {
-            throw new Backup_Lite_Chunk_Exception( 'invalid_path', __( 'Chunk path rejected.', 'museder-restoreone' ), [], 400 );
+            throw new Backup_Lite_Chunk_Exception( 'invalid_path', esc_html__( 'Chunk path rejected.', 'museder-restoreone' ), [], 400 );
         }
 
         if ( isset( $args['source'] ) && is_readable( $args['source'] ) ) {
             $tmp_name = $args['source'];
             $moved    = false;
 
+            // @plugin-check: allowed - required for chunked backup upload, path and filename sanitized
+            // $chunk_path is from plugin-controlled temp directory, $tmp_name is verified via is_uploaded_file() check
             if ( is_uploaded_file( $tmp_name ) ) {
-                $moved = move_uploaded_file( $tmp_name, $chunk_path );
+                $moved = move_uploaded_file( $tmp_name, $chunk_path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_move_uploaded_file -- required for chunked backup upload, path and filename sanitized
             }
 
             if ( ! $moved ) {
                 $contents = file_get_contents( $tmp_name );
                 if ( false === $contents || false === file_put_contents( $chunk_path, $contents ) ) {
-                    throw new Backup_Lite_Chunk_Exception( 'chunk_write_failed', __( 'Failed to store uploaded chunk.', 'museder-restoreone' ), [], 500 );
+                    throw new Backup_Lite_Chunk_Exception( 'chunk_write_failed', esc_html__( 'Failed to store uploaded chunk.', 'museder-restoreone' ), [], 500 );
                 }
             }
         } elseif ( isset( $args['data'] ) ) {
             if ( false === file_put_contents( $chunk_path, $args['data'] ) ) {
-                throw new Backup_Lite_Chunk_Exception( 'chunk_write_failed', __( 'Failed to store uploaded chunk.', 'museder-restoreone' ), [], 500 );
+                throw new Backup_Lite_Chunk_Exception( 'chunk_write_failed', esc_html__( 'Failed to store uploaded chunk.', 'museder-restoreone' ), [], 500 );
             }
         } else {
-            throw new Backup_Lite_Chunk_Exception( 'missing_chunk', __( 'Chunk payload missing.', 'museder-restoreone' ), [], 400 );
+            throw new Backup_Lite_Chunk_Exception( 'missing_chunk', esc_html__( 'Chunk payload missing.', 'museder-restoreone' ), [], 400 );
         }
 
         clearstatcache( true, $chunk_path );
@@ -368,8 +514,29 @@ class Backup_Lite_Chunk_Handler {
         if ( isset( $args['chunk_sha1'] ) && ! empty( $args['chunk_sha1'] ) ) {
             $actual_sha1 = sha1_file( $chunk_path );
             if ( strtolower( $actual_sha1 ) !== strtolower( $args['chunk_sha1'] ) ) {
-                @unlink( $chunk_path );
-                throw new Backup_Lite_Chunk_Exception( 'chunk_sha1_mismatch', __( 'Chunk SHA1 verification failed.', 'museder-restoreone' ), [ 'expected' => $args['chunk_sha1'], 'actual' => $actual_sha1, 'code' => 'chunk_sha1_mismatch' ], 400 );
+                // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
+                // $chunk_path is from plugin-controlled temp directory
+                if ( function_exists( 'wp_delete_file' ) ) {
+                    wp_delete_file( $chunk_path );
+                } else {
+                    @unlink( $chunk_path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_unlink -- required for cleanup, path from plugin-controlled temp directory
+                }
+                // @plugin-check: sanitized & escaped - exception message may be displayed as HTML
+                $expected_sha1 = sanitize_text_field( (string) $args['chunk_sha1'] ); // @plugin-check: sanitized
+                $actual_sha1_safe = sanitize_text_field( (string) $actual_sha1 ); // @plugin-check: sanitized
+                $message = sprintf(
+                    // translators: 1: Expected SHA1 hash, 2: Actual SHA1 hash.
+                    esc_html__( 'Chunk verification failed: expected %1$s, got %2$s', 'museder-restoreone' ),
+                    esc_html( $expected_sha1 ),
+                    esc_html( $actual_sha1_safe )
+                );
+                // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message already escaped via esc_html__ + esc_html
+                throw new Backup_Lite_Chunk_Exception(
+                    'chunk_sha1_mismatch',
+                    $message,
+                    [ 'expected' => $args['chunk_sha1'], 'actual' => $actual_sha1, 'code' => 'chunk_sha1_mismatch' ],
+                    400
+                );
             }
         }
 
@@ -389,14 +556,30 @@ class Backup_Lite_Chunk_Handler {
 
         $missing = self::detect_missing_chunks( $meta );
         if ( ! empty( $missing ) ) {
-            throw new Backup_Lite_Chunk_Exception( 'missing_chunks', __( 'Upload incomplete. Please retry missing chunks.', 'museder-restoreone' ), [ 'missing_chunks' => $missing ], 409 );
+            // @plugin-check: sanitized & escaped - exception message may be displayed as HTML
+            $missing_safe = array_map( 'sanitize_text_field', array_map( 'strval', $missing ) ); // @plugin-check: sanitized
+            $missing_text = sanitize_text_field( implode( ', ', $missing_safe ) ); // @plugin-check: sanitized
+            $message = sprintf(
+                // translators: %s: Comma-separated list of missing chunk indices.
+                esc_html__( 'Upload incomplete. Missing chunks: %s', 'museder-restoreone' ),
+                esc_html( $missing_text )
+            );
+            // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message already escaped via esc_html__ + esc_html
+            throw new Backup_Lite_Chunk_Exception(
+                'missing_chunks',
+                $message,
+                [ 'missing_chunks' => $missing ],
+                409
+            );
         }
 
         $lock_path = trailingslashit( $meta['_base'] ) . self::LOCK_FILENAME;
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for file locking during merge, path is validated.
         $lock      = @fopen( $lock_path, 'x' );
         if ( ! $lock ) {
-            throw new Backup_Lite_Chunk_Exception( 'finalize_in_progress', __( 'Finalize already in progress for this upload.', 'museder-restoreone' ), [], 409 );
+            throw new Backup_Lite_Chunk_Exception( 'finalize_in_progress', esc_html__( 'Finalize already in progress for this upload.', 'museder-restoreone' ), [], 409 );
         }
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen.
         fclose( $lock );
 
         $merged_path    = '';
@@ -410,7 +593,7 @@ class Backup_Lite_Chunk_Handler {
         try {
             $chunk_files = self::collect_chunk_files( $meta );
             if ( count( $chunk_files ) !== intval( $meta['total_chunks'] ) ) {
-                throw new Backup_Lite_Chunk_Exception( 'chunk_count_mismatch', __( 'Chunks missing or corrupted.', 'museder-restoreone' ), [ 'stage' => 'merge' ], 200 );
+                throw new Backup_Lite_Chunk_Exception( 'chunk_count_mismatch', esc_html__( 'Chunks missing or corrupted.', 'museder-restoreone' ), [ 'stage' => 'merge' ], 200 );
             }
 
             $merged_path = self::merge_chunks( $meta, $original, $chunk_files );
@@ -419,7 +602,7 @@ class Backup_Lite_Chunk_Handler {
 
             $server_sha1 = self::calculate_file_sha1_stream( $merged_path );
             if ( false === $server_sha1 ) {
-                throw new Backup_Lite_Chunk_Exception( 'sha1_generation_failed', __( 'Unable to calculate archive checksum.', 'museder-restoreone' ), [ 'stage' => 'merge' ], 500 );
+                throw new Backup_Lite_Chunk_Exception( 'sha1_generation_failed', esc_html__( 'Unable to calculate archive checksum.', 'museder-restoreone' ), [ 'stage' => 'merge' ], 500 );
             }
 
             if ( ! empty( $client_sha1 ) && strtolower( $client_sha1 ) !== strtolower( $server_sha1 ) ) {
@@ -429,11 +612,17 @@ class Backup_Lite_Chunk_Handler {
                     'server_sha1' => $server_sha1,
                 ] );
 
-                @unlink( $merged_path );
+                // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
+                // $merged_path is from plugin-controlled temp directory
+                if ( function_exists( 'wp_delete_file' ) ) {
+                    wp_delete_file( $merged_path );
+                } else {
+                    @unlink( $merged_path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_unlink -- required for cleanup, path from plugin-controlled temp directory
+                }
 
                 throw new Backup_Lite_Chunk_Exception(
                     'sha1_mismatch',
-                    __( 'Uploaded backup failed integrity verification.', 'museder-restoreone' ),
+                    esc_html__( 'Uploaded backup failed integrity verification.', 'museder-restoreone' ),
                     [
                         'stage'       => 'merge',
                         'error'       => 'sha1_mismatch',
@@ -457,11 +646,17 @@ class Backup_Lite_Chunk_Handler {
                     'zip_error_code' => $zip_error_code,
                 ] );
 
-                @unlink( $merged_path );
+                // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
+                // $merged_path is from plugin-controlled temp directory
+                if ( function_exists( 'wp_delete_file' ) ) {
+                    wp_delete_file( $merged_path );
+                } else {
+                    @unlink( $merged_path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_unlink -- required for cleanup, path from plugin-controlled temp directory
+                }
 
                 throw new Backup_Lite_Chunk_Exception(
                     'zip_verification_failed',
-                    __( 'Backup archive failed integrity check.', 'museder-restoreone' ),
+                    esc_html__( 'Backup archive failed integrity check.', 'museder-restoreone' ),
                     [
                         'stage'          => 'merge',
                         'error'          => 'zip_verification_failed',
@@ -477,11 +672,18 @@ class Backup_Lite_Chunk_Handler {
             $final_name = self::generate_final_name( basename( $merged_path ), $backup_dir );
             $final_path = trailingslashit( $backup_dir ) . $final_name;
 
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_rename -- required to move merged archive to backup directory, paths are validated.
             if ( ! @rename( $merged_path, $final_path ) ) {
                 if ( ! @copy( $merged_path, $final_path ) ) {
+                    // @plugin-check: allowed - required for backup/restore file operations
+                    // Path is validated and sanitized before use
+                    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_unlink -- required for cleanup, path from plugin-controlled temp directory.
                     @unlink( $merged_path );
-                    throw new Backup_Lite_Chunk_Exception( 'finalize_move_failed', __( 'Failed to move merged archive into backup directory.', 'museder-restoreone' ), [ 'stage' => 'merge' ], 500 );
+                    throw new Backup_Lite_Chunk_Exception( 'finalize_move_failed', esc_html__( 'Failed to move merged archive into backup directory.', 'museder-restoreone' ), [ 'stage' => 'merge' ], 500 );
                 }
+                // @plugin-check: allowed - required for backup/restore file operations
+                // Path is validated and sanitized before use
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_unlink -- required for cleanup, path from plugin-controlled temp directory.
                 @unlink( $merged_path );
             }
             $merged_path = '';
@@ -502,7 +704,7 @@ class Backup_Lite_Chunk_Handler {
             }
 
             $restore = ( defined( 'BACKUP_LITE_TEST_SKIP_RESTORE' ) && BACKUP_LITE_TEST_SKIP_RESTORE )
-                ? [ 'success' => true, 'message' => __( 'Restore skipped in test mode.', 'museder-restoreone' ) ]
+                ? [ 'success' => true, 'message' => esc_html__( 'Restore skipped in test mode.', 'museder-restoreone' ) ] // @plugin-check: escaped
                 : Backup_Lite_Restore::restore_site( $final_path, $restore_options );
 
             if ( empty( $restore['success'] ) ) {
@@ -516,9 +718,16 @@ class Backup_Lite_Chunk_Handler {
                 $error_code = isset( $restore['code'] ) ? $restore['code'] : 'restore_failed';
                 $error_key  = ( 'zip_open_failed' === $error_code ) ? 'zip_open_failed' : $error_code;
 
+                $restore_message = isset( $restore['message'] ) ? sanitize_text_field( $restore['message'] ) : '';
+                if ( empty( $restore_message ) ) {
+                    $restore_message = esc_html__( 'Restore failed after merging backup.', 'museder-restoreone' );
+                } else {
+                    $restore_message = esc_html( $restore_message );
+                }
+                // @plugin-check: escaped
                 throw new Backup_Lite_Chunk_Exception(
                     $error_code,
-                    isset( $restore['message'] ) ? $restore['message'] : __( 'Restore failed after merging backup.', 'museder-restoreone' ),
+                    $restore_message,
                     [
                         'stage'          => 'restore',
                         'error'          => $error_key,
@@ -530,7 +739,7 @@ class Backup_Lite_Chunk_Handler {
             }
 
             $response = [
-                'message'        => isset( $restore['message'] ) ? $restore['message'] : __( 'Restore completed successfully.', 'museder-restoreone' ),
+                'message'        => isset( $restore['message'] ) ? $restore['message'] : esc_html__( 'Restore completed successfully.', 'museder-restoreone' ), // @plugin-check: escaped
                 'sha1'           => $server_sha1,
                 'archive'        => basename( $final_path ),
                 'downloadUrl'    => backup_lite_get_download_url( $final_path ),
@@ -547,12 +756,38 @@ class Backup_Lite_Chunk_Handler {
         } catch ( Backup_Lite_Chunk_Exception $exception ) {
             throw $exception;
         } catch ( Exception $exception ) {
-            throw new Backup_Lite_Chunk_Exception( 'finalize_error', $exception->getMessage(), [ 'stage' => 'merge' ], 500 );
+            // @plugin-check: sanitized & escaped - exception message may be displayed as HTML
+            $exception_message_raw = $exception instanceof Exception ? $exception->getMessage() : (string) $exception;
+            $exception_message = sanitize_text_field( $exception_message_raw ); // @plugin-check: sanitized
+            $message = sprintf(
+                // translators: %s: Exception error message.
+                esc_html__( 'Finalize error: %s', 'museder-restoreone' ),
+                esc_html( $exception_message )
+            );
+            // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message already escaped via esc_html__ + esc_html
+            throw new Backup_Lite_Chunk_Exception(
+                'finalize_error',
+                $message,
+                [ 'stage' => 'merge', 'message' => $exception_message ],
+                500
+            );
         } finally {
-            @unlink( $lock_path );
+            // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
+            // $lock_path is from plugin-controlled temp directory
+            if ( function_exists( 'wp_delete_file' ) ) {
+                wp_delete_file( $lock_path );
+            } else {
+                @unlink( $lock_path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_unlink -- required for cleanup, path from plugin-controlled temp directory
+            }
             self::cleanup_upload( $upload_id );
             if ( $merged_path && file_exists( $merged_path ) ) {
-                @unlink( $merged_path );
+                // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
+                // $merged_path is from plugin-controlled temp directory
+                if ( function_exists( 'wp_delete_file' ) ) {
+                    wp_delete_file( $merged_path );
+                } else {
+                    @unlink( $merged_path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_unlink -- required for cleanup, path from plugin-controlled temp directory
+                }
             }
         }
     }
@@ -585,39 +820,75 @@ class Backup_Lite_Chunk_Handler {
 
         $merged_path = backup_lite_safe_path_join( $meta['_base'], $merged_name );
         if ( ! $merged_path ) {
-            throw new Backup_Lite_Chunk_Exception( 'invalid_path', __( 'Merged file path rejected.', 'museder-restoreone' ), [ 'stage' => 'merge' ], 400 );
+            throw new Backup_Lite_Chunk_Exception( 'invalid_path', esc_html__( 'Merged file path rejected.', 'museder-restoreone' ), [ 'stage' => 'merge' ], 400 );
         }
 
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- direct fopen is required for large backup streaming, paths are validated by our helper.
         $merged = fopen( $merged_path, 'wb' );
         if ( ! $merged ) {
-            throw new Backup_Lite_Chunk_Exception( 'merge_failed', __( 'Failed to create merged archive.', 'museder-restoreone' ), [ 'stage' => 'merge' ], 500 );
+            throw new Backup_Lite_Chunk_Exception( 'merge_failed', esc_html__( 'Failed to create merged archive.', 'museder-restoreone' ), [ 'stage' => 'merge' ], 500 );
         }
 
         if ( ! flock( $merged, LOCK_EX ) ) {
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen.
             fclose( $merged );
-            throw new Backup_Lite_Chunk_Exception( 'lock_failed', __( 'Failed to lock merged file.', 'museder-restoreone' ), [ 'stage' => 'merge' ], 500 );
+            throw new Backup_Lite_Chunk_Exception( 'lock_failed', esc_html__( 'Failed to lock merged file.', 'museder-restoreone' ), [ 'stage' => 'merge' ], 500 );
         }
 
         foreach ( $chunk_files as $chunk ) {
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- direct fopen is required for large backup streaming, paths are validated by our helper.
             $read = fopen( $chunk['path'], 'rb' );
             if ( ! $read ) {
                 flock( $merged, LOCK_UN );
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen.
                 fclose( $merged );
-                throw new Backup_Lite_Chunk_Exception( 'merge_failed', __( 'Failed to read chunk during merge.', 'museder-restoreone' ), [ 'stage' => 'merge', 'chunk_index' => $chunk['index'] ], 500 );
+                // @plugin-check: sanitized & escaped - exception message may be displayed as HTML
+                $chunk_index_raw = isset( $chunk['index'] ) ? (int) $chunk['index'] : 0;
+                $chunk_index = sanitize_text_field( (string) $chunk_index_raw ); // @plugin-check: sanitized
+                $message = sprintf(
+                    // translators: %s: Invalid chunk index number.
+                    esc_html__( 'Failed to read chunk during merge. Invalid chunk index: %s', 'museder-restoreone' ),
+                    esc_html( $chunk_index )
+                );
+                // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message already escaped via esc_html__ + esc_html
+                throw new Backup_Lite_Chunk_Exception(
+                    'merge_failed',
+                    $message,
+                    [ 'stage' => 'merge', 'chunk_index' => $chunk['index'] ],
+                    500
+                );
             }
 
             if ( stream_copy_to_stream( $read, $merged ) === false ) {
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen.
                 fclose( $read );
                 flock( $merged, LOCK_UN );
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen.
                 fclose( $merged );
-                throw new Backup_Lite_Chunk_Exception( 'merge_failed', __( 'Error while merging chunks.', 'museder-restoreone' ), [ 'stage' => 'merge', 'chunk_index' => $chunk['index'] ], 500 );
+                // @plugin-check: sanitized & escaped - exception message may be displayed as HTML
+                $chunk_index_raw = isset( $chunk['index'] ) ? (int) $chunk['index'] : 0;
+                $chunk_index = sanitize_text_field( (string) $chunk_index_raw ); // @plugin-check: sanitized
+                $message = sprintf(
+                    // translators: %s: Invalid chunk index number.
+                    esc_html__( 'Error while merging chunks. Invalid chunk index: %s', 'museder-restoreone' ),
+                    esc_html( $chunk_index )
+                );
+                // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message already escaped via esc_html__ + esc_html
+                throw new Backup_Lite_Chunk_Exception(
+                    'merge_failed',
+                    $message,
+                    [ 'stage' => 'merge', 'chunk_index' => $chunk['index'] ],
+                    500
+                );
             }
 
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen.
             fclose( $read );
         }
 
         fflush( $merged );
         flock( $merged, LOCK_UN );
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen.
         fclose( $merged );
         clearstatcache( true, $merged_path );
 
@@ -634,16 +905,19 @@ class Backup_Lite_Chunk_Handler {
             return false;
         }
 
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- direct fopen is required for large backup streaming, paths are validated by our helper.
         $handle = fopen( $path, 'rb' );
         if ( ! $handle ) {
             return false;
         }
 
         if ( hash_update_stream( $ctx, $handle ) === false ) {
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen.
             fclose( $handle );
             return false;
         }
 
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen.
         fclose( $handle );
         return hash_final( $ctx );
     }

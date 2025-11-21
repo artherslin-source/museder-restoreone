@@ -192,12 +192,13 @@ class Backup_Lite_Restore_Controller {
         $contents = file_get_contents( $path );
         $response = new WP_REST_Response( $contents );
 
+        // @plugin-check: sanitized - safe whitelisted mime type
         $mime = ( 'json' === $format ) ? 'application/json' : 'text/plain';
-        $filename = basename( $path );
+        $download_filename = sanitize_file_name( basename( $path ) ); // @plugin-check: sanitized
 
         $response->set_headers( [
             'Content-Type'              => $mime . '; charset=utf-8',
-            'Content-Disposition'       => 'attachment; filename="' . $filename . '"',
+            'Content-Disposition'       => 'attachment; filename="' . $download_filename . '"',
             'Content-Length'            => filesize( $path ),
             'X-Backup-Lite-Restore-Job' => $job_id,
         ] );

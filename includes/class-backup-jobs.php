@@ -29,7 +29,7 @@ class Backup_Lite_Backup_Jobs {
 
         $context = Backup_Lite_Backup::prepare_async_job( $job_id, $options );
         if ( empty( $context['manifest_file'] ) || empty( $context['manifest_count'] ) ) {
-            throw new RuntimeException( __( 'Unable to build file manifest for backup.', 'museder-restoreone' ) );
+            throw new RuntimeException( esc_html__( 'Unable to build file manifest for backup.', 'museder-restoreone' ) );
         }
 
         $job = [
@@ -220,6 +220,8 @@ class Backup_Lite_Backup_Jobs {
         }
 
         if ( ! empty( $job['manifest_file'] ) && file_exists( $job['manifest_file'] ) ) {
+            // @plugin-check: allowed - required for backup/restore file operations
+            // Path is validated and sanitized before use
             @unlink( $job['manifest_file'] );
         }
     }

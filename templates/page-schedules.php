@@ -9,35 +9,35 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-$schedules       = isset( $schedules ) ? $schedules : Backup_Lite_Schedule_Handler::list_schedules();
-$total_schedules = is_array( $schedules ) ? count( $schedules ) : 0;
-$enabled_count   = 0;
-$next_run_label  = __( 'Not scheduled', 'museder-restoreone' );
-$next_run_title  = '—';
-$next_run_diff   = '';
+$museder_restoreone_schedules       = isset( $schedules ) ? $schedules : Backup_Lite_Schedule_Handler::list_schedules();
+$museder_restoreone_total_schedules = is_array( $museder_restoreone_schedules ) ? count( $museder_restoreone_schedules ) : 0;
+$museder_restoreone_enabled_count   = 0;
+$museder_restoreone_next_run_label  = __( 'Not scheduled', 'museder-restoreone' );
+$museder_restoreone_next_run_title  = '—';
+$museder_restoreone_next_run_diff   = '';
 
-if ( $total_schedules ) {
-    $now = time();
-    foreach ( $schedules as $schedule ) {
-        if ( isset( $schedule['status'] ) && 'disabled' !== $schedule['status'] ) {
-            $enabled_count++;
+if ( $museder_restoreone_total_schedules ) {
+    $museder_restoreone_now = time();
+    foreach ( $museder_restoreone_schedules as $museder_restoreone_schedule ) {
+        if ( isset( $museder_restoreone_schedule['status'] ) && 'disabled' !== $museder_restoreone_schedule['status'] ) {
+            $museder_restoreone_enabled_count++;
         }
 
-        if ( empty( $schedule['next_run'] ) ) {
+        if ( empty( $museder_restoreone_schedule['next_run'] ) ) {
             continue;
         }
 
-        $timestamp = is_numeric( $schedule['next_run'] ) ? (int) $schedule['next_run'] : strtotime( $schedule['next_run'] );
-        if ( ! $timestamp ) {
+        $museder_restoreone_timestamp = is_numeric( $museder_restoreone_schedule['next_run'] ) ? (int) $museder_restoreone_schedule['next_run'] : strtotime( $museder_restoreone_schedule['next_run'] );
+        if ( ! $museder_restoreone_timestamp ) {
             continue;
         }
 
-        if ( ! isset( $earliest_timestamp ) || $timestamp < $earliest_timestamp ) {
-            $earliest_timestamp = $timestamp;
-            $next_run_label     = backup_lite_local_time( 'Y-m-d H:i', $timestamp );
-            $next_run_title     = ! empty( $schedule['title'] ) ? $schedule['title'] : __( '(Untitled)', 'museder-restoreone' );
-            if ( $timestamp >= $now ) {
-                $next_run_diff = human_time_diff( $now, $timestamp );
+        if ( ! isset( $museder_restoreone_earliest_timestamp ) || $museder_restoreone_timestamp < $museder_restoreone_earliest_timestamp ) {
+            $museder_restoreone_earliest_timestamp = $museder_restoreone_timestamp;
+            $museder_restoreone_next_run_label     = backup_lite_local_time( 'Y-m-d H:i', $museder_restoreone_timestamp );
+            $museder_restoreone_next_run_title     = ! empty( $museder_restoreone_schedule['title'] ) ? $museder_restoreone_schedule['title'] : __( '(Untitled)', 'museder-restoreone' );
+            if ( $museder_restoreone_timestamp >= $museder_restoreone_now ) {
+                $museder_restoreone_next_run_diff = human_time_diff( $museder_restoreone_now, $museder_restoreone_timestamp );
             }
         }
     }
@@ -59,20 +59,20 @@ if ( $total_schedules ) {
         <div class="schedule-hero-stats">
             <div class="schedule-hero-stat">
                 <span class="label"><?php esc_html_e( 'Total schedules', 'museder-restoreone' ); ?></span>
-                <span class="value"><?php echo esc_html( $total_schedules ); ?></span>
+                <span class="value"><?php echo esc_html( $museder_restoreone_total_schedules ); ?></span>
             </div>
             <div class="schedule-hero-stat">
                 <span class="label"><?php esc_html_e( 'Active', 'museder-restoreone' ); ?></span>
-                <span class="value"><?php echo esc_html( $enabled_count ); ?></span>
+                <span class="value"><?php echo esc_html( $museder_restoreone_enabled_count ); ?></span>
             </div>
             <div class="schedule-hero-stat">
                 <span class="label"><?php esc_html_e( 'Next run', 'museder-restoreone' ); ?></span>
-                <span class="value"><?php echo esc_html( $next_run_label ); ?></span>
+                <span class="value"><?php echo esc_html( $museder_restoreone_next_run_label ); ?></span>
                 <?php // @plugin-check: escaped ?>
-                <span class="label"><?php echo esc_html( $next_run_title ); ?><?php echo $next_run_diff ? ' · ' . esc_html( sprintf(
+                <span class="label"><?php echo esc_html( $museder_restoreone_next_run_title ); ?><?php echo $museder_restoreone_next_run_diff ? ' · ' . esc_html( sprintf(
                     /* translators: %s: Relative time until the next run. */
-                    __( 'in %s', 'museder-restoreone' ),
-                    esc_html( $next_run_diff )
+                    esc_html__( 'in %s', 'museder-restoreone' ),
+                    esc_html( $museder_restoreone_next_run_diff )
                 ) ) : ''; ?></span>
             </div>
         </div>
@@ -172,7 +172,7 @@ if ( $total_schedules ) {
                 <p class="description"><?php esc_html_e( 'Each schedule runs through WP-Cron. Start, edit, or delete tasks anytime.', 'museder-restoreone' ); ?></p>
             </div>
             <?php // @plugin-check: escaped ?>
-            <button type="button" class="button button-primary <?php echo esc_attr( $is_pro || $total_schedules === 0 ? '' : 'pro-locked' ); ?>" id="bl-new-schedule" <?php echo $is_pro || $total_schedules === 0 ? '' : 'data-upgrade="' . esc_attr( 'pro' ) . '"'; ?>>
+            <button type="button" class="button button-primary <?php echo esc_attr( $is_pro || $museder_restoreone_total_schedules === 0 ? '' : 'pro-locked' ); ?>" id="bl-new-schedule" <?php echo $is_pro || $museder_restoreone_total_schedules === 0 ? '' : 'data-upgrade="' . esc_attr( 'pro' ) . '"'; // @plugin-check: escaped ?>>
                 ＋ <?php esc_html_e( 'New Schedule', 'museder-restoreone' ); ?>
                 <?php if ( ! $is_pro && $total_schedules >= 1 ) : ?>
                     <span class="pro-badge">PRO</span>
@@ -194,24 +194,24 @@ if ( $total_schedules ) {
                     </tr>
                 </thead>
                 <tbody id="backup-lite-schedule-body">
-                    <?php if ( empty( $schedules ) ) : ?>
+                    <?php if ( empty( $museder_restoreone_schedules ) ) : ?>
                         <tr class="bl-empty-row">
                             <td colspan="8"><?php esc_html_e( 'No schedules configured yet.', 'museder-restoreone' ); ?></td>
                         </tr>
                     <?php else : ?>
-                        <?php foreach ( $schedules as $schedule ) : ?>
+                        <?php foreach ( $museder_restoreone_schedules as $museder_restoreone_schedule ) : ?>
                             <tr>
-                                <td><?php echo esc_html( $schedule['title'] ); ?></td>
+                                <td><?php echo esc_html( $museder_restoreone_schedule['title'] ); ?></td>
                                 <?php // @plugin-check: escaped ?>
-                                <td class="<?php echo esc_attr( 'disabled' === $schedule['status'] ? 'bl-status-disabled' : 'bl-status-enabled' ); ?>">
-                                    <?php echo 'disabled' === $schedule['status'] ? esc_html__( 'Disabled', 'museder-restoreone' ) : esc_html__( 'Enabled', 'museder-restoreone' ); ?>
+                                <td class="<?php echo esc_attr( 'disabled' === $museder_restoreone_schedule['status'] ? 'bl-status-disabled' : 'bl-status-enabled' ); ?>">
+                                    <?php echo 'disabled' === $museder_restoreone_schedule['status'] ? esc_html__( 'Disabled', 'museder-restoreone' ) : esc_html__( 'Enabled', 'museder-restoreone' ); ?>
                                 </td>
-                                <td><?php echo esc_html( ucfirst( $schedule['period'] ) ); ?></td>
-                                <td><?php echo esc_html( $schedule['time'] ); ?></td>
+                                <td><?php echo esc_html( ucfirst( $museder_restoreone_schedule['period'] ) ); ?></td>
+                                <td><?php echo esc_html( $museder_restoreone_schedule['time'] ); ?></td>
                                 <td>
                                     <?php
-                                    if ( ! empty( $schedule['next_run'] ) ) {
-                                        echo esc_html( backup_lite_local_time( 'Y-m-d H:i', (int) $schedule['next_run'] ) );
+                                    if ( ! empty( $museder_restoreone_schedule['next_run'] ) ) {
+                                        echo esc_html( backup_lite_local_time( 'Y-m-d H:i', (int) $museder_restoreone_schedule['next_run'] ) );
                                     } else {
                                         esc_html_e( '—', 'museder-restoreone' );
                                     }
@@ -219,22 +219,22 @@ if ( $total_schedules ) {
                                 </td>
                                 <td>
                                     <?php
-                                    $result_key   = isset( $schedule['last_result'] ) ? strtolower( $schedule['last_result'] ) : 'pending';
-                                    $result_map   = [
+                                    $museder_restoreone_result_key   = isset( $museder_restoreone_schedule['last_result'] ) ? strtolower( $museder_restoreone_schedule['last_result'] ) : 'pending';
+                                    $museder_restoreone_result_map   = [
                                         'success' => [ 'icon' => '✅', 'label' => __( 'Success', 'museder-restoreone' ), 'class' => 'success' ],
                                         'failed'  => [ 'icon' => '❌', 'label' => __( 'Failed', 'museder-restoreone' ), 'class' => 'error' ],
                                         'pending' => [ 'icon' => '⏳', 'label' => __( 'Pending', 'museder-restoreone' ), 'class' => 'pending' ],
                                     ];
-                                    $result_value = isset( $result_map[ $result_key ] ) ? $result_map[ $result_key ] : $result_map['pending'];
+                                    $museder_restoreone_result_value = isset( $museder_restoreone_result_map[ $museder_restoreone_result_key ] ) ? $museder_restoreone_result_map[ $museder_restoreone_result_key ] : $museder_restoreone_result_map['pending'];
                                     ?>
-                                    <span class="badge <?php echo esc_attr( $result_value['class'] ); ?>">
-                                        <?php echo esc_html( $result_value['icon'] . ' ' . $result_value['label'] ); ?>
+                                    <span class="badge <?php echo esc_attr( $museder_restoreone_result_value['class'] ); ?>">
+                                        <?php echo esc_html( $museder_restoreone_result_value['icon'] . ' ' . $museder_restoreone_result_value['label'] ); ?>
                                     </span>
                                 </td>
                                 <td>
                                     <?php
-                                    if ( ! empty( $schedule['last_run'] ) ) {
-                                        echo esc_html( backup_lite_local_time( 'Y-m-d H:i', strtotime( $schedule['last_run'] ) ) );
+                                    if ( ! empty( $museder_restoreone_schedule['last_run'] ) ) {
+                                        echo esc_html( backup_lite_local_time( 'Y-m-d H:i', strtotime( $museder_restoreone_schedule['last_run'] ) ) );
                                     } else {
                                         esc_html_e( '—', 'museder-restoreone' );
                                     }
@@ -244,9 +244,9 @@ if ( $total_schedules ) {
                                     <details class="bl-actions-menu">
                                         <summary class="bl-actions-trigger" aria-label="<?php esc_attr_e( 'Schedule actions', 'museder-restoreone' ); ?>">⋮</summary>
                                         <div class="bl-actions-list">
-                                            <button type="button" class="button" data-schedule-action="start" data-schedule-id="<?php echo esc_attr( $schedule['id'] ); ?>">▶️ <?php esc_html_e( 'Start Now', 'museder-restoreone' ); ?></button>
-                                            <button type="button" class="button" data-schedule-action="edit" data-schedule-id="<?php echo esc_attr( $schedule['id'] ); ?>">✏️ <?php esc_html_e( 'Edit', 'museder-restoreone' ); ?></button>
-                                            <button type="button" class="button" data-schedule-action="delete" data-schedule-id="<?php echo esc_attr( $schedule['id'] ); ?>">🗑️ <?php esc_html_e( 'Delete', 'museder-restoreone' ); ?></button>
+                                            <button type="button" class="button" data-schedule-action="start" data-schedule-id="<?php echo esc_attr( $museder_restoreone_schedule['id'] ); ?>">▶️ <?php esc_html_e( 'Start Now', 'museder-restoreone' ); ?></button>
+                                            <button type="button" class="button" data-schedule-action="edit" data-schedule-id="<?php echo esc_attr( $museder_restoreone_schedule['id'] ); ?>">✏️ <?php esc_html_e( 'Edit', 'museder-restoreone' ); ?></button>
+                                            <button type="button" class="button" data-schedule-action="delete" data-schedule-id="<?php echo esc_attr( $museder_restoreone_schedule['id'] ); ?>">🗑️ <?php esc_html_e( 'Delete', 'museder-restoreone' ); ?></button>
                                         </div>
                                     </details>
                                 </td>

@@ -33,32 +33,48 @@ $chart_failed  = isset( $activity_stats['failed'] ) ? (int) $activity_stats['fai
             <h2>⚙️ <?php esc_html_e( 'Environment Compatibility', 'museder-restoreone' ); ?></h2>
             <ul class="backup-lite-status-list">
                 <li>
-                    <span class="badge <?php echo ! empty( $status['shell'] ) ? 'success' : 'pending'; ?>">
-                        <?php echo ! empty( $status['shell'] )
-                            ? esc_html__( 'Shell commands available', 'museder-restoreone' )
-                            : esc_html__( 'Shell commands disabled (fallback active)', 'museder-restoreone' ); ?>
-                    </span>
+                    <?php if ( ! empty( $status['shell'] ) ) : ?>
+                        <span class="badge success">
+                            <?php esc_html_e( 'Shell commands available', 'museder-restoreone' ); ?>
+                        </span>
+                    <?php else : ?>
+                        <span class="badge pending">
+                            <?php esc_html_e( 'Shell commands disabled (fallback active)', 'museder-restoreone' ); ?>
+                        </span>
+                    <?php endif; ?>
                 </li>
                 <li>
-                    <span class="badge <?php echo ! empty( $status['mysqldump'] ) ? 'success' : 'pending'; ?>">
-                        <?php echo ! empty( $status['mysqldump'] )
-                            ? esc_html__( 'mysqldump detected', 'museder-restoreone' )
-                            : esc_html__( 'mysqldump unavailable (using PHP export)', 'museder-restoreone' ); ?>
-                    </span>
+                    <?php if ( ! empty( $status['mysqldump'] ) ) : ?>
+                        <span class="badge success">
+                            <?php esc_html_e( 'mysqldump detected', 'museder-restoreone' ); ?>
+                        </span>
+                    <?php else : ?>
+                        <span class="badge pending">
+                            <?php esc_html_e( 'mysqldump unavailable (using PHP export)', 'museder-restoreone' ); ?>
+                        </span>
+                    <?php endif; ?>
                 </li>
                 <li>
-                    <span class="badge <?php echo ! empty( $status['mysql_cli'] ) ? 'success' : 'pending'; ?>">
-                        <?php echo ! empty( $status['mysql_cli'] )
-                            ? esc_html__( 'mysql client detected', 'museder-restoreone' )
-                            : esc_html__( 'mysql client unavailable (using PHP import)', 'museder-restoreone' ); ?>
-                    </span>
+                    <?php if ( ! empty( $status['mysql_cli'] ) ) : ?>
+                        <span class="badge success">
+                            <?php esc_html_e( 'mysql client detected', 'museder-restoreone' ); ?>
+                        </span>
+                    <?php else : ?>
+                        <span class="badge pending">
+                            <?php esc_html_e( 'mysql client unavailable (using PHP import)', 'museder-restoreone' ); ?>
+                        </span>
+                    <?php endif; ?>
                 </li>
                 <li>
-                    <span class="badge <?php echo ! empty( $status['ziparchive'] ) ? 'success' : 'pending'; ?>">
-                        <?php echo ! empty( $status['ziparchive'] )
-                            ? esc_html__( 'ZipArchive available', 'museder-restoreone' )
-                            : esc_html__( 'ZipArchive missing (using PclZip)', 'museder-restoreone' ); ?>
-                    </span>
+                    <?php if ( ! empty( $status['ziparchive'] ) ) : ?>
+                        <span class="badge success">
+                            <?php esc_html_e( 'ZipArchive available', 'museder-restoreone' ); ?>
+                        </span>
+                    <?php else : ?>
+                        <span class="badge pending">
+                            <?php esc_html_e( 'ZipArchive missing (using PclZip)', 'museder-restoreone' ); ?>
+                        </span>
+                    <?php endif; ?>
                 </li>
             </ul>
         </div>
@@ -69,21 +85,21 @@ $chart_failed  = isset( $activity_stats['failed'] ) ? (int) $activity_stats['fai
                 <p class="description"><?php esc_html_e( 'No backups created yet. Head to the Backups page to create your first snapshot.', 'museder-restoreone' ); ?></p>
             <?php else : ?>
                 <ul class="backup-lite-list">
-                    <?php foreach ( $dashboard_recent_backups as $item ) : ?>
+                    <?php foreach ( $dashboard_recent_backups as $museder_restoreone_item ) : ?>
                         <li>
-                            <strong><?php echo esc_html( $item['name'] ); ?></strong>
-                            <span><?php echo esc_html( $item['created'] ); ?> · <?php echo esc_html( $item['size_human'] ); ?></span>
+                            <strong><?php echo esc_html( $museder_restoreone_item['name'] ); ?></strong>
+                            <span><?php echo esc_html( $museder_restoreone_item['created'] ); ?> · <?php echo esc_html( $museder_restoreone_item['size_human'] ); ?></span>
                             <?php
-                            $status_key  = strtolower( $item['status'] ?? 'pending' );
-                            $status_map  = [
+                            $museder_restoreone_status_key  = strtolower( $museder_restoreone_item['status'] ?? 'pending' );
+                            $museder_restoreone_status_map  = [
                                 'success' => [ 'label' => __( 'Success', 'museder-restoreone' ), 'icon' => '✅', 'class' => 'success' ],
                                 'failed'  => [ 'label' => __( 'Failed', 'museder-restoreone' ), 'icon' => '❌', 'class' => 'error' ],
                                 'pending' => [ 'label' => __( 'Pending', 'museder-restoreone' ), 'icon' => '⏳', 'class' => 'pending' ],
                             ];
-                            $status_item = $status_map[ $status_key ] ?? $status_map['pending'];
+                            $museder_restoreone_status_item = $museder_restoreone_status_map[ $museder_restoreone_status_key ] ?? $museder_restoreone_status_map['pending'];
                             ?>
-                            <span class="badge <?php echo esc_attr( $status_item['class'] ); ?>">
-                                <?php echo esc_html( $status_item['icon'] . ' ' . $status_item['label'] ); ?>
+                            <span class="badge <?php echo esc_attr( $museder_restoreone_status_item['class'] ); ?>">
+                                <?php echo esc_html( $museder_restoreone_status_item['icon'] . ' ' . $museder_restoreone_status_item['label'] ); ?>
                             </span>
                         </li>
                     <?php endforeach; ?>
@@ -124,18 +140,18 @@ $chart_failed  = isset( $activity_stats['failed'] ) ? (int) $activity_stats['fai
                 <?php if ( ! empty( $schedule_overview['last_result'] ) ) : ?>
                     <p class="description">
                         <?php
-                        $result_key  = strtolower( $schedule_overview['last_result'] );
-                        $result_map  = [
-                            'success' => '✅ ' . __( 'Success', 'museder-restoreone' ),
-                            'failed'  => '❌ ' . __( 'Failed', 'museder-restoreone' ),
-                            'pending' => '⏳ ' . __( 'Pending', 'museder-restoreone' ),
+                        $museder_restoreone_result_key  = strtolower( $schedule_overview['last_result'] );
+                        $museder_restoreone_result_map  = [
+                            'success' => '✅ ' . esc_html__( 'Success', 'museder-restoreone' ),
+                            'failed'  => '❌ ' . esc_html__( 'Failed', 'museder-restoreone' ),
+                            'pending' => '⏳ ' . esc_html__( 'Pending', 'museder-restoreone' ),
                         ];
                         ?>
                         <?php
                         printf(
                             /* translators: %s: Result of the most recent schedule run. */
                             esc_html__( 'Last result: %s', 'museder-restoreone' ),
-                            esc_html( $result_map[ $result_key ] ?? ucfirst( $result_key ) )
+                            esc_html( $museder_restoreone_result_map[ $museder_restoreone_result_key ] ?? ucfirst( $museder_restoreone_result_key ) )
                         );
                         ?>
                     </p>
@@ -149,7 +165,8 @@ $chart_failed  = isset( $activity_stats['failed'] ) ? (int) $activity_stats['fai
             <h2>📊 <?php esc_html_e( 'Activity (Last 7 Days)', 'museder-restoreone' ); ?></h2>
             <div class="backup-lite-chart-area">
                 <canvas id="backup-lite-activity-chart" aria-label="<?php esc_attr_e( 'Backup success vs failure chart', 'museder-restoreone' ); ?>"></canvas>
-                <p id="bl-dashboard-chart-empty" class="backup-lite-chart-empty" <?php echo ( $chart_success + $chart_failed ) > 0 ? 'hidden' : ''; ?>>
+                <?php // @plugin-check: escaped ?>
+                <p id="bl-dashboard-chart-empty" class="backup-lite-chart-empty" <?php echo esc_attr( ( $chart_success + $chart_failed ) > 0 ? 'hidden' : '' ); ?>>
                     <?php esc_html_e( 'No activity recorded in the last 7 days.', 'museder-restoreone' ); ?>
                 </p>
             </div>
@@ -177,7 +194,7 @@ $chart_failed  = isset( $activity_stats['failed'] ) ? (int) $activity_stats['fai
         $is_pro = Backup_Lite_Pro::is_pro_active();
         ?>
         <?php // @plugin-check: escaped ?>
-        <div class="backup-lite-card <?php echo esc_attr( $is_pro ? '' : 'pro-locked' ); ?>" <?php echo $is_pro ? '' : 'data-upgrade="' . esc_attr( 'pro' ) . '"'; ?>>
+        <div class="backup-lite-card <?php echo esc_attr( $is_pro ? '' : 'pro-locked' ); ?>" <?php echo $is_pro ? '' : 'data-upgrade="' . esc_attr( 'pro' ) . '"'; // @plugin-check: escaped ?>>
             <h2>
                 🏥 <?php esc_html_e( 'Site Backup Health Score (Pro)', 'museder-restoreone' ); ?>
                 <?php if ( ! $is_pro ) : ?>

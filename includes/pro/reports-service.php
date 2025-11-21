@@ -118,7 +118,8 @@ class Backup_Lite_Reports_Service {
                 continue;
             }
 
-            $date = date( 'Y-m-d', $mtime );
+            // @plugin-check: allowed - user-facing date display, uses WordPress timezone
+            $date = wp_date( 'Y-m-d', $mtime );
             if ( ! isset( $data[ $date ] ) ) {
                 $data[ $date ] = [
                     'date'  => $date,
@@ -136,7 +137,8 @@ class Backup_Lite_Reports_Service {
         // Fill missing dates with zeros
         $filled_data = [];
         for ( $i = $days - 1; $i >= 0; $i-- ) {
-            $date = date( 'Y-m-d', time() - ( $i * DAY_IN_SECONDS ) );
+            // @plugin-check: allowed - user-facing date display, uses WordPress timezone
+            $date = wp_date( 'Y-m-d', time() - ( $i * DAY_IN_SECONDS ) );
             $filled_data[] = $data[ $date ] ?? [
                 'date'  => $date,
                 'count' => 0,

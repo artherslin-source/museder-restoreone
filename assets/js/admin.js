@@ -122,7 +122,7 @@ var backupJobContext = {
             var actionsEl = document.createElement('div');
             actionsEl.className = 'bl-completion-actions';
 
-            if (actionHref) {
+            if (actionHref && actionHref !== '') {
                 var actionBtn = document.createElement('a');
                 actionBtn.className = 'button button-primary';
                 actionBtn.href = actionHref;
@@ -132,13 +132,28 @@ var backupJobContext = {
                 
                 // Check if download link is expired before allowing download
                 actionBtn.addEventListener('click', function(e) {
+                    if (!actionHref || actionHref === '') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        alert(strings.downloadUnavailable || 'Download link is not available. Please download from the backup library.');
+                        // Optionally redirect to backups page
+                        if (window.location.href.indexOf('page=backup-lite-backups') === -1) {
+                            var backupsUrl = window.location.href.replace(/page=[^&]*/, 'page=backup-lite-backups');
+                            if (backupsUrl === window.location.href) {
+                                backupsUrl += (window.location.href.indexOf('?') === -1 ? '?' : '&') + 'page=backup-lite-backups';
+                            }
+                            window.location.href = backupsUrl;
+                        }
+                        return false;
+                    }
                     try {
-                        var url = new URL(actionHref);
+                        // Use window.location.origin as base for relative URLs
+                        var url = new URL(actionHref, window.location.origin);
                         var expires = parseInt(url.searchParams.get('expires'), 10);
                         if (expires && expires < Math.floor(Date.now() / 1000)) {
                             e.preventDefault();
                             e.stopPropagation();
-                            alert('Your download link has expired. Please download from the backup library.');
+                            alert(strings.downloadExpired || 'Your download link has expired. Please download from the backup library.');
                             // Optionally redirect to backups page
                             if (window.location.href.indexOf('page=backup-lite-backups') === -1) {
                                 var backupsUrl = window.location.href.replace(/page=[^&]*/, 'page=backup-lite-backups');
@@ -150,8 +165,9 @@ var backupJobContext = {
                             return false;
                         }
                     } catch (err) {
-                        // If URL parsing fails, allow normal download
-                        console.warn('Could not parse download URL:', err);
+                        // If URL parsing fails, allow the download to proceed
+                        // This handles nonce-based download URLs or relative URLs
+                        console.warn('[Backup Lite] Could not parse download URL, allowing download to proceed', err);
                     }
                 });
                 
@@ -717,14 +733,27 @@ var backupJobContext = {
             ? window.BackupLiteUI.showCompletionOverlay
             : showCompletionOverlay;
 
-        overlayFunc({
-            icon: '📦',
-            title: overlayTitle,
-            message: overlayMessage,
-            actionHref: job.download_url || '',
-            actionText: strings.downloadLabel || 'Download',
-            autoClose: job.download_url ? 0 : 4000
-        });
+        // Ensure download_url is available and valid
+        var downloadUrl = job.download_url || '';
+        if (downloadUrl && downloadUrl !== '') {
+            overlayFunc({
+                icon: '📦',
+                title: overlayTitle,
+                message: overlayMessage,
+                actionHref: downloadUrl,
+                actionText: strings.downloadLabel || 'Download',
+                autoClose: 0
+            });
+        } else {
+            // If download URL is not available, show overlay without download button
+            overlayFunc({
+                icon: '📦',
+                title: overlayTitle,
+                message: overlayMessage + ' ' + (strings.downloadUnavailable || 'Download link will be available in the backup library.'),
+                confirmText: strings.close || 'Got it',
+                autoClose: 4000
+            });
+        }
     }
 
     // Backup form submission handled in DOM ready block.
@@ -948,7 +977,28 @@ function initBackupLiteDomReady() {
         });
     }
 
-    function initRestoreCenter() {
+    // Listen for summary-ready event from chunk-upload-v2.js
+document.addEventListener('backup-lite-summary-ready', function(event) {
+    if (event.detail && event.detail.data) {
+        var handleSummaryResponse = window.BackupLiteUI && window.BackupLiteUI.handleSummaryResponse;
+        if (typeof handleSummaryResponse === 'function') {
+            handleSummaryResponse(event.detail);
+        } else {
+            // If handleSummaryResponse is not yet available, wait a bit and try again
+            setTimeout(function() {
+                handleSummaryResponse = window.BackupLiteUI && window.BackupLiteUI.handleSummaryResponse;
+                if (typeof handleSummaryResponse === 'function') {
+                    handleSummaryResponse(event.detail);
+                } else {
+                    console.warn('[Backup Lite] handleSummaryResponse not available, reloading page');
+                    window.location.reload();
+                }
+            }, 500);
+        }
+    }
+});
+
+function initRestoreCenter() {
         var restoreData = window.BackupLiteRestore || {};
         // Get ajaxUrl from BackupLiteRestore, BackupLite (main settings), or fallback
         var ajaxUrl = restoreData.ajaxUrl 
@@ -1316,9 +1366,27 @@ function initBackupLiteDomReady() {
                 return;
             }
             
-            // If restoreCompletionShown is true but overlay doesn't exist, reset the flag
-            // This handles cases where overlay was removed or failed to show
+            // If restoreCompletionShown is true but overlay doesn't exist, check if it was just closed
+            // If overlay was closed (user dismissed it), don't show it again
             if (restoreCompletionShown && !overlayExists) {
+                // Check if there's a recent restore history entry that we've already shown
+                // If so, don't show again (user already dismissed it)
+                var restoreHistory = restoreData && restoreData.history ? restoreData.history : [];
+                if (restoreHistory.length > 0) {
+                    var latestHistory = restoreHistory[0];
+                    if (latestHistory && latestHistory.result === 'success') {
+                        var historyTime = latestHistory.timestamp_raw || 0;
+                        if (historyTime) {
+                            var storageKey = 'backup_lite_restore_shown_' + (latestHistory.file || '') + '_' + historyTime;
+                            var alreadyShown = sessionStorage.getItem(storageKey);
+                            if (alreadyShown) {
+                                console.log('[Backup Lite] Completion was already shown and dismissed, not showing again');
+                                restoreCompletionShown = false;
+                                return;
+                            }
+                        }
+                    }
+                }
                 console.log('[Backup Lite] Completion flag set but overlay not visible, resetting and showing overlay');
                 restoreCompletionShown = false;
             }
@@ -1811,16 +1879,21 @@ function initBackupLiteDomReady() {
                     showToast(strings.restoreCancelSuccess || 'Restore cancelled.', 'warning');
                 }
             }).catch(function (error) {
-                // Handle nonce expiration (invalid_nonce or 400/403 errors)
+                // Handle nonce expiration (invalid_nonce or 400/403/404 errors)
                 var isNonceError = false;
+                
                 if (error && error.payload && error.payload.code === 'invalid_nonce') {
                     isNonceError = true;
-                } else if (error && (error.status === 400 || error.status === 403)) {
+                } else if (error && (error.status === 400 || error.status === 403 || error.status === 404)) {
                     // Check if response indicates nonce expiration
                     if (error.responseText) {
                         try {
                             var errorJson = JSON.parse(error.responseText);
-                            if (errorJson && (errorJson.data && errorJson.data.code === 'invalid_nonce' || errorJson.code === 'invalid_nonce')) {
+                            if (errorJson && errorJson.data) {
+                                if (errorJson.data.code === 'invalid_nonce' || errorJson.code === 'invalid_nonce') {
+                                    isNonceError = true;
+                                }
+                            } else if (errorJson && errorJson.code === 'invalid_nonce') {
                                 isNonceError = true;
                             }
                         } catch (e) {
@@ -1829,6 +1902,60 @@ function initBackupLiteDomReady() {
                                 isNonceError = true;
                             }
                         }
+                    }
+                    
+                    // For 404 errors, it might be that WordPress AJAX hook is not registered
+                    // In this case, directly check restore history to determine status
+                    if (error.status === 404) {
+                        console.warn('[Backup Lite] Received 404 error, checking restore history directly', { jobId, error });
+                        // Try to check history directly by making a request without job_id
+                        // This will return history which we can use to determine restore status
+                        var historyCheckFormData = prepareFormData('backup_lite_restore_job_status');
+                        // Don't append job_id - backend will return history only
+                        ajaxRequest(historyCheckFormData).then(function(json) {
+                            var payload = getJsonPayload(json) || {};
+                            if (payload.history && payload.history.length > 0) {
+                                var latestHistory = payload.history[0];
+                                // Check if this restore job matches the latest history entry
+                                if (latestHistory && latestHistory.result === 'success') {
+                                    // Check if the timestamp matches (within 5 minutes)
+                                    var historyTime = latestHistory.timestamp_raw || 0;
+                                    var now = Math.floor(Date.now() / 1000);
+                                    if (historyTime && (now - historyTime) < 300) {
+                                        console.log('[Backup Lite] Found recent successful restore in history (404 fallback), marking as completed');
+                                        markRestoreCompleted(strings.restoreCompleted || 'Restore Completed.');
+                                        return;
+                                    }
+                                } else if (latestHistory && latestHistory.result === 'failed') {
+                                    // Restore failed
+                                    console.log('[Backup Lite] Found failed restore in history (404 fallback)');
+                                    stopRestoreJobMonitor();
+                                    restoreInProgress = false;
+                                    restoreCompleted = false;
+                                    if (startButton) {
+                                        startButton.disabled = false;
+                                    }
+                                    setProgress(100, latestHistory.message || (strings.errorGeneric || 'Restore failed.'), true);
+                                    syncWizard();
+                                    updateRestoreCancelState();
+                                    showToast('❌ ' + (strings.restoreFailed || 'Restore Failed'), 'error');
+                                    if (!restoreCompletionShown) {
+                                        restoreCompletionShown = true;
+                                        showCompletionOverlay({
+                                            icon: '❌',
+                                            title: strings.restoreFailed || 'Restore Failed',
+                                            message: latestHistory.message || (strings.errorGeneric || 'Restore failed. Please review the error log and try again.'),
+                                            confirmText: strings.restoreOverlayConfirm || strings.close || 'Got it',
+                                            type: 'error'
+                                        });
+                                    }
+                                    return;
+                                }
+                            }
+                        }).catch(function(historyError) {
+                            // If history check also fails, just log it
+                            console.warn('[Backup Lite] History check failed after 404 error:', historyError);
+                        });
                     }
                 }
                 
@@ -1864,7 +1991,7 @@ function initBackupLiteDomReady() {
                     return;
                 }
                 
-                // For other errors, still try to check completion from history as fallback
+                // For other errors (including 404), still try to check completion from history as fallback
                 if (activeRestoreJobId === jobId) {
                     if (!silent) {
                         console.warn('[Backup Lite] Restore job status failed, checking history as fallback:', error);
@@ -1872,6 +1999,127 @@ function initBackupLiteDomReady() {
                     // Always try to check history, even if silent
                     // This is important because errors might prevent status updates, but restore might have completed
                     checkRestoreCompletionFromHistory(jobId);
+                    
+                    // If we've been polling for a while and getting consistent errors, check if restore completed
+                    // Reduce timeout to 60 seconds for faster detection
+                    if (restoreJobPollStartTime && (Date.now() - restoreJobPollStartTime) > 60000) {
+                        // If we've been polling for more than 60 seconds with errors, check history one more time
+                        // and if restore completed, show success; otherwise show failure
+                        console.log('[Backup Lite] Polling timeout reached, checking history for final status');
+                        setTimeout(function() {
+                            if (activeRestoreJobId === jobId) {
+                                var historyCheckFormData = prepareFormData('backup_lite_restore_job_status');
+                                ajaxRequest(historyCheckFormData).then(function(json) {
+                                    var payload = getJsonPayload(json) || {};
+                                    if (payload.history && payload.history.length > 0) {
+                                        var latestHistory = payload.history[0];
+                                        // Check if the timestamp matches (within 10 minutes to be safe)
+                                        var historyTime = latestHistory.timestamp_raw || 0;
+                                        var now = Math.floor(Date.now() / 1000);
+                                        if (historyTime && (now - historyTime) < 600) {
+                                            if (latestHistory && latestHistory.result === 'success') {
+                                                // Restore completed successfully
+                                                console.log('[Backup Lite] Timeout check: Found successful restore in history');
+                                                markRestoreCompleted(strings.restoreCompleted || 'Restore Completed.');
+                                                return;
+                                            } else if (latestHistory && latestHistory.result === 'failed') {
+                                                // Restore failed
+                                                console.log('[Backup Lite] Timeout check: Found failed restore in history');
+                                                stopRestoreJobMonitor();
+                                                restoreInProgress = false;
+                                                restoreCompleted = false;
+                                                if (startButton) {
+                                                    startButton.disabled = false;
+                                                }
+                                                setProgress(100, latestHistory.message || (strings.errorGeneric || 'Restore failed.'), true);
+                                                syncWizard();
+                                                updateRestoreCancelState();
+                                                showToast('❌ ' + (strings.restoreFailed || 'Restore Failed'), 'error');
+                                                if (!restoreCompletionShown) {
+                                                    restoreCompletionShown = true;
+                                                    showCompletionOverlay({
+                                                        icon: '❌',
+                                                        title: strings.restoreFailed || 'Restore Failed',
+                                                        message: latestHistory.message || (strings.errorGeneric || 'Restore failed. Please review the error log and try again.'),
+                                                        confirmText: strings.restoreOverlayConfirm || strings.close || 'Got it',
+                                                        type: 'error'
+                                                    });
+                                                }
+                                                return;
+                                            }
+                                        }
+                                    }
+                                    // If no matching history found, assume failure after timeout
+                                    console.warn('[Backup Lite] Timeout check: No matching history found, assuming failure');
+                                    stopRestoreJobMonitor();
+                                    restoreInProgress = false;
+                                    restoreCompleted = false;
+                                    if (startButton) {
+                                        startButton.disabled = false;
+                                    }
+                                    setProgress(100, strings.errorGeneric || 'Restore failed. Please review the error log and try again.', true);
+                                    syncWizard();
+                                    updateRestoreCancelState();
+                                    showToast('❌ ' + (strings.restoreFailed || 'Restore Failed'), 'error');
+                                    if (!restoreCompletionShown) {
+                                        restoreCompletionShown = true;
+                                        showCompletionOverlay({
+                                            icon: '❌',
+                                            title: strings.restoreFailed || 'Restore Failed',
+                                            message: strings.errorGeneric || 'Restore failed. Please review the error log and try again.',
+                                            confirmText: strings.restoreOverlayConfirm || strings.close || 'Got it',
+                                            type: 'error'
+                                        });
+                                    }
+                                }).catch(function(historyError) {
+                                    // If history check also fails, assume failure after timeout
+                                    console.error('[Backup Lite] History check failed after timeout, assuming failure:', historyError);
+                                    stopRestoreJobMonitor();
+                                    restoreInProgress = false;
+                                    restoreCompleted = false;
+                                    if (startButton) {
+                                        startButton.disabled = false;
+                                    }
+                                    setProgress(100, strings.errorGeneric || 'Restore failed. Please review the error log and try again.', true);
+                                    syncWizard();
+                                    updateRestoreCancelState();
+                                    showToast('❌ ' + (strings.restoreFailed || 'Restore Failed'), 'error');
+                                    if (!restoreCompletionShown) {
+                                        restoreCompletionShown = true;
+                                        showCompletionOverlay({
+                                            icon: '❌',
+                                            title: strings.restoreFailed || 'Restore Failed',
+                                            message: strings.errorGeneric || 'Restore failed. Please review the error log and try again.',
+                                            confirmText: strings.restoreOverlayConfirm || strings.close || 'Got it',
+                                            type: 'error'
+                                        });
+                                    }
+                                });
+                            }
+                        }, 1000);
+                    }
+                } else if (error && error.status === 400 && error.payload && error.payload.message && error.payload.message.indexOf('Job identifier') !== -1) {
+                    // Job ID was missing - try to check history to see if restore completed
+                    // This handles the case where job_id was lost but restore might have completed
+                    console.log('[Backup Lite] Job ID missing in request, checking history for completion');
+                    // Try to get history without job_id
+                    var historyFormData = prepareFormData('backup_lite_restore_job_status');
+                    // Don't append job_id - backend will return history only
+                    ajaxRequest(historyFormData).then(function(json) {
+                        var payload = getJsonPayload(json) || {};
+                        if (payload.history && payload.history.length > 0) {
+                            var latestHistory = payload.history[0];
+                            if (latestHistory && latestHistory.result === 'success') {
+                                console.log('[Backup Lite] Found successful restore in history, marking as completed');
+                                markRestoreCompleted(strings.restoreCompleted || 'Restore Completed.');
+                            }
+                        }
+                    }).catch(function(historyError) {
+                        // If history check also fails, just log it
+                        if (!silent) {
+                            console.warn('[Backup Lite] History check also failed:', historyError);
+                        }
+                    });
                 } else {
                     // No active job, but we got an error - might be a stale request
                     // Reset state to prevent stuck progress
@@ -2605,6 +2853,12 @@ function initBackupLiteDomReady() {
             syncWizard();
             updateRestoreCancelState();
         }
+        
+        // Expose handleSummaryResponse to window.BackupLiteUI for chunk-upload-v2.js
+        if (typeof window.BackupLiteUI === 'undefined') {
+            window.BackupLiteUI = {};
+        }
+        window.BackupLiteUI.handleSummaryResponse = handleSummaryResponse;
 
         if (restoreData.summary) {
             renderSummary(restoreData.summary);
@@ -2645,6 +2899,66 @@ function initBackupLiteDomReady() {
                 startRestoreJobMonitor(restoreData.job, fileSize);
             }
         } else {
+            // No active job - check history to see if a restore just completed
+            // This handles the case where restore completed but job was cleaned up
+            if (restoreData.history && restoreData.history.length > 0) {
+                var latestHistory = restoreData.history[0];
+                var historyTime = latestHistory.timestamp_raw || 0;
+                var now = Math.floor(Date.now() / 1000);
+                
+                // Check if the latest history entry shows a successful restore within the last 5 minutes
+                if (latestHistory && latestHistory.result === 'success' && historyTime && (now - historyTime) < 300) {
+                    // Use sessionStorage to track if we've already shown completion for this restore
+                    var storageKey = 'backup_lite_restore_shown_' + (latestHistory.file || '') + '_' + historyTime;
+                    var alreadyShown = sessionStorage.getItem(storageKey);
+                    
+                    if (!alreadyShown && !restoreCompletionShown) {
+                        console.log('[Backup Lite] Found recent successful restore in history, showing completion window');
+                        // Mark as shown in sessionStorage to prevent duplicate displays
+                        sessionStorage.setItem(storageKey, '1');
+                        setTimeout(function() {
+                            markRestoreCompleted(strings.restoreCompleted || 'Restore Completed.');
+                        }, 500);
+                        return;
+                    } else if (alreadyShown) {
+                        console.log('[Backup Lite] Completion window already shown for this restore, skipping');
+                    }
+                } 
+                // Check if the latest history entry shows a failed restore within the last 5 minutes
+                else if (latestHistory && latestHistory.result === 'failed' && historyTime && (now - historyTime) < 300) {
+                    // Use sessionStorage to track if we've already shown failure for this restore
+                    var storageKey = 'backup_lite_restore_shown_' + (latestHistory.file || '') + '_' + historyTime;
+                    var alreadyShown = sessionStorage.getItem(storageKey);
+                    
+                    if (!alreadyShown && !restoreCompletionShown) {
+                        console.log('[Backup Lite] Found recent failed restore in history, showing failure window');
+                        // Mark as shown in sessionStorage to prevent duplicate displays
+                        sessionStorage.setItem(storageKey, '1');
+                        setTimeout(function() {
+                            stopRestoreJobMonitor();
+                            restoreInProgress = false;
+                            restoreCompleted = false;
+                            if (startButton) {
+                                startButton.disabled = false;
+                            }
+                            setProgress(100, latestHistory.message || (strings.errorGeneric || 'Restore failed.'), true);
+                            syncWizard();
+                            updateRestoreCancelState();
+                            showToast('❌ ' + (strings.restoreFailed || 'Restore Failed'), 'error');
+                            restoreCompletionShown = true;
+                            showCompletionOverlay({
+                                icon: '❌',
+                                title: strings.restoreFailed || 'Restore Failed',
+                                message: latestHistory.message || (strings.errorGeneric || 'Restore failed. Please review the error log and try again.'),
+                                confirmText: strings.restoreOverlayConfirm || strings.close || 'Got it',
+                                type: 'error'
+                            });
+                        }, 500);
+                        return;
+                    }
+                }
+            }
+            
             // No active job - reset progress to 0 if it's showing 100%
             // This handles the case where page was reloaded after restore completed
             if (restoreData.progress && restoreData.progress.done) {

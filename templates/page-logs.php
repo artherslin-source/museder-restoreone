@@ -41,18 +41,18 @@ $logs = isset( $logs ) ? $logs : Backup_Lite_Log_Handler::get_logs();
                                 <td colspan="4"><?php esc_html_e( 'No log entries yet.', 'museder-restoreone' ); ?></td>
                             </tr>
                         <?php else : ?>
-                            <?php foreach ( $logs as $log ) : ?>
-                                <tr data-log="<?php echo esc_attr( $log['name'] ); ?>">
-                                    <td><?php echo esc_html( $log['name'] ); ?></td>
-                                    <td><?php echo esc_html( $log['modified'] ?? '' ); ?></td>
-                                    <td><?php echo esc_html( $log['size'] ?? '' ); ?></td>
+                            <?php foreach ( $logs as $museder_restoreone_log ) : ?>
+                                <tr data-log="<?php echo esc_attr( $museder_restoreone_log['name'] ); ?>">
+                                    <td><?php echo esc_html( $museder_restoreone_log['name'] ); ?></td>
+                                    <td><?php echo esc_html( $museder_restoreone_log['modified'] ?? '' ); ?></td>
+                                    <td><?php echo esc_html( $museder_restoreone_log['size'] ?? '' ); ?></td>
                                     <td>
                                         <details class="bl-actions-menu">
                                             <summary class="bl-actions-trigger" aria-label="<?php esc_attr_e( 'Log actions', 'museder-restoreone' ); ?>">⋮</summary>
                                             <div class="bl-actions-list">
-                                                <button type="button" class="button" data-log-action="view" data-log="<?php echo esc_attr( $log['name'] ); ?>">👁️ <?php esc_html_e( 'Preview', 'museder-restoreone' ); ?></button>
-                                                <a class="button" href="<?php echo esc_url( $log['download_url'] ); ?>">⬇️ <?php esc_html_e( 'Download', 'museder-restoreone' ); ?></a>
-                                                <button type="button" class="button" data-log-action="delete" data-log="<?php echo esc_attr( $log['name'] ); ?>">🗑️ <?php esc_html_e( 'Delete', 'museder-restoreone' ); ?></button>
+                                                <button type="button" class="button" data-log-action="view" data-log="<?php echo esc_attr( $museder_restoreone_log['name'] ); ?>">👁️ <?php esc_html_e( 'Preview', 'museder-restoreone' ); ?></button>
+                                                <a class="button" href="<?php echo esc_url( $museder_restoreone_log['download_url'] ); ?>">⬇️ <?php esc_html_e( 'Download', 'museder-restoreone' ); ?></a>
+                                                <button type="button" class="button" data-log-action="delete" data-log="<?php echo esc_attr( $museder_restoreone_log['name'] ); ?>">🗑️ <?php esc_html_e( 'Delete', 'museder-restoreone' ); ?></button>
                                             </div>
                                         </details>
                                     </td>

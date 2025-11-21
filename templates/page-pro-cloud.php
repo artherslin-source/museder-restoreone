@@ -9,18 +9,18 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-$is_pro = isset( $is_pro ) ? $is_pro : Backup_Lite_Pro::is_pro_active();
-$upgrade_url = Backup_Lite_Pro::get_upgrade_url();
+$museder_restoreone_is_pro = isset( $museder_restoreone_is_pro ) ? $museder_restoreone_is_pro : Backup_Lite_Pro::is_pro_active();
+$museder_restoreone_upgrade_url = Backup_Lite_Pro::get_upgrade_url();
 ?>
 
 <?php // @plugin-check: escaped ?>
-<div class="wrap backup-lite-admin backup-lite-pro-page <?php echo esc_attr( $is_pro ? '' : 'pro-locked-overlay' ); ?>">
+<div class="wrap backup-lite-admin backup-lite-pro-page <?php echo esc_attr( $museder_restoreone_is_pro ? '' : 'pro-locked-overlay' ); ?>">
     <div class="bl-container">
         <div class="bl-card" style="margin-bottom: 24px;">
             <div class="bl-card-heading">
                 <h1 style="margin: 0; font-size: 28px;">
                     ☁️ <?php esc_html_e( 'Cloud Storage', 'museder-restoreone' ); ?>
-                    <?php if ( ! $is_pro ) : ?>
+                    <?php if ( ! $museder_restoreone_is_pro ) : ?>
                         <span class="pro-badge">PRO</span>
                     <?php endif; ?>
                     <span style="font-size: 14px; color: var(--bl-text-muted); font-weight: normal; margin-left: 8px;">(Coming Soon)</span>
@@ -31,7 +31,7 @@ $upgrade_url = Backup_Lite_Pro::get_upgrade_url();
             </p>
         </div>
 
-        <?php if ( ! $is_pro ) : ?>
+        <?php if ( ! $museder_restoreone_is_pro ) : ?>
             <!-- Upgrade CTA -->
             <div class="bl-card" style="background: linear-gradient(135deg, var(--bl-primary) 0%, var(--bl-primary-alt) 100%); color: #fff; border: none; margin-bottom: 24px;">
                 <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px;">
@@ -43,7 +43,7 @@ $upgrade_url = Backup_Lite_Pro::get_upgrade_url();
                             <?php esc_html_e( 'Store your backups securely in the cloud with automatic synchronization.', 'museder-restoreone' ); ?>
                         </p>
                     </div>
-                    <a href="<?php echo esc_url( $upgrade_url ); ?>" target="_blank" class="bl-button" style="background: #fff; color: var(--bl-primary); border: none; padding: 12px 24px; font-weight: 600;">
+                    <a href="<?php echo esc_url( $museder_restoreone_upgrade_url ); ?>" target="_blank" class="bl-button" style="background: #fff; color: var(--bl-primary); border: none; padding: 12px 24px; font-weight: 600;">
                         <?php esc_html_e( 'Upgrade Now', 'museder-restoreone' ); ?> →
                     </a>
                 </div>
@@ -74,6 +74,10 @@ $upgrade_url = Backup_Lite_Pro::get_upgrade_url();
     </div>
 </div>
 
+<?php
+// Hide other plugins' admin notices on this page to avoid confusion
+// These notices appear in the WordPress admin area and can be mistaken for our plugin's content
+?>
 <style>
 .backup-lite-pro-page.pro-locked-overlay::before {
     content: '';
@@ -92,5 +96,47 @@ $upgrade_url = Backup_Lite_Pro::get_upgrade_url();
     position: relative;
     z-index: 2;
 }
+
+/* Hide other plugins' admin notices on PRO pages */
+.backup-lite-pro-page .notice:not(.backup-lite-notice),
+.backup-lite-pro-page .update-nag:not(.backup-lite-notice),
+.backup-lite-pro-page .error:not(.backup-lite-notice),
+.backup-lite-pro-page .updated:not(.backup-lite-notice) {
+    display: none !important;
+}
+
+/* Specifically target common plugin notice containers */
+.backup-lite-pro-page > .notice,
+.backup-lite-pro-page > .update-nag,
+.backup-lite-pro-page > .error,
+.backup-lite-pro-page > .updated {
+    display: none !important;
+}
 </style>
+<script>
+(function() {
+    // Remove other plugins' admin notices that appear before our content
+    // This prevents confusion where users might think these are our plugin's features
+    document.addEventListener('DOMContentLoaded', function() {
+        var proPage = document.querySelector('.backup-lite-pro-page');
+        if (proPage) {
+            // Find all notices that are siblings of our page content
+            var pageWrapper = proPage.closest('.wrap') || proPage.parentElement;
+            if (pageWrapper) {
+                // Remove notices that are not from our plugin
+                var notices = pageWrapper.querySelectorAll('.notice:not(.backup-lite-notice), .update-nag:not(.backup-lite-notice), .error:not(.backup-lite-notice), .updated:not(.backup-lite-notice)');
+                notices.forEach(function(notice) {
+                    // Only remove if it's not immediately after our content
+                    // This allows WordPress core notices to still show
+                    var heroSection = proPage.querySelector('.bl-card');
+                    if (heroSection && notice.compareDocumentPosition(heroSection) & Node.DOCUMENT_POSITION_FOLLOWING) {
+                        // Notice is before our content, remove it
+                        notice.style.display = 'none';
+                    }
+                });
+            }
+        }
+    });
+})();
+</script>
 

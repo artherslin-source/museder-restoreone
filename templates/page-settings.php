@@ -42,6 +42,7 @@ $selected_role    = isset( $settings['min_role'], $roles[ $settings['min_role'] 
     <div id="bl-settings-message" class="backup-lite-messages" role="status" aria-live="polite"></div>
 
     <form id="bl-settings-form" class="bl-container">
+        <?php wp_nonce_field( 'museder_restoreone_save_settings', 'museder_restoreone_settings_nonce' ); ?>
         <div class="bl-card">
             <div class="bl-card-heading">
                 <h3><span class="bl-icon-circle">🌐</span><?php esc_html_e( 'General Settings', 'museder-restoreone' ); ?></h3>
@@ -114,21 +115,21 @@ $selected_role    = isset( $settings['min_role'], $roles[ $settings['min_role'] 
                     <code><?php echo esc_html( $temp_dir ); ?></code>
                     <?php // @plugin-check: escaped ?>
                     <span class="bl-pill <?php echo esc_attr( $temp_writable ? 'bl-pill--ok' : 'bl-pill--warning' ); ?>">
-                        <?php echo $temp_writable ? esc_html__( 'Writable', 'museder-restoreone' ) : esc_html__( 'Needs attention', 'museder-restoreone' ); ?>
+                        <?php echo $temp_writable ? esc_html__( 'Writable', 'museder-restoreone' ) : esc_html__( 'Needs attention', 'museder-restoreone' ); // @plugin-check: escaped ?>
                     </span>
                 </div>
                 <div class="bl-diagnostic-item">
                     <span class="label"><?php esc_html_e( 'Backup directory writable', 'museder-restoreone' ); ?></span>
                     <?php // @plugin-check: escaped ?>
                     <span class="bl-pill <?php echo esc_attr( $backup_writable ? 'bl-pill--ok' : 'bl-pill--warning' ); ?>">
-                        <?php echo $backup_writable ? esc_html__( 'Writable', 'museder-restoreone' ) : esc_html__( 'Check permissions', 'museder-restoreone' ); ?>
+                        <?php echo $backup_writable ? esc_html__( 'Writable', 'museder-restoreone' ) : esc_html__( 'Check permissions', 'museder-restoreone' ); // @plugin-check: escaped ?>
                     </span>
                 </div>
                 <div class="bl-diagnostic-item">
                     <span class="label"><?php esc_html_e( 'Uploads directory writable', 'museder-restoreone' ); ?></span>
                     <?php // @plugin-check: escaped ?>
                     <span class="bl-pill <?php echo esc_attr( $uploads_writable ? 'bl-pill--ok' : 'bl-pill--warning' ); ?>">
-                        <?php echo $uploads_writable ? esc_html__( 'Writable', 'museder-restoreone' ) : esc_html__( 'Check permissions', 'museder-restoreone' ); ?>
+                        <?php echo $uploads_writable ? esc_html__( 'Writable', 'museder-restoreone' ) : esc_html__( 'Check permissions', 'museder-restoreone' ); // @plugin-check: escaped ?>
                     </span>
                 </div>
                 <div class="bl-diagnostic-item">

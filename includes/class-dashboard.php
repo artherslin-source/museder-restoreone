@@ -124,12 +124,12 @@ class Backup_Lite_Dashboard {
         if ( $seconds < HOUR_IN_SECONDS ) {
             $minutes = max( 1, (int) floor( $seconds / MINUTE_IN_SECONDS ) );
             /* translators: %d: number of minutes */
-            return sprintf( _n( 'Next run in %d minute', 'Next run in %d minutes', $minutes, 'museder-restoreone' ), $minutes );
+            return sprintf( esc_html_n( 'Next run in %d minute', 'Next run in %d minutes', $minutes, 'museder-restoreone' ), $minutes );
         }
 
         $hours = (int) floor( $seconds / HOUR_IN_SECONDS );
         /* translators: %d: number of hours */
-        return sprintf( _n( 'Next run in %d hour', 'Next run in %d hours', $hours, 'museder-restoreone' ), $hours );
+        return sprintf( esc_html_n( 'Next run in %d hour', 'Next run in %d hours', $hours, 'museder-restoreone' ), $hours );
     }
 }
 

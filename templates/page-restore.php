@@ -3,9 +3,9 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-$summary      = isset( $summary ) ? $summary : null;
-$history_rows = isset( $history ) && is_array( $history ) ? $history : [];
-$backups      = isset( $backups ) && is_array( $backups ) ? $backups : [];
+$museder_restoreone_summary      = isset( $museder_restoreone_summary ) ? $museder_restoreone_summary : null;
+$museder_restoreone_history_rows = isset( $museder_restoreone_history ) && is_array( $museder_restoreone_history ) ? $museder_restoreone_history : [];
+$museder_restoreone_backups      = isset( $museder_restoreone_backups ) && is_array( $museder_restoreone_backups ) ? $museder_restoreone_backups : [];
 ?>
     <div class="wrap backup-lite-restore">
         <h1>🧩 <?php esc_html_e( 'Restore Center', 'museder-restoreone' ); ?></h1>
@@ -58,8 +58,8 @@ $backups      = isset( $backups ) && is_array( $backups ) ? $backups : [];
         <div id="restore-existing" class="method-panel">
             <select id="existingBackup">
                 <option value=""><?php esc_html_e( 'Select a backup…', 'museder-restoreone' ); ?></option>
-                <?php foreach ( $backups as $backup ) : ?>
-                    <option value="<?php echo esc_attr( $backup['name'] ); ?>"><?php echo esc_html( $backup['name'] . ' (' . size_format( $backup['size'] ) . ')' ); ?></option>
+                <?php foreach ( $museder_restoreone_backups as $museder_restoreone_backup ) : ?>
+                    <option value="<?php echo esc_attr( $museder_restoreone_backup['name'] ); ?>"><?php echo esc_html( $museder_restoreone_backup['name'] . ' (' . size_format( $museder_restoreone_backup['size'] ) . ')' ); ?></option>
                 <?php endforeach; ?>
             </select>
                 <button id="selectRestore" class="button-primary step-action"><?php esc_html_e( 'Step 1 – Load Info', 'museder-restoreone' ); ?></button>
@@ -73,13 +73,13 @@ $backups      = isset( $backups ) && is_array( $backups ) ? $backups : [];
         <section class="backup-lite-card restore-summary">
         <h2>📄 <?php esc_html_e( 'File Summary', 'museder-restoreone' ); ?></h2>
         <div id="fileSummary">
-            <?php if ( $summary ) : ?>
-                <p><strong><?php esc_html_e( 'File:', 'museder-restoreone' ); ?></strong> <?php echo esc_html( $summary['name'] ); ?></p>
-                <p><strong><?php esc_html_e( 'Size:', 'museder-restoreone' ); ?></strong> <?php echo esc_html( $summary['size'] ); ?></p>
-                <?php if ( ! empty( $summary['sha1'] ) ) : ?>
-                    <p><strong><?php esc_html_e( 'SHA1:', 'museder-restoreone' ); ?></strong> <code><?php echo esc_html( $summary['sha1'] ); ?></code></p>
+            <?php if ( $museder_restoreone_summary ) : ?>
+                <p><strong><?php esc_html_e( 'File:', 'museder-restoreone' ); ?></strong> <?php echo esc_html( $museder_restoreone_summary['name'] ); ?></p>
+                <p><strong><?php esc_html_e( 'Size:', 'museder-restoreone' ); ?></strong> <?php echo esc_html( $museder_restoreone_summary['size'] ); ?></p>
+                <?php if ( ! empty( $museder_restoreone_summary['sha1'] ) ) : ?>
+                    <p><strong><?php esc_html_e( 'SHA1:', 'museder-restoreone' ); ?></strong> <code><?php echo esc_html( $museder_restoreone_summary['sha1'] ); ?></code></p>
                 <?php endif; ?>
-                <p><strong><?php esc_html_e( 'Source:', 'museder-restoreone' ); ?></strong> <?php echo esc_html( ucfirst( $summary['source'] ) ); ?></p>
+                <p><strong><?php esc_html_e( 'Source:', 'museder-restoreone' ); ?></strong> <?php echo esc_html( ucfirst( $museder_restoreone_summary['source'] ) ); ?></p>
             <?php else : ?>
                 <p><?php esc_html_e( 'No file selected yet.', 'museder-restoreone' ); ?></p>
             <?php endif; ?>
@@ -133,7 +133,7 @@ $backups      = isset( $backups ) && is_array( $backups ) ? $backups : [];
                 <span id="restore-progress-text" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #fff; font-weight: 600; font-size: 12px; pointer-events: none; text-align: center; width: 100%;">0%</span>
             </div>
             <p id="restore-progress-status" class="progress-status" style="text-align: center; font-size: 13px; color: var(--bl-text-muted); margin: 0;">
-                <?php echo esc_html( isset( $progress['message'] ) ? $progress['message'] : __( 'Waiting for action...', 'museder-restoreone' ) ); ?>
+                <?php echo esc_html( isset( $museder_restoreone_progress['message'] ) ? $museder_restoreone_progress['message'] : __( 'Waiting for action...', 'museder-restoreone' ) ); ?>
             </p>
             <button type="button" id="restore-cancel-btn" class="button button-secondary" style="display:none; margin-top: 16px;">
                 <?php esc_html_e( 'Cancel Restore', 'museder-restoreone' ); ?>
@@ -149,15 +149,15 @@ $backups      = isset( $backups ) && is_array( $backups ) ? $backups : [];
         <table class="wp-list-table widefat striped">
             <thead><tr><th><?php esc_html_e( 'Date/Time', 'museder-restoreone' ); ?></th><th><?php esc_html_e( 'File', 'museder-restoreone' ); ?></th><th><?php esc_html_e( 'Result', 'museder-restoreone' ); ?></th><th><?php esc_html_e( 'Log', 'museder-restoreone' ); ?></th></tr></thead>
             <tbody id="restoreHistory">
-                <?php if ( ! empty( $history_rows ) ) : ?>
-                    <?php foreach ( $history_rows as $row ) : ?>
+                <?php if ( ! empty( $museder_restoreone_history_rows ) ) : ?>
+                    <?php foreach ( $museder_restoreone_history_rows as $museder_restoreone_row ) : ?>
                         <tr>
-                            <td><?php echo esc_html( $row['timestamp'] ); ?></td>
-                            <td><?php echo esc_html( $row['file'] ); ?></td>
-                            <td><?php echo esc_html( ucfirst( $row['result'] ) ); ?></td>
+                            <td><?php echo esc_html( $museder_restoreone_row['timestamp'] ); ?></td>
+                            <td><?php echo esc_html( $museder_restoreone_row['file'] ); ?></td>
+                            <td><?php echo esc_html( ucfirst( $museder_restoreone_row['result'] ) ); ?></td>
                             <td>
-                                <?php if ( ! empty( $row['log_url'] ) ) : ?>
-                                    <a href="<?php echo esc_url( $row['log_url'] ); ?>" class="button button-small" target="_blank" rel="noopener noreferrer"><?php esc_html_e( 'Download', 'museder-restoreone' ); ?></a>
+                                <?php if ( ! empty( $museder_restoreone_row['log_url'] ) ) : ?>
+                                    <a href="<?php echo esc_url( $museder_restoreone_row['log_url'] ); ?>" class="button button-small" target="_blank" rel="noopener noreferrer"><?php esc_html_e( 'Download', 'museder-restoreone' ); ?></a>
                                 <?php else : ?>
                                     <em><?php esc_html_e( 'N/A', 'museder-restoreone' ); ?></em>
                                 <?php endif; ?>
