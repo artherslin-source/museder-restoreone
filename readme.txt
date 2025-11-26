@@ -4,13 +4,105 @@ Tags: backup, migration, restore, site-backup, database-backup
 Requires at least: 6.8
 Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 2.7.10
+Stable tag: 2.7.20
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
 A lightweight WordPress backup & restore plugin focused on compatibility, single-file site snapshots, and clean restore workflows.
 
 == Changelog ==
+
+= 2.7.20 =
+* Bug Fix: Fixed "Run Backup AI Report" button not responding issue
+* Feature: AI Site Scan and Backup AI Report results now persist across page reloads
+* Feature: Added store_last_site_scan() and get_last_site_scan() methods for result persistence
+* Enhancement: Dashboard pre-renders last AI results on page load (no need to regenerate)
+* Enhancement: Health Score card now uses expandable details element instead of scroll navigation
+* Enhancement: Removed auto-reload after Backup AI Report generation (results update via DOM)
+* UX: Users can view full AI report directly in Health Score card using expandable details
+* UX: Last scan/report results remain visible after page refresh, preventing unnecessary API calls
+* Technical: Results stored in museder_ai_last_site_scan and museder_ai_last_backup_report options
+
+= 2.7.19 =
+* Enhancement: Improved UX for Health Score card navigation
+* Enhancement: "View full AI report" button now smoothly scrolls to Backup AI Report section
+* Enhancement: Dashboard automatically refreshes after successful Backup AI Report generation
+* Enhancement: Health Score card updates immediately after new report is generated
+* UX: Users can see report results for 0.8 seconds before page refresh
+* Technical: Added initAIScrollLinks() function for smooth scroll navigation
+* Technical: Auto-refresh only triggers on successful report generation, not on errors
+
+= 2.7.18 =
+* Feature: Implemented Site Backup Health Score (Pro) card with actual score display
+* Feature: Health Score card shows overall_score and risk_level from last Backup AI Report
+* Feature: Pro/Agency users see actual health score, Free users see upgrade prompt
+* Enhancement: Added store_last_backup_report() and get_last_backup_report() methods to persist report data
+* Enhancement: Backup AI Report automatically saves results for Health Score display
+* Enhancement: Health Score card shows "No report yet" prompt when no report exists
+* Enhancement: Added smooth scroll navigation from Health Score to Backup AI Report section
+* UX: Health Score displays score (e.g., "75/100"), risk badge, summary, and last updated time
+* UX: Color-coded risk badges (green/yellow/red) for visual health indication
+* Technical: Health Score data stored in museder_ai_last_backup_report option
+
+= 2.7.17 =
+* Feature: Added Backup AI Report module - comprehensive AI analysis of backup strategy and restore risks
+* Feature: Backup AI Report provides detailed insights including overall score, risk factors, and recommendations
+* Enhancement: Refactored usage limit checking with can_run_ai_action() generic method
+* Enhancement: Free tier users share quota between Site Scan and Backup Report (1 per month total)
+* Enhancement: Pro and Agency tier users have unlimited access to both AI features
+* UX: New Backup AI Report card on Dashboard with detailed report display
+* UX: Score visualization with color-coded badges (green/yellow/red based on score)
+* Technical: Extended send_request() and demo_response() to support backup_report action
+* Technical: Added ajax_ai_backup_report() AJAX handler
+* Technical: Enhanced prompt engineering for comprehensive backup strategy analysis
+
+= 2.7.16 =
+* Feature: Added AI usage tracking and limiting system for AI Site Scan
+* Feature: Free tier users limited to 1 AI Site Scan per month
+* Feature: Pro and Agency tier users have unlimited AI Site Scans
+* Feature: Usage logs automatically cleaned up (keeps last 6 months)
+* Enhancement: Added user-friendly error messages when usage limit is reached
+* Enhancement: Button text changes based on license tier (Free shows "1 per month" hint)
+* Technical: Added log_usage(), count_usage_since(), can_run_site_scan(), and get_month_start_timestamp() methods
+* Technical: Usage tracking stored in museder_ai_usage_log option
+
+= 2.7.15 =
+* Enhancement: Improved OpenAI API error handling with user-friendly error messages
+* Enhancement: Added specific error messages for common HTTP status codes (429 rate limit, 401 authentication, 403 forbidden, 5xx server errors)
+* Enhancement: Error messages now include detailed information from OpenAI API response when available
+* UX: Better error feedback when API rate limits are exceeded or authentication fails
+
+= 2.7.14 =
+* Bug Fix: Fixed JavaScript error "Cannot read properties of undefined (reading 'toLocaleString')" when clicking Re-scan Size button
+* Enhancement: Added null/undefined checks for scanned_count and total_bytes_formatted in backup size estimation progress display
+
+= 2.7.13 =
+* Bug Fix: Fixed PHP syntax error in render_alert_section() that caused PHP source code to be displayed on AI Settings page
+* Bug Fix: Ensured Save Changes button is properly displayed on AI Settings page
+* Enhancement: Improved submit_button() call with explicit text domain for better internationalization
+
+= 2.7.12 =
+* Feature: Added OpenAI API Key field in AI Settings page
+* Feature: Added send_request() method in Museder_AI_Service to call OpenAI Chat Completions API
+* Enhancement: AI Site Scan now supports both demo mode (no API key) and live mode (with OpenAI API key)
+* Enhancement: AI Site Scan automatically uses live mode when API key is configured, falls back to demo mode otherwise
+* Enhancement: Added mode indicator in AI Site Scan results (shows "Demo mode" or "Powered by Museder AI (OpenAI)")
+* Enhancement: Improved payload collection for AI Site Scan (includes plugins list and detailed backups summary)
+* Technical: Fixed render_api_section() PHP syntax issue in AI Settings page
+* Technical: OpenAI API integration uses gpt-4o-mini model with JSON response format
+* Technical: All AI features maintain backward compatibility with demo mode
+
+= 2.7.11 =
+* Feature: Added AI Settings page - configure AI license tier, API endpoint, and alert email
+* Feature: Added Museder_AI_Service class - core AI service with demo response functionality
+* Feature: Added AI Site Scan (Demo) on Dashboard - run demo AI scan to analyze site and backup health
+* Enhancement: AI Settings page uses WordPress Settings API for secure configuration
+* Enhancement: Demo AI responses for site_scan, health_check, and analyze_log actions
+* UX: New "AI Settings" submenu under Museder RestoreOne main menu
+* UX: Interactive AI Site Scan card on Dashboard with real-time results display
+* UX: Visual risk level indicators (Low/Medium/High) with color coding
+* Technical: All AI features currently use demo data (no external API calls yet)
+* Technical: All new strings properly internationalized with museder-restoreone text domain
 
 = 2.7.10 =
 * Feature: Added Backup Size Estimation feature - estimate database and file sizes before creating backups

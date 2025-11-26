@@ -2,7 +2,7 @@
 # 创建 Museder RestoreOne 插件打包文件
 
 PLUGIN_NAME="museder-restoreone"
-VERSION="2.7.10"
+VERSION="2.7.20"
 PACKAGE_NAME="${PLUGIN_NAME}-${VERSION}.zip"
 TEMP_DIR=$(mktemp -d)
 PLUGIN_DIR="${TEMP_DIR}/${PLUGIN_NAME}"

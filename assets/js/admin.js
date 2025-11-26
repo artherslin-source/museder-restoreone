@@ -4571,7 +4571,9 @@ function initRestoreCenter() {
 
                             // Update status
                             if (scanStatus) {
-                                var statusText = 'Scanned: ' + data.scanned_count.toLocaleString() + ' files, ' + data.total_bytes_formatted;
+                                var scannedCount = (data.scanned_count !== undefined && data.scanned_count !== null) ? data.scanned_count : 0;
+                                var totalBytesFormatted = data.total_bytes_formatted || '0 B';
+                                var statusText = 'Scanned: ' + scannedCount.toLocaleString() + ' files, ' + totalBytesFormatted;
                                 if (data.current_path) {
                                     statusText += ' | Current: ' + data.current_path.substring(data.current_path.lastIndexOf('/') + 1);
                                 }
@@ -4605,6 +4607,299 @@ function initRestoreCenter() {
 
         // Initial load
         loadEstimate();
+    })();
+
+    // Initialize AI Site Scan (Demo)
+    (function initAISiteScan() {
+        var scanBtn = document.getElementById('museder-ai-scan-btn');
+        var scanCard = document.getElementById('museder-ai-scan-card');
+        if (!scanBtn || !scanCard) {
+            return; // Not on dashboard page
+        }
+
+        var loadingEl = document.getElementById('museder-ai-scan-loading');
+        var resultsEl = document.getElementById('museder-ai-scan-results');
+        var errorEl = document.getElementById('museder-ai-scan-error');
+        var modeEl = document.getElementById('museder-ai-scan-mode');
+        var summaryText = document.getElementById('museder-ai-scan-summary-text');
+        var riskBadge = document.getElementById('museder-ai-scan-risk-badge');
+        var recommendationsList = document.getElementById('museder-ai-scan-recommendations-list');
+        var errorMessage = document.getElementById('museder-ai-scan-error-message');
+
+        scanBtn.addEventListener('click', function() {
+            // Reset UI
+            scanBtn.disabled = true;
+            loadingEl.style.display = 'block';
+            resultsEl.style.display = 'none';
+            errorEl.style.display = 'none';
+
+            var ajaxUrl = localizedSettings.ajaxUrl || '/wp-admin/admin-ajax.php';
+            var nonce = localizedSettings.nonce || '';
+
+            jQuery.ajax({
+                url: ajaxUrl,
+                type: 'POST',
+                data: {
+                    action: 'museder_ai_demo_site_scan',
+                    nonce: nonce
+                },
+                success: function(response) {
+                    scanBtn.disabled = false;
+                    loadingEl.style.display = 'none';
+
+                    if (response.success && response.data) {
+                        var data = response.data;
+                        
+                        // Display mode indicator
+                        if (modeEl) {
+                            if (data.mode === 'demo') {
+                                modeEl.textContent = 'Demo mode (no external AI call).';
+                            } else if (data.mode === 'live') {
+                                modeEl.textContent = 'Powered by Museder AI (OpenAI).';
+                            } else {
+                                modeEl.textContent = '';
+                            }
+                        }
+                        
+                        // Display summary
+                        if (summaryText && data.summary) {
+                            summaryText.textContent = data.summary;
+                        }
+
+                        // Display risk badge
+                        if (riskBadge && data.risk) {
+                            var risk = data.risk.toLowerCase();
+                            var riskColors = {
+                                'low': { bg: '#d4edda', color: '#155724', text: 'Low' },
+                                'medium': { bg: '#fff3cd', color: '#856404', text: 'Medium' },
+                                'high': { bg: '#f8d7da', color: '#721c24', text: 'High' },
+                                'critical': { bg: '#f5c6cb', color: '#721c24', text: 'Critical' }
+                            };
+                            var riskStyle = riskColors[risk] || riskColors['medium'];
+                            riskBadge.textContent = riskStyle.text;
+                            riskBadge.style.backgroundColor = riskStyle.bg;
+                            riskBadge.style.color = riskStyle.color;
+                        }
+
+                        // Display recommendations
+                        if (recommendationsList && data.recommendations && Array.isArray(data.recommendations)) {
+                            recommendationsList.innerHTML = '';
+                            data.recommendations.forEach(function(rec) {
+                                var li = document.createElement('li');
+                                li.textContent = rec;
+                                recommendationsList.appendChild(li);
+                            });
+                        }
+
+                        resultsEl.style.display = 'block';
+                    } else {
+                        // Handle limit reached error
+                        if (response.data && response.data.code === 'limit_reached') {
+                            errorMessage.textContent = response.data.message || 'You have used your free AI Site Scan for this month. Upgrade to Pro for unlimited scans.';
+                            // Optionally disable button or change text
+                            // scanBtn.disabled = true;
+                            // scanBtn.textContent = 'Upgrade to Pro';
+                        } else {
+                            errorMessage.textContent = response.data && response.data.message 
+                                ? response.data.message 
+                                : (strings.errorGeneric || 'An error occurred.');
+                        }
+                        errorEl.style.display = 'block';
+                    }
+                },
+                error: function(xhr, status, error) {
+                    scanBtn.disabled = false;
+                    loadingEl.style.display = 'none';
+                    errorMessage.textContent = strings.errorGeneric || 'An error occurred. Please try again.';
+                    errorEl.style.display = 'block';
+                }
+            });
+        });
+    })();
+
+    // Initialize Backup AI Report
+    (function initAIBackupReport() {
+        var reportBtn = document.getElementById('museder-ai-backup-report-btn');
+        var reportCard = document.getElementById('museder-ai-backup-report');
+        if (!reportBtn || !reportCard) {
+            return; // Not on dashboard page
+        }
+
+        var loadingEl = document.getElementById('museder-ai-backup-report-loading');
+        var resultsEl = document.getElementById('museder-ai-backup-report-results');
+        var errorEl = document.getElementById('museder-ai-backup-report-error');
+        var modeEl = document.getElementById('museder-ai-backup-report-mode');
+        var summaryText = document.getElementById('museder-ai-backup-report-summary-text');
+        var scoreBadge = document.getElementById('museder-ai-backup-report-score-badge');
+        var riskBadge = document.getElementById('museder-ai-backup-report-risk-badge');
+        var riskFactorsList = document.getElementById('museder-ai-backup-report-risk-factors-list');
+        var recommendationsList = document.getElementById('museder-ai-backup-report-recommendations-list');
+        var errorMessage = document.getElementById('museder-ai-backup-report-error-message');
+
+        reportBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            console.log('AI Backup Report clicked');
+            
+            // Reset UI
+            reportBtn.disabled = true;
+            loadingEl.style.display = 'block';
+            resultsEl.style.display = 'none';
+            errorEl.style.display = 'none';
+
+            var ajaxUrl = localizedSettings.ajaxUrl || '/wp-admin/admin-ajax.php';
+            var nonce = localizedSettings.nonce || '';
+
+            jQuery.ajax({
+                url: ajaxUrl,
+                type: 'POST',
+                data: {
+                    action: 'museder_ai_backup_report',
+                    nonce: nonce
+                },
+                success: function(response) {
+                    reportBtn.disabled = false;
+                    loadingEl.style.display = 'none';
+
+                    if (response.success && response.data) {
+                        var data = response.data;
+                        
+                        // Display mode indicator
+                        if (modeEl) {
+                            if (data.mode === 'demo') {
+                                modeEl.textContent = 'Demo mode (no external AI call).';
+                            } else if (data.mode === 'live') {
+                                modeEl.textContent = 'Powered by Museder AI (OpenAI).';
+                            } else {
+                                modeEl.textContent = '';
+                            }
+                        }
+                        
+                        // Display summary
+                        if (summaryText && data.summary) {
+                            summaryText.textContent = data.summary;
+                        }
+
+                        // Display overall score
+                        if (scoreBadge && data.overall_score !== undefined) {
+                            var score = parseInt(data.overall_score, 10);
+                            scoreBadge.textContent = score + '/100';
+                            
+                            // Color code based on score
+                            if (score >= 80) {
+                                scoreBadge.style.backgroundColor = '#d4edda';
+                                scoreBadge.style.color = '#155724';
+                            } else if (score >= 60) {
+                                scoreBadge.style.backgroundColor = '#fff3cd';
+                                scoreBadge.style.color = '#856404';
+                            } else {
+                                scoreBadge.style.backgroundColor = '#f8d7da';
+                                scoreBadge.style.color = '#721c24';
+                            }
+                        }
+
+                        // Display risk badge
+                        if (riskBadge && data.risk_level) {
+                            var risk = data.risk_level.toLowerCase();
+                            var riskColors = {
+                                'low': { bg: '#d4edda', color: '#155724', text: 'Low' },
+                                'medium': { bg: '#fff3cd', color: '#856404', text: 'Medium' },
+                                'high': { bg: '#f8d7da', color: '#721c24', text: 'High' }
+                            };
+                            var riskStyle = riskColors[risk] || riskColors['medium'];
+                            riskBadge.textContent = riskStyle.text;
+                            riskBadge.style.backgroundColor = riskStyle.bg;
+                            riskBadge.style.color = riskStyle.color;
+                        }
+
+                        // Display risk factors
+                        if (riskFactorsList && data.risk_factors && Array.isArray(data.risk_factors)) {
+                            riskFactorsList.innerHTML = '';
+                            data.risk_factors.forEach(function(factor) {
+                                var li = document.createElement('li');
+                                var severity = factor.severity || 'medium';
+                                var severityColors = {
+                                    'low': '#28a745',
+                                    'medium': '#ffc107',
+                                    'high': '#dc3545'
+                                };
+                                var severityColor = severityColors[severity] || '#666';
+                                
+                                var text = '<strong style="color: ' + severityColor + ';">' + 
+                                    (factor.name || 'Unknown') + '</strong>';
+                                if (factor.details) {
+                                    text += ': ' + factor.details;
+                                }
+                                li.innerHTML = text;
+                                riskFactorsList.appendChild(li);
+                            });
+                        }
+
+                        // Display recommendations
+                        if (recommendationsList && data.recommendations && Array.isArray(data.recommendations)) {
+                            recommendationsList.innerHTML = '';
+                            data.recommendations.forEach(function(rec) {
+                                var li = document.createElement('li');
+                                li.textContent = rec;
+                                recommendationsList.appendChild(li);
+                            });
+                        }
+
+                        resultsEl.style.display = 'block';
+
+                        // Show success message (optional)
+                        if (showToast) {
+                            showToast('✅ ' + (strings.settingsSaved || 'Report generated successfully.'), 'success');
+                        }
+                    } else {
+                        // Handle limit reached error
+                        if (response.data && response.data.code === 'limit_reached') {
+                            errorMessage.textContent = response.data.message || 'You have used your free Backup AI Report for this month. Upgrade to Pro for unlimited reports.';
+                        } else {
+                            errorMessage.textContent = response.data && response.data.message 
+                                ? response.data.message 
+                                : (strings.errorGeneric || 'An error occurred.');
+                        }
+                        errorEl.style.display = 'block';
+                        // Do not reload on error
+                    }
+                },
+                error: function(xhr, status, error) {
+                    reportBtn.disabled = false;
+                    loadingEl.style.display = 'none';
+                    errorMessage.textContent = strings.errorGeneric || 'An error occurred. Please try again.';
+                    errorEl.style.display = 'block';
+                }
+            });
+        });
+    })();
+
+    // Handle scroll-to anchor links (for Health Score card and other AI features)
+    (function initAIScrollLinks() {
+        var links = document.querySelectorAll('[data-museder-scroll]');
+        if (!links || !links.length) {
+            return;
+        }
+
+        links.forEach(function(link) {
+            link.addEventListener('click', function(e) {
+                e.preventDefault();
+                var targetSelector = link.getAttribute('data-museder-scroll');
+                if (!targetSelector) {
+                    return;
+                }
+                var target = document.querySelector(targetSelector);
+                if (target) {
+                    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                } else {
+                    // Fallback to default anchor behavior if target not found
+                    var href = link.getAttribute('href');
+                    if (href && href.indexOf('#') === 0) {
+                        window.location.hash = href;
+                    }
+                }
+            });
+        });
     })();
 
     // Handle exit safe mode button

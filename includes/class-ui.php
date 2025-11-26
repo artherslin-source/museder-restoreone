@@ -27,6 +27,8 @@ class Backup_Lite_UI {
         add_action( 'wp_ajax_backup_lite_continue_backup_job', [ __CLASS__, 'ajax_continue_backup_job' ] );
         add_action( 'wp_ajax_backup_lite_cancel_backup_job', [ __CLASS__, 'ajax_cancel_backup_job' ] );
         add_action( 'wp_ajax_backup_lite_refresh_nonce', [ __CLASS__, 'ajax_refresh_nonce' ] );
+        add_action( 'wp_ajax_museder_ai_demo_site_scan', [ __CLASS__, 'ajax_ai_demo_site_scan' ] );
+        add_action( 'wp_ajax_museder_ai_backup_report', [ __CLASS__, 'ajax_ai_backup_report' ] );
 
         add_action( 'admin_post_backup_lite_download_log', [ __CLASS__, 'handle_log_download' ] );
         add_action( 'admin_post_backup_lite_download_backup', [ __CLASS__, 'handle_backup_download' ] );
@@ -806,6 +808,266 @@ class Backup_Lite_UI {
                 'nonce' => wp_create_nonce( self::NONCE ),
             ]
         );
+    }
+
+    /**
+     * AJAX handler for AI demo site scan.
+     * 
+     * This handler supports two modes:
+     * - Live mode: Uses send_request() to call OpenAI API (when API key is configured)
+     * - Demo mode: Uses demo_response() to return fixed demo data (when no API key)
+     */
+    public static function ajax_ai_demo_site_scan() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( [
+                'message' => esc_html__( 'Insufficient permissions.', 'museder-restoreone' ),
+            ], 403 );
+        }
+
+        check_ajax_referer( self::NONCE, 'nonce' );
+
+        // Check if site scan is allowed based on license tier and usage limits
+        $permission = Museder_AI_Service::can_run_site_scan();
+        if ( ! $permission['allowed'] ) {
+            wp_send_json_error( [
+                'code'    => 'limit_reached',
+                'message' => $permission['message'],
+            ] );
+        }
+
+        // Prepare payload with site information
+        $backups = Backup_Lite_UI::get_backups_list();
+        $backup_count = count( $backups );
+        
+        $last_backup_days = 0;
+        if ( ! empty( $backups ) && isset( $backups[0]['path'] ) ) {
+            $last_backup_time = filemtime( $backups[0]['path'] );
+            if ( $last_backup_time ) {
+                $last_backup_days = ( time() - $last_backup_time ) / DAY_IN_SECONDS;
+            }
+        }
+
+        $schedules = Backup_Lite_Schedule_Handler::list_schedules();
+        $schedule_active = ! empty( $schedules );
+
+        // Get plugins list
+        $plugins = [];
+        if ( ! function_exists( 'get_plugins' ) ) {
+            require_once ABSPATH . 'wp-admin/includes/plugin.php';
+        }
+        $all_plugins = get_plugins();
+        foreach ( $all_plugins as $plugin_file => $plugin_data ) {
+            if ( is_plugin_active( $plugin_file ) ) {
+                $plugins[] = [
+                    'name' => $plugin_data['Name'],
+                    'version' => $plugin_data['Version'],
+                ];
+            }
+        }
+
+        // Prepare backups summary
+        $backups_summary = [];
+        if ( ! empty( $backups ) ) {
+            $recent_backups = array_slice( $backups, 0, 5 ); // Get last 5 backups
+            foreach ( $recent_backups as $backup ) {
+                $backups_summary[] = [
+                    'name' => $backup['name'] ?? '',
+                    'size' => $backup['size'] ?? 0,
+                    'created' => $backup['created'] ?? '',
+                ];
+            }
+        }
+
+        $payload = [
+            'site_url'         => home_url(),
+            'wp_version'       => get_bloginfo( 'version' ),
+            'php_version'      => PHP_VERSION,
+            'plugins'          => $plugins,
+            'backup_count'     => $backup_count,
+            'last_backup_days' => round( $last_backup_days, 1 ),
+            'schedule_active'  => $schedule_active,
+            'backups_summary'  => $backups_summary,
+        ];
+
+        // Check if OpenAI API key is configured
+        $settings = Museder_AI_Service::get_settings();
+        $api_key = $settings['openai_api_key'] ?? '';
+
+        // Use live mode if API key is available, otherwise use demo mode
+        if ( ! empty( $api_key ) ) {
+            $result = Museder_AI_Service::send_request( 'site_scan', $payload );
+            $mode = 'live';
+        } else {
+            $result = Museder_AI_Service::demo_response( 'site_scan', $payload );
+            $mode = 'demo';
+        }
+
+        // Handle response
+        if ( isset( $result['status'] ) && $result['status'] === 'success' ) {
+            // Add mode to result for storage
+            $result['mode'] = $mode;
+
+            // Store the last site scan result
+            Museder_AI_Service::store_last_site_scan( $result );
+
+            // Prepare response data
+            $response_data = [
+                'summary'         => $result['summary'] ?? '',
+                'risk'            => $result['risk'] ?? 'medium',
+                'recommendations' => $result['recommendations'] ?? [],
+                'mode'            => $mode,
+            ];
+
+            // Add remaining scans for free tier (before logging)
+            $settings = Museder_AI_Service::get_settings();
+            $license_tier = $settings['license_tier'] ?? 'free';
+            if ( $license_tier === 'free' && isset( $permission['remaining'] ) ) {
+                $response_data['remaining_scans'] = $permission['remaining'] - 1; // Will be 0 after this scan
+            }
+
+            // Log successful usage (after preparing response)
+            Museder_AI_Service::log_usage( 'site_scan', 'success' );
+
+            wp_send_json_success( $response_data );
+        } else {
+            // Log error usage (optional, for tracking)
+            Museder_AI_Service::log_usage( 'site_scan', 'error' );
+
+            wp_send_json_error( [
+                'code'    => $result['code'] ?? 'unknown_error',
+                'message' => $result['message'] ?? esc_html__( 'AI request failed.', 'museder-restoreone' ),
+                'mode'    => $mode,
+            ] );
+        }
+    }
+
+    /**
+     * AJAX handler for AI backup report.
+     * 
+     * This handler supports two modes:
+     * - Live mode: Uses send_request() to call OpenAI API (when API key is configured)
+     * - Demo mode: Uses demo_response() to return fixed demo data (when no API key)
+     */
+    public static function ajax_ai_backup_report() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( [
+                'message' => esc_html__( 'Insufficient permissions.', 'museder-restoreone' ),
+            ], 403 );
+        }
+
+        check_ajax_referer( self::NONCE, 'nonce' );
+
+        // Check if backup report is allowed based on license tier and usage limits
+        $permission = Museder_AI_Service::can_run_backup_report();
+        if ( ! $permission['allowed'] ) {
+            wp_send_json_error( [
+                'code'    => 'limit_reached',
+                'message' => $permission['message'],
+            ] );
+        }
+
+        // Prepare payload with site information
+        $backups = Backup_Lite_UI::get_backups_list();
+        $backup_count = count( $backups );
+        
+        $last_backup_days = 0;
+        if ( ! empty( $backups ) && isset( $backups[0]['path'] ) ) {
+            $last_backup_time = filemtime( $backups[0]['path'] );
+            if ( $last_backup_time ) {
+                $last_backup_days = ( time() - $last_backup_time ) / DAY_IN_SECONDS;
+            }
+        }
+
+        $schedules = Backup_Lite_Schedule_Handler::list_schedules();
+        $schedule_active = ! empty( $schedules );
+
+        // Get plugins list
+        $plugins = [];
+        if ( ! function_exists( 'get_plugins' ) ) {
+            require_once ABSPATH . 'wp-admin/includes/plugin.php';
+        }
+        $all_plugins = get_plugins();
+        foreach ( $all_plugins as $plugin_file => $plugin_data ) {
+            if ( is_plugin_active( $plugin_file ) ) {
+                $plugins[] = [
+                    'name' => $plugin_data['Name'],
+                    'version' => $plugin_data['Version'],
+                ];
+            }
+        }
+
+        // Prepare backups summary
+        $backups_summary = [];
+        if ( ! empty( $backups ) ) {
+            $recent_backups = array_slice( $backups, 0, 5 ); // Get last 5 backups
+            foreach ( $recent_backups as $backup ) {
+                $backups_summary[] = [
+                    'name' => $backup['name'] ?? '',
+                    'size' => $backup['size'] ?? 0,
+                    'created' => $backup['created'] ?? '',
+                ];
+            }
+        }
+
+        // TODO: Add backup schedules / cloud destinations info if needed
+        $payload = [
+            'site_url'         => home_url(),
+            'wp_version'       => get_bloginfo( 'version' ),
+            'php_version'      => PHP_VERSION,
+            'plugins'          => $plugins,
+            'backup_count'     => $backup_count,
+            'last_backup_days' => round( $last_backup_days, 1 ),
+            'schedule_active'  => $schedule_active,
+            'backups_summary'  => $backups_summary,
+        ];
+
+        // Check if OpenAI API key is configured
+        $settings = Museder_AI_Service::get_settings();
+        $api_key = $settings['openai_api_key'] ?? '';
+
+        // Use live mode if API key is available, otherwise use demo mode
+        if ( ! empty( $api_key ) ) {
+            $result = Museder_AI_Service::send_request( 'backup_report', $payload );
+            $mode = 'live';
+        } else {
+            $result = Museder_AI_Service::demo_response( 'backup_report', $payload );
+            $mode = 'demo';
+        }
+
+        // Handle response
+        if ( isset( $result['status'] ) && $result['status'] === 'success' ) {
+            // Add mode to result for storage
+            $result['mode'] = $mode;
+
+            // Store the last backup report if overall_score exists
+            if ( isset( $result['overall_score'] ) ) {
+                Museder_AI_Service::store_last_backup_report( $result );
+            }
+
+            // Log successful usage
+            Museder_AI_Service::log_usage( 'backup_report', 'success' );
+
+            // Prepare response data
+            $response_data = [
+                'summary'         => $result['summary'] ?? '',
+                'overall_score'   => $result['overall_score'] ?? 50,
+                'risk_level'      => $result['risk_level'] ?? 'medium',
+                'risk_factors'    => $result['risk_factors'] ?? [],
+                'recommendations' => $result['recommendations'] ?? [],
+                'mode'            => $mode,
+            ];
+
+            wp_send_json_success( $response_data );
+        } else {
+            // Log error usage (optional, for tracking)
+            Museder_AI_Service::log_usage( 'backup_report', 'error' );
+
+            wp_send_json_error( [
+                'code'    => $result['code'] ?? 'unknown_error',
+                'message' => $result['message'] ?? esc_html__( 'AI request failed.', 'museder-restoreone' ),
+                'mode'    => $mode,
+            ] );
+        }
     }
 
     public static function get_backups_list( $limit = 0 ) {

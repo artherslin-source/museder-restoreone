@@ -25,6 +25,15 @@ if ( $safe_mode_active ) {
     $prev_plugins = get_option( 'backup_lite_prev_active_plugins', [] );
     $prev_plugins_count = is_array( $prev_plugins ) ? count( $prev_plugins ) : 0;
 }
+
+// Get AI settings and last results for AI cards
+$ai_settings         = Museder_AI_Service::get_settings();
+$ai_license_tier     = isset( $ai_settings['license_tier'] ) ? $ai_settings['license_tier'] : 'free';
+$last_backup_report  = Museder_AI_Service::get_last_backup_report();
+$last_backup_score   = isset( $last_backup_report['overall_score'] ) ? (int) $last_backup_report['overall_score'] : null;
+$last_backup_updated = isset( $last_backup_report['updated_at'] ) ? (int) $last_backup_report['updated_at'] : 0;
+$last_backup_risk    = isset( $last_backup_report['risk_level'] ) ? $last_backup_report['risk_level'] : '';
+$last_site_scan      = Museder_AI_Service::get_last_site_scan();
 ?>
 
 <div class="wrap backup-lite-admin backup-lite-dashboard">
@@ -224,26 +233,357 @@ if ( $safe_mode_active ) {
         </div>
 
         <?php
-        // Site Backup Health Score (Pro) — Lite shows promo only, no score
-        // Moved to last position as it's a PRO feature and appears grayed out
-        $is_pro = Backup_Lite_Pro::is_pro_active();
+        // Site Backup Health Score (Pro)
+        // Free tier: Show upgrade prompt
+        // Pro/Agency tier: Show actual score or prompt to generate report
+        $is_pro_license = in_array( $ai_license_tier, [ 'pro', 'agency' ], true );
         ?>
-        <?php // @plugin-check: escaped ?>
-        <div class="backup-lite-card <?php echo esc_attr( $is_pro ? '' : 'pro-locked' ); ?>" <?php echo $is_pro ? '' : 'data-upgrade="' . esc_attr( 'pro' ) . '"'; // @plugin-check: escaped ?>>
+        <div class="backup-lite-card <?php echo esc_attr( $is_pro_license ? '' : 'pro-locked' ); ?>" id="museder-ai-health-score-card">
             <h2>
                 🏥 <?php esc_html_e( 'Site Backup Health Score (Pro)', 'museder-restoreone' ); ?>
-                <?php if ( ! $is_pro ) : ?>
+                <?php if ( ! $is_pro_license ) : ?>
                     <span class="pro-badge">PRO</span>
                 <?php endif; ?>
             </h2>
-            <p class="description" style="margin-top: 8px;">
-                <?php esc_html_e( 'Premium sites can see an overall backup health score based on schedules, recent activity, and storage hygiene.', 'museder-restoreone' ); ?>
-            </p>
-            <?php if ( ! $is_pro ) : ?>
+
+            <?php if ( ! $is_pro_license ) : ?>
+                <!-- Free tier: Upgrade prompt -->
+                <p class="description" style="margin-top: 8px;">
+                    <?php esc_html_e( 'Premium sites can see an overall backup health score based on schedules, recent activity, and storage hygiene.', 'museder-restoreone' ); ?>
+                </p>
                 <a href="<?php echo esc_url( admin_url( 'admin.php?page=backup-lite-pro' ) ); ?>" class="button button-primary" style="margin-top: 8px;">
                     <?php esc_html_e( 'Upgrade to Pro', 'museder-restoreone' ); ?>
                 </a>
+                <p style="margin-top: 12px; font-size: 12px; color: #666;">
+                    <?php esc_html_e( 'AI Site Scan and Backup AI Report are available in Free, but the full health score dashboard is a Pro feature.', 'museder-restoreone' ); ?>
+                </p>
+            <?php else : ?>
+                <!-- Pro/Agency tier: Show score or prompt -->
+                <?php if ( $last_backup_score === null ) : ?>
+                    <!-- No report yet -->
+                    <p class="description" style="margin-top: 8px; font-weight: 600;">
+                        <?php esc_html_e( 'No AI backup report yet.', 'museder-restoreone' ); ?>
+                    </p>
+                    <p class="description" style="margin-top: 8px;">
+                        <?php esc_html_e( 'Run a Backup AI Report to generate your first health score.', 'museder-restoreone' ); ?>
+                    </p>
+                    <a href="#museder-ai-backup-report" class="button button-primary backup-lite-ai-scroll" style="margin-top: 8px;" data-museder-scroll="#museder-ai-backup-report">
+                        <?php esc_html_e( 'Run Backup AI Report', 'museder-restoreone' ); ?>
+                    </a>
+                <?php else : ?>
+                    <!-- Show score -->
+                    <div style="margin-top: 16px;">
+                        <div style="display: flex; align-items: center; gap: 16px; margin-bottom: 12px;">
+                            <div style="font-size: 48px; font-weight: 700; line-height: 1;">
+                                <?php echo esc_html( $last_backup_score ); ?><span style="font-size: 24px; color: #666;">/100</span>
+                            </div>
+                            <?php
+                            // Determine risk badge class and color
+                            $risk_class = 'backup-lite-badge--success';
+                            $risk_bg = '#d4edda';
+                            $risk_color = '#155724';
+                            $risk_text = __( 'Low', 'museder-restoreone' );
+                            
+                            switch ( strtolower( $last_backup_risk ) ) {
+                                case 'high':
+                                    $risk_class = 'backup-lite-badge--danger';
+                                    $risk_bg = '#f8d7da';
+                                    $risk_color = '#721c24';
+                                    $risk_text = __( 'High', 'museder-restoreone' );
+                                    break;
+                                case 'medium':
+                                    $risk_class = 'backup-lite-badge--warning';
+                                    $risk_bg = '#fff3cd';
+                                    $risk_color = '#856404';
+                                    $risk_text = __( 'Medium', 'museder-restoreone' );
+                                    break;
+                                case 'low':
+                                default:
+                                    $risk_class = 'backup-lite-badge--success';
+                                    $risk_bg = '#d4edda';
+                                    $risk_color = '#155724';
+                                    $risk_text = __( 'Low', 'museder-restoreone' );
+                                    break;
+                            }
+                            ?>
+                            <span class="<?php echo esc_attr( $risk_class ); ?>" style="display: inline-block; padding: 4px 12px; border-radius: 4px; font-weight: 600; background-color: <?php echo esc_attr( $risk_bg ); ?>; color: <?php echo esc_attr( $risk_color ); ?>;">
+                                <?php echo esc_html( $risk_text ); ?>
+                            </span>
+                        </div>
+
+                        <?php if ( ! empty( $last_backup_report['summary'] ) ) : ?>
+                            <p style="margin: 12px 0; color: #555;">
+                                <?php echo esc_html( wp_trim_words( $last_backup_report['summary'], 30, '...' ) ); ?>
+                            </p>
+                        <?php endif; ?>
+
+                        <?php if ( $last_backup_updated > 0 ) : ?>
+                            <p style="margin: 8px 0; font-size: 12px; color: #666;">
+                                <?php
+                                printf(
+                                    esc_html__( 'Last updated: %s', 'museder-restoreone' ),
+                                    esc_html( date_i18n( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), $last_backup_updated ) )
+                                );
+                                ?>
+                            </p>
+                        <?php endif; ?>
+
+                        <?php if ( ! empty( $last_backup_report['summary'] ) ) : ?>
+                            <details class="museder-ai-health-report-details" style="margin-top: 16px;">
+                                <summary style="cursor: pointer; padding: 8px 12px; background: #f0f0f0; border-radius: 4px; font-weight: 600; user-select: none;">
+                                    <?php esc_html_e( 'Show full AI report', 'museder-restoreone' ); ?>
+                                </summary>
+                                <div class="museder-ai-health-report-body" style="margin-top: 16px; padding: 16px; background: #f9f9f9; border-radius: 4px;">
+                                    <h4 style="margin-top: 0;"><?php esc_html_e( 'Summary', 'museder-restoreone' ); ?></h4>
+                                    <p><?php echo esc_html( $last_backup_report['summary'] ); ?></p>
+
+                                    <?php if ( ! empty( $last_backup_report['risk_factors'] ) && is_array( $last_backup_report['risk_factors'] ) ) : ?>
+                                        <h4><?php esc_html_e( 'Risk factors', 'museder-restoreone' ); ?></h4>
+                                        <ul>
+                                            <?php foreach ( $last_backup_report['risk_factors'] as $factor ) : ?>
+                                                <li>
+                                                    <strong><?php echo esc_html( $factor['name'] ?? '' ); ?></strong>
+                                                    <?php if ( ! empty( $factor['details'] ) ) : ?>
+                                                        <span>: <?php echo esc_html( $factor['details'] ); ?></span>
+                                                    <?php endif; ?>
+                                                </li>
+                                            <?php endforeach; ?>
+                                        </ul>
+                                    <?php endif; ?>
+
+                                    <?php if ( ! empty( $last_backup_report['recommendations'] ) && is_array( $last_backup_report['recommendations'] ) ) : ?>
+                                        <h4><?php esc_html_e( 'Recommendations', 'museder-restoreone' ); ?></h4>
+                                        <ul>
+                                            <?php foreach ( $last_backup_report['recommendations'] as $rec ) : ?>
+                                                <li><?php echo esc_html( is_array( $rec ) ? ( $rec['text'] ?? '' ) : $rec ); ?></li>
+                                            <?php endforeach; ?>
+                                        </ul>
+                                    <?php endif; ?>
+                                </div>
+                            </details>
+                        <?php endif; ?>
+                    </div>
+                <?php endif; ?>
             <?php endif; ?>
+        </div>
+
+        <!-- AI Site Scan (Demo) -->
+        <div class="backup-lite-card" id="museder-ai-scan-card">
+            <h2>🤖 <?php esc_html_e( 'AI Site Scan (Demo)', 'museder-restoreone' ); ?></h2>
+            <p class="description">
+                <?php esc_html_e( 'Run a demo AI scan to see how Museder will analyze your site and backup health.', 'museder-restoreone' ); ?>
+            </p>
+            
+            <div id="museder-ai-scan-content">
+                <?php
+                $ai_settings = Museder_AI_Service::get_settings();
+                $license_tier = $ai_settings['license_tier'] ?? 'free';
+                $button_text = ( $license_tier === 'free' ) 
+                    ? __( 'Run Free AI Scan (1 per month)', 'museder-restoreone' )
+                    : __( 'Run AI Scan', 'museder-restoreone' );
+                ?>
+                <button type="button" class="button button-primary" id="museder-ai-scan-btn">
+                    <?php echo esc_html( $button_text ); ?>
+                </button>
+                
+                <div id="museder-ai-scan-loading" style="display: none; margin-top: 16px;">
+                    <span class="spinner is-active"></span>
+                    <span><?php esc_html_e( 'Scanning…', 'museder-restoreone' ); ?></span>
+                </div>
+                
+                <div id="museder-ai-scan-results" style="<?php echo ! empty( $last_site_scan['summary'] ) ? 'display: block;' : 'display: none;'; ?> margin-top: 16px; padding: 16px; background: #f9f9f9; border-radius: 4px;">
+                    <h3 style="margin-top: 0;"><?php esc_html_e( 'Scan Results', 'museder-restoreone' ); ?></h3>
+                    <div id="museder-ai-scan-mode" style="margin-bottom: 12px; font-size: 12px; color: #666; font-style: italic;">
+                        <?php if ( ! empty( $last_site_scan['summary'] ) ) : ?>
+                            <?php echo esc_html( $last_site_scan['mode'] === 'demo' ? 'Demo mode (no external AI call).' : 'Powered by Museder AI (OpenAI).' ); ?>
+                        <?php endif; ?>
+                    </div>
+                    <div id="museder-ai-scan-summary" style="margin-bottom: 12px;">
+                        <strong><?php esc_html_e( 'Summary:', 'museder-restoreone' ); ?></strong>
+                        <p id="museder-ai-scan-summary-text" style="margin: 8px 0;">
+                            <?php echo ! empty( $last_site_scan['summary'] ) ? esc_html( $last_site_scan['summary'] ) : ''; ?>
+                        </p>
+                    </div>
+                    <div id="museder-ai-scan-risk" style="margin-bottom: 12px;">
+                        <strong><?php esc_html_e( 'Risk Level:', 'museder-restoreone' ); ?></strong>
+                        <span id="museder-ai-scan-risk-badge" style="display: inline-block; margin-left: 8px; padding: 4px 12px; border-radius: 4px; font-weight: 600; <?php
+                            if ( ! empty( $last_site_scan['risk_level'] ) ) {
+                                $risk = strtolower( $last_site_scan['risk_level'] );
+                                $risk_colors = [
+                                    'low' => [ 'bg' => '#d4edda', 'color' => '#155724', 'text' => __( 'Low', 'museder-restoreone' ) ],
+                                    'medium' => [ 'bg' => '#fff3cd', 'color' => '#856404', 'text' => __( 'Medium', 'museder-restoreone' ) ],
+                                    'high' => [ 'bg' => '#f8d7da', 'color' => '#721c24', 'text' => __( 'High', 'museder-restoreone' ) ],
+                                ];
+                                $risk_style = $risk_colors[ $risk ] ?? $risk_colors['medium'];
+                                echo 'background-color: ' . esc_attr( $risk_style['bg'] ) . '; color: ' . esc_attr( $risk_style['color'] ) . ';';
+                            }
+                        ?>">
+                            <?php
+                            if ( ! empty( $last_site_scan['risk_level'] ) ) {
+                                $risk = strtolower( $last_site_scan['risk_level'] );
+                                $risk_texts = [
+                                    'low' => __( 'Low', 'museder-restoreone' ),
+                                    'medium' => __( 'Medium', 'museder-restoreone' ),
+                                    'high' => __( 'High', 'museder-restoreone' ),
+                                ];
+                                echo esc_html( $risk_texts[ $risk ] ?? $risk_texts['medium'] );
+                            }
+                            ?>
+                        </span>
+                    </div>
+                    <div id="museder-ai-scan-recommendations" style="margin-top: 16px;">
+                        <strong><?php esc_html_e( 'Recommendations:', 'museder-restoreone' ); ?></strong>
+                        <ul id="museder-ai-scan-recommendations-list" style="margin: 8px 0; padding-left: 20px;">
+                            <?php
+                            if ( ! empty( $last_site_scan['recommendations'] ) && is_array( $last_site_scan['recommendations'] ) ) {
+                                foreach ( $last_site_scan['recommendations'] as $rec ) {
+                                    echo '<li>' . esc_html( $rec ) . '</li>';
+                                }
+                            }
+                            ?>
+                        </ul>
+                    </div>
+                </div>
+                
+                <div id="museder-ai-scan-error" style="display: none; margin-top: 16px; padding: 12px; background: #ffeaea; border-left: 4px solid #dc3232; border-radius: 4px; color: #721c24;">
+                    <strong><?php esc_html_e( 'Error:', 'museder-restoreone' ); ?></strong>
+                    <span id="museder-ai-scan-error-message"></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Backup AI Report (Preview) -->
+        <div class="backup-lite-card" id="museder-ai-backup-report">
+            <h2>📊 <?php esc_html_e( 'Backup AI Report (Preview)', 'museder-restoreone' ); ?></h2>
+            <p class="description">
+                <?php esc_html_e( 'Get a detailed AI report about your backup strategy, schedules and restore risks.', 'museder-restoreone' ); ?>
+            </p>
+            
+            <div id="museder-ai-backup-report-content">
+                <?php
+                $ai_settings = Museder_AI_Service::get_settings();
+                $license_tier = $ai_settings['license_tier'] ?? 'free';
+                $button_text = ( $license_tier === 'free' ) 
+                    ? __( 'Run Free Backup Report (1 per month)', 'museder-restoreone' )
+                    : __( 'Run Backup AI Report', 'museder-restoreone' );
+                ?>
+                <button type="button" class="button button-primary" id="museder-ai-backup-report-btn">
+                    <?php echo esc_html( $button_text ); ?>
+                </button>
+                
+                <div id="museder-ai-backup-report-loading" style="display: none; margin-top: 16px;">
+                    <span class="spinner is-active"></span>
+                    <span><?php esc_html_e( 'Generating report…', 'museder-restoreone' ); ?></span>
+                </div>
+                
+                <div id="museder-ai-backup-report-results" style="<?php echo ! empty( $last_backup_report['summary'] ) ? 'display: block;' : 'display: none;'; ?> margin-top: 16px; padding: 16px; background: #f9f9f9; border-radius: 4px;">
+                    <h3 style="margin-top: 0;"><?php esc_html_e( 'Report Results', 'museder-restoreone' ); ?></h3>
+                    <div id="museder-ai-backup-report-mode" style="margin-bottom: 12px; font-size: 12px; color: #666; font-style: italic;">
+                        <?php if ( ! empty( $last_backup_report['summary'] ) ) : ?>
+                            <?php echo esc_html( $last_backup_report['mode'] === 'demo' ? 'Demo mode (no external AI call).' : 'Powered by Museder AI (OpenAI).' ); ?>
+                        <?php endif; ?>
+                    </div>
+                    
+                    <div id="museder-ai-backup-report-summary" style="margin-bottom: 12px;">
+                        <strong><?php esc_html_e( 'Summary:', 'museder-restoreone' ); ?></strong>
+                        <p id="museder-ai-backup-report-summary-text" style="margin: 8px 0;">
+                            <?php echo ! empty( $last_backup_report['summary'] ) ? esc_html( $last_backup_report['summary'] ) : ''; ?>
+                        </p>
+                    </div>
+                    
+                    <div id="museder-ai-backup-report-score" style="margin-bottom: 12px;">
+                        <strong><?php esc_html_e( 'Overall Score:', 'museder-restoreone' ); ?></strong>
+                        <span id="museder-ai-backup-report-score-badge" style="display: inline-block; margin-left: 8px; padding: 4px 12px; border-radius: 4px; font-weight: 600; <?php
+                            if ( $last_backup_score !== null ) {
+                                if ( $last_backup_score >= 80 ) {
+                                    echo 'background-color: #d4edda; color: #155724;';
+                                } elseif ( $last_backup_score >= 60 ) {
+                                    echo 'background-color: #fff3cd; color: #856404;';
+                                } else {
+                                    echo 'background-color: #f8d7da; color: #721c24;';
+                                }
+                            }
+                        ?>">
+                            <?php echo $last_backup_score !== null ? esc_html( $last_backup_score . '/100' ) : ''; ?>
+                        </span>
+                    </div>
+                    
+                    <div id="museder-ai-backup-report-risk" style="margin-bottom: 12px;">
+                        <strong><?php esc_html_e( 'Risk Level:', 'museder-restoreone' ); ?></strong>
+                        <span id="museder-ai-backup-report-risk-badge" style="display: inline-block; margin-left: 8px; padding: 4px 12px; border-radius: 4px; font-weight: 600; <?php
+                            if ( ! empty( $last_backup_risk ) ) {
+                                $risk = strtolower( $last_backup_risk );
+                                $risk_colors = [
+                                    'low' => [ 'bg' => '#d4edda', 'color' => '#155724', 'text' => __( 'Low', 'museder-restoreone' ) ],
+                                    'medium' => [ 'bg' => '#fff3cd', 'color' => '#856404', 'text' => __( 'Medium', 'museder-restoreone' ) ],
+                                    'high' => [ 'bg' => '#f8d7da', 'color' => '#721c24', 'text' => __( 'High', 'museder-restoreone' ) ],
+                                ];
+                                $risk_style = $risk_colors[ $risk ] ?? $risk_colors['medium'];
+                                echo 'background-color: ' . esc_attr( $risk_style['bg'] ) . '; color: ' . esc_attr( $risk_style['color'] ) . ';';
+                            }
+                        ?>">
+                            <?php
+                            if ( ! empty( $last_backup_risk ) ) {
+                                $risk = strtolower( $last_backup_risk );
+                                $risk_texts = [
+                                    'low' => __( 'Low', 'museder-restoreone' ),
+                                    'medium' => __( 'Medium', 'museder-restoreone' ),
+                                    'high' => __( 'High', 'museder-restoreone' ),
+                                ];
+                                echo esc_html( $risk_texts[ $risk ] ?? $risk_texts['medium'] );
+                            }
+                            ?>
+                        </span>
+                    </div>
+                    
+                    <div id="museder-ai-backup-report-risk-factors" style="margin-top: 16px; margin-bottom: 16px;">
+                        <strong><?php esc_html_e( 'Risk Factors:', 'museder-restoreone' ); ?></strong>
+                        <ul id="museder-ai-backup-report-risk-factors-list" style="margin: 8px 0; padding-left: 20px;">
+                            <?php
+                            if ( ! empty( $last_backup_report['risk_factors'] ) && is_array( $last_backup_report['risk_factors'] ) ) {
+                                foreach ( $last_backup_report['risk_factors'] as $factor ) {
+                                    $name = isset( $factor['name'] ) ? $factor['name'] : '';
+                                    $severity = isset( $factor['severity'] ) ? strtolower( $factor['severity'] ) : 'medium';
+                                    $details = isset( $factor['details'] ) ? $factor['details'] : '';
+                                    $severity_colors = [
+                                        'low' => '#28a745',
+                                        'medium' => '#ffc107',
+                                        'high' => '#dc3545'
+                                    ];
+                                    $severity_color = $severity_colors[ $severity ] ?? '#666';
+                                    echo '<li>';
+                                    if ( $name ) {
+                                        echo '<strong style="color: ' . esc_attr( $severity_color ) . ';">' . esc_html( $name ) . '</strong>';
+                                    }
+                                    if ( $details ) {
+                                        echo ': ' . esc_html( $details );
+                                    }
+                                    echo '</li>';
+                                }
+                            }
+                            ?>
+                        </ul>
+                    </div>
+                    
+                    <div id="museder-ai-backup-report-recommendations" style="margin-top: 16px;">
+                        <strong><?php esc_html_e( 'Recommendations:', 'museder-restoreone' ); ?></strong>
+                        <ul id="museder-ai-backup-report-recommendations-list" style="margin: 8px 0; padding-left: 20px;">
+                            <?php
+                            if ( ! empty( $last_backup_report['recommendations'] ) && is_array( $last_backup_report['recommendations'] ) ) {
+                                foreach ( $last_backup_report['recommendations'] as $rec ) {
+                                    echo '<li>' . esc_html( is_array( $rec ) ? ( $rec['text'] ?? '' ) : $rec ) . '</li>';
+                                }
+                            }
+                            ?>
+                        </ul>
+                    </div>
+                </div>
+                
+                <div id="museder-ai-backup-report-error" style="display: none; margin-top: 16px; padding: 12px; background: #ffeaea; border-left: 4px solid #dc3232; border-radius: 4px; color: #721c24;">
+                    <strong><?php esc_html_e( 'Error:', 'museder-restoreone' ); ?></strong>
+                    <span id="museder-ai-backup-report-error-message"></span>
+                </div>
+            </div>
         </div>
     </div>
 </div>
