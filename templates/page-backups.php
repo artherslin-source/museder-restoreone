@@ -22,6 +22,61 @@ $backups = isset( $backups ) ? $backups : Backup_Lite_UI::get_backups_list();
     <?php
     $is_pro = Backup_Lite_Pro::is_pro_active();
     ?>
+    
+    <!-- Estimated Backup Size Card -->
+    <div class="backup-lite-card" id="backup-lite-estimate-card">
+        <h2>
+            📦 <?php esc_html_e( 'Estimated Backup Size', 'museder-restoreone' ); ?>
+        </h2>
+        <div id="backup-lite-estimate-content">
+            <div class="backup-lite-estimate-loading" style="text-align: center; padding: 20px;">
+                <span class="spinner is-active"></span>
+                <p><?php esc_html_e( 'Loading size estimates...', 'museder-restoreone' ); ?></p>
+            </div>
+            <div class="backup-lite-estimate-results" style="display: none;">
+                <div class="backup-lite-estimate-row" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid #e2e8f0;">
+                    <strong><?php esc_html_e( 'Database:', 'museder-restoreone' ); ?></strong>
+                    <span id="backup-lite-estimate-db-size">-</span>
+                </div>
+                <div class="backup-lite-estimate-row" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid #e2e8f0;">
+                    <strong><?php esc_html_e( 'Files (wp-content):', 'museder-restoreone' ); ?></strong>
+                    <span id="backup-lite-estimate-files-size">-</span>
+                </div>
+                <div class="backup-lite-estimate-row" style="display: flex; justify-content: space-between; align-items: center; padding: 16px 0; font-size: 16px; font-weight: 600; border-top: 2px solid #e2e8f0; margin-top: 8px;">
+                    <strong><?php esc_html_e( 'Estimated Total:', 'museder-restoreone' ); ?></strong>
+                    <span id="backup-lite-estimate-total-size" style="color: var(--bl-primary, #3b82f6);">-</span>
+                </div>
+                <div class="backup-lite-estimate-meta" style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e2e8f0; font-size: 12px; color: #64748b;">
+                    <p style="margin: 4px 0;">
+                        <?php esc_html_e( 'Last scanned:', 'museder-restoreone' ); ?>
+                        <span id="backup-lite-estimate-last-scanned">-</span>
+                    </p>
+                </div>
+                <div id="backup-lite-estimate-warning" class="backup-lite-estimate-warning" style="display: none; margin-top: 16px; padding: 12px; background: #fef3c7; border-left: 4px solid #f59e0b; border-radius: 4px; color: #92400e;">
+                    <strong>⚠️ <?php esc_html_e( 'Large site detected.', 'museder-restoreone' ); ?></strong>
+                    <p style="margin: 4px 0 0 0; font-size: 13px;">
+                        <?php esc_html_e( 'We recommend enabling chunk mode / background mode.', 'museder-restoreone' ); ?>
+                    </p>
+                </div>
+            </div>
+            <div class="backup-lite-estimate-scanning" style="display: none; margin-top: 16px;">
+                <div style="margin-bottom: 8px;">
+                    <strong><?php esc_html_e( 'Scanning...', 'museder-restoreone' ); ?></strong>
+                    <span id="backup-lite-estimate-progress-text">0%</span>
+                </div>
+                <div class="progress-bar" style="position: relative; height: 20px; border-radius: 5px; background: #e2e8f0; overflow: hidden;">
+                    <div class="progress-bar-fill" id="backup-lite-estimate-progress-fill" style="height: 100%; border-radius: 5px; width: 0; background: var(--bl-primary, #3b82f6); transition: width 0.3s ease;"></div>
+                </div>
+                <p id="backup-lite-estimate-scan-status" style="margin: 8px 0 0 0; font-size: 12px; color: #64748b;"></p>
+            </div>
+            <div class="backup-lite-estimate-actions" style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e2e8f0;">
+                <button type="button" class="button button-secondary" id="backup-lite-estimate-rescan">
+                    <?php esc_html_e( 'Re-scan Size', 'museder-restoreone' ); ?>
+                </button>
+            </div>
+        </div>
+    </div>
+
     <div class="backup-lite-card">
         <h2>
             ✨ <?php esc_html_e( 'Create Backup', 'museder-restoreone' ); ?>

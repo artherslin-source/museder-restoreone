@@ -1,14 +1,14 @@
 <?php
 /*
-Plugin Name: Museder RestoreOne – Backup & One-Click Restore
-Plugin URI: https://musederlabs.com/
-Description: A lightweight WordPress backup & restore plugin focused on compatibility, single-file site snapshots, and clean restore workflows.
-Version: 2.6.124
-Requires at least: 6.8
-Tested up to: 6.8
+Plugin Name: Museder RestoreOne
+Plugin URI: https://museder.com/restoreone
+Description: Museder RestoreOne is a simple backup & restore plugin for WordPress.
+Version: 2.7.10
+Requires at least: 5.8
+Tested up to: 6.7
 Requires PHP: 7.4
-Author: Museder Labs
-Author URI: https://musederlabs.com/
+Author: Jerry Lin
+Author URI: https://museder.com/
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 Text Domain: museder-restoreone
@@ -17,7 +17,7 @@ Domain Path: /languages
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-define( 'BACKUP_LITE_VERSION', '2.6.124' );
+define( 'BACKUP_LITE_VERSION', '2.7.10' );
 define( 'BACKUP_LITE_PATH', plugin_dir_path( __FILE__ ) );
 define( 'BACKUP_LITE_URL', plugin_dir_url( __FILE__ ) );
 
@@ -41,6 +41,7 @@ require_once BACKUP_LITE_PATH . 'includes/class-email-handler.php';
 require_once BACKUP_LITE_PATH . 'includes/class-settings.php';
 require_once BACKUP_LITE_PATH . 'includes/class-chunk-handler.php';
 require_once BACKUP_LITE_PATH . 'includes/class-chunk-handler-v2.php';
+require_once BACKUP_LITE_PATH . 'includes/class-estimate-size.php';
 
 // PRO Features will be loaded in backup_lite_bootstrap() after WordPress is fully loaded
 // This prevents errors during activation when get_option() may not be available
@@ -134,6 +135,7 @@ function backup_lite_bootstrap() {
     Backup_Lite_Settings::init();
     Backup_Lite_Chunk_Handler::init();
     Backup_Lite_Chunk_V2::init();
+    Backup_Lite_Estimate_Size::init();
 
     // Load PRO features if PRO is active (deferred from file loading to prevent activation errors)
     if ( class_exists( 'Backup_Lite_Pro' ) && method_exists( 'Backup_Lite_Pro', 'is_pro_active' ) && Backup_Lite_Pro::is_pro_active() ) {

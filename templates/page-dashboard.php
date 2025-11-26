@@ -17,11 +17,46 @@ $recent_logs              = isset( $recent_logs ) ? $recent_logs : Backup_Lite_L
 
 $chart_success = isset( $activity_stats['success'] ) ? (int) $activity_stats['success'] : 0;
 $chart_failed  = isset( $activity_stats['failed'] ) ? (int) $activity_stats['failed'] : 0;
+
+// Check if safe mode is active
+$safe_mode_active = get_option( 'backup_lite_safe_mode', '' ) === '1';
+$prev_plugins_count = 0;
+if ( $safe_mode_active ) {
+    $prev_plugins = get_option( 'backup_lite_prev_active_plugins', [] );
+    $prev_plugins_count = is_array( $prev_plugins ) ? count( $prev_plugins ) : 0;
+}
 ?>
 
 <div class="wrap backup-lite-admin backup-lite-dashboard">
     <h1 class="backup-lite-page-title">💾 <?php esc_html_e( 'Museder RestoreOne Dashboard', 'museder-restoreone' ); ?></h1>
     <p class="backup-lite-page-description"><?php esc_html_e( 'Quick overview of your environment, schedules, and the latest backup health signals.', 'museder-restoreone' ); ?></p>
+
+    <?php if ( $safe_mode_active ) : ?>
+    <div class="notice notice-warning is-dismissible" id="backup-lite-safe-mode-notice" style="border-left-color: #ffb900; padding: 12px 20px; margin: 20px 0;">
+        <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px;">
+            <div style="flex: 1; min-width: 300px;">
+                <p style="margin: 0 0 8px 0; font-weight: 600;">
+                    <span style="font-size: 20px; margin-right: 8px;">🛡️</span>
+                    <?php esc_html_e( 'Safe Mode Active', 'museder-restoreone' ); ?>
+                </p>
+                <p style="margin: 0; color: #646970;">
+                    <?php
+                    printf(
+                        /* translators: %d: Number of plugins that were deactivated. */
+                        esc_html__( 'RestoreOne has enabled safe mode after restore, temporarily disabling %d plugin(s) to prevent conflicts. Please verify your site is working correctly, then click the button below to restore all plugins.', 'museder-restoreone' ),
+                        $prev_plugins_count
+                    );
+                    ?>
+                </p>
+            </div>
+            <div>
+                <button type="button" id="backup-lite-exit-safe-mode-btn" class="button button-primary" style="white-space: nowrap;">
+                    <?php esc_html_e( 'Exit Safe Mode & Restore Plugins', 'museder-restoreone' ); ?>
+                </button>
+            </div>
+        </div>
+    </div>
+    <?php endif; ?>
 
     <div class="backup-lite-dashboard-actions">
         <a class="button button-primary" href="<?php echo esc_url( admin_url( 'admin.php?page=backup-lite-settings' ) ); ?>">⚙️ <?php esc_html_e( 'Settings', 'museder-restoreone' ); ?></a>

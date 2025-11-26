@@ -199,14 +199,108 @@ class Backup_Lite_Restore_Service {
             $meta['message']    = __( 'Extracting archive and preparing files…', 'museder-restoreone' );
             self::write_job_meta( $job_id, $meta );
 
-            $extracted = self::extract_for_restore( $job_id, $meta['file'] );
+            // Check if this is an All-in-One WP Migration backup and convert it if needed
+            $file_to_extract = $meta['file'];
+            $ext = strtolower( pathinfo( $file_to_extract, PATHINFO_EXTENSION ) );
+            
+            if ( 'wpress' === $ext || ( 'zip' === $ext && file_exists( $file_to_extract ) ) ) {
+                require_once plugin_dir_path( __FILE__ ) . 'class-ai1wm-converter.php';
+                
+                try {
+                    if ( class_exists( 'Backup_Lite_AI1WM_Converter' ) && Backup_Lite_AI1WM_Converter::is_ai1wm_backup( $file_to_extract ) ) {
+                        backup_lite_log( 'info', 'Detected All-in-One WP Migration backup in restore service, converting to Museder RestoreOne format.', [
+                            'job_id' => $job_id,
+                            'file' => basename( $file_to_extract ),
+                        ] );
+                        
+                        $convert_result = Backup_Lite_AI1WM_Converter::convert( $file_to_extract );
+                        
+                        if ( ! empty( $convert_result['success'] ) && ! empty( $convert_result['file'] ) && file_exists( $convert_result['file'] ) ) {
+                            // Use converted file for extraction
+                            $file_to_extract = $convert_result['file'];
+                            $meta['file'] = $file_to_extract;
+                            $meta['file_name'] = basename( $file_to_extract );
+                            backup_lite_log( 'info', 'Successfully converted All-in-One backup in restore service.', [
+                                'job_id' => $job_id,
+                                'converted_file' => basename( $file_to_extract ),
+                            ] );
+                        } else {
+                            // Conversion failed or not needed (e.g., .wpress files don't need conversion)
+                            $log_level = ( isset( $convert_result['error'] ) && 'wpress_no_conversion_needed' === $convert_result['error'] ) ? 'info' : 'warning';
+                            backup_lite_log( $log_level, 'All-in-One conversion not performed in restore service, will attempt direct extraction.', [
+                                'job_id' => $job_id,
+                                'error' => isset( $convert_result['error'] ) ? $convert_result['error'] : 'unknown',
+                                'message' => isset( $convert_result['message'] ) ? $convert_result['message'] : '',
+                            ] );
+                        }
+                    }
+                } catch ( Exception $e ) {
+                    // Log conversion error but continue with original file
+                    backup_lite_log( 'warning', 'Exception during All-in-One conversion in restore service, continuing with original file.', [
+                        'job_id' => $job_id,
+                        'error' => $e->getMessage(),
+                    ] );
+                }
+            }
+
+            // Log extraction attempt
+            backup_lite_log( 'info', 'Starting archive extraction.', [
+                'job_id' => $job_id,
+                'file' => basename( $file_to_extract ),
+                'file_size' => file_exists( $file_to_extract ) ? size_format( filesize( $file_to_extract ), 2 ) : 'unknown',
+            ] );
+
+            try {
+                $extracted = self::extract_for_restore( $job_id, $file_to_extract );
+                backup_lite_log( 'info', 'Archive extraction completed successfully.', [
+                    'job_id' => $job_id,
+                    'extract_dir' => $extracted,
+                ] );
+            } catch ( Exception $extract_exception ) {
+                // Log detailed extraction error
+                backup_lite_log( 'error', 'Archive extraction failed.', [
+                    'job_id' => $job_id,
+                    'file' => basename( $file_to_extract ),
+                    'error' => $extract_exception->getMessage(),
+                    'file_exists' => file_exists( $file_to_extract ),
+                    'file_readable' => file_exists( $file_to_extract ) ? is_readable( $file_to_extract ) : false,
+                    'file_size' => file_exists( $file_to_extract ) ? filesize( $file_to_extract ) : 0,
+                ] );
+                // Re-throw with enhanced message
+                throw new RuntimeException( sprintf(
+                    /* translators: 1: Original error message, 2: File name */
+                    esc_html__( 'Failed to extract backup archive: %1$s. File: %2$s. Please check the logs for details.', 'museder-restoreone' ),
+                    $extract_exception->getMessage(),
+                    basename( $file_to_extract )
+                ) );
+            }
 
             $meta['stage']    = 'restore-db';
             $meta['progress'] = 90;
             $meta['message']  = __( 'Importing database…', 'museder-restoreone' );
             self::write_job_meta( $job_id, $meta );
 
+            // Log database restore start
+            $old_siteurl = get_option( 'siteurl' );
+            $old_home = get_option( 'home' );
+            backup_lite_log( 'info', 'Starting database import.', [
+                'job_id' => $job_id,
+                'old_siteurl' => $old_siteurl,
+                'old_home' => $old_home,
+            ] );
+
             self::import_database_from_extract( $extracted, $meta );
+
+            // Log database restore completion
+            $new_siteurl = get_option( 'siteurl' );
+            $new_home = get_option( 'home' );
+            backup_lite_log( 'info', 'Database import completed.', [
+                'job_id' => $job_id,
+                'new_siteurl' => $new_siteurl,
+                'new_home' => $new_home,
+                'siteurl_changed' => ( $old_siteurl !== $new_siteurl ),
+                'home_changed' => ( $old_home !== $new_home ),
+            ] );
 
             $meta['stage']    = 'restore-files-final';
             $meta['message']  = __( 'Copying wp-content files…', 'museder-restoreone' );
@@ -232,6 +326,45 @@ class Backup_Lite_Restore_Service {
             // Clear caches and refresh permalinks after restore
             self::post_restore_cleanup();
 
+            // Enter safe mode after restore to prevent plugin conflicts
+            $safe_mode_entered = false;
+            try {
+                Backup_Lite_Restore::enter_safe_mode_after_import();
+                $safe_mode_entered = true;
+                backup_lite_log( 'info', 'Safe mode activated after restore.', [ 'job_id' => $job_id ] );
+            } catch ( Exception $e ) {
+                backup_lite_log( 'warning', 'Failed to enter safe mode after restore.', [
+                    'job_id' => $job_id,
+                    'error' => $e->getMessage(),
+                ] );
+            }
+
+            // Prepare metadata for hooks
+            $restore_meta = [
+                'job_id' => $job_id,
+                'file' => isset( $meta['file'] ) ? $meta['file'] : '',
+                'file_name' => isset( $meta['file_name'] ) ? $meta['file_name'] : '',
+                'source' => isset( $meta['source'] ) ? $meta['source'] : '',
+                'siteurl_old' => isset( $meta['validation']['domain']['backup'] ) ? $meta['validation']['domain']['backup'] : '',
+                'siteurl_new' => isset( $meta['validation']['domain']['current'] ) ? $meta['validation']['domain']['current'] : home_url(),
+                'safe_mode' => $safe_mode_entered,
+                'completed_at' => current_time( 'mysql' ),
+            ];
+
+            // Fire hook after restore completion (before marking as done)
+            try {
+                do_action( 'backup_lite_after_restore', $restore_meta );
+                if ( $safe_mode_entered ) {
+                    do_action( 'backup_lite_after_restore_safe_mode', $restore_meta );
+                }
+            } catch ( Exception $hook_exception ) {
+                // Log hook errors but don't fail the restore
+                backup_lite_log( 'warning', 'Error in restore completion hook.', [
+                    'job_id' => $job_id,
+                    'error' => $hook_exception->getMessage(),
+                ] );
+            }
+
             $meta['stage']      = 'done';
             $meta['progress']   = 100;
             $meta['message']    = __( 'Restore completed successfully.', 'museder-restoreone' );
@@ -239,7 +372,10 @@ class Backup_Lite_Restore_Service {
             $meta['updated_at'] = current_time( 'mysql' );
             self::write_job_meta( $job_id, $meta );
 
-            backup_lite_log( 'info', 'Restore job executed.', [ 'job_id' => $job_id ] );
+            backup_lite_log( 'info', 'Restore job executed successfully.', [
+                'job_id' => $job_id,
+                'safe_mode' => $safe_mode_entered,
+            ] );
 
             return [
                 'ok'                  => true,
@@ -504,15 +640,53 @@ class Backup_Lite_Restore_Service {
     }
 
     protected static function unpack_archive( $archive_path, $destination ) {
+        if ( ! file_exists( $archive_path ) || ! is_readable( $archive_path ) ) {
+            backup_lite_log( 'error', 'Archive file not found or not readable for extraction.', [
+                'file' => $archive_path,
+                'exists' => file_exists( $archive_path ),
+                'readable' => file_exists( $archive_path ) ? is_readable( $archive_path ) : false,
+            ] );
+            return [ 'success' => false, 'error' => 'file_not_readable' ];
+        }
+
+        $file_size = filesize( $archive_path );
+        if ( $file_size <= 0 ) {
+            backup_lite_log( 'error', 'Archive file is empty or invalid.', [
+                'file' => basename( $archive_path ),
+                'size' => $file_size,
+            ] );
+            return [ 'success' => false, 'error' => 'file_empty' ];
+        }
+
+        // Try ZipArchive first
         if ( class_exists( 'ZipArchive' ) ) {
             $zip = new ZipArchive();
-            if ( true === $zip->open( $archive_path ) ) {
-                $zip->extractTo( $destination );
+            $open_result = $zip->open( $archive_path );
+            
+            if ( true === $open_result ) {
+                $extract_result = $zip->extractTo( $destination );
                 $zip->close();
-                return [ 'success' => true ];
+                
+                if ( $extract_result ) {
+                    backup_lite_log( 'info', 'Archive extracted successfully using ZipArchive.', [
+                        'file' => basename( $archive_path ),
+                        'destination' => $destination,
+                    ] );
+                    return [ 'success' => true ];
+                } else {
+                    backup_lite_log( 'warning', 'ZipArchive extractTo() returned false, trying PclZip fallback.', [
+                        'file' => basename( $archive_path ),
+                    ] );
+                }
+            } else {
+                backup_lite_log( 'warning', 'ZipArchive failed to open archive, trying PclZip fallback.', [
+                    'file' => basename( $archive_path ),
+                    'error_code' => $open_result,
+                ] );
             }
         }
 
+        // Fallback to PclZip
         if ( ! class_exists( 'PclZip' ) ) {
             require_once ABSPATH . 'wp-admin/includes/class-pclzip.php';
         }
@@ -523,8 +697,35 @@ class Backup_Lite_Restore_Service {
             PCLZIP_OPT_PATH => $destination,
             PCLZIP_OPT_REPLACE_NEWER => true,
         ];
-        $result = $pcl->extract( $options );
-        return [ 'success' => ( false !== $result && 0 !== $result ) ];
+        
+        try {
+            $result = $pcl->extract( $options );
+            $success = ( false !== $result && 0 !== $result );
+            
+            if ( $success ) {
+                backup_lite_log( 'info', 'Archive extracted successfully using PclZip.', [
+                    'file' => basename( $archive_path ),
+                    'destination' => $destination,
+                    'extracted_count' => is_array( $result ) ? count( $result ) : ( is_numeric( $result ) ? $result : 'unknown' ),
+                ] );
+            } else {
+                $error_code = method_exists( $pcl, 'errorCode' ) ? $pcl->errorCode() : 'unknown';
+                $error_info = method_exists( $pcl, 'errorInfo' ) ? $pcl->errorInfo( true ) : 'Unknown error';
+                backup_lite_log( 'error', 'PclZip extraction failed.', [
+                    'file' => basename( $archive_path ),
+                    'error_code' => $error_code,
+                    'error_info' => $error_info,
+                ] );
+            }
+            
+            return [ 'success' => $success, 'error_code' => $success ? null : $error_code, 'error_info' => $success ? null : $error_info ];
+        } catch ( Exception $pcl_exception ) {
+            backup_lite_log( 'error', 'PclZip extraction threw exception.', [
+                'file' => basename( $archive_path ),
+                'error' => $pcl_exception->getMessage(),
+            ] );
+            return [ 'success' => false, 'error' => 'pclzip_exception', 'error_message' => $pcl_exception->getMessage() ];
+        }
     }
 
     protected static function import_database_from_extract( $extract_dir, array $meta ) {
@@ -591,15 +792,151 @@ class Backup_Lite_Restore_Service {
             return;
         }
 
-        // Use the complete search-replace implementation from Backup_Lite_Restore
-        $pairs = [
-            [
-                'search'  => $from,
-                'replace' => $to,
-            ],
-        ];
+        // Build comprehensive URL replacement pairs
+        $pairs = self::build_url_replacement_pairs( $meta );
+
+        if ( empty( $pairs ) ) {
+            backup_lite_log( 'warning', 'No URL replacement pairs generated.', [
+                'from' => $from,
+                'to' => $to,
+            ] );
+            return;
+        }
+
+        // Log the pairs being used
+        $pair_summary = [];
+        foreach ( $pairs as $pair ) {
+            $pair_summary[] = $pair['search'] . ' → ' . $pair['replace'];
+        }
+        backup_lite_log( 'info', 'Applying URL search & replace.', [
+            'pairs_count' => count( $pairs ),
+            'pairs' => $pair_summary,
+        ] );
 
         self::run_search_replace( $pairs );
+    }
+
+    /**
+     * Build comprehensive URL replacement pairs for search-replace operation.
+     * Handles http/https, www/non-www, and subdirectory path variations.
+     *
+     * @param array $meta Restore job metadata containing domain information.
+     * @return array Array of search/replace pairs.
+     */
+    protected static function build_url_replacement_pairs( array $meta ) {
+        $old_base = isset( $meta['validation']['domain']['backup'] ) ? $meta['validation']['domain']['backup'] : '';
+        $new_base = isset( $meta['validation']['domain']['current'] ) ? $meta['validation']['domain']['current'] : '';
+
+        // Fallback to current site URLs if not in meta
+        if ( empty( $old_base ) ) {
+            // Try to get from metadata if available
+            $metadata = self::extract_archive_metadata( isset( $meta['id'] ) ? $meta['id'] : '', isset( $meta['file'] ) ? $meta['file'] : '' );
+            if ( ! empty( $metadata['siteurl'] ) ) {
+                $old_base = $metadata['siteurl'];
+            } else {
+                // Last resort: use current site URL as old base (not ideal but better than nothing)
+                $old_base = home_url();
+            }
+        }
+
+        if ( empty( $new_base ) ) {
+            $new_base = home_url();
+        }
+
+        // Normalize URLs: remove trailing slashes
+        $old_base = rtrim( $old_base, '/' );
+        $new_base = rtrim( $new_base, '/' );
+
+        if ( empty( $old_base ) || empty( $new_base ) || $old_base === $new_base ) {
+            return [];
+        }
+
+        // Parse URLs to extract components
+        $old_parsed = wp_parse_url( $old_base );
+        $new_parsed = wp_parse_url( $new_base );
+
+        if ( ! $old_parsed || ! $new_parsed ) {
+            // If parsing fails, use simple replacement
+            return [
+                [
+                    'search'  => $old_base,
+                    'replace' => $new_base,
+                ],
+            ];
+        }
+
+        $old_scheme = isset( $old_parsed['scheme'] ) ? $old_parsed['scheme'] : 'http';
+        $old_host   = isset( $old_parsed['host'] ) ? $old_parsed['host'] : '';
+        $old_path   = isset( $old_parsed['path'] ) ? $old_parsed['path'] : '';
+
+        $new_scheme = isset( $new_parsed['scheme'] ) ? $new_parsed['scheme'] : 'http';
+        $new_host   = isset( $new_parsed['host'] ) ? $new_parsed['host'] : '';
+        $new_path   = isset( $new_parsed['path'] ) ? $new_parsed['path'] : '';
+
+        if ( empty( $old_host ) || empty( $new_host ) ) {
+            return [];
+        }
+
+        // Build base URLs with and without www
+        $old_host_with_www    = 'www.' . ltrim( $old_host, 'www.' );
+        $old_host_without_www = preg_replace( '/^www\./', '', $old_host );
+        $new_host_with_www    = 'www.' . ltrim( $new_host, 'www.' );
+        $new_host_without_www = preg_replace( '/^www\./', '', $new_host );
+
+        // Determine if we should preserve www or remove it based on new_base
+        $new_has_www = ( 0 === strpos( $new_host, 'www.' ) );
+        $target_new_host = $new_has_www ? $new_host_with_www : $new_host_without_www;
+
+        $pairs = [];
+
+        // Generate pairs for all common variations
+        $variations = [
+            // http variations
+            [ 'http', $old_host, $old_path, $new_scheme, $target_new_host, $new_path ],
+            [ 'http', $old_host_with_www, $old_path, $new_scheme, $target_new_host, $new_path ],
+            [ 'http', $old_host_without_www, $old_path, $new_scheme, $target_new_host, $new_path ],
+            // https variations
+            [ 'https', $old_host, $old_path, $new_scheme, $target_new_host, $new_path ],
+            [ 'https', $old_host_with_www, $old_path, $new_scheme, $target_new_host, $new_path ],
+            [ 'https', $old_host_without_www, $old_path, $new_scheme, $target_new_host, $new_path ],
+        ];
+
+        foreach ( $variations as $variation ) {
+            list( $old_s, $old_h, $old_p, $new_s, $new_h, $new_p ) = $variation;
+
+            $old_url = $old_s . '://' . $old_h . $old_p;
+            $new_url = $new_s . '://' . $new_h . $new_p;
+
+            // Only add if different
+            if ( $old_url !== $new_url ) {
+                $pairs[] = [
+                    'search'  => $old_url,
+                    'replace' => $new_url,
+                ];
+            }
+        }
+
+        // Also handle path-only replacements if paths differ
+        if ( $old_path !== $new_path && ! empty( $old_path ) ) {
+            // Replace old path with new path in URLs
+            $pairs[] = [
+                'search'  => $old_path,
+                'replace' => $new_path,
+            ];
+        }
+
+        // Remove duplicates
+        $unique_pairs = [];
+        $seen = [];
+        foreach ( $pairs as $pair ) {
+            $key = $pair['search'] . '|' . $pair['replace'];
+            if ( ! isset( $seen[ $key ] ) ) {
+                $seen[ $key ] = true;
+                $unique_pairs[] = $pair;
+            }
+        }
+
+        return $unique_pairs;
     }
 
     /**

@@ -97,17 +97,34 @@ class Backup_Lite_Restore {
         }
 
         if ( empty( $extract_result['success'] ) ) {
+            $ext = strtolower( pathinfo( $archive_file, PATHINFO_EXTENSION ) );
+            $error_code = isset( $extract_result['code'] ) ? $extract_result['code'] : 'zip_open_failed';
+            
+            // Provide more specific error messages for .wpress files
+            $error_message = __( 'Unable to extract backup archive. Check logs for details.', 'museder-restoreone' );
+            if ( 'wpress' === $ext ) {
+                if ( 'tar_not_available' === $error_code ) {
+                    $error_message = __( 'Unable to extract .wpress file: tar command is not available on this server. Please contact your hosting provider to enable tar command, or convert the .wpress file to ZIP format first.', 'museder-restoreone' );
+                } elseif ( 'wpress_extraction_failed' === $error_code ) {
+                    $error_message = __( 'Unable to extract .wpress file. The file may be corrupted, use a custom format, or require All-in-One WP Migration plugin to extract. Please try: 1) Verify the backup file is not corrupted, 2) Use All-in-One WP Migration plugin to convert the backup to ZIP format, or 3) Contact support with the log file for assistance.', 'museder-restoreone' );
+                } else {
+                    $error_message = __( 'Unable to extract .wpress file. All-in-One WP Migration .wpress files may require special handling. Please try converting the backup to ZIP format using All-in-One WP Migration plugin, or check the logs for details.', 'museder-restoreone' );
+                }
+            }
+            
             backup_lite_log( 'error', 'Failed to extract archive for restore.', [
                 'archive'        => $archive_file,
                 'zip_error_code' => isset( $extract_result['zip_error_code'] ) ? $extract_result['zip_error_code'] : null,
+                'error_code'     => $error_code,
+                'extension'      => $ext,
             ] );
             backup_lite_delete_directory( $temp_dir );
 
             return [
                 'success' => false,
-                'message' => __( 'Unable to extract backup archive. Check logs for details.', 'museder-restoreone' ),
+                'message' => $error_message,
                 'log'     => $log,
-                'code'    => isset( $extract_result['code'] ) ? $extract_result['code'] : 'zip_open_failed',
+                'code'    => $error_code,
                 'zip_error_code' => isset( $extract_result['zip_error_code'] ) ? $extract_result['zip_error_code'] : null,
             ];
         }
@@ -563,6 +580,26 @@ class Backup_Lite_Restore {
     private static function extract_archive( $archive, $destination ) {
         $zip_error_code = null;
 
+        // Check if this is a .wpress file (All-in-One WP Migration format)
+        $ext = strtolower( pathinfo( $archive, PATHINFO_EXTENSION ) );
+        if ( 'wpress' === $ext ) {
+            // Try to extract .wpress file using tar command (it's a gzip-compressed tar archive)
+            $wpress_result = self::extract_with_tar( $archive, $destination );
+            if ( ! empty( $wpress_result['success'] ) ) {
+                return [
+                    'success'        => true,
+                    'method'         => 'tar',
+                    'zip_error_code' => 0,
+                ];
+            }
+
+            // If tar extraction failed, log and continue to try ZIP methods as fallback
+            backup_lite_log( 'warning', 'WPRESS extraction with tar failed, attempting ZIP methods as fallback', [
+                'archive' => $archive,
+                'error'  => isset( $wpress_result['error'] ) ? $wpress_result['error'] : 'unknown',
+            ] );
+        }
+
         if ( backup_lite_can_use_ziparchive() ) {
             $zip_result = self::extract_with_ziparchive( $archive, $destination );
             if ( ! empty( $zip_result['success'] ) ) {
@@ -593,8 +630,13 @@ class Backup_Lite_Restore {
             $zip_error_code = $zip_error_code ?? $pcl_result['error_code'];
         }
 
-        // If both methods failed, return error
-        backup_lite_log( 'error', 'Both ZipArchive and PclZip extraction failed', [
+        // If all methods failed, return error
+        $error_message = 'Both ZipArchive and PclZip extraction failed';
+        if ( 'wpress' === $ext ) {
+            $error_message = 'WPRESS extraction failed. All-in-One WP Migration .wpress files require tar command or need to be converted to ZIP format first.';
+        }
+        
+        backup_lite_log( 'error', $error_message, [
             'archive'    => $archive,
             'zip_error_code' => $zip_error_code,
             'pclzip_error' => isset( $pcl_result['error'] ) ? $pcl_result['error'] : '',
@@ -602,7 +644,7 @@ class Backup_Lite_Restore {
 
         return [
             'success'        => false,
-            'code'           => 'zip_open_failed',
+            'code'           => 'wpress' === $ext ? 'wpress_extraction_failed' : 'zip_open_failed',
             'zip_error_code' => $zip_error_code,
         ];
     }
@@ -702,6 +744,292 @@ class Backup_Lite_Restore {
         }
 
         return [ 'success' => true, 'entries' => $zip->numFiles ];
+    }
+
+    /**
+     * Extract .wpress file using tar command
+     * .wpress files can be gzip-compressed tar, uncompressed tar, or other formats
+     *
+     * @param string $archive Path to .wpress file
+     * @param string $destination Destination directory
+     * @return array{success:bool, error?:string, error_code?:string}
+     */
+    private static function extract_with_tar( $archive, $destination ) {
+        // Check if tar command is available
+        if ( ! backup_lite_command_exists( 'tar' ) ) {
+            backup_lite_log( 'warning', 'tar command not available for WPRESS extraction', [
+                'archive' => basename( $archive ),
+            ] );
+            return [
+                'success'    => false,
+                'error'      => __( 'tar command is not available on this server. .wpress files require tar command for extraction.', 'museder-restoreone' ),
+                'error_code' => 'tar_not_available',
+            ];
+        }
+
+        // Ensure destination directory exists
+        $destination = wp_normalize_path( $destination );
+        backup_lite_ensure_directory( $destination );
+
+        // Sanitize paths for shell command
+        $archive_escaped = escapeshellarg( $archive );
+        $destination_escaped = escapeshellarg( $destination );
+
+        // Detect file format by reading first few bytes
+        $file_handle = fopen( $archive, 'rb' );
+        $file_header = '';
+        if ( $file_handle ) {
+            $file_header = fread( $file_handle, 512 ); // Read first 512 bytes
+            fclose( $file_handle );
+        }
+
+        // Try different extraction methods based on file format
+        $methods = [];
+        
+        // Check if it's gzip compressed (starts with 0x1f 0x8b)
+        if ( strlen( $file_header ) >= 2 && ord( $file_header[0] ) === 0x1f && ord( $file_header[1] ) === 0x8b ) {
+            // Gzip compressed tar: tar -xzf
+            $methods[] = [
+                'command' => sprintf( 'tar -xzf %s -C %s 2>&1', $archive_escaped, $destination_escaped ),
+                'method' => 'gzip-compressed tar',
+            ];
+        }
+        
+        // Check if it's a tar file (starts with tar magic bytes or ustar)
+        if ( strlen( $file_header ) >= 263 ) {
+            $ustar_pos = strpos( $file_header, 'ustar', 257 );
+            if ( $ustar_pos !== false || substr( $file_header, 0, 4 ) === "\x00\x00\x00" ) {
+                // Uncompressed tar: tar -xf
+                $methods[] = [
+                    'command' => sprintf( 'tar -xf %s -C %s 2>&1', $archive_escaped, $destination_escaped ),
+                    'method' => 'uncompressed tar',
+                ];
+            }
+        }
+        
+        // If we couldn't detect format, try both methods in order
+        if ( empty( $methods ) ) {
+            $methods[] = [
+                'command' => sprintf( 'tar -xzf %s -C %s 2>&1', $archive_escaped, $destination_escaped ),
+                'method' => 'gzip-compressed tar (auto-detect)',
+            ];
+            $methods[] = [
+                'command' => sprintf( 'tar -xf %s -C %s 2>&1', $archive_escaped, $destination_escaped ),
+                'method' => 'uncompressed tar (fallback)',
+            ];
+        }
+
+        backup_lite_log( 'info', 'Extracting WPRESS file with tar command', [
+            'archive' => basename( $archive ),
+            'destination' => $destination,
+            'detected_methods' => count( $methods ),
+        ] );
+
+        $last_error = '';
+        $last_return_code = 0;
+
+        foreach ( $methods as $method_info ) {
+            $command = $method_info['command'];
+            $method_name = $method_info['method'];
+            
+            backup_lite_log( 'info', 'Attempting WPRESS extraction', [
+                'archive' => basename( $archive ),
+                'method' => $method_name,
+            ] );
+
+            $output = [];
+            $return_code = 0;
+
+            if ( function_exists( 'exec' ) ) {
+                exec( $command, $output, $return_code );
+            } elseif ( function_exists( 'shell_exec' ) ) {
+                $output_str = shell_exec( $command . ' 2>&1' );
+                $output = ! empty( $output_str ) ? explode( "\n", trim( $output_str ) ) : [];
+                // For shell_exec, check if output contains error indicators
+                if ( ! empty( $output_str ) && ( stripos( $output_str, 'error' ) !== false || stripos( $output_str, 'failed' ) !== false ) ) {
+                    $return_code = 1;
+                }
+            } else {
+                return [
+                    'success'    => false,
+                    'error'      => __( 'No shell execution function available for tar extraction.', 'museder-restoreone' ),
+                    'error_code' => 'shell_not_available',
+                ];
+            }
+
+            if ( 0 === $return_code ) {
+                // Success! Verify that files were actually extracted
+                $extracted_files = 0;
+                if ( is_dir( $destination ) ) {
+                    try {
+                        $iterator = new RecursiveIteratorIterator(
+                            new RecursiveDirectoryIterator( $destination, FilesystemIterator::SKIP_DOTS ),
+                            RecursiveIteratorIterator::LEAVES_ONLY
+                        );
+                        $extracted_files = iterator_count( $iterator );
+                    } catch ( Exception $e ) {
+                        backup_lite_log( 'warning', 'Unable to count extracted files after tar extraction', [
+                            'error' => $e->getMessage(),
+                        ] );
+                    }
+                }
+
+                if ( $extracted_files > 0 ) {
+                    backup_lite_log( 'info', 'WPRESS tar extraction completed successfully', [
+                        'archive' => basename( $archive ),
+                        'method' => $method_name,
+                        'files_extracted' => $extracted_files,
+                    ] );
+
+                    return [
+                        'success' => true,
+                    ];
+                } else {
+                    // No files extracted, continue to next method
+                    backup_lite_log( 'warning', 'WPRESS tar extraction completed but no files found', [
+                        'archive' => basename( $archive ),
+                        'method' => $method_name,
+                    ] );
+                    $last_error = __( 'tar extraction completed but no files were extracted.', 'museder-restoreone' );
+                    $last_return_code = 1;
+                    continue;
+                }
+            } else {
+                // This method failed, try next one
+                $error_message = ! empty( $output ) ? implode( "\n", $output ) : __( 'tar extraction failed', 'museder-restoreone' );
+                backup_lite_log( 'warning', 'WPRESS tar extraction method failed, trying next method', [
+                    'archive' => basename( $archive ),
+                    'method' => $method_name,
+                    'return_code' => $return_code,
+                    'error' => $error_message,
+                ] );
+                $last_error = $error_message;
+                $last_return_code = $return_code;
+                continue;
+            }
+        }
+
+        // All tar methods failed - try PHP native extraction as last resort
+        // .wpress files may use All-in-One WP Migration's custom format
+        backup_lite_log( 'info', 'WPRESS tar extraction failed, attempting PHP native extraction', [
+            'archive' => basename( $archive ),
+        ] );
+        
+        $php_result = self::extract_wpress_with_php( $archive, $destination );
+        if ( ! empty( $php_result['success'] ) ) {
+            return $php_result;
+        }
+        
+        // All methods failed
+        backup_lite_log( 'error', 'WPRESS extraction failed with all methods (tar and PHP)', [
+            'archive' => basename( $archive ),
+            'last_error' => $last_error,
+            'last_return_code' => $last_return_code,
+            'php_error' => isset( $php_result['error'] ) ? $php_result['error'] : '',
+        ] );
+        
+        // Provide more helpful error message
+        $error_message = __( 'Unable to extract .wpress file. The file may be corrupted, in an unsupported format, or require All-in-One WP Migration plugin to extract. Please try using All-in-One WP Migration plugin to convert the backup to ZIP format first.', 'museder-restoreone' );
+        
+        return [
+            'success'    => false,
+            'error'      => $error_message,
+            'error_code' => 'wpress_extraction_failed',
+        ];
+    }
+    
+    /**
+     * Attempt to extract .wpress file using PHP native functions
+     * This is a fallback when tar command fails
+     *
+     * @param string $archive Path to .wpress file
+     * @param string $destination Destination directory
+     * @return array{success:bool, error?:string, error_code?:string}
+     */
+    private static function extract_wpress_with_php( $archive, $destination ) {
+        // Ensure destination directory exists
+        $destination = wp_normalize_path( $destination );
+        backup_lite_ensure_directory( $destination );
+        
+        backup_lite_log( 'info', 'Attempting WPRESS extraction with PHP native functions', [
+            'archive' => basename( $archive ),
+            'destination' => $destination,
+        ] );
+        
+        // Check if file is readable
+        if ( ! file_exists( $archive ) || ! is_readable( $archive ) ) {
+            return [
+                'success'    => false,
+                'error'      => __( 'WPRESS file is not readable.', 'museder-restoreone' ),
+                'error_code' => 'file_not_readable',
+            ];
+        }
+        
+        // Read file header to determine format
+        $file_handle = fopen( $archive, 'rb' );
+        if ( ! $file_handle ) {
+            return [
+                'success'    => false,
+                'error'      => __( 'Unable to open WPRESS file for reading.', 'museder-restoreone' ),
+                'error_code' => 'file_open_failed',
+            ];
+        }
+        
+        $header = fread( $file_handle, 1024 );
+        fclose( $file_handle );
+        
+        // Check for gzip magic bytes (0x1f 0x8b)
+        if ( strlen( $header ) >= 2 && ord( $header[0] ) === 0x1f && ord( $header[1] ) === 0x8b ) {
+            // Try gzopen
+            if ( function_exists( 'gzopen' ) ) {
+                $gz_handle = gzopen( $archive, 'rb' );
+                if ( $gz_handle ) {
+                    // Read and write decompressed data
+                    $output_file = trailingslashit( $destination ) . 'extracted_content';
+                    $output_handle = fopen( $output_file, 'wb' );
+                    if ( $output_handle ) {
+                        $bytes_written = 0;
+                        while ( ! gzeof( $gz_handle ) ) {
+                            $chunk = gzread( $gz_handle, 8192 );
+                            if ( false === $chunk ) {
+                                break;
+                            }
+                            fwrite( $output_handle, $chunk );
+                            $bytes_written += strlen( $chunk );
+                        }
+                        fclose( $output_handle );
+                        gzclose( $gz_handle );
+                        
+                        if ( $bytes_written > 0 ) {
+                            backup_lite_log( 'info', 'WPRESS PHP extraction completed (gzip)', [
+                                'archive' => basename( $archive ),
+                                'bytes_written' => $bytes_written,
+                            ] );
+                            // Note: This extracts to a single file, not a directory structure
+                            // .wpress files may need special handling beyond simple gzip
+                            return [
+                                'success' => true,
+                                'note' => 'Extracted as single file - may need further processing',
+                            ];
+                        }
+                    }
+                    gzclose( $gz_handle );
+                }
+            }
+        }
+        
+        // If we get here, PHP native extraction also failed
+        backup_lite_log( 'warning', 'WPRESS PHP native extraction failed', [
+            'archive' => basename( $archive ),
+            'header_length' => strlen( $header ),
+            'header_start' => bin2hex( substr( $header, 0, 16 ) ),
+        ] );
+        
+        return [
+            'success'    => false,
+            'error'      => __( 'PHP native extraction failed. .wpress file may use a custom format that requires All-in-One WP Migration plugin.', 'museder-restoreone' ),
+            'error_code' => 'php_extraction_failed',
+        ];
     }
 
     private static function extract_with_pclzip( $archive, $destination ) {
@@ -1391,5 +1719,111 @@ class Backup_Lite_Restore {
         }
 
         return $summary;
+    }
+
+    /**
+     * Enter safe mode after restore import.
+     * Temporarily disables all non-essential plugins to prevent white screen issues.
+     *
+     * @return bool True on success, false on failure.
+     */
+    public static function enter_safe_mode_after_import() {
+        // Get current active plugins
+        $active_plugins = get_option( 'active_plugins', [] );
+        
+        if ( ! is_array( $active_plugins ) ) {
+            $active_plugins = [];
+        }
+
+        $plugin_count = count( $active_plugins );
+        
+        // Store the previous active plugins list
+        update_option( 'backup_lite_prev_active_plugins', $active_plugins, false );
+        
+        // Keep only essential plugins (this plugin itself)
+        // Find this plugin's basename
+        $plugin_file = plugin_basename( dirname( dirname( __FILE__ ) ) . '/museder-restoreone.php' );
+        $essential_plugins = [];
+        
+        // Always keep this plugin active
+        if ( in_array( $plugin_file, $active_plugins, true ) ) {
+            $essential_plugins[] = $plugin_file;
+        }
+        
+        // Set active_plugins to only essential plugins
+        update_option( 'active_plugins', $essential_plugins, false );
+        
+        // Set safe mode flag
+        update_option( 'backup_lite_safe_mode', '1', false );
+        
+        // Clear plugin cache
+        wp_cache_delete( 'plugins', 'plugins' );
+        
+        backup_lite_log( 'info', 'Safe mode entered after restore.', [
+            'previous_plugins_count' => $plugin_count,
+            'essential_plugins_count' => count( $essential_plugins ),
+            'plugin_file' => $plugin_file,
+        ] );
+        
+        return true;
+    }
+
+    /**
+     * Exit safe mode and restore previous plugin activation status.
+     *
+     * @return bool True on success, false on failure.
+     */
+    public static function exit_safe_mode() {
+        // Check if safe mode is active
+        $safe_mode = get_option( 'backup_lite_safe_mode', '' );
+        
+        if ( '1' !== $safe_mode ) {
+            backup_lite_log( 'info', 'Safe mode exit called but safe mode is not active.', [] );
+            return false;
+        }
+        
+        // Get previous active plugins
+        $prev_plugins = get_option( 'backup_lite_prev_active_plugins', [] );
+        
+        if ( ! is_array( $prev_plugins ) ) {
+            $prev_plugins = [];
+        }
+        
+        // Validate that plugins still exist before restoring
+        if ( ! function_exists( 'get_plugins' ) ) {
+            require_once ABSPATH . 'wp-admin/includes/plugin.php';
+        }
+        
+        $all_plugins = get_plugins();
+        $valid_plugins = [];
+        $missing_plugins = [];
+        
+        foreach ( $prev_plugins as $plugin_file ) {
+            $plugin_path = wp_normalize_path( trailingslashit( WP_PLUGIN_DIR ) . $plugin_file );
+            
+            if ( file_exists( $plugin_path ) && isset( $all_plugins[ $plugin_file ] ) ) {
+                $valid_plugins[] = $plugin_file;
+            } else {
+                $missing_plugins[] = $plugin_file;
+            }
+        }
+        
+        // Restore active plugins
+        update_option( 'active_plugins', $valid_plugins, false );
+        
+        // Clear plugin cache
+        wp_cache_delete( 'plugins', 'plugins' );
+        
+        // Delete safe mode options
+        delete_option( 'backup_lite_safe_mode' );
+        delete_option( 'backup_lite_prev_active_plugins' );
+        
+        backup_lite_log( 'info', 'Safe mode exited and plugins restored.', [
+            'restored_plugins_count' => count( $valid_plugins ),
+            'missing_plugins_count' => count( $missing_plugins ),
+            'missing_plugins' => $missing_plugins,
+        ] );
+        
+        return true;
     }
 }

@@ -6,9 +6,44 @@ if ( ! defined( 'ABSPATH' ) ) {
 $museder_restoreone_summary      = isset( $museder_restoreone_summary ) ? $museder_restoreone_summary : null;
 $museder_restoreone_history_rows = isset( $museder_restoreone_history ) && is_array( $museder_restoreone_history ) ? $museder_restoreone_history : [];
 $museder_restoreone_backups      = isset( $museder_restoreone_backups ) && is_array( $museder_restoreone_backups ) ? $museder_restoreone_backups : [];
+
+// Check if safe mode is active
+$safe_mode_active = get_option( 'backup_lite_safe_mode', '' ) === '1';
+$prev_plugins_count = 0;
+if ( $safe_mode_active ) {
+    $prev_plugins = get_option( 'backup_lite_prev_active_plugins', [] );
+    $prev_plugins_count = is_array( $prev_plugins ) ? count( $prev_plugins ) : 0;
+}
 ?>
     <div class="wrap backup-lite-restore">
         <h1>🧩 <?php esc_html_e( 'Restore Center', 'museder-restoreone' ); ?></h1>
+
+        <?php if ( $safe_mode_active ) : ?>
+        <div class="notice notice-warning is-dismissible" id="backup-lite-safe-mode-notice" style="border-left-color: #ffb900; padding: 12px 20px; margin: 20px 0;">
+            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px;">
+                <div style="flex: 1; min-width: 300px;">
+                    <p style="margin: 0 0 8px 0; font-weight: 600;">
+                        <span style="font-size: 20px; margin-right: 8px;">🛡️</span>
+                        <?php esc_html_e( 'Safe Mode Active', 'museder-restoreone' ); ?>
+                    </p>
+                    <p style="margin: 0; color: #646970;">
+                        <?php
+                        printf(
+                            /* translators: %d: Number of plugins that were deactivated. */
+                            esc_html__( 'RestoreOne has enabled safe mode after restore, temporarily disabling %d plugin(s) to prevent conflicts. Please verify your site is working correctly, then click the button below to restore all plugins.', 'museder-restoreone' ),
+                            $prev_plugins_count
+                        );
+                        ?>
+                    </p>
+                </div>
+                <div>
+                    <button type="button" id="backup-lite-exit-safe-mode-btn" class="button button-primary" style="white-space: nowrap;">
+                        <?php esc_html_e( 'Exit Safe Mode & Restore Plugins', 'museder-restoreone' ); ?>
+                    </button>
+                </div>
+            </div>
+        </div>
+        <?php endif; ?>
 
         <div class="restore-stepper" id="restore-stepper">
             <div class="restore-step-node" id="restore-step-upload" data-bl-state="active">

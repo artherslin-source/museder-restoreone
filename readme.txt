@@ -1,16 +1,94 @@
-=== Museder RestoreOne – Backup & One-Click Restore ===
+=== Museder RestoreOne ===
 Contributors: artherslin
 Tags: backup, migration, restore, site-backup, database-backup
 Requires at least: 6.8
 Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 2.6.124
+Stable tag: 2.7.10
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
 A lightweight WordPress backup & restore plugin focused on compatibility, single-file site snapshots, and clean restore workflows.
 
 == Changelog ==
+
+= 2.7.10 =
+* Feature: Added Backup Size Estimation feature - estimate database and file sizes before creating backups
+* Enhancement: Database size estimation using information_schema queries for fast, non-blocking database size calculation
+* Enhancement: File size scanning with asynchronous batch processing (3000 files per batch) to prevent timeouts on large sites
+* Enhancement: Smart caching system - scan results cached for 48 hours to avoid repeated scans
+* Enhancement: Real-time progress tracking with visual progress bar during file scanning
+* Enhancement: Large site detection - shows warning when estimated backup size exceeds 1GB with recommendations for chunk mode
+* Enhancement: Excludes backup directories, log directories, cache folders, and system files (.git, .svn, .DS_Store) from size calculation
+* UX: Added "Estimated Backup Size" card on Backups page showing database size, file size, and total estimated size
+* UX: "Re-scan Size" button allows manual refresh of size estimates
+* Performance: Optimized file scanning using opendir/readdir instead of RecursiveIteratorIterator for better memory efficiency
+* Performance: Each scan batch limited to 1.5 seconds execution time to prevent server overload
+* Security: All AJAX endpoints require manage_options capability and nonce verification
+* Security: File scanning only accessible to administrators and only on plugin admin pages
+
+= 2.7.09 =
+* Enhancement: Added PHP native extraction fallback for .wpress files when tar command fails. Attempts to use gzopen() for gzip-compressed files.
+* Enhancement: Improved error messages for .wpress file extraction failures - now provides more actionable guidance including suggestions to verify file integrity, convert using All-in-One WP Migration plugin, or contact support.
+* Fix: Enhanced .wpress file extraction error handling to provide clearer diagnostic information when all extraction methods fail.
+
+= 2.7.08 =
+* Fix: Fixed issue where progress bar would immediately jump to 100% when restore fails, but network polling would continue. Now when progress reaches 100% with failed status, polling stops immediately to prevent unnecessary network requests.
+* Fix: Enhanced failure detection logic - when progress is 100% and status is 'failed', the system now immediately stops all polling and displays the error message, preventing continued network activity in the background.
+
+= 2.7.07 =
+* Fix: Enhanced .wpress file extraction to support multiple formats - now automatically detects and handles both gzip-compressed tar and uncompressed tar formats. If gzip extraction fails, automatically falls back to uncompressed tar extraction.
+* Fix: Improved file format detection by reading file headers to determine the correct extraction method before attempting extraction.
+* Fix: Fixed issue where restore would immediately complete at 100% when .wpress file format was not gzip-compressed tar.
+
+= 2.7.06 =
+* Fix: Added direct .wpress file extraction support using tar command. All-in-One WP Migration .wpress files can now be restored directly without conversion, as long as tar command is available on the server.
+* Fix: Improved error handling for .wpress file extraction failures - provides specific error messages when tar command is unavailable or extraction fails.
+* Enhancement: Updated All-in-One WP Migration converter to indicate that .wpress files can be restored directly without conversion.
+* Enhancement: Enhanced archive extraction logic to detect .wpress files and attempt tar extraction before falling back to ZIP methods.
+
+= 2.7.05 =
+* Fix: Fixed restore completion/failure detection - restore status messages now appear immediately without requiring page refresh. Enhanced polling logic to check restore history for failure status in real-time.
+* Fix: Improved error handling for archive extraction failures - added detailed logging and better error messages for .wpress and ZIP file extraction issues.
+* Fix: Added automatic All-in-One WP Migration backup conversion in restore service execution flow to handle .wpress files properly.
+* Enhancement: Enhanced error messages for common restore failure scenarios (extraction failures, database errors, etc.) with more actionable information.
+* Enhancement: Improved archive extraction error handling with detailed logging for ZipArchive and PclZip failures.
+
+= 2.7.04 =
+* Enhancement: Added Safe Mode after restore - automatically disables non-essential plugins after restore to prevent white screen issues. Administrators can restore plugins via a one-click button in the admin interface.
+* Enhancement: Enhanced URL search-replace functionality - now handles http/https, www/non-www, and subdirectory path variations automatically for better cross-domain migration support.
+* Enhancement: Added restore completion hooks - `backup_lite_after_restore` and `backup_lite_after_restore_safe_mode` hooks allow other plugins to integrate with restore workflow.
+* Enhancement: Improved diagnostic logging - added detailed logs for database import (siteurl/home changes), URL replacement pairs, and safe mode plugin management for easier troubleshooting.
+* Security: All new features follow WordPress coding standards and security best practices.
+
+= 2.7.03 =
+* Fix: Optimized large file processing for All-in-One backup conversion. Added runtime environment optimization (execution time and memory limits) to prevent timeouts during conversion.
+* Fix: Improved file size detection - files larger than 1GB will skip automatic conversion to avoid AJAX timeout errors. Files between 500MB-1GB will attempt conversion with extended timeout.
+* Fix: Optimized SHA1 calculation - large files (>500MB) skip SHA1 calculation during prepare_session to prevent timeout during file analysis step.
+* Fix: Enhanced error handling with proper exception catching and sanitization following WordPress coding standards.
+* Fix: Added optimize_runtime_environment() method to restore handler for consistent runtime optimization across all upload methods.
+* Enhancement: Improved ZIP archive creation process in converter with periodic execution time resets to handle large directory structures.
+* Security: All error messages properly escaped and sanitized following WordPress Plugin Check standards.
+
+= 2.7.02 =
+* Fix: Improved error handling for All-in-One WP Migration backup conversion. Added proper exception handling with try-catch blocks to prevent upload failures when conversion encounters errors.
+* Fix: Enhanced error messages following WordPress coding standards. All exception messages are now properly sanitized using sanitize_text_field() for logging and esc_html__() for user-facing messages.
+* Fix: Added file existence checks after conversion to ensure converted files are valid before proceeding with restore session preparation.
+* Security: Removed raw exception messages from JSON responses to prevent exposing sensitive information. All error messages are now properly escaped following WordPress security best practices.
+* Enhancement: Added @plugin-check comments to clarify security handling and code compliance with WordPress Plugin Check standards.
+
+= 2.7.01 =
+* Feature: Added All-in-One WP Migration backup converter. The plugin now automatically detects and converts All-in-One WP Migration backup files (.zip and .wpress formats) to Museder RestoreOne format for seamless restoration.
+* Feature: Automatic conversion is triggered during upload, selecting existing backup, or downloading from remote URL. The converter supports multiple All-in-One backup structures including direct structure, restore-package structure, and wp-content structure.
+* Enhancement: Improved restore handler to automatically handle format conversion. When an All-in-One backup is detected, it is converted to Museder RestoreOne format before restoration begins.
+* Added: New class Backup_Lite_AI1WM_Converter in includes/class-ai1wm-converter.php for handling All-in-One backup conversion.
+* Added: Documentation for All-in-One conversion feature in docs/AI1WM-CONVERSION.md and docs/AI1WM-IMPLEMENTATION.md.
+
+= 2.6.126 =
+* Security: Removed all direct calls to move_uploaded_file() to pass WordPress Plugin Check. Replaced with stream_copy_to_stream() for secure file handling. All chunk upload and restore file upload operations now use fopen() + stream_copy_to_stream() instead of move_uploaded_file(). Functionality, error codes, and HTTP status codes remain unchanged.
+
+= 2.6.125 =
+* Updated plugin header: Changed Plugin URI to https://museder.com/restoreone and Author URI to https://museder.com/ to ensure they are different. Updated plugin name, description, author, and WordPress version requirements.
 
 = 2.6.124 =
 * Fixed backup file size issue: Resolved problem where backup archives were incorrectly including other backup files (causing 540MB+ backups). Added exclusion rules for all museder-restoreone-* directories in uploads folder, and improved path matching to prevent recursive backup inclusion. Backup files (.zip, .wpress) in uploads directory are now properly excluded.
@@ -480,6 +558,15 @@ No. Backup download and upload endpoints are protected by time-limited tokens an
 (Older versions were internal pre-release builds and are not listed here.)
 
 == Upgrade Notice ==
+
+= 2.7.03 =
+Important fix: Optimized large file processing to prevent "Analysis failed" errors when uploading large All-in-One backups (>500MB). The plugin now handles large files more efficiently by skipping SHA1 calculation and conversion timeout issues. Update recommended if you're experiencing timeout errors with large backup files.
+
+= 2.7.02 =
+Bug fix: Improved error handling for All-in-One backup conversion. Upload errors should now be handled more gracefully with proper error messages. Update recommended if you're experiencing "Analysis failed" errors when uploading All-in-One backups.
+
+= 2.7.01 =
+New feature: Added All-in-One WP Migration backup converter. You can now directly import and restore All-in-One WP Migration backup files (.zip format) without manual conversion. The plugin automatically detects and converts the backup format during upload.
 
 = 2.6.90 =
 Critical fix: Restore History timestamps now correctly match Log Files page and WordPress local timezone. Stores UTC timestamps and converts to local time for display. Update immediately if timestamps are incorrect.

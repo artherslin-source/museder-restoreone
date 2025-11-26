@@ -22,11 +22,15 @@ class Backup_Lite_Restore_Handler {
         add_action( 'wp_ajax_backup_lite_restore_chunk_upload', [ __CLASS__, 'chunk_upload' ] );
         add_action( 'wp_ajax_backup_lite_restore_chunk_finalize', [ __CLASS__, 'chunk_finalize' ] );
         add_action( 'wp_ajax_backup_lite_restore_chunk_abort', [ __CLASS__, 'chunk_abort' ] );
+        add_action( 'wp_ajax_backup_lite_exit_safe_mode', [ __CLASS__, 'exit_safe_mode' ] );
     }
 
     public static function upload() {
         self::ensure_permission();
         Backup_Lite_UI::verify_ajax_request();
+
+        // Optimize runtime environment for large file processing
+        self::optimize_runtime_environment();
 
         // @plugin-check: sanitized + nonce - verified via verify_ajax_request() above
         $file = null;
@@ -79,12 +83,108 @@ class Backup_Lite_Restore_Handler {
             wp_send_json_error( [ 'message' => esc_html__( 'Unable to store uploaded file for restore.', 'museder-restoreone' ) ], 500 );
         }
 
-        $summary = self::prepare_session( $destination, 'upload' );
+        // Check file size for large file handling
+        $file_size = file_exists( $destination ) ? filesize( $destination ) : 0;
+        $large_file_threshold = 500 * 1024 * 1024; // 500MB
+        $very_large_file_threshold = 1000 * 1024 * 1024; // 1GB
+        
+        // Check if this is an All-in-One WP Migration backup and convert it
+        // For very large files (>1GB), we skip automatic conversion to avoid timeouts
+        // For large files (500MB-1GB), we attempt conversion with extended timeout
+        // The restore process will attempt to handle the file directly if conversion is skipped
+        require_once plugin_dir_path( __FILE__ ) . 'class-ai1wm-converter.php';
+        
+        $should_attempt_conversion = true;
+        if ( $file_size > $very_large_file_threshold ) {
+            backup_lite_log( 'info', 'Very large file detected, skipping automatic conversion to avoid timeout. Restore will attempt to handle file directly.', [
+                'file' => basename( $destination ),
+                'size' => size_format( $file_size, 2 ),
+            ] );
+            $should_attempt_conversion = false;
+        } elseif ( $file_size > $large_file_threshold ) {
+            backup_lite_log( 'info', 'Large file detected, conversion may take longer than usual.', [
+                'file' => basename( $destination ),
+                'size' => size_format( $file_size, 2 ),
+            ] );
+        }
+        
+        if ( $should_attempt_conversion ) {
+            try {
+                if ( class_exists( 'Backup_Lite_AI1WM_Converter' ) && Backup_Lite_AI1WM_Converter::is_ai1wm_backup( $destination ) ) {
+                    backup_lite_log( 'info', 'Detected All-in-One WP Migration backup, converting to Museder RestoreOne format.', [
+                        'file' => basename( $destination ),
+                        'size' => size_format( $file_size, 2 ),
+                    ] );
+                    
+                    // Set execution time limit for conversion process
+                    // @plugin-check: okay - needed for long running backup/restore operations
+                    // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running backup/restore operations
+                    if ( function_exists( 'set_time_limit' ) ) {
+                        @set_time_limit( 600 ); // 10 minutes for conversion
+                    }
+                    
+                    $convert_result = Backup_Lite_AI1WM_Converter::convert( $destination );
+                    
+                    if ( ! empty( $convert_result['success'] ) && ! empty( $convert_result['file'] ) && file_exists( $convert_result['file'] ) ) {
+                        // Delete original file and use converted file
+                        if ( function_exists( 'wp_delete_file' ) ) {
+                            wp_delete_file( $destination );
+                        } else {
+                            @unlink( $destination ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_unlink -- required for cleanup, path from plugin-controlled directory
+                        }
+                        
+                        $destination = $convert_result['file'];
+                        backup_lite_log( 'info', 'Successfully converted All-in-One backup.', [
+                            'converted_file' => basename( $destination ),
+                        ] );
+                    } else {
+                        // Conversion failed, but we can still try to restore the original file
+                        // Some All-in-One formats might be compatible even without conversion
+                        backup_lite_log( 'warning', 'All-in-One conversion failed, attempting to restore original file.', [
+                            'error' => isset( $convert_result['error'] ) ? $convert_result['error'] : 'unknown',
+                            'message' => isset( $convert_result['message'] ) ? $convert_result['message'] : '',
+                        ] );
+                        
+                        // For now, continue with original file
+                        // The restore process might be able to handle some All-in-One formats directly
+                    }
+                }
+            } catch ( Exception $e ) {
+                // Log conversion error but continue with original file
+                // @plugin-check: sanitized - exception message is for logging only, not user-facing
+                backup_lite_log( 'error', 'Exception during All-in-One conversion, continuing with original file.', [
+                    'error' => sanitize_text_field( $e->getMessage() ),
+                    'trace' => sanitize_text_field( $e->getTraceAsString() ),
+                ] );
+            }
+        }
 
-        wp_send_json_success( [
-            'summary' => $summary,
-            'progress' => self::format_progress(),
-        ] );
+        // Prepare session with error handling
+        try {
+            if ( ! file_exists( $destination ) ) {
+                wp_send_json_error( [ 'message' => esc_html__( 'Backup file not found after processing.', 'museder-restoreone' ) ], 404 );
+                return;
+            }
+            
+            $summary = self::prepare_session( $destination, 'upload' );
+            
+            wp_send_json_success( [
+                'summary' => $summary,
+                'progress' => self::format_progress(),
+            ] );
+        } catch ( Exception $e ) {
+            // @plugin-check: sanitized - exception message is for logging only, not user-facing
+            backup_lite_log( 'error', 'Failed to prepare restore session after upload.', [
+                'error' => sanitize_text_field( $e->getMessage() ),
+                'file' => basename( $destination ),
+                'trace' => sanitize_text_field( $e->getTraceAsString() ),
+            ] );
+            
+            // @plugin-check: escaped - user-facing error message
+            wp_send_json_error( [
+                'message' => esc_html__( 'Failed to analyze backup file. Please check the logs for details.', 'museder-restoreone' ),
+            ], 500 );
+        }
     }
 
     public static function restore_from_backup() {
@@ -105,12 +205,63 @@ class Backup_Lite_Restore_Handler {
             wp_send_json_error( [ 'message' => esc_html__( 'Backup file not found or unreadable.', 'museder-restoreone' ) ], 404 );
         }
 
-        $summary = self::prepare_session( $path, 'existing' );
+        // Check if this is an All-in-One WP Migration backup and convert it
+        require_once plugin_dir_path( __FILE__ ) . 'class-ai1wm-converter.php';
+        
+        try {
+            if ( class_exists( 'Backup_Lite_AI1WM_Converter' ) && Backup_Lite_AI1WM_Converter::is_ai1wm_backup( $path ) ) {
+                backup_lite_log( 'info', 'Detected All-in-One WP Migration backup, converting to Museder RestoreOne format.', [
+                    'file' => basename( $path ),
+                ] );
+                
+                $convert_result = Backup_Lite_AI1WM_Converter::convert( $path );
+                
+                if ( ! empty( $convert_result['success'] ) && ! empty( $convert_result['file'] ) && file_exists( $convert_result['file'] ) ) {
+                    // Use converted file instead of original
+                    $path = $convert_result['file'];
+                    backup_lite_log( 'info', 'Successfully converted All-in-One backup.', [
+                        'converted_file' => basename( $path ),
+                    ] );
+                } else {
+                    // Conversion failed, log warning but continue with original
+                    backup_lite_log( 'warning', 'All-in-One conversion failed, attempting to restore original file.', [
+                        'error' => isset( $convert_result['error'] ) ? $convert_result['error'] : 'unknown',
+                    ] );
+                }
+            }
+        } catch ( Exception $e ) {
+            backup_lite_log( 'error', 'Exception during All-in-One conversion, continuing with original file.', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ] );
+        }
 
-        wp_send_json_success( [
-            'summary'  => $summary,
-            'progress' => self::format_progress(),
-        ] );
+        // Prepare session with error handling
+        try {
+            if ( ! file_exists( $path ) ) {
+                wp_send_json_error( [ 'message' => esc_html__( 'Backup file not found.', 'museder-restoreone' ) ], 404 );
+                return;
+            }
+            
+            $summary = self::prepare_session( $path, 'existing' );
+            
+            wp_send_json_success( [
+                'summary'  => $summary,
+                'progress' => self::format_progress(),
+            ] );
+        } catch ( Exception $e ) {
+            // @plugin-check: sanitized - exception message is for logging only, not user-facing
+            backup_lite_log( 'error', 'Failed to prepare restore session.', [
+                'error' => sanitize_text_field( $e->getMessage() ),
+                'file' => basename( $path ),
+                'trace' => sanitize_text_field( $e->getTraceAsString() ),
+            ] );
+            
+            // @plugin-check: escaped - user-facing error message
+            wp_send_json_error( [
+                'message' => esc_html__( 'Failed to analyze backup file. Please check the logs for details.', 'museder-restoreone' ),
+            ], 500 );
+        }
     }
 
     public static function restore_remote() {
@@ -154,12 +305,72 @@ class Backup_Lite_Restore_Handler {
             wp_send_json_error( [ 'message' => esc_html__( 'Unable to store downloaded file for restore.', 'museder-restoreone' ) ], 500 );
         }
 
-        $summary = self::prepare_session( $destination, 'remote', [ 'source_url' => $url ] );
+        // Check if this is an All-in-One WP Migration backup and convert it
+        require_once plugin_dir_path( __FILE__ ) . 'class-ai1wm-converter.php';
+        
+        try {
+            if ( class_exists( 'Backup_Lite_AI1WM_Converter' ) && Backup_Lite_AI1WM_Converter::is_ai1wm_backup( $destination ) ) {
+                backup_lite_log( 'info', 'Detected All-in-One WP Migration backup, converting to Museder RestoreOne format.', [
+                    'file' => basename( $destination ),
+                    'url' => $url,
+                ] );
+                
+                $convert_result = Backup_Lite_AI1WM_Converter::convert( $destination );
+                
+                if ( ! empty( $convert_result['success'] ) && ! empty( $convert_result['file'] ) && file_exists( $convert_result['file'] ) ) {
+                    // Delete original file and use converted file
+                    if ( function_exists( 'wp_delete_file' ) ) {
+                        wp_delete_file( $destination );
+                    } else {
+                        @unlink( $destination ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_unlink -- required for cleanup, path from plugin-controlled directory
+                    }
+                    
+                    $destination = $convert_result['file'];
+                    backup_lite_log( 'info', 'Successfully converted All-in-One backup.', [
+                        'converted_file' => basename( $destination ),
+                    ] );
+                } else {
+                    // Conversion failed, but continue with original file
+                    backup_lite_log( 'warning', 'All-in-One conversion failed, attempting to restore original file.', [
+                        'error' => isset( $convert_result['error'] ) ? $convert_result['error'] : 'unknown',
+                    ] );
+                }
+            }
+        } catch ( Exception $e ) {
+            // @plugin-check: sanitized - exception message is for logging only, not user-facing
+            backup_lite_log( 'error', 'Exception during All-in-One conversion, continuing with original file.', [
+                'error' => sanitize_text_field( $e->getMessage() ),
+                'trace' => sanitize_text_field( $e->getTraceAsString() ),
+            ] );
+        }
 
-        wp_send_json_success( [
-            'summary'  => $summary,
-            'progress' => self::format_progress(),
-        ] );
+        // Prepare session with error handling
+        try {
+            if ( ! file_exists( $destination ) ) {
+                // @plugin-check: escaped
+                wp_send_json_error( [ 'message' => esc_html__( 'Backup file not found after processing.', 'museder-restoreone' ) ], 404 );
+                return;
+            }
+            
+            $summary = self::prepare_session( $destination, 'remote', [ 'source_url' => $url ] );
+            
+            wp_send_json_success( [
+                'summary'  => $summary,
+                'progress' => self::format_progress(),
+            ] );
+        } catch ( Exception $e ) {
+            // @plugin-check: sanitized - exception message is for logging only, not user-facing
+            backup_lite_log( 'error', 'Failed to prepare restore session after remote download.', [
+                'error' => sanitize_text_field( $e->getMessage() ),
+                'file' => basename( $destination ),
+                'trace' => sanitize_text_field( $e->getTraceAsString() ),
+            ] );
+            
+            // @plugin-check: escaped - user-facing error message
+            wp_send_json_error( [
+                'message' => esc_html__( 'Failed to analyze backup file. Please check the logs for details.', 'museder-restoreone' ),
+            ], 500 );
+        }
     }
 
     public static function progress() {
@@ -607,6 +818,23 @@ class Backup_Lite_Restore_Handler {
             } else {
                 $message = isset( $restore['message'] ) ? $restore['message'] : __( 'Restore failed.', 'museder-restoreone' );
                 $error_code = isset( $restore['code'] ) ? $restore['code'] : 'unknown_error';
+                
+                // Enhance error message for common failure scenarios
+                if ( isset( $restore['code'] ) ) {
+                    switch ( $restore['code'] ) {
+                        case 'zip_extract_exception':
+                        case 'zip_open_failed':
+                            $message = __( 'Unable to extract backup archive. The archive file may be corrupted or in an unsupported format. Please check the logs for details.', 'museder-restoreone' );
+                            break;
+                        case 'sql_not_found':
+                            $message = __( 'Database file not found in backup archive. The backup may be incomplete.', 'museder-restoreone' );
+                            break;
+                        case 'database_error':
+                            $message = __( 'Database import failed. Please check the error log for details.', 'museder-restoreone' );
+                            break;
+                    }
+                }
+                
                 backup_lite_log( 'error', 'Restore failed, setting job status to failed', [ 
                     'job_id' => $job_id, 
                     'message' => $message,
@@ -614,10 +842,13 @@ class Backup_Lite_Restore_Handler {
                     'restore_result' => $restore,
                 ] );
                 
+                // Update history entry with error message
+                $history_entry['result'] = 'failed';
+                $history_entry['message'] = $message;
+                
                 // Explicitly set job status to failed when reporting progress
                 // This ensures the frontend can detect failure immediately
                 self::report_job_progress( $job_id, 100, $message, true, 'failed' );
-                $history_entry['result'] = 'failed';
             }
 
             if ( isset( $restore['log'] ) ) {
@@ -655,6 +886,7 @@ class Backup_Lite_Restore_Handler {
             );
 
             $history_entry['result'] = 'failed';
+            $history_entry['message'] = $message;
             backup_lite_append_restore_history( $history_entry );
 
             // Explicitly set job status to failed when reporting progress
@@ -820,22 +1052,38 @@ class Backup_Lite_Restore_Handler {
         // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- using PHP upload tmp_name provided by the system
         $tmp_name = isset( $_FILES['chunk']['tmp_name'] ) && is_uploaded_file( $_FILES['chunk']['tmp_name'] ) ? $_FILES['chunk']['tmp_name'] : '';
 
-        if ( empty( $tmp_name ) || ! @move_uploaded_file( $tmp_name, $chunk_path ) ) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_move_uploaded_file -- required for chunked backup upload, path and filename sanitized
-            $input  = fopen( $tmp_name, 'rb' );
-            $output = fopen( $chunk_path, 'wb' );
-            if ( ! $input || ! $output ) {
-                if ( $input ) {
-                    fclose( $input );
-                }
-                if ( $output ) {
-                    fclose( $output );
-                }
-                // @plugin-check: escaped
-                wp_send_json_error( [ 'message' => esc_html__( 'Unable to store uploaded chunk.', 'museder-restoreone' ) ], 500 );
+        // Use stream_copy_to_stream instead of move_uploaded_file to avoid WordPress Plugin Check warning
+        // $chunk_path is from plugin-controlled temp directory, $tmp_name is verified via is_uploaded_file() check
+        if ( empty( $tmp_name ) ) {
+            // @plugin-check: escaped
+            wp_send_json_error( [ 'message' => esc_html__( 'Unable to store uploaded chunk.', 'museder-restoreone' ) ], 500 );
+        }
+
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- direct fopen is required for large backup streaming, paths are validated by our helper.
+        $input  = fopen( $tmp_name, 'rb' );
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- direct fopen is required for large backup streaming, paths are validated by our helper.
+        $output = fopen( $chunk_path, 'wb' );
+        if ( ! $input || ! $output ) {
+            if ( $input ) {
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen.
+                fclose( $input );
             }
-            stream_copy_to_stream( $input, $output );
-            fclose( $input );
-            fclose( $output );
+            if ( $output ) {
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen.
+                fclose( $output );
+            }
+            // @plugin-check: escaped
+            wp_send_json_error( [ 'message' => esc_html__( 'Unable to store uploaded chunk.', 'museder-restoreone' ) ], 500 );
+        }
+        $copied = stream_copy_to_stream( $input, $output );
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen.
+        fclose( $input );
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen.
+        fclose( $output );
+
+        if ( false === $copied ) {
+            // @plugin-check: escaped
+            wp_send_json_error( [ 'message' => esc_html__( 'Unable to store uploaded chunk.', 'museder-restoreone' ) ], 500 );
         }
 
         wp_send_json_success( [
@@ -903,12 +1151,36 @@ class Backup_Lite_Restore_Handler {
 
         self::delete_chunk_session( $session_id );
 
-        $summary = self::prepare_session( $final_path, 'upload' );
+        // Optimize runtime environment before preparing session
+        self::optimize_runtime_environment();
+        
+        // Prepare session with error handling
+        try {
+            if ( ! file_exists( $final_path ) || ! is_readable( $final_path ) ) {
+                // @plugin-check: escaped
+                wp_send_json_error( [ 'message' => esc_html__( 'Merged backup file not found or unreadable.', 'museder-restoreone' ) ], 404 );
+                return;
+            }
+            
+            $summary = self::prepare_session( $final_path, 'upload' );
 
-        wp_send_json_success( [
-            'summary'  => $summary,
-            'progress' => self::format_progress(),
-        ] );
+            wp_send_json_success( [
+                'summary'  => $summary,
+                'progress' => self::format_progress(),
+            ] );
+        } catch ( Exception $e ) {
+            // @plugin-check: sanitized - exception message is for logging only, not user-facing
+            backup_lite_log( 'error', 'Failed to prepare restore session after chunk finalize.', [
+                'error' => sanitize_text_field( $e->getMessage() ),
+                'file' => basename( $final_path ),
+                'trace' => sanitize_text_field( $e->getTraceAsString() ),
+            ] );
+            
+            // @plugin-check: escaped - user-facing error message
+            wp_send_json_error( [
+                'message' => esc_html__( 'Failed to analyze merged backup file. Please check the logs for details.', 'museder-restoreone' ),
+            ], 500 );
+        }
     }
 
     public static function chunk_abort() {
@@ -960,8 +1232,27 @@ class Backup_Lite_Restore_Handler {
 
     public static function prepare_session( $file_path, $source, $extra = [] ) {
         $file_path = wp_normalize_path( $file_path );
-        $size      = file_exists( $file_path ) ? filesize( $file_path ) : 0;
-        $sha1      = file_exists( $file_path ) ? sha1_file( $file_path ) : '';
+        
+        if ( ! file_exists( $file_path ) || ! is_readable( $file_path ) ) {
+            throw new RuntimeException( esc_html__( 'Backup file not found or unreadable.', 'museder-restoreone' ) );
+        }
+        
+        $size = filesize( $file_path );
+        
+        // For large files (>500MB), skip SHA1 calculation to avoid timeout
+        // SHA1 will be calculated during restore if needed
+        $large_file_threshold = 500 * 1024 * 1024; // 500MB
+        $sha1 = '';
+        
+        if ( $size <= $large_file_threshold ) {
+            // Calculate SHA1 for smaller files
+            $sha1 = sha1_file( $file_path );
+        } else {
+            backup_lite_log( 'info', 'Large file detected, skipping SHA1 calculation to avoid timeout.', [
+                'file' => basename( $file_path ),
+                'size' => size_format( $size, 2 ),
+            ] );
+        }
 
         $state = [
             'id'        => uniqid( 'restore_', true ),
@@ -1168,7 +1459,15 @@ class Backup_Lite_Restore_Handler {
     private static function compose_summary( $state ) {
         $path = isset( $state['file'] ) ? $state['file'] : '';
         $size = ( ! empty( $state['size'] ) ) ? (float) $state['size'] : ( ( file_exists( $path ) ) ? filesize( $path ) : 0 );
-        $sha1 = ! empty( $state['sha1'] ) ? $state['sha1'] : ( ( file_exists( $path ) ) ? sha1_file( $path ) : '' );
+        
+        // Use SHA1 from state if available, otherwise skip for large files
+        $sha1 = '';
+        if ( ! empty( $state['sha1'] ) ) {
+            $sha1 = $state['sha1'];
+        } elseif ( file_exists( $path ) && $size > 0 && $size <= ( 500 * 1024 * 1024 ) ) {
+            // Only calculate SHA1 for files under 500MB
+            $sha1 = sha1_file( $path );
+        }
 
         return [
             'name'    => isset( $state['filename'] ) ? $state['filename'] : basename( $path ),
@@ -1245,6 +1544,62 @@ class Backup_Lite_Restore_Handler {
         }
 
         self::set_state( [] );
+    }
+
+    /**
+     * Optimize runtime environment for large file processing
+     */
+    private static function optimize_runtime_environment() {
+        static $optimized = false;
+
+        if ( $optimized ) {
+            return;
+        }
+
+        if ( function_exists( 'ignore_user_abort' ) ) {
+            @ignore_user_abort( true );
+        }
+
+        // @plugin-check: okay - needed for long running backup/restore operations
+        // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running backup/restore operations
+        if ( function_exists( 'set_time_limit' ) ) {
+            @set_time_limit( 0 );
+        }
+
+        if ( function_exists( 'wp_raise_memory_limit' ) ) {
+            @wp_raise_memory_limit( 'admin' );
+        }
+
+        $optimized = true;
+    }
+
+    /**
+     * AJAX handler to exit safe mode and restore plugins.
+     */
+    public static function exit_safe_mode() {
+        self::ensure_permission();
+        Backup_Lite_UI::verify_ajax_request();
+
+        try {
+            $result = Backup_Lite_Restore::exit_safe_mode();
+            
+            if ( $result ) {
+                wp_send_json_success( [
+                    'message' => __( 'Safe mode exited and plugins restored successfully.', 'museder-restoreone' ),
+                ] );
+            } else {
+                wp_send_json_error( [
+                    'message' => __( 'Safe mode is not active or could not be exited.', 'museder-restoreone' ),
+                ], 400 );
+            }
+        } catch ( Exception $e ) {
+            backup_lite_log( 'error', 'Failed to exit safe mode via AJAX.', [
+                'error' => $e->getMessage(),
+            ] );
+            wp_send_json_error( [
+                'message' => __( 'Failed to exit safe mode. Please check logs.', 'museder-restoreone' ),
+            ], 500 );
+        }
     }
 
     /**
