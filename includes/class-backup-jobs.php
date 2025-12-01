@@ -32,6 +32,9 @@ class Backup_Lite_Backup_Jobs {
             throw new RuntimeException( esc_html__( 'Unable to build file manifest for backup.', 'museder-restoreone' ) );
         }
 
+        // Store started_at timestamp when job is actually queued
+        $started_at = time();
+        
         $job = [
             'id'              => $job_id,
             'status'          => 'pending',
@@ -50,6 +53,7 @@ class Backup_Lite_Backup_Jobs {
             'temp_dir'        => $context['temp_dir'],
             'manifest_file'   => $context['manifest_file'],
             'options'         => $context['options'],
+            'started_at'      => $started_at, // Store timestamp when job is queued
             'last_activity'   => time(),
         ];
 
@@ -153,10 +157,16 @@ class Backup_Lite_Backup_Jobs {
             if ( in_array( $job['status'], [ 'completed', 'failed', 'cancelled' ], true ) ) {
                 self::clear_active_job( $job['id'] );
             }
-        } catch ( Exception $exception ) {
+        } catch ( Throwable $exception ) {
+            backup_lite_log( 'error', 'Error processing backup job batch.', [
+                'job_id' => $job_id,
+                'message' => $exception->getMessage(),
+                'trace' => $exception->getTraceAsString(),
+            ] );
+            
             $job['status']  = 'failed';
             $job['stage']   = 'failed';
-            $job['message'] = $exception->getMessage();
+            $job['message'] = __( 'Backup failed due to an internal error. Please check logs for details.', 'museder-restoreone' );
         }
 
         if ( in_array( $job['status'], [ 'completed', 'failed', 'cancelled' ], true ) ) {
@@ -178,12 +188,20 @@ class Backup_Lite_Backup_Jobs {
      * @return array|null
      */
     public static function get_job_payload( $job_id ) {
-        $job = self::load_job( $job_id );
-        if ( ! $job ) {
+        try {
+            $job = self::load_job( $job_id );
+            if ( ! $job ) {
+                return null;
+            }
+
+            return self::format_job_payload( $job );
+        } catch ( Throwable $e ) {
+            backup_lite_log( 'error', 'Failed to get job payload.', [
+                'job_id' => $job_id,
+                'message' => $e->getMessage(),
+            ] );
             return null;
         }
-
-        return self::format_job_payload( $job );
     }
 
     /**
@@ -249,15 +267,30 @@ class Backup_Lite_Backup_Jobs {
      * @return array|null
      */
     public static function load_job( $job_id ) {
-        $path = self::job_state_path( $job_id );
-        if ( ! file_exists( $path ) ) {
+        try {
+            $path = self::job_state_path( $job_id );
+            if ( ! file_exists( $path ) || ! is_readable( $path ) ) {
+                return null;
+            }
+
+            $contents = file_get_contents( $path );
+            if ( false === $contents ) {
+                return null;
+            }
+
+            $decoded = json_decode( $contents, true );
+            if ( json_last_error() !== JSON_ERROR_NONE ) {
+                return null;
+            }
+
+            return is_array( $decoded ) ? $decoded : null;
+        } catch ( Throwable $e ) {
+            backup_lite_log( 'error', 'Failed to load job state.', [
+                'job_id' => $job_id,
+                'message' => $e->getMessage(),
+            ] );
             return null;
         }
-
-        $contents = file_get_contents( $path );
-        $decoded  = json_decode( $contents, true );
-
-        return is_array( $decoded ) ? $decoded : null;
     }
 
     /**
@@ -267,17 +300,18 @@ class Backup_Lite_Backup_Jobs {
      * @return array
      */
     public static function format_job_payload( $job ) {
-        $total_files   = max( 1, (int) $job['total_files'] );
-        $processed     = min( $total_files, (int) $job['processed_files'] );
-        $total_bytes   = max( 1, (int) $job['total_bytes'] );
-        $processed_b   = min( $total_bytes, max( 0, (int) $job['processed_bytes'] ) );
+        // Safely extract values with defaults to prevent undefined index errors
+        $total_files   = max( 1, isset( $job['total_files'] ) ? (int) $job['total_files'] : 1 );
+        $processed     = min( $total_files, isset( $job['processed_files'] ) ? (int) $job['processed_files'] : 0 );
+        $total_bytes   = max( 1, isset( $job['total_bytes'] ) ? (int) $job['total_bytes'] : 1 );
+        $processed_b   = min( $total_bytes, max( 0, isset( $job['processed_bytes'] ) ? (int) $job['processed_bytes'] : 0 ) );
         $percentage    = max( 0, min( 100, round( ( $processed_b / $total_bytes ) * 100 ) ) );
 
-        return [
-            'id'              => $job['id'],
-            'status'          => $job['status'],
-            'stage'           => $job['stage'],
-            'message'         => $job['message'],
+        $payload = array(
+            'id'              => isset( $job['id'] ) ? $job['id'] : '',
+            'status'          => isset( $job['status'] ) ? $job['status'] : 'unknown',
+            'stage'           => isset( $job['stage'] ) ? $job['stage'] : '',
+            'message'         => isset( $job['message'] ) ? $job['message'] : '',
             'processed_files' => $processed,
             'total_files'     => $total_files,
             'processed_bytes' => $processed_b,
@@ -286,7 +320,17 @@ class Backup_Lite_Backup_Jobs {
             'download_url'    => isset( $job['download_url'] ) ? $job['download_url'] : '',
             'processing'      => ! empty( $job['processing'] ),
             'updated_at'      => isset( $job['updated_at'] ) ? $job['updated_at'] : '',
-        ];
+        );
+
+        // Include duration if available
+        if ( isset( $job['duration'] ) ) {
+            $payload['duration'] = (int) $job['duration'];
+        }
+
+        // Note: S3 upload is now handled server-side in finalize_async_job()
+        // No need to pass flags to frontend anymore
+
+        return $payload;
     }
 
     /**
@@ -377,6 +421,10 @@ class Backup_Lite_Backup_Jobs {
         $stored = get_option( self::STATE_OPTION, '' );
         if ( $stored === $job_id ) {
             delete_option( self::STATE_OPTION );
+        }
+        // Clear transient used for server-side protection against settings changes
+        if ( class_exists( 'Backup_Lite_UI' ) ) {
+            Backup_Lite_UI::clear_job_running();
         }
     }
 }

@@ -55,6 +55,8 @@ class Museder_AI_Settings_Page {
                     'ai_api_endpoint' => '',
                     'openai_api_key'  => '',
                     'alert_email'   => get_option( 'admin_email' ),
+                    'dev_mode'      => false,
+                    'force_high_risk' => false,
                 ],
             ]
         );
@@ -114,6 +116,30 @@ class Museder_AI_Settings_Page {
             'museder-restoreone-ai',
             'museder_ai_alert_section'
         );
+
+        // Developer Mode section (always register, but only visible to administrators in render)
+        add_settings_section(
+            'museder_ai_dev_section',
+            __( 'Developer Mode', 'museder-restoreone' ),
+            [ __CLASS__, 'render_dev_section' ],
+            'museder-restoreone-ai'
+        );
+
+        add_settings_field(
+            'dev_mode',
+            __( 'Enable Developer Mode', 'museder-restoreone' ),
+            [ __CLASS__, 'render_dev_mode_field' ],
+            'museder-restoreone-ai',
+            'museder_ai_dev_section'
+        );
+
+        add_settings_field(
+            'force_high_risk',
+            __( 'Force High Risk', 'museder-restoreone' ),
+            [ __CLASS__, 'render_force_high_risk_field' ],
+            'museder-restoreone-ai',
+            'museder_ai_dev_section'
+        );
     }
 
     /**
@@ -159,6 +185,22 @@ class Museder_AI_Settings_Page {
             }
         } else {
             $sanitized['alert_email'] = get_option( 'admin_email' );
+        }
+
+        // Developer mode (only for administrators)
+        // Store to global option: backup_lite_enable_developer_mode
+        if ( current_user_can( 'manage_options' ) ) {
+            $dev_mode_enabled = isset( $input['dev_mode'] ) && $input['dev_mode'] === '1';
+            // Store to global option
+            update_option( 'backup_lite_enable_developer_mode', $dev_mode_enabled ? 1 : 0, false );
+            // Also keep in AI settings for backward compatibility
+            $sanitized['dev_mode'] = $dev_mode_enabled;
+            $sanitized['force_high_risk'] = isset( $input['force_high_risk'] ) && $input['force_high_risk'] === '1';
+        } else {
+            // Non-admins cannot change dev mode settings
+            $current = get_option( self::OPTION_KEY, [] );
+            $sanitized['dev_mode'] = isset( $current['dev_mode'] ) ? (bool) $current['dev_mode'] : false;
+            $sanitized['force_high_risk'] = isset( $current['force_high_risk'] ) ? (bool) $current['force_high_risk'] : false;
         }
 
         return $sanitized;
@@ -248,6 +290,133 @@ class Museder_AI_Settings_Page {
                value="<?php echo esc_attr( $value ); ?>" 
                class="regular-text" />
         <p class="description"><?php esc_html_e( 'Email address to receive AI-generated alerts and recommendations.', 'museder-restoreone' ); ?></p>
+        <?php
+    }
+
+    /**
+     * Render developer mode section description.
+     */
+    public static function render_dev_section() {
+        // Only show to administrators
+        if ( ! current_user_can( 'manage_options' ) ) {
+            return;
+        }
+
+        // Check both constant and option (constant takes priority)
+        $dev_mode_from_constant = ( defined( 'BACKUP_LITE_FORCE_DEV_MODE' ) && BACKUP_LITE_FORCE_DEV_MODE ) || ( defined( 'MUSERDER_DEV_MODE' ) && MUSERDER_DEV_MODE );
+        $force_high_risk_from_constant = defined( 'MUSERDER_FORCE_HIGH_RISK' ) && MUSERDER_FORCE_HIGH_RISK;
+        
+        // Check global developer mode option
+        $dev_mode_from_option = function_exists( 'backup_lite_is_developer_mode' ) ? backup_lite_is_developer_mode() : false;
+        
+        $settings = Museder_AI_Service::get_settings();
+        $force_high_risk_from_option = ! empty( $settings['force_high_risk'] );
+        
+        // Constant takes priority
+        $dev_mode_enabled = $dev_mode_from_constant || $dev_mode_from_option;
+        $force_high_risk_enabled = ( $force_high_risk_from_constant || $force_high_risk_from_option ) && $dev_mode_enabled;
+        
+        // Show warning if constant is set
+        $has_constant_override = $dev_mode_from_constant || $force_high_risk_from_constant;
+        
+        ?>
+        <?php if ( $has_constant_override ) : ?>
+        <div style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 12px; margin: 15px 0; border-radius: 4px;">
+            <strong>⚠️ <?php esc_html_e( 'Note:', 'museder-restoreone' ); ?></strong>
+            <p style="margin: 5px 0 0 0;">
+                <?php esc_html_e( 'Developer mode settings are currently controlled by PHP constants in wp-config.php. The settings below will be ignored until the constants are removed.', 'museder-restoreone' ); ?>
+            </p>
+        </div>
+        <?php endif; ?>
+        <p><?php esc_html_e( 'Enable developer mode to bypass Free tier limits and test AI features. Force High Risk mode will make all AI functions return High risk for testing alerts.', 'museder-restoreone' ); ?></p>
+        <?php
+    }
+
+    /**
+     * Render developer mode field.
+     */
+    public static function render_dev_mode_field() {
+        // Only show to administrators
+        if ( ! current_user_can( 'manage_options' ) ) {
+            return;
+        }
+
+        // Check if constant is set (takes priority)
+        $constant_enabled = ( defined( 'BACKUP_LITE_FORCE_DEV_MODE' ) && BACKUP_LITE_FORCE_DEV_MODE ) || ( defined( 'MUSERDER_DEV_MODE' ) && MUSERDER_DEV_MODE );
+        
+        // Check global developer mode option
+        $option_enabled = function_exists( 'backup_lite_is_developer_mode' ) ? backup_lite_is_developer_mode() : false;
+        
+        // Constant takes priority
+        $is_enabled = $constant_enabled || $option_enabled;
+        $is_disabled_by_constant = $constant_enabled;
+        
+        ?>
+        <label>
+            <input type="checkbox" 
+                   name="<?php echo esc_attr( self::OPTION_KEY ); ?>[dev_mode]" 
+                   value="1" 
+                   id="dev_mode"
+                   <?php checked( $option_enabled ); ?>
+                   <?php disabled( $is_disabled_by_constant ); ?> />
+            <?php esc_html_e( 'Enable Developer Mode (bypass Free tier limits)', 'museder-restoreone' ); ?>
+        </label>
+        <?php if ( $is_disabled_by_constant ) : ?>
+            <p class="description" style="color: #dc3232;">
+                <?php esc_html_e( 'This setting is controlled by BACKUP_LITE_FORCE_DEV_MODE or MUSERDER_DEV_MODE constant in wp-config.php.', 'museder-restoreone' ); ?>
+            </p>
+        <?php else : ?>
+            <p class="description">
+                <?php esc_html_e( 'When enabled, Free tier users can use AI features unlimited times. Only enable on development/testing sites.', 'museder-restoreone' ); ?>
+            </p>
+        <?php endif; ?>
+        <?php
+    }
+
+    /**
+     * Render force high risk field.
+     */
+    public static function render_force_high_risk_field() {
+        // Only show to administrators
+        if ( ! current_user_can( 'manage_options' ) ) {
+            return;
+        }
+
+        // Check if constant is set (takes priority)
+        $constant_enabled = defined( 'MUSERDER_FORCE_HIGH_RISK' ) && MUSERDER_FORCE_HIGH_RISK;
+        
+        // Check global developer mode
+        $dev_mode_enabled = function_exists( 'backup_lite_is_developer_mode' ) ? backup_lite_is_developer_mode() : false;
+        $option_enabled = ! empty( $settings['force_high_risk'] );
+        
+        // Constant takes priority
+        $is_enabled = $constant_enabled || $option_enabled;
+        $is_disabled_by_constant = $constant_enabled;
+        $is_disabled_by_dev_mode = ! $dev_mode_enabled;
+        
+        ?>
+        <label>
+            <input type="checkbox" 
+                   name="<?php echo esc_attr( self::OPTION_KEY ); ?>[force_high_risk]" 
+                   value="1" 
+                   id="force_high_risk"
+                   <?php checked( $option_enabled ); ?>
+                   <?php disabled( $is_disabled_by_constant || $is_disabled_by_dev_mode ); ?> />
+            <?php esc_html_e( 'Force High Risk (for testing AI Alerts)', 'museder-restoreone' ); ?>
+        </label>
+        <?php if ( $is_disabled_by_constant ) : ?>
+            <p class="description" style="color: #dc3232;">
+                <?php esc_html_e( 'This setting is controlled by MUSERDER_FORCE_HIGH_RISK constant in wp-config.php.', 'museder-restoreone' ); ?>
+            </p>
+        <?php elseif ( $is_disabled_by_dev_mode ) : ?>
+            <p class="description" style="color: #dc3232;">
+                <?php esc_html_e( 'Please enable Developer Mode first.', 'museder-restoreone' ); ?>
+            </p>
+        <?php else : ?>
+            <p class="description">
+                <?php esc_html_e( 'When enabled, all AI functions will return High risk for testing alert notifications. Requires Developer Mode to be enabled.', 'museder-restoreone' ); ?>
+            </p>
+        <?php endif; ?>
         <?php
     }
 

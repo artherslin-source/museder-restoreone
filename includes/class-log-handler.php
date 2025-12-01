@@ -359,6 +359,54 @@ class Backup_Lite_Log_Handler {
     }
 
     /**
+     * Get recent log content from the latest log file.
+     * 
+     * @param int $max_bytes Maximum bytes to read from the end of the file (default: 20000).
+     * @return string Log content as UTF-8 string, empty if no log found.
+     */
+    public static function get_recent_log_content( $max_bytes = 20000 ) {
+        $files = self::scan_logs();
+        if ( empty( $files ) ) {
+            return '';
+        }
+
+        // Get the most recent log file
+        $latest_file = $files[0];
+        
+        if ( ! file_exists( $latest_file ) ) {
+            return '';
+        }
+
+        $file_size = filesize( $latest_file );
+        if ( $file_size === false ) {
+            return '';
+        }
+
+        // If file is smaller than max_bytes, read entire file
+        if ( $file_size <= $max_bytes ) {
+            $content = @file_get_contents( $latest_file );
+            return $content !== false ? $content : '';
+        }
+
+        // Read only the last $max_bytes
+        $handle = @fopen( $latest_file, 'rb' );
+        if ( ! $handle ) {
+            return '';
+        }
+
+        // Seek to position from end
+        if ( fseek( $handle, -1 * $max_bytes, SEEK_END ) !== 0 ) {
+            fclose( $handle );
+            return '';
+        }
+
+        $content = stream_get_contents( $handle );
+        fclose( $handle );
+
+        return $content !== false ? $content : '';
+    }
+
+    /**
      * Parses a log line into structured data.
      *
      * @param string $line Log line.

@@ -16,8 +16,15 @@ class Backup_Lite_Pro {
      * Check if PRO version is active.
      * 
      * @return bool
+     * @deprecated Use backup_lite_has_pro_features() instead for unified license management.
      */
     public static function is_pro_active() {
+        // Use global helper if available (considers Developer Mode)
+        if ( function_exists( 'backup_lite_has_pro_features' ) ) {
+            return backup_lite_has_pro_features();
+        }
+        
+        // Fallback to old method
         $active = get_option( self::OPTION_KEY, false );
         
         // For development/testing, you can enable via constant

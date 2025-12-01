@@ -91,6 +91,28 @@ body.wp-admin #wpcontent {
     .backup-lite-grid {
         grid-template-columns: 1fr !important;
     }
+
+    /* Fix menu overflow on mobile devices */
+    .bl-actions-list,
+    .backup-lite-admin .bl-actions-list {
+        right: auto;
+        left: 0;
+        max-width: calc(100vw - 20px);
+        transform: translateX(0);
+    }
+
+    .bl-actions-menu {
+        position: relative;
+    }
+
+    .bl-actions-list .button,
+    .backup-lite-admin .bl-actions-list .button {
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+        white-space: normal;
+        word-wrap: break-word;
+    }
 }
 
 .backup-lite-card,
@@ -567,6 +589,8 @@ body.bl-restore-v2-off .restore-stepper {
     box-shadow: var(--glass-shadow);
     padding: 12px;
     z-index: 50;
+    max-width: calc(100vw - 40px);
+    box-sizing: border-box;
 }
 
 .bl-actions-list .button {
@@ -670,6 +694,8 @@ body.bl-restore-v2-off .restore-stepper {
     padding: 10px 12px;
     background: rgba(248, 250, 252, 0.8);
     transition: border 0.2s ease, box-shadow 0.2s ease;
+    width: 100%;
+    box-sizing: border-box;
 }
 
 .bl-form-control input:focus,
@@ -1106,6 +1132,8 @@ body.bl-restore-v2-off .restore-stepper {
     padding: 12px;
     box-shadow: 0 8px 24px rgba(15, 23, 42, 0.15);
     z-index: 10;
+    max-width: calc(100vw - 40px);
+    box-sizing: border-box;
 }
 
 .backup-lite-admin .bl-actions-list .button {
@@ -1631,6 +1659,8 @@ body.bl-modal-open {
     border-radius: 14px;
     border: 1px solid var(--bl-border);
     transition: border-color .2s ease, box-shadow .2s ease, background .2s ease;
+    width: 100%;
+    box-sizing: border-box;
 }
 
 .backup-lite-admin .bl-form-control input:focus,
@@ -1937,5 +1967,105 @@ body.bl-modal-open {
     justify-content: center;
     gap: 12px;
     flex-wrap: wrap;
+}
+
+/* Museder RestoreOne - Backup Options UI Styles */
+.mro-backup-options {
+    margin-top: 8px;
+    margin-bottom: 16px;
+}
+
+.mro-backup-option {
+    margin-bottom: 8px;
+}
+
+.mro-backup-option label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+}
+
+.mro-backup-option input[type="checkbox"] {
+    margin: 0;
+    flex-shrink: 0;
+}
+
+.mro-backup-option-label {
+    font-size: 13px;
+    flex: 1;
+}
+
+.mro-pro-badge {
+    display: inline-block;
+    padding: 0 6px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    border-radius: 3px;
+    background: #ffb900;
+    color: #23282d;
+    flex-shrink: 0;
+}
+
+.mro-section-title {
+    font-size: 14px;
+    font-weight: 600;
+    margin: 16px 0 8px 0;
+    color: #1d2327;
+}
+
+.mro-backup-destinations {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 8px;
+    margin-bottom: 16px;
+}
+
+.mro-backup-destination {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    border: 1px solid #ccd0d4;
+    border-radius: 4px;
+    background: #fff;
+    min-width: 260px;
+    cursor: pointer;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.mro-backup-destination:hover:not(.is-disabled) {
+    border-color: #2271b1;
+    box-shadow: 0 0 0 1px #2271b1;
+}
+
+.mro-backup-destination.is-disabled {
+    opacity: 0.7;
+    cursor: default;
+}
+
+.mro-backup-destination input[type="checkbox"] {
+    margin: 0;
+    flex-shrink: 0;
+}
+
+.mro-backup-destination-title {
+    font-weight: 500;
+    font-size: 13px;
+    flex: 1;
+}
+
+/* Responsive: Stack destinations vertically on smaller screens */
+@media (max-width: 768px) {
+    .mro-backup-destinations {
+        flex-direction: column;
+    }
+    
+    .mro-backup-destination {
+        min-width: 100%;
+        width: 100%;
+    }
 }
 

@@ -9,7 +9,7 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-$museder_restoreone_is_pro = isset( $museder_restoreone_is_pro ) ? $museder_restoreone_is_pro : Backup_Lite_Pro::is_pro_active();
+$museder_restoreone_is_pro = isset( $museder_restoreone_is_pro ) ? $museder_restoreone_is_pro : ( function_exists( 'backup_lite_has_pro_features' ) && backup_lite_has_pro_features() );
 $museder_restoreone_upgrade_url = Backup_Lite_Pro::get_upgrade_url();
 
 // Get system check data (for PRO users)

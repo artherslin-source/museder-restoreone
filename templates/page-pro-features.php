@@ -9,7 +9,7 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-$museder_restoreone_is_pro = isset( $museder_restoreone_is_pro ) ? $museder_restoreone_is_pro : Backup_Lite_Pro::is_pro_active();
+$museder_restoreone_is_pro = isset( $museder_restoreone_is_pro ) ? $museder_restoreone_is_pro : ( function_exists( 'backup_lite_has_pro_features' ) && backup_lite_has_pro_features() );
 $museder_restoreone_upgrade_url = Backup_Lite_Pro::get_upgrade_url();
 ?>
 
@@ -85,14 +85,19 @@ $museder_restoreone_upgrade_url = Backup_Lite_Pro::get_upgrade_url();
                             <?php if ( ! $museder_restoreone_is_pro ) : ?>
                                 <span class="pro-badge">PRO</span>
                             <?php endif; ?>
-                            <span style="font-size: 11px; color: var(--bl-text-muted); font-weight: normal;">(Coming Soon)</span>
                         </h3>
                         <p style="margin: 0 0 16px 0; color: var(--bl-text-muted); font-size: 14px;">
-                            <?php esc_html_e( 'Backup to Google Drive, Amazon S3, Dropbox, and more cloud storage providers.', 'museder-restoreone' ); ?>
+                            <?php esc_html_e( 'Backup to Amazon S3 or S3-compatible storage. More providers coming soon.', 'museder-restoreone' ); ?>
                         </p>
-                        <a href="<?php echo esc_url( admin_url( 'admin.php?page=backup-lite-pro-cloud' ) ); ?>" class="bl-button bl-button-primary" style="width: 100%;">
-                            <?php esc_html_e( 'Configure', 'museder-restoreone' ); ?>
-                        </a>
+                        <?php if ( $museder_restoreone_is_pro ) : ?>
+                            <a href="<?php echo esc_url( admin_url( 'admin.php?page=backup-lite-cloud' ) ); ?>" class="bl-button bl-button-primary" style="width: 100%;">
+                                <?php esc_html_e( 'Configure', 'museder-restoreone' ); ?>
+                            </a>
+                        <?php else : ?>
+                            <a href="<?php echo esc_url( $museder_restoreone_upgrade_url ); ?>" target="_blank" class="bl-button bl-button-primary" style="width: 100%;">
+                                <?php esc_html_e( 'Upgrade to Pro', 'museder-restoreone' ); ?>
+                            </a>
+                        <?php endif; ?>
                     </div>
                 </div>
             </div>

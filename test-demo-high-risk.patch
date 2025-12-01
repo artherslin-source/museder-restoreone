@@ -1,0 +1,12 @@
+# 臨時修改 demo_response() 讓它回傳 High 風險（用於測試）
+# 使用方法：手動套用這些修改，測試完成後還原
+
+# 修改 site_scan (約第 116 行)
+# 將 'risk' => 'medium', 改為 'risk' => 'high',
+
+# 修改 backup_report (約第 160 行)
+# 將 'risk_level' => 'medium', 改為 'risk_level' => 'high',
+# 將 'overall_score' => 65, 改為 'overall_score' => 30,
+
+# 修改 restore_guide (約第 218 行)
+# 將 'risk_level' => 'medium', 改為 'risk_level' => 'high',

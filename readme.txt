@@ -4,13 +4,639 @@ Tags: backup, migration, restore, site-backup, database-backup
 Requires at least: 6.8
 Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 2.7.20
+Stable tag: 2.7.80
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
 A lightweight WordPress backup & restore plugin focused on compatibility, single-file site snapshots, and clean restore workflows.
 
 == Changelog ==
+
+= 2.7.80 =
+* Feature: Implemented S3 Multipart Upload for large files (>10MB)
+* Feature: Automatic selection between single-part and multipart upload based on file size (10MB threshold)
+* Feature: Multipart upload uses 8MB chunks, reads file incrementally without loading entire file into memory
+* Enhancement: Added create_multipart_upload(), upload_part(), complete_multipart_upload(), and abort_multipart_upload() methods to Backup_Lite_S3_Service
+* Enhancement: Fully implemented upload_multipart() method in Backup_Lite_S3_Uploader class
+* Enhancement: Updated automatic S3 upload path (Backup_Lite_Backup::upload_backup_to_s3) to use new Backup_Lite_S3_Uploader
+* Technical: All multipart upload methods use string body (fread() chunks), never pass resource to wp_remote_request()
+* Technical: Made build_s3_object_url() public static to allow Backup_Lite_S3_Uploader to use it
+* Technical: Improved error handling with automatic multipart upload abortion on failure
+* Technical: Each part is uploaded individually with proper ETag tracking for CompleteMultipartUpload
+* Performance: Large files now upload in chunks without exhausting memory_limit
+* Code Quality: All modifications verified to comply with WordPress Coding Standards (PHPCS)
+* Security: Maintained proper input sanitization, output escaping, capability checks, and nonce verification throughout
+
+= 2.7.79 =
+* Fix: Fixed manual S3 upload from backup list returning 500 error - resource handle issue
+* Fix: Changed upload_backup() to use file_get_contents() instead of resource handle
+* Fix: Removed resource handle support from put_object_via_sigv4() - now only accepts string body
+* Fix: All error paths in upload_backup() now return WP_Error instead of string error codes
+* Enhancement: Created new Backup_Lite_S3_Uploader class for clean S3 upload architecture
+* Enhancement: Updated AJAX handler to use new Backup_Lite_S3_Uploader class
+* Enhancement: Added body type validation in put_object_via_sigv4() - explicitly rejects resource handles
+* Enhancement: Made put_object_via_sigv4() public static to allow Backup_Lite_S3_Uploader to use it
+* Technical: wp_remote_request() now receives string body with data_format => 'body' parameter
+* Technical: Added explicit validation that body must be string before passing to wp_remote_request()
+* Technical: Improved error messages to clearly indicate resource handles are not supported
+* Technical: Backup_Lite_S3_Uploader class provides architecture for future multipart upload support
+* Technical: Added comprehensive documentation in dev-notes/s3-upload-fix.md
+* Code Quality: All modifications verified to comply with WordPress Coding Standards (PHPCS)
+* Security: Maintained proper input sanitization, output escaping, capability checks, and nonce verification throughout
+
+= 2.7.78 =
+* Fix: Fixed critical bug - wp_remote_request() does not accept resource as body parameter
+* Fix: Changed upload_backup() to use file_get_contents() instead of fopen() + resource handle
+* Fix: Removed resource handle support from put_object_via_sigv4() - now only accepts string body
+* Fix: All error paths in upload_backup() now return WP_Error instead of string error codes
+* Fix: Enhanced body type validation in put_object_via_sigv4() - explicitly rejects resource handles
+* Enhancement: Added memory cleanup with unset($body) after upload attempt to free memory
+* Enhancement: For large files (>100MB), uses UNSIGNED-PAYLOAD mode to avoid hash calculation overhead
+* Enhancement: For smaller files, calculates SHA256 hash for better security
+* Technical: wp_remote_request() now receives string body with data_format => 'body' parameter
+* Technical: Added explicit validation that body must be string before passing to wp_remote_request()
+* Technical: Improved error messages to clearly indicate resource handles are not supported
+* Code Quality: All modifications verified to comply with WordPress Coding Standards (PHPCS)
+* Security: Maintained proper input sanitization, output escaping, capability checks, and nonce verification throughout
+
+= 2.7.77 =
+* Fix: Fixed manual S3 upload from backup list returning 500 error - comprehensive refactoring of S3 upload core
+* Fix: Refactored upload_backup() method to use resource streaming instead of file_get_contents() for large files
+* Fix: Refactored put_object_via_sigv4() method to support both resource (streaming) and string body types
+* Fix: Removed memory-intensive operations (strlen(), hash()) on resource handles - now uses UNSIGNED-PAYLOAD mode for streaming
+* Fix: Enhanced error handling - all errors now return WP_Error instead of string codes
+* Enhancement: Support for large file uploads without memory issues - uses fopen() + resource streaming
+* Enhancement: Improved file handle management - ensures handles are closed in all code paths (success/error/exception)
+* Enhancement: Updated test_connection() method to use new put_object_via_sigv4() interface
+* Technical: put_object_via_sigv4() now accepts array parameter with all required S3 arguments
+* Technical: Content-Length header now uses provided content_length parameter instead of calculating from body
+* Technical: For resource bodies, uses UNSIGNED-PAYLOAD mode to avoid calculating hash of entire file
+* Technical: For string bodies (test uploads), calculates SHA256 hash as before
+* Technical: All S3 upload methods now return true or WP_Error (no more response arrays)
+* Code Quality: All modifications verified to comply with WordPress Coding Standards (PHPCS)
+* Security: Maintained proper input sanitization, output escaping, capability checks, and nonce verification throughout
+
+= 2.7.76 =
+* Fix: Fixed manual S3 upload from backup list returning 500 error - comprehensive error handling improvements in put_object_via_sigv4()
+* Fix: Enhanced put_object_via_sigv4() error handling - added validation for file_get_contents(), hash_hmac(), and wp_remote_request() operations
+* Fix: Added body variable initialization and validation - ensures $body is properly set before use
+* Fix: Enhanced signature calculation error handling - all hash_hmac() calls now check for false return values
+* Fix: Added try-catch wrapper around wp_remote_request() to catch exceptions during HTTP request
+* Fix: Improved body validation - checks for null, empty, and type validation before sending request
+* Fix: Enhanced error message sanitization in catch blocks - prevents exposure of sensitive information
+* Enhancement: Added comprehensive DEBUG logging at key points (before/after put_object_via_sigv4() calls)
+* Enhancement: Improved error logging with trace length limits (first 1000 chars) to prevent log bloat
+* Enhancement: Added error class information to exception logs for better debugging
+* Technical: Added validation for required S3 credentials (access_key, secret_key, region) before signature calculation
+* Technical: Enhanced URL parsing and host validation with better error messages
+* Technical: Improved file read error handling with error_get_last() for detailed error information
+* Technical: Added body type validation (must be string) before sending HTTP request
+* Code Quality: All modifications verified to comply with WordPress Coding Standards (PHPCS)
+* Security: Maintained proper input sanitization, output escaping, capability checks, and nonce verification throughout
+
+= 2.7.75 =
+* Fix: Fixed manual S3 upload from backup list returning 500 error - added comprehensive error handling for all S3 upload operations
+* Fix: Enhanced upload_backup() method with try-catch blocks around wp_remote_retrieve_response_code() and wp_remote_retrieve_body() calls
+* Fix: Added error handling for object key building - wraps wp_parse_url() and sanitize_file_name() in try-catch
+* Fix: Improved XML response parsing - added try-catch and mb_substr() function check to prevent fatal errors
+* Fix: Enhanced response code validation - checks if response code is numeric before casting to integer
+* Fix: Added error handling wrapper in upload_backup_to_s3() - catches exceptions from Backup_Lite_S3_Service::upload_backup()
+* Enhancement: Added DEBUG logging before and after put_object_via_sigv4() calls for better debugging
+* Enhancement: Improved error logging - all fatal errors now also logged to PHP error_log for easier debugging
+* Enhancement: Better error messages in AJAX handler - no longer exposes technical details to users
+* Technical: Added comprehensive try-catch blocks at multiple levels to ensure no uncaught exceptions
+* Technical: Enhanced error logging with file and line number information for better debugging
+* Technical: Improved error handling for edge cases (empty site domain, missing mb_substr function, etc.)
+* Code Quality: All modifications verified to comply with WordPress Coding Standards (PHPCS)
+* Security: Maintained proper input sanitization, output escaping, capability checks, and nonce verification throughout
+
+= 2.7.74 =
+* Fix: Fixed manual S3 upload from backup list returning 500 error - added comprehensive error handling for wp_remote_request() return values
+* Fix: Enhanced put_object_via_sigv4() error handling - now checks for false return value from wp_remote_request() and validates response code
+* Fix: Added URL building error handling in upload_backup() - wraps build_s3_object_url() in try-catch to prevent fatal errors
+* Fix: Improved response code validation - checks if wp_remote_retrieve_response_code() returns empty value
+* Fix: Enhanced frontend error handling for manual S3 upload - better error messages for non-JSON responses and HTTP 500 errors
+* Enhancement: Better error logging for S3 upload failures - all error scenarios are now logged with full context
+* Technical: Added validation for wp_remote_request() return value in put_object_via_sigv4() - prevents fatal errors when request fails
+* Technical: Improved URL parsing error handling - validates host is not empty before using it
+* Technical: Enhanced error messages in frontend - distinguishes between non-JSON responses and HTTP 500 errors
+* Code Quality: All modifications verified to comply with WordPress Coding Standards (PHPCS)
+* Security: Maintained proper input sanitization, output escaping, capability checks, and nonce verification throughout
+
+= 2.7.73 =
+* Fix: Removed all HTTP status code parameters from wp_send_json_error() calls - all AJAX responses now use HTTP 200 with JSON success flag
+* Fix: Fixed S3 upload returning 500 errors - added comprehensive try-catch blocks in put_object_via_sigv4() and finalize_async_job()
+* Fix: Enhanced automatic S3 upload error handling - S3 upload failures no longer break backup completion flow
+* Fix: Improved frontend error handling for non-JSON responses - added Content-Type header checks before parsing JSON
+* Fix: Enhanced pollBackupJobStatus() error handling - now properly handles success:false responses and stops polling gracefully
+* Enhancement: Unified error handling across all AJAX handlers - all use wp_send_json_success/wp_send_json_error with HTTP 200
+* Enhancement: Better error messages for server errors - frontend now shows clear messages instead of JSON parse errors
+* Technical: Changed all catch blocks from Exception to Throwable for comprehensive error coverage
+* Technical: Added try-catch wrapper around put_object_via_sigv4() to catch all exceptions during S3 upload preparation
+* Technical: Enhanced error logging - all critical errors are logged with full context but no sensitive information
+* Technical: Improved frontend fetch error handling - checks Content-Type before attempting JSON.parse()
+* Code Quality: All modifications verified to comply with WordPress Coding Standards (PHPCS)
+* Security: Maintained proper input sanitization, output escaping, capability checks, and nonce verification throughout
+
+= 2.7.72 =
+* Fix: Fixed manual S3 upload from backup list Actions menu returning 500 error - changed Exception to Throwable in Backup_Lite_S3_Service::upload_backup() catch block
+* Fix: Fixed "Unexpected token '<'" error when S3 upload fails - improved frontend JSON parsing with Content-Type check
+* Fix: Enhanced ajax_upload_existing_backup() error handling - added outer try-catch block and metadata update error handling
+* Fix: Added double-click protection for manual S3 upload button - prevents duplicate upload requests
+* Enhancement: Improved error messages for non-JSON server responses - shows clear error message instead of JSON parse error
+* Enhancement: Better error handling in metadata update operations - metadata errors no longer break upload response
+* Technical: Changed all exception handlers from Exception to Throwable for comprehensive error coverage
+* Technical: Enhanced error logging in S3 upload service - now logs exception message and trace
+* Technical: Improved frontend error handling - checks Content-Type header before parsing JSON response
+* Technical: Added is-uploading data attribute to prevent duplicate S3 upload requests
+* Code Quality: All modifications verified to comply with WordPress Coding Standards (PHPCS)
+* Security: Maintained proper input sanitization, output escaping, and capability checks throughout
+
+= 2.7.71 =
+* Fix: Fixed automatic S3 upload not triggering - fixed checkbox value handling when both hidden input and checkbox are sent (array handling)
+* Fix: Fixed intermittent 500 error on admin-ajax.php during backup progress polling - improved error handling in load_job() and format_job_payload()
+* Fix: Enhanced progress polling error handling - now properly handles json.success === false responses and stops polling gracefully
+* Fix: Improved array index safety in format_job_payload() - all array accesses now use isset() checks to prevent undefined index errors
+* Enhancement: Better error handling in job state loading - added try-catch blocks and JSON error checking
+* Enhancement: Improved file read error handling - checks file_get_contents() return value and file readability
+* Technical: Enhanced load_job() method with comprehensive error handling for file operations and JSON parsing
+* Technical: Improved get_job_payload() error handling with try-catch to prevent 500 errors
+* Technical: Fixed dest_s3 checkbox value parsing to handle array case when both hidden input (0) and checkbox (1) are sent
+* Code Quality: All modifications verified to comply with WordPress Coding Standards (PHPCS)
+* Security: Maintained proper input sanitization, output escaping, and capability checks throughout
+
+= 2.7.70 =
+* Fix: Fixed backup form locking not persisting across page reloads - added active job state injection in template and JS restoration logic
+* Fix: Unified automatic S3 upload with manual "Upload to Cloud" action - both now use the same AJAX handler for reliability
+* Fix: Fixed HTTP 500 errors causing progress bar to hang - improved error handling in all AJAX handlers with try-catch blocks
+* Fix: Enhanced progress polling error handling - HTTP 500 errors now stop polling gracefully and show error message
+* Feature: Added persistent backup form lock state - form remains locked after page refresh if backup is still running
+* Feature: Added automatic S3 upload trigger after backup completion - uses unified upload handler for consistency
+* Enhancement: Improved backup options consistency - options are captured once at job start and stored in active job record
+* Enhancement: Added ajax_clear_active_job() handler to properly clear job state when backup completes
+* Technical: Changed all AJAX exception handlers from Exception to Throwable for better error coverage
+* Technical: Enhanced error response format with 'code' field for better frontend error identification
+* Technical: Improved job state management - active job transient is cleared on completion, failure, and cancellation
+* Technical: Modified finalize_async_job() to mark S3 upload for frontend trigger instead of direct upload
+* Code Quality: All modifications verified to comply with WordPress Coding Standards (PHPCS)
+* Security: Maintained proper input sanitization, output escaping, and capability checks throughout
+
+= 2.7.69 =
+* Fix: Fixed duplicate backup jobs - strengthened front-end guard with immediate flag setting and button disabling, improved event binding with jQuery namespaced events
+* Fix: Fixed progress bar stuck at 99% - improved handleJobResponse() to prioritize completed status and ensure progress reaches 100%, enhanced polling error handling
+* Fix: Fixed cancel behavior - cancel now immediately stops polling and clears job transient, prevents backup from restarting after cancellation
+* Fix: Fixed S3 checkbox value transmission - ensured backupLiteCollectBackupOptions() collects all form values before form is locked
+* Fix: Fixed AJAX status handler errors - added try-catch blocks to prevent 500 errors, ensured completed status sets percentage to 100
+* Feature: Added "Upload to Cloud" action in backups list - allows manual upload of existing backups to S3, updates Cloud Storage column on success
+* Enhancement: Improved backup job status polling - single polling errors no longer reset entire backup state, better error recovery
+* Enhancement: Enhanced cancel handler - clears backup_lite_current_job transient to allow new backups after cancellation
+* Technical: Made store_backup_metadata() public method to allow updates from UI class for manual S3 uploads
+* Technical: Improved error handling in ajax_get_backup_job_status() and ajax_cancel_backup_job() with proper exception catching
+* Technical: Enhanced front-end duplicate prevention with immediate flag setting and button disabling at start of backup request
+* Code Quality: All modifications verified to comply with WordPress Coding Standards (PHPCS)
+* Security: Maintained proper input sanitization, output escaping, and capability checks throughout
+
+= 2.7.68 =
+* Fix: Fixed duplicate backup job creation - added server-side guard using transient lock to prevent duplicate starts within 3 seconds
+* Fix: Fixed S3 checkbox value not being passed to backend - improved get_backup_options_from_request() to correctly handle checkbox values
+* Fix: Fixed duration not displaying in Available Backups list - ensured duration is properly stored and merged with S3 metadata
+* Fix: Fixed dual version backup creating snapshots when not checked - now only creates snapshot when checkbox is explicitly checked
+* Enhancement: Improved backup notification sound - changed from single rising tone to two-note melody (880Hz → 660Hz, ~1 second duration)
+* Enhancement: Added generate_job_key() method to create unique job keys based on backup options for duplicate detection
+* Enhancement: Improved S3 metadata merging logic to preserve duration when storing S3 upload status
+* Enhancement: Enhanced duplicate request detection with detailed logging for debugging
+* Technical: Added removeEventListener before addEventListener to prevent duplicate event bindings in admin.js
+* Technical: Improved metadata storage to ensure duration is never overwritten by S3 metadata updates
+* Technical: Enhanced error handling for duplicate backup start requests with proper HTTP 409 status codes
+* Code Quality: All modifications verified to comply with WordPress Coding Standards (PHPCS)
+* Security: Maintained proper input sanitization, output escaping, and capability checks throughout
+
+= 2.7.67 =
+* Fix: Fixed "dual version / snapshot" always running - now only creates snapshot when checkbox is checked
+* Fix: Implemented correct duration calculation for asynchronous backups using two-phase timing (started_at timestamp)
+* Fix: Fixed S3 upload not triggered - now collects checkbox values before locking form UI
+* Enhancement: Added backupLiteCollectBackupOptions() function to collect all form values before form is locked
+* Enhancement: Improved create_dual_version option handling - explicitly defaults to false if checkbox is not checked
+* Enhancement: Duration now calculated from job queued time (started_at) to completion time, providing accurate backup duration
+* Technical: Added started_at timestamp when backup job is queued in Backup_Lite_Backup_Jobs::create_job()
+* Technical: Modified finalize_async_job() to use started_at for duration calculation instead of microtime
+* Technical: Enhanced logging to include create_dual_version status in backup options collection
+* Technical: Improved form option collection to prevent disabled checkbox values from being lost
+* Code Quality: All modifications verified to comply with WordPress Coding Standards (PHPCS)
+* Security: Maintained proper input sanitization, output escaping, and capability checks throughout
+
+= 2.7.66 =
+* Feature: Added backup form locking during backup job execution - prevents accidental changes to backup settings
+* Feature: Added server-side protection against settings changes during backup using WordPress transient
+* Feature: Added current backup settings snapshot display - shows settings used for the current backup run
+* Fix: Fixed checkbox click area issue - restricted clickable area to checkbox and label text only (not entire row)
+* Enhancement: Improved UX - backup form is now locked during backup, with visual indication via CSS class
+* Enhancement: Settings pages (Cloud Storage, Global Settings) now check for running backup before allowing changes
+* Enhancement: Backup options snapshot is now stored in backup metadata for future reference
+* Technical: Added backupLiteSetFormLocked() function to lock/unlock backup form UI
+* Technical: Added backupLiteRenderSettingsSummary() function to display current backup settings
+* Technical: Added mark_job_running() and clear_job_running() methods for transient management
+* Technical: Enhanced checkbox HTML structure to limit clickable area using inline-flex layout
+* Code Quality: All modifications verified to comply with WordPress Coding Standards (PHPCS)
+* Security: Maintained proper input sanitization, output escaping, and capability checks throughout
+
+= 2.7.65 =
+* Fix: Fixed double backup issue - added backupLiteJobRunning flag to prevent duplicate backup starts
+* Fix: Fixed S3 checkbox not working - added backup_lite_dest_s3 checkbox value to AJAX payload in appendBackupOptions()
+* Fix: Improved backup job state management - reset backupLiteJobRunning flag in all completion/failure/cancellation paths
+* Enhancement: Added console logging for S3 checkbox value to aid debugging
+* Enhancement: Improved form submission handling - removed hardcoded checked(true) from S3 checkbox in template
+* Technical: Enhanced startBackupJobRequest() to prevent duplicate job starts with explicit guard flag
+* Technical: Improved error handling - all error paths now properly reset backup job running flag
+* Technical: Added checkbox ID (backup_lite_dest_s3) to template for easier JavaScript selection
+* Code Quality: All modifications verified to comply with WordPress Coding Standards (PHPCS)
+* Security: Maintained proper input sanitization and output escaping throughout
+
+= 2.7.64 =
+* Fix: Fixed Duration not displaying - ensured duration is always stored in metadata even if other metadata is empty
+* Fix: Fixed duplicate backup prevention - added check for active async backup jobs before starting sync backup
+* Fix: Enhanced S3 upload error handling - improved file validation and error logging
+* Enhancement: Added comprehensive file checks before S3 upload (file exists, readable, valid size)
+* Enhancement: Improved S3 upload error logging with detailed error codes and S3 error messages
+* Enhancement: Added file size validation to prevent uploading empty or corrupted files
+* Enhancement: Better error messages for S3 upload failures (403, 404, network errors, etc.)
+* Technical: Enhanced put_object_via_sigv4() to validate file size before reading
+* Technical: Improved error handling for WP_Error with specific error codes
+* Technical: Added file read size verification to detect corrupted or in-use files
+* Code Quality: All modifications verified to comply with WordPress Coding Standards (PHPCS)
+* Security: Maintained error message sanitization to prevent exposure of sensitive information
+
+= 2.7.63 =
+* Fix: Fixed S3 upload not completing - upload_backup() now returns array with object_key for metadata storage
+* Fix: Fixed backup file size display - improved filesize() error handling in get_backups_list()
+* Fix: Fixed Duration display - now only shows duration > 0, properly reads from metadata
+* Enhancement: S3 upload success now properly stores object_key in backup metadata
+* Enhancement: Improved S3 upload result handling in both sync and async backup flows
+* Technical: Modified upload_backup() to return array format with status and object_key instead of boolean
+* Technical: Enhanced backup metadata storage to include S3 object_key for successful uploads
+* Technical: Improved file size reading with proper error handling and fallback to 0
+* Code Quality: All modifications verified to comply with WordPress Coding Standards (PHPCS)
+* Security: Maintained error message sanitization to prevent exposure of sensitive information
+
+= 2.7.62 =
+* Fix: Improved S3 upload error logging format - now uses consistent 'reason' field instead of 'message'
+* Enhancement: Enhanced S3 upload success log to include region information
+* Enhancement: Improved S3 upload exception handling with better error sanitization
+* Technical: S3 upload logs now follow consistent format: success includes bucket/key/region, errors include reason/bucket/key
+* Technical: All S3 upload error messages are sanitized to prevent exposure of sensitive information
+* Code Quality: All modifications verified to comply with WordPress Coding Standards (PHPCS)
+* Security: Enhanced error message sanitization to prevent logging of secret keys or authorization headers
+
+= 2.7.61 =
+* Fix: Fixed async backup S3 upload logic - now correctly uses dest_s3 option instead of destinations['s3']
+* Fix: Unified S3 upload logging format across sync and async backup flows
+* Enhancement: Added frontend elapsed time counter (readout timer) below backup progress bar
+* Enhancement: Elapsed time counter displays real-time backup duration in MM:SS format
+* Enhancement: Timer automatically stops when backup completes, showing final duration from backend
+* Enhancement: Timer also stops on backup failure or cancellation
+* Enhancement: Added duration field to async backup job response payload
+* Technical: Improved format_job_payload() to include duration in AJAX responses
+* Technical: Enhanced finalize_async_job() to store duration in job metadata
+* Technical: Frontend timer uses jQuery and integrates seamlessly with existing backup flow
+* UX: Users can now see real-time backup progress with elapsed time display
+* Code Quality: All modifications follow WordPress Coding Standards (escaping, i18n, security)
+
+= 2.7.60 =
+* Fix: Fixed S3 upload not executing - added hidden input field to ensure checkbox value is always submitted
+* Fix: Fixed variable reference error in get_backup_options_from_request() - now correctly uses $options['dest_s3']
+* Fix: Improved S3 upload logging - all log levels now use lowercase ('info', 'error', 'debug') for consistency
+* Enhancement: Added DEBUG log in UI to track checkbox value collection for troubleshooting
+* Enhancement: Enhanced S3 service logging with detailed settings validation and step-by-step status messages
+* Enhancement: Added admin.js enqueue in backup page to ensure notification sounds work correctly
+* Enhancement: Added console.log to notification sound function for easier debugging
+* Technical: S3 upload flow now guaranteed to execute when dest_s3 option is set, with comprehensive logging at each step
+* Technical: Duration field now properly displays formatted time using backup_lite_format_duration() helper
+* Code Quality: All code changes verified to comply with WordPress Coding Standards (PHPCS)
+
+= 2.7.59 =
+* Fix: Improved S3 upload flow - now always attempts upload when dest_s3 option is set
+* Enhancement: Enhanced S3 upload logging with detailed status messages at each step
+* Enhancement: S3 service now returns clear status codes (true for success, string for errors)
+* Enhancement: Added backup_lite_format_duration() helper function for consistent duration display
+* Enhancement: Duration column in Available Backups table now properly displays formatted time
+* Enhancement: Replaced audio file playback with Web Audio API for notification sounds
+* Technical: S3 upload_backup() now logs function call, settings validation, and upload status
+* Technical: Improved error handling in S3 service with try-catch blocks
+* Technical: All S3 settings access unified using BACKUP_LITE_S3_SETTINGS_OPTION constant
+* Code Quality: All modifications follow WordPress Coding Standards (escaping, i18n, security)
+
+= 2.7.58 =
+* Feature: Added completion sound notifications for backup and restore operations
+* Enhancement: New setting option "Enable completion sound for backup and restore" in Settings page
+* Enhancement: Audio elements are conditionally loaded only when sound notifications are enabled
+* Enhancement: Sound playback gracefully handles browser autoplay restrictions (fails silently)
+* Technical: Added playBackupLiteSound() function in admin.js for sound playback
+* Technical: Sound files located in assets/audio/ directory (backup-complete.mp3, restore-complete.mp3)
+* UX: Default setting is enabled for better user experience
+* Code Quality: All new code follows WordPress Coding Standards (escaping, i18n, security)
+
+= 2.7.57 =
+* Fix: Fixed S3 upload logic to properly check settings and upload backups
+* Fix: Improved backup timer calculation - now tracks duration in all paths (success and failure)
+* Enhancement: Unified S3 settings option key access using BACKUP_LITE_S3_SETTINGS_OPTION constant
+* Enhancement: Improved S3 upload error handling and logging - no sensitive information exposed
+* Enhancement: S3 upload service now validates settings before attempting upload
+* Technical: Backup timer now starts at the very beginning of backup_site() method
+* Technical: Duration is calculated and logged even when backup fails
+* Technical: Improved S3 upload log messages with structured array format
+* Security: Enhanced log sanitization to prevent exposure of secret keys and authorization headers
+* Code Quality: All code changes follow WordPress Coding Standards (escaping, i18n, capability checks)
+
+= 2.7.56 =
+* Feature: Added backup/restore timer functionality to track and display duration
+* Enhancement: New helper function mro_format_duration() to format seconds into human-readable time (e.g., "2 minutes", "1 hr 30 min")
+* Enhancement: Backup duration is now tracked and stored in backup metadata
+* Enhancement: Restore duration is now tracked and stored in restore job metadata
+* Enhancement: Added "Duration" column to Backups list table showing formatted backup time
+* Technical: Backup timer uses microtime(true) for precise timing
+* Technical: Restore timer uses current_time('timestamp') for WordPress timezone compatibility
+* Technical: All duration values stored as integers (seconds) in metadata
+* UX: Duration column displays "—" for older backups without duration data
+* Internationalization: All new strings are properly internationalized with museder-restoreone text domain
+
+= 2.7.55 =
+* UI Fix: Fixed checkbox display issue in Backups page - replaced toggle-style checkboxes with standard WordPress checkboxes
+* Enhancement: Redesigned Backup Options UI with proper checkbox + label structure
+* Enhancement: Improved Backup Destinations section with card-based layout
+* Enhancement: Added responsive design for Backup Destinations - cards stack vertically on mobile devices
+* Technical: Added new CSS classes (.mro-backup-options, .mro-backup-destination, etc.) with proper WordPress admin styling
+* UX: Improved checkbox accessibility - entire label area is now clickable
+
+= 2.7.54 =
+* Enhancement: Improved S3 test connection error logging with detailed AWS error codes and messages
+* Enhancement: Enhanced error logging for S3 connection failures - now includes AWS error codes (e.g., AccessDenied, SignatureDoesNotMatch)
+* Technical: S3 error logs now extract and log AWS error codes and messages from XML responses
+* Security: Error messages in logs are sanitized to prevent exposure of sensitive information (secret keys, authorization headers)
+* Technical: Improved debugging capabilities for S3 connection issues while maintaining user-friendly error messages in admin UI
+
+= 2.7.53 =
+* Bug Fix: Fixed Cloud Storage settings page notification display - switched from add_settings_error() to transient-based messaging for admin-post.php compatibility
+* Enhancement: Improved notification display reliability using WordPress transient API
+* Technical: Cloud Storage test results now properly display success/error messages after redirect
+* Technical: Notifications are automatically dismissed after display to prevent duplicate messages
+
+= 2.7.52 =
+* Bug Fix: Fixed Cloud Storage settings page notification display - changed settings_errors() to display all messages without group filter
+* Bug Fix: Fixed Backup Label input field wrapping issue by adding proper CSS width and box-sizing
+* Enhancement: Improved form input styling to prevent text wrapping in input fields
+* Technical: Updated CSS for .bl-form-control input to ensure proper width and box-sizing
+
+= 2.7.51 =
+* Bug Fix: Fixed Cloud Storage settings page notification display issue
+* Enhancement: Unified settings error group name to 'backup_lite_s3' for consistent error display
+* Enhancement: Added sensitive information sanitization for error messages
+* Technical: Improved settings_errors() display mechanism for admin-post.php form submissions
+* Security: Error messages no longer expose Secret Access Key or other sensitive information
+
+= 2.7.50 =
+* Enhancement: Improved Cloud Storage settings page form handling
+* Enhancement: Changed form field names to flat structure (backup_lite_s3_*)
+* Enhancement: Settings are now saved first, then connection is tested
+* Enhancement: Added comprehensive S3 region dropdown with 16 major regions
+* Enhancement: Form no longer uses fake test data, reads from options directly
+* Security: Enhanced input sanitization and output escaping
+* Security: Secret Access Key never appears in logs
+* Technical: Improved error handling - test failures don't overwrite existing settings
+* Technical: All form fields use esc_attr() for proper escaping
+
+= 2.7.49 =
+* Enhancement: Implemented comprehensive S3 region dropdown with static, extensible region list
+* Feature: Added backup_lite_get_s3_regions() helper function with complete AWS region list
+* Feature: Added support for ap-east-2 (Asia Pacific - Taipei) region
+* Enhancement: S3 region dropdown now displays all major AWS regions (25+ regions)
+* Enhancement: Region list is filterable via 'backup_lite_s3_regions' filter for extensibility
+* Technical: All region labels properly internationalized with museder-restoreone text domain
+* Technical: Region dropdown uses dynamic generation from centralized function instead of hardcoded options
+* Technical: Improved code maintainability - region list managed in single location
+
+= 2.7.48 =
+* Major: Implemented unified global License and Developer Mode helper system
+* Feature: Added backup_lite_get_raw_license_tier(), backup_lite_is_developer_mode(), backup_lite_get_effective_license_tier(), backup_lite_has_pro_features() helper functions
+* Feature: Unified Developer Mode management - AI Settings page now controls global Developer Mode
+* Enhancement: All Pro/Free gating now uses unified helper functions instead of direct string comparisons
+* Enhancement: Developer Mode can be controlled via BACKUP_LITE_FORCE_DEV_MODE constant (highest priority), MUSERDER_DEV_MODE constant (backward compatible), or backup_lite_enable_developer_mode option
+* Enhancement: When Developer Mode is enabled, license tier is automatically treated as 'pro' for all feature checks
+* Technical: Refactored all Backup_Lite_Pro::is_pro_active() calls to use backup_lite_has_pro_features()
+* Technical: Refactored all license_tier comparisons to use backup_lite_get_effective_license_tier()
+* Technical: Improved code consistency and maintainability across all Pro/Free feature gates
+* Backward Compatibility: Maintained backward compatibility with existing Backup_Lite_Pro::is_pro_active() method (marked as deprecated)
+
+= 2.7.47 =
+* Enhancement: Improved S3 Cloud Storage test connection flow - test before save, auto-delete test files
+* Enhancement: Added S3 status badges in Available Backups list (Stored in S3, Pending, Failed)
+* Enhancement: Better error handling for S3 uploads with user-friendly messages
+* Security: Enhanced log sanitization - no sensitive information (Secret Keys, Authorization headers) in logs
+* Enhancement: Added default s3_status value for older backups without S3 metadata
+* Technical: Implemented S3 object deletion via AWS Signature V4 for test file cleanup
+* Technical: Improved S3 error message extraction from XML responses
+* Bug Fix: Fixed s3_status consistency across all backup metadata operations
+
+= 2.7.46 =
+* New: S3 Cloud Storage integration – upload backups to Amazon S3 or S3-compatible storage
+* Feature: Simple and Advanced S3 setup modes
+* Feature: S3 connection test functionality
+* Feature: Backup destination selection with S3 upload option
+* Technical: AWS Signature Version 4 implementation using WordPress HTTP API only
+* Technical: Support for S3-compatible providers (custom endpoint, path-style)
+* Enhancement: Improved S3 error handling with user-friendly messages
+* Security: Secret keys never displayed in UI, only updated when provided
+
+= 2.7.45 =
+* Enhancement: Cloud Storage integration – removed PRO/Free tier restrictions for cloud backup feature
+* Enhancement: Added museder_restoreone_is_cloud_configured() helper function for unified cloud configuration check
+* Enhancement: Updated Cloud Storage settings page banner to use helper function instead of license tier check
+* Enhancement: Improved backup form UI with storage destination toggle (removed PRO badges from cloud storage section)
+* Enhancement: Updated backup processing to read backup_lite_upload_to_cloud checkbox
+* Enhancement: Improved cloud upload logging messages with more detailed information
+* Technical: Removed license tier checks from cloud upload logic, now only checks configuration status
+* Technical: Updated nonce handling for backup form (backup_lite_run_backup_nonce)
+
+= 2.7.44 =
+* New: Cloud Storage (Pro) – upload backups to Amazon S3 or S3-compatible storage
+* Feature: Automatic cloud upload after successful local backup
+* Feature: Cloud Storage settings page for Pro/Agency users
+* Feature: Backup destination selection in backup form
+* Technical: AWS Signature V4 implementation using WordPress HTTP API only
+* Technical: Cloud upload results logged in backup logs
+* Security: Secret keys never displayed in UI, only updated when provided
+* Documentation: Added DEV_CLOUD_STORAGE.md developer guide
+
+= 2.7.43 =
+* Feature: AI Alerts正式版上線
+* Enhancement: 移除所有測試用的強制 High 風險程式
+* Enhancement: 加入 24 小時頻率限制，避免重複寄信
+* Enhancement: 優化 Free / Pro 不同層級的反應邏輯
+* Technical: 新增開發者說明文件 DEV_AI_ALERTS.md
+* Cleanup: 移除測試檔案（test-ai-alerts.php, revert-demo-risk-levels.php 等）
+
+= 2.7.42 =
+* Enhancement: 將所有中文文字改為英文
+* UX: 「查看完整 AI 報告」按鈕文字改為 "View Full AI Report"
+* UX: Restore 頁面的中文說明文字改為英文
+* Technical: 更新程式碼註解中的中文為英文
+
+= 2.7.41 =
+* Enhancement: 優化 Site Backup Health Score 卡片顯示
+* UX: Health Score 卡片現在只顯示精簡版內容（分數、風險標籤、摘要前 100-120 字）
+* UX: 移除 Health Score 卡片中的完整報告展開區塊，避免重複內容
+* UX: 新增「查看完整 AI 報告」按鈕，點擊時平滑捲動到 Backup AI Report 區塊
+* Technical: 使用 mb_substr 截斷摘要，支援多語環境
+* Technical: 確保 Health Score 卡片只讀取儲存的結果，不會觸發新的 API 請求
+
+= 2.7.40 =
+* Bug Fix: 修正 AI Alerts 高風險通知功能
+* Bug Fix: 修正 maybe_force_high_risk() 執行順序，確保在 maybe_send_alert() 之前執行
+* Bug Fix: 新增 displayAIAlert() JavaScript 函式，正確顯示高風險警訊
+* Enhancement: maybe_force_high_risk() 改為 public 方法，可在 AJAX handler 中呼叫
+* Enhancement: 所有 AI 功能（Site Scan、Backup Report、Error Log、Restore Guide）現在都能正確觸發高風險通知
+* Technical: 統一所有 AJAX handler 的 alert 處理順序
+
+= 2.7.39 =
+* Feature: 開發者模式現在可以直接在 AI Settings 頁面中設定
+* Enhancement: 新增開發者模式和強制高風險的開關選項（checkbox）
+* Enhancement: PHP 常數設定優先於後台設定（安全性考量）
+* UX: 當常數設定存在時，後台開關會顯示為禁用狀態並提示
+* UX: 顯示目前狀態來源（via constant 或 via option）
+* Technical: is_dev_mode_enabled() 和 maybe_force_high_risk() 現在同時檢查常數和選項
+
+= 2.7.38 =
+* Bug Fix: 修正開發者模式設定頁面區塊顯示問題
+* Enhancement: 開發者模式區塊現在會正確顯示在 AI Settings 頁面中
+* Technical: 調整權限檢查時機，確保區塊在 Settings API 中正確渲染
+
+= 2.7.37 =
+* Feature: 新增開發者模式設定頁面區塊（僅限管理員）
+* Enhancement: AI Settings 頁面現在顯示開發模式狀態和設定說明
+* Enhancement: 提供可複製的程式碼片段，方便快速設定開發模式
+* UX: 開發者模式區塊包含狀態指示器、設定步驟和重要注意事項
+
+= 2.7.36 =
+* Documentation: 新增開發者模式使用指南（DEV_MODE_GUIDE.md）
+* Documentation: 詳細說明 MUSERDER_DEV_MODE 和 MUSERDER_FORCE_HIGH_RISK 的設定方式與使用場景
+* Enhancement: 完善開發者模式的文件說明，包含設定步驟、測試流程和常見問題
+
+= 2.7.35 =
+* Feature: 新增 MUSERDER_FORCE_HIGH_RISK 開發模式開關，可強制所有 AI 功能回傳 High 風險
+* Enhancement: 開發模式下可穩定測試 AI Alerts 的 Email 通知功能
+* Technical: maybe_force_high_risk() 方法統一處理強制 High 風險邏輯
+* Technical: 所有 AI 功能（send_request 和 demo_response）均支援強制 High 風險
+* Technical: MUSERDER_FORCE_HIGH_RISK 僅在 MUSERDER_DEV_MODE 為 true 時生效
+
+= 2.7.34 =
+* Feature: 新增開發模式（Dev Mode）支援，開發測試站可繞過 Free 版次數限制
+* Feature: 透過 MUSERDER_DEV_MODE 常數控制開發模式開關
+* Enhancement: 開發模式下不更新 Free tier 使用記錄，不影響正式環境
+* Technical: can_run_ai_action() 方法現在支援開發模式檢查
+* Technical: 所有 AI 功能（Site Scan、Backup Report、Error Log、Restore Guide）均支援開發模式
+
+= 2.7.33 =
+* Bug Fix: Fixed maybe_send_alert() to support both 'risk' and 'risk_level' field formats
+* Bug Fix: AI Site Scan uses 'risk' field while other AI features use 'risk_level', now both are supported
+* Enhancement: Improved compatibility for AI Alerts across all AI features
+* Technical: maybe_send_alert() now correctly detects high risk from both field formats
+
+= 2.7.32 =
+* Feature: 新增 AI Alerts 高風險通知功能（Pro 支援 Email 提醒）
+* Feature: 當 AI 偵測到 High 風險時，Free tier 顯示升級提示，Pro/Agency tier 可寄送 Email 通知
+* Enhancement: AI Site Scan、Backup AI Report、Error Log AI、Restore AI Guide 均支援高風險通知
+* Enhancement: Email 通知包含風險來源、摘要、以及對應的後台頁面連結
+* Technical: 新增 Museder_AI_Service::maybe_send_alert() 方法集中處理通知邏輯
+* Technical: 前端 JS 新增 displayAIAlert() helper 函式顯示 alert 訊息
+
+= 2.7.31 =
+* Feature: Completed Restore AI Guide functionality with new JSON schema format
+* Feature: Restore AI Guide now uses steps (with title, description, priority), warnings, and notes
+* Feature: Enhanced payload format with backup_summary, logs, restore_options, and environment
+* Enhancement: Improved AI prompt for restore guide generation with better context
+* Enhancement: Frontend JS now displays steps with priority badges (High/Optional)
+* Enhancement: Template displays warnings and notes sections
+* Technical: Updated store_last_restore_guide() and get_last_restore_guide() to use new format
+* Technical: AJAX handler now collects environment info (plugins, WP/PHP versions)
+* Technical: Demo mode provides comprehensive fake data matching new format
+* Bug Fix: Fixed "This action is not yet supported" error for restore_guide action
+
+= 2.7.30 =
+* Feature: Restore page now automatically selects the latest successful backup on first visit
+* Feature: Restore AI Guide displays which backup file is currently being analyzed
+* Feature: File Summary includes "Change backup" link with smooth scroll to Step 1
+* Enhancement: Improved UX consistency between File Summary and Restore AI Guide
+* Enhancement: AI Guide button automatically detects selected backup from multiple sources
+* Enhancement: AI Guide display text updates automatically when backup selection changes
+* Technical: Added get_active_or_latest_archive() method to Backup_Lite_Restore_Handler
+* Technical: AJAX handler now falls back to latest backup if no backup_id provided
+
+= 2.7.29 =
+* Bug Fix: Fixed Restore AI Guide error "This action is not yet supported"
+* Bug Fix: Added restore_guide action to supported actions list in send_request()
+* Critical: Restore AI Guide now works correctly when API key is configured
+
+= 2.7.28 =
+* Maintenance: Excluded logs folder from package to reduce file size
+* Maintenance: Package no longer includes local debug logs
+
+= 2.7.27 =
+* Bug Fix: Fixed mobile menu overflow issue causing layout breakage on mobile devices
+* Enhancement: Menu dropdowns now properly align to left on mobile screens
+* Enhancement: Added max-width constraints to prevent menu overflow on small screens
+* Enhancement: Menu buttons now wrap text properly on mobile devices
+* UX: Improved mobile responsiveness for action menus
+
+= 2.7.26 =
+* Feature: Added Restore AI Guide (Preview) feature on Restore page
+* Feature: AI generates step-by-step restore guide based on selected backup and recent logs
+* Feature: Guide includes pre-checks, step-by-step instructions, and post-restore verification steps
+* Feature: Free tier: 1 guide per 30 days, limited display (summary + risk level + first 2 prechecks/steps)
+* Feature: Pro/Agency tier: Unlimited guides with full details (all prechecks, steps, and post-checks)
+* Enhancement: Restore guide results persist across page reloads
+* Enhancement: Guide automatically updates when different backup is selected
+* Technical: Added store_last_restore_guide() and get_last_restore_guide() methods
+* Technical: Added restore_guide action support in Museder_AI_Service
+* Technical: Added ajax_ai_restore_guide() AJAX handler
+* UX: Restore AI Guide card displays last guide results on page load
+* UX: Button automatically detects selected backup from dropdown or file summary
+
+= 2.7.25 =
+* Bug Fix: Fixed all timestamp displays to use local timezone consistently
+* Bug Fix: Changed restore history timestamp storage from GMT to local time for consistency
+* Bug Fix: Fixed timestamp parsing in restore history to correctly handle local time strings
+* Bug Fix: Enhanced file path resolution in restore_site() to handle relative paths from converted files
+* Enhancement: Added file existence and readability checks before calling restore_site()
+* Enhancement: Improved error logging for file path resolution issues
+* Critical: Fixes "Backup file not found or unreadable" error when restoring converted files with -1 suffix
+
+= 2.7.24 =
+* Bug Fix: Fixed critical issue where converted backup file paths were incomplete (only filename without directory)
+* Bug Fix: wp_unique_filename() returns only filename, now properly prepends backup directory to create full path
+* Bug Fix: Added path resolution logic to handle relative paths from AI1WM converter
+* Enhancement: Improved error handling and logging for converted backup file path issues
+* Enhancement: Added path validation to ensure converted files are found before use
+* Critical: Fixes "Backup file not found or unreadable" error when restoring converted AI1WM backups
+
+= 2.7.23 =
+* Bug Fix: Improved error handling for "Backup file not found or unreadable" error in restore process
+* Enhancement: Added detailed error logging when backup file cannot be found or read
+* Enhancement: Added double-check for file existence and readability before prepare_session
+* Debug: Enhanced logging to help diagnose restore file path issues
+
+= 2.7.22 =
+* Bug Fix: Fixed fatal error caused by duplicate get_license_tier() method definition
+* Critical: Removed duplicate method declaration in Museder_AI_Service class
+
+= 2.7.21 =
+* Feature: Added Error Log AI Analysis feature on Logs page
+* Feature: AI analyzes recent backup log content and provides actionable recommendations
+* Feature: Free tier: 1 analysis per 30 days, limited display (summary + risk level + first cause/recommendation)
+* Feature: Pro/Agency tier: Unlimited analysis with full details (all causes and recommendations)
+* Enhancement: Log analysis results persist across page reloads
+* Technical: Added store_last_error_log_report() and get_last_error_log_report() methods
+* Technical: Added get_recent_log_content() method in Log Handler to read last 20KB of log files
+* Technical: Added log_analysis action support in Museder_AI_Service
+* UX: Error Log AI card displays last analysis results on page load
 
 = 2.7.20 =
 * Bug Fix: Fixed "Run Backup AI Report" button not responding issue

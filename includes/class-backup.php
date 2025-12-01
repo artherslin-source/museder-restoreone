@@ -24,23 +24,52 @@ class Backup_Lite_Backup {
      * @return array{success:bool,message:string,file?:string,url?:string}
      */
     public static function backup_site( $options = [] ) {
+        // Start backup timer at the very beginning
+        $start_time = microtime( true );
+        
+        // Check if there's an active async backup job to prevent duplicates
+        if ( class_exists( 'Backup_Lite_Backup_Jobs' ) ) {
+            $active_job = Backup_Lite_Backup_Jobs::get_active_job();
+            if ( ! empty( $active_job ) ) {
+                $duration = max( 1, (int) round( microtime( true ) - $start_time ) );
+                backup_lite_log( 'warning', 'Backup skipped: another backup is already in progress.', [
+                    'active_job_id' => $active_job['id'] ?? 'unknown',
+                    'duration' => $duration,
+                ] );
+                return [
+                    'success' => false,
+                    'message' => __( 'Another backup is already in progress. Please wait for it to complete.', 'museder-restoreone' ),
+                    'duration' => $duration,
+                ];
+            }
+        }
+        
         $backup_dir = trailingslashit( backup_lite_get_backup_dir() );
 
         self::optimize_runtime_environment();
 
         if ( ! self::ensure_writable_directory( $backup_dir ) ) {
-            $log = backup_lite_log( 'error', 'Backup directory is not writable.', [ 'dir' => $backup_dir ] );
+            // Calculate duration even on failure (ensure at least 1 second)
+            $duration = microtime( true ) - $start_time;
+            $duration = max( 1, (int) round( $duration ) );
+            
+            $log = backup_lite_log( 'error', 'Backup directory is not writable.', [ 
+                'dir' => $backup_dir,
+                'duration' => $duration,
+            ] );
             self::record_backup_event( 'failed', [
                 'message' => __( 'Backup directory is not writable.', 'museder-restoreone' ),
+                'duration' => $duration,
             ] );
             return [
                 'success' => false,
                 'message' => __( 'Backup directory is not writable.', 'museder-restoreone' ),
                 'log'     => $log,
+                'duration' => $duration,
             ];
         }
 
-        // Generate backup filename: 网址+西元年月日+时分+乱数编码
+        // Generate backup filename: site_url + YYYYMMDD + HHMM + random_code
         $site_url = wp_parse_url( home_url(), PHP_URL_HOST );
         if ( empty( $site_url ) ) {
             $site_url = 'site';
@@ -53,7 +82,7 @@ class Backup_Lite_Backup {
         
         $label_suffix = '';
         // PRO: Backup label
-        if ( ! empty( $options['label'] ) && Backup_Lite_Pro::is_pro_active() ) {
+        if ( ! empty( $options['label'] ) && function_exists( 'backup_lite_has_pro_features' ) && backup_lite_has_pro_features() ) {
             $label_suffix = '-' . sanitize_file_name( $options['label'] );
         }
         
@@ -70,32 +99,50 @@ class Backup_Lite_Backup {
         ] );
 
         if ( ! self::generate_database_dump( $sql_path ) ) {
-            backup_lite_log( 'error', 'Failed to generate database dump.', [ 'path' => $sql_path ] );
+            // Calculate duration even on failure (ensure at least 1 second)
+            $duration = microtime( true ) - $start_time;
+            $duration = max( 1, (int) round( $duration ) );
+            
+            backup_lite_log( 'error', 'Failed to generate database dump.', [ 
+                'path' => $sql_path,
+                'duration' => $duration,
+            ] );
             backup_lite_delete_directory( $temp_dir );
 
             self::record_backup_event( 'failed', [
                 'message' => __( 'Database export failed. Check logs for details.', 'museder-restoreone' ),
+                'duration' => $duration,
             ] );
 
             return [
                 'success' => false,
                 'message' => __( 'Database export failed. Check logs for details.', 'museder-restoreone' ),
                 'log'     => $log,
+                'duration' => $duration,
             ];
         }
 
         if ( ! self::write_meta_file( $meta_path, $options ) ) {
-            backup_lite_log( 'error', 'Failed to write meta.json file.', [ 'path' => $meta_path ] );
+            // Calculate duration even on failure (ensure at least 1 second)
+            $duration = microtime( true ) - $start_time;
+            $duration = max( 1, (int) round( $duration ) );
+            
+            backup_lite_log( 'error', 'Failed to write meta.json file.', [ 
+                'path' => $meta_path,
+                'duration' => $duration,
+            ] );
             backup_lite_delete_directory( $temp_dir );
 
             self::record_backup_event( 'failed', [
                 'message' => __( 'Unable to write meta information for backup.', 'museder-restoreone' ),
+                'duration' => $duration,
             ] );
 
             return [
                 'success' => false,
                 'message' => __( 'Unable to write meta information for backup.', 'museder-restoreone' ),
                 'log'     => $log,
+                'duration' => $duration,
             ];
         }
 
@@ -118,33 +165,157 @@ class Backup_Lite_Backup {
         backup_lite_delete_directory( $temp_dir );
 
         if ( ! $success || ! file_exists( $archive_path ) ) {
-            backup_lite_log( 'error', 'Site backup failed.', [ 'archive' => $archive_path ] );
+            // Calculate duration even on failure (ensure at least 1 second)
+            $duration = microtime( true ) - $start_time;
+            $duration = max( 1, (int) round( $duration ) );
+            
+            backup_lite_log( 'error', 'Site backup failed.', [ 
+                'archive' => $archive_path,
+                'duration' => $duration,
+            ] );
 
             self::record_backup_event( 'failed', [
                 'message' => __( 'Backup failed. See logs for more information.', 'museder-restoreone' ),
                 'file'    => $archive_path,
+                'duration' => $duration,
             ] );
 
             return [
                 'success' => false,
                 'message' => __( 'Backup failed. See logs for more information.', 'museder-restoreone' ),
                 'log'     => $log,
+                'duration' => $duration,
             ];
         }
 
         $size = filesize( $archive_path );
-        backup_lite_log( 'info', 'Site backup completed.', [
-            'archive' => $archive_path,
+        
+        // Calculate backup duration (ensure at least 1 second)
+        $duration = microtime( true ) - $start_time;
+        $duration = max( 1, (int) round( $duration ) ); // Convert to seconds, minimum 1 second
+        
+        backup_lite_log( 'info', 'Backup completed locally, preparing for S3 upload if enabled.', [
+            'file'    => $archive_path,
             'size'    => $size,
+            'duration' => $duration,
+            'dest_s3' => isset( $options['dest_s3'] ) ? (bool) $options['dest_s3'] : null,
         ] );
 
-        // Store backup metadata (for labels, etc.)
-        if ( Backup_Lite_Pro::is_pro_active() && ! empty( $options['label'] ) ) {
-            self::store_backup_metadata( basename( $archive_path ), [
-                'label' => sanitize_text_field( $options['label'] ),
-                'encrypted' => ! empty( $options['encrypt'] ),
-                'cloud_destinations' => $options['cloud_destinations'] ?? [],
-            ] );
+        // S3 cloud storage: upload backup archive and record status
+        $s3_result = array(
+            'status' => 'none',
+            'message' => '',
+            'object_key' => '',
+            'error' => '',
+        );
+        
+        // Check if S3 upload is requested - use unified upload method
+        if ( ! empty( $options['dest_s3'] ) && ! empty( $archive_path ) && file_exists( $archive_path ) ) {
+            backup_lite_log(
+                'info',
+                'S3 upload requested for this backup. Starting unified upload handler.',
+                array( 'file' => $archive_path )
+            );
+            
+            // Use unified upload method (same as async backup and manual upload)
+            $s3_upload_result = self::upload_backup_to_s3( $archive_path );
+            
+            if ( is_wp_error( $s3_upload_result ) ) {
+                // Upload failed - log error but don't fail the backup
+                $error_code = $s3_upload_result->get_error_code();
+                $error_message = $s3_upload_result->get_error_message();
+                
+                backup_lite_log( 'error', 'S3 upload failed during backup completion.', [
+                    'file' => $archive_path,
+                    'error_code' => $error_code,
+                    'error_message' => $error_message,
+                ] );
+                
+                // Store error status
+                $s3_result = array(
+                    'status' => 'error',
+                    'error' => $error_code,
+                );
+            } else {
+                // Upload succeeded
+                $s3_result = array(
+                    'status' => 'success',
+                );
+                if ( is_array( $s3_upload_result ) && isset( $s3_upload_result['object_key'] ) ) {
+                    $s3_result['object_key'] = $s3_upload_result['object_key'];
+                }
+                
+                backup_lite_log( 'info', 'S3 upload completed successfully during backup.', [
+                    'file' => $archive_path,
+                    'object_key' => $s3_result['object_key'] ?? '',
+                ] );
+            }
+        } else {
+            backup_lite_log(
+                'info',
+                'S3 upload skipped because dest_s3 option is not set.',
+                array( 'file' => $archive_path )
+            );
+        }
+        
+        // Legacy: Cloud Storage upload (for backward compatibility)
+        $should_upload_cloud = ! empty( $options['cloud_destination'] ) || ! empty( $options['upload_to_cloud'] );
+        if ( $should_upload_cloud && ! $should_upload_s3 && function_exists( 'museder_restoreone_is_cloud_configured' ) && museder_restoreone_is_cloud_configured() && class_exists( 'Museder_Cloud_Service' ) ) {
+            $cloud_context = [
+                'type'       => isset( $options['schedule_id'] ) ? 'schedule' : 'manual',
+                'site_url'   => home_url(),
+                'created_at' => time(),
+                'backup_id'  => basename( $archive_path ),
+            ];
+            
+            $cloud_result = Museder_Cloud_Service::maybe_upload_backup( $archive_path, $cloud_context, $should_upload_cloud );
+            
+            // Log cloud upload result
+            if ( $cloud_result['status'] === 'success' ) {
+                backup_lite_log( 'info', sprintf( 'Cloud: uploaded backup to S3 bucket %s - file: %s', $cloud_result['remote_path'] ?? 'cloud storage', basename( $archive_path ) ) );
+            } elseif ( $cloud_result['status'] === 'error' ) {
+                backup_lite_log( 'error', sprintf( 'Cloud: failed to upload backup to S3 (%s)', $cloud_result['message'] ?? 'Unknown error' ) );
+            }
+            // 'skipped' status is not logged
+        }
+
+        // Store backup metadata (for labels, S3 status, duration, etc.)
+        $metadata = array();
+        if ( ! empty( $options['label'] ) ) {
+            $metadata['label'] = sanitize_text_field( $options['label'] );
+        }
+        if ( ! empty( $options['encrypt'] ) ) {
+            $metadata['encrypted'] = true;
+        }
+        if ( ! empty( $options['cloud_destinations'] ) ) {
+            $metadata['cloud_destinations'] = $options['cloud_destinations'];
+        }
+        
+        // Store backup duration (always store duration, even if metadata is empty)
+        $metadata['duration'] = $duration;
+        
+        // Always store S3 status (even for Free tier, for future compatibility)
+        if ( ! empty( $s3_result ) && $s3_result['status'] !== 'none' ) {
+            $metadata['s3_status'] = $s3_result['status'];
+            if ( ! empty( $s3_result['object_key'] ) ) {
+                $metadata['s3_object_key'] = $s3_result['object_key'];
+            }
+            if ( ! empty( $s3_result['error'] ) ) {
+                $metadata['s3_error'] = $s3_result['error'];
+            }
+        }
+        
+        // Always store metadata (at minimum, duration should be stored)
+        self::store_backup_metadata( basename( $archive_path ), $metadata );
+        
+        // Display admin notice if S3 upload failed (only in admin context)
+        if ( ! empty( $s3_result ) && $s3_result['status'] === 'error' && is_admin() ) {
+            add_action( 'admin_notices', function() use ( $s3_result ) {
+                printf(
+                    '<div class="notice notice-warning is-dismissible"><p>%s</p></div>',
+                    esc_html( sprintf( __( 'Local backup succeeded, but S3 upload failed: %s', 'museder-restoreone' ), $s3_result['error'] ) )
+                );
+            } );
         }
 
         $response = [
@@ -153,17 +324,19 @@ class Backup_Lite_Backup {
             'file'    => $archive_path,
             'url'     => backup_lite_get_download_url( $archive_path ),
             'size'    => $size,
+            'duration' => $duration,
         ];
 
         self::record_backup_event( 'success', [
             'file'       => $archive_path,
             'size_bytes' => $size,
             'size_human' => size_format( $size, 2 ),
-            'label'     => $options['label'] ?? '',
+            'label'      => $options['label'] ?? '',
+            'duration'   => $duration,
         ] );
 
         // PRO: Upload to cloud storage if specified
-        if ( Backup_Lite_Pro::is_pro_active() && ! empty( $options['cloud_destinations'] ) && is_array( $options['cloud_destinations'] ) ) {
+        if ( function_exists( 'backup_lite_has_pro_features' ) && backup_lite_has_pro_features() && ! empty( $options['cloud_destinations'] ) && is_array( $options['cloud_destinations'] ) ) {
             foreach ( $options['cloud_destinations'] as $destination ) {
                 if ( 'local' !== $destination ) {
                     Backup_Lite_Cloud_Storage::upload_backup( $archive_path, $destination );
@@ -206,7 +379,7 @@ class Backup_Lite_Backup {
         ];
 
         // PRO: Add label and encryption info
-        if ( Backup_Lite_Pro::is_pro_active() ) {
+        if ( function_exists( 'backup_lite_has_pro_features' ) && backup_lite_has_pro_features() ) {
             if ( ! empty( $options['label'] ) ) {
                 $meta['label'] = sanitize_text_field( $options['label'] );
             }
@@ -418,7 +591,7 @@ class Backup_Lite_Backup {
             throw new RuntimeException( esc_html__( 'Backup directory is not writable.', 'museder-restoreone' ) );
         }
 
-        // Generate backup filename: 网址+西元年月日+时分+乱数编码
+        // Generate backup filename: site_url + YYYYMMDD + HHMM + random_code
         $site_url = wp_parse_url( home_url(), PHP_URL_HOST );
         if ( empty( $site_url ) ) {
             $site_url = 'site';
@@ -430,12 +603,16 @@ class Backup_Lite_Backup {
         $random_code = wp_generate_password( 6, false, false );
         
         $label_suffix = '';
-        if ( Backup_Lite_Pro::is_pro_active() && ! empty( $options['label'] ) ) {
+        if ( function_exists( 'backup_lite_has_pro_features' ) && backup_lite_has_pro_features() && ! empty( $options['label'] ) ) {
             $label_suffix = '-' . sanitize_file_name( $options['label'] );
         }
 
         $archive_name = sprintf( '%s-%s-%s%s.zip', $site_url, $date_time, $random_code, $label_suffix );
         $archive_path = $backup_dir . $archive_name;
+        
+        // Start backup timer
+        $start_time = microtime( true );
+        
         $temp_dir     = backup_lite_create_temp_dir( 'build' );
         $sql_path     = trailingslashit( $temp_dir ) . 'database.sql';
         $meta_path    = trailingslashit( $temp_dir ) . 'meta.json';
@@ -490,6 +667,7 @@ class Backup_Lite_Backup {
             'manifest_count' => $manifest_data['count'],
             'manifest_bytes' => $manifest_data['bytes'],
             'options'        => $options,
+            'start_time'     => $start_time, // Backup timer start
         ];
     }
 
@@ -706,7 +884,8 @@ class Backup_Lite_Backup {
      * @return array
      */
     private static function finalize_async_job( array $job ) {
-        $job['status']          = 'completed';
+        try {
+            $job['status']          = 'completed';
         $job['stage']           = 'completed';
         $job['message']         = esc_html__( 'Backup completed successfully.', 'museder-restoreone' );
         $job['processed_files'] = isset( $job['total_files'] ) ? (int) $job['total_files'] : $job['processed_files'];
@@ -719,31 +898,344 @@ class Backup_Lite_Backup {
             $job['download_url'] = backup_lite_get_download_url( $job['archive_path'] );
         }
 
-        backup_lite_log( 'info', 'Backup job completed.', [
-            'archive' => $job['archive_path'],
-            'size'    => $size,
-        ] );
+        // Calculate backup duration from started_at timestamp (two-phase timing)
+        $duration = 0;
+        if ( ! empty( $job['started_at'] ) ) {
+            // Use started_at from job meta (when job was queued)
+            $duration = max( 1, time() - (int) $job['started_at'] );
+        } elseif ( ! empty( $job['start_time'] ) ) {
+            // Fallback to microtime if started_at is not available
+            $duration = microtime( true ) - (float) $job['start_time'];
+            $duration = max( 1, (int) round( $duration ) );
+        } else {
+            // If no timestamp recorded, set to 1 second as fallback
+            $duration = 1;
+        }
+
+        // Log backup completion with unified format
+        backup_lite_log( 'info', 'Backup completed locally, preparing for S3 upload if enabled.', array(
+            'file'     => $job['archive_path'],
+            'size'     => $size,
+            'duration' => $duration,
+            'dest_s3'  => ! empty( $job['options']['dest_s3'] ) ? 'true' : 'false',
+        ) );
+
+        // S3 cloud storage: upload backup archive and record status
+        $s3_result = array(
+            'status' => 'none',
+            'message' => '',
+            'object_key' => '',
+            'error' => '',
+        );
+        
+        // Check if S3 upload is requested (use dest_s3, fallback to legacy formats)
+        $dest_s3 = ! empty( $job['options']['dest_s3'] );
+        if ( ! $dest_s3 && ! empty( $job['options']['destinations']['s3'] ) ) {
+            $dest_s3 = (bool) $job['options']['destinations']['s3'];
+        } elseif ( ! $dest_s3 && ! empty( $job['options']['upload_to_s3'] ) ) {
+            // Legacy format support
+            $dest_s3 = (bool) $job['options']['upload_to_s3'];
+        }
+        
+        // S3 upload: use unified upload method
+        if ( $dest_s3 && ! empty( $job['archive_path'] ) && file_exists( $job['archive_path'] ) ) {
+            backup_lite_log(
+                'info',
+                'S3 upload requested for this backup. Starting unified upload handler.',
+                array( 'file' => $job['archive_path'] )
+            );
+            
+            try {
+                // Use unified upload method (same as manual upload)
+                $s3_upload_result = self::upload_backup_to_s3( $job['archive_path'] );
+                
+                if ( is_wp_error( $s3_upload_result ) ) {
+                    // Upload failed - log error but don't fail the backup
+                    $error_code = $s3_upload_result->get_error_code();
+                    $error_message = $s3_upload_result->get_error_message();
+                    
+                    backup_lite_log( 'error', 'S3 upload failed during backup completion.', [
+                        'file' => $job['archive_path'],
+                        'error_code' => $error_code,
+                        'error_message' => $error_message,
+                    ] );
+                    
+                    // Store error status in metadata
+                    $s3_result = array(
+                        'status' => 'error',
+                        'error' => $error_code,
+                    );
+                } else {
+                    // Upload succeeded
+                    $s3_result = array(
+                        'status' => 'success',
+                    );
+                    if ( is_array( $s3_upload_result ) && isset( $s3_upload_result['object_key'] ) ) {
+                        $s3_result['object_key'] = $s3_upload_result['object_key'];
+                    }
+                    
+                    backup_lite_log( 'info', 'S3 upload completed successfully during backup.', [
+                        'file' => $job['archive_path'],
+                        'object_key' => $s3_result['object_key'] ?? '',
+                    ] );
+                }
+            } catch ( Throwable $e ) {
+                // Catch any unhandled exceptions during S3 upload
+                backup_lite_log( 'error', 'S3 upload exception during backup completion.', [
+                    'file' => $job['archive_path'],
+                    'message' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString(),
+                ] );
+                
+                // Store error status in metadata
+                $s3_result = array(
+                    'status' => 'error',
+                    'error' => 'exception',
+                );
+            }
+        } else {
+            backup_lite_log(
+                'info',
+                'S3 upload skipped because dest_s3 option is not set.',
+                array( 'file' => $job['archive_path'] ?? '' )
+            );
+        }
+        
+        // Legacy: Cloud Storage upload (for backward compatibility)
+        $should_upload_cloud = ! empty( $job['options']['cloud_destination'] ) || ! empty( $job['options']['upload_to_cloud'] );
+        if ( $should_upload_cloud && ! $should_upload_s3 && ! empty( $job['archive_path'] ) && file_exists( $job['archive_path'] ) && function_exists( 'museder_restoreone_is_cloud_configured' ) && museder_restoreone_is_cloud_configured() && class_exists( 'Museder_Cloud_Service' ) ) {
+            $cloud_context = [
+                'type'       => isset( $job['options']['schedule_id'] ) ? 'schedule' : 'manual',
+                'site_url'   => home_url(),
+                'created_at' => time(),
+                'backup_id'  => basename( $job['archive_path'] ),
+            ];
+            
+            $cloud_result = Museder_Cloud_Service::maybe_upload_backup( $job['archive_path'], $cloud_context, $should_upload_cloud );
+            
+            // Log cloud upload result
+            if ( $cloud_result['status'] === 'success' ) {
+                backup_lite_log( 'info', sprintf( 'Cloud: uploaded backup to S3 bucket %s - file: %s', $cloud_result['remote_path'] ?? 'cloud storage', basename( $job['archive_path'] ) ) );
+            } elseif ( $cloud_result['status'] === 'error' ) {
+                backup_lite_log( 'error', sprintf( 'Cloud: failed to upload backup to S3 (%s)', $cloud_result['message'] ?? 'Unknown error' ) );
+            }
+            // 'skipped' status is not logged
+        }
 
         self::record_backup_event( 'success', [
             'file'       => $job['archive_path'],
             'size_bytes' => $size,
             'size_human' => size_format( $size, 2 ),
             'label'      => $job['options']['label'] ?? '',
+            'duration'   => $duration,
         ] );
 
-        if ( Backup_Lite_Pro::is_pro_active() && ! empty( $job['options']['label'] ) ) {
-            self::store_backup_metadata( basename( $job['archive_path'] ), [
-                'label'               => sanitize_text_field( $job['options']['label'] ),
-                'encrypted'           => ! empty( $job['options']['encrypt'] ),
-                'cloud_destinations'  => $job['options']['cloud_destinations'] ?? [],
-            ] );
+        // Store backup metadata (label, encrypted, duration, etc.)
+        $job_metadata = array();
+        if ( function_exists( 'backup_lite_has_pro_features' ) && backup_lite_has_pro_features() && ! empty( $job['options']['label'] ) ) {
+            $job_metadata['label'] = sanitize_text_field( $job['options']['label'] );
         }
+        if ( ! empty( $job['options']['encrypt'] ) ) {
+            $job_metadata['encrypted'] = true;
+        }
+        if ( ! empty( $job['options']['cloud_destinations'] ) ) {
+            $job_metadata['cloud_destinations'] = $job['options']['cloud_destinations'];
+        }
+        // Store backup duration (always store duration, even if metadata is empty)
+        $job_metadata['duration'] = $duration;
+        
+        // Store options snapshot in metadata for future reference
+        if ( ! empty( $job['options'] ) ) {
+            $options_snapshot = array(
+                'encrypt' => ! empty( $job['options']['encrypt'] ),
+                'dual'    => ! empty( $job['options']['create_dual_version'] ) || ! empty( $job['options']['dual_version'] ) || ! empty( $job['options']['dual'] ),
+                'dest_s3' => ! empty( $job['options']['dest_s3'] ),
+            );
+            $job_metadata['options'] = $options_snapshot;
+        }
+        
+        // Store S3 status in metadata if upload was attempted
+        if ( isset( $s3_result ) && $s3_result['status'] !== 'none' ) {
+            $job_metadata['s3_status'] = $s3_result['status'];
+            if ( ! empty( $s3_result['object_key'] ) ) {
+                $job_metadata['s3_object_key'] = $s3_result['object_key'];
+            }
+            if ( ! empty( $s3_result['error'] ) ) {
+                $job_metadata['s3_error'] = $s3_result['error'];
+            }
+        }
+        
+        // Always store metadata (at minimum, duration should be stored)
+        // Merge all metadata before storing to ensure duration and options are both saved
+        self::store_backup_metadata( basename( $job['archive_path'] ), $job_metadata );
+        
+        // Store duration in job for response
+        $job['duration'] = $duration;
 
+        // Clean up job resources
         if ( class_exists( 'Backup_Lite_Backup_Jobs' ) ) {
             Backup_Lite_Backup_Jobs::cleanup_job( $job );
+            Backup_Lite_Backup_Jobs::clear_active_job( $job['id'] );
+        }
+
+        // Clear the current job transient to allow new backups
+        if ( class_exists( 'Backup_Lite_UI' ) ) {
+            Backup_Lite_UI::clear_job_running();
         }
 
         return $job;
+        } catch ( Throwable $e ) {
+            // Log error but don't fail silently - return job with error status
+            backup_lite_log( 'error', 'Error in finalize_async_job.', [
+                'message' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ] );
+            
+            // Still try to clean up
+            if ( class_exists( 'Backup_Lite_Backup_Jobs' ) ) {
+                try {
+                    Backup_Lite_Backup_Jobs::cleanup_job( $job );
+                    Backup_Lite_Backup_Jobs::clear_active_job( $job['id'] ?? '' );
+                } catch ( Throwable $cleanup_error ) {
+                    backup_lite_log( 'error', 'Error during job cleanup.', [
+                        'message' => $cleanup_error->getMessage(),
+                    ] );
+                }
+            }
+            
+            if ( class_exists( 'Backup_Lite_UI' ) ) {
+                try {
+                    Backup_Lite_UI::clear_job_running();
+                } catch ( Throwable $clear_error ) {
+                    backup_lite_log( 'error', 'Error clearing job running state.', [
+                        'message' => $clear_error->getMessage(),
+                    ] );
+                }
+            }
+            
+            // Return job with error status
+            $job['status'] = 'failed';
+            $job['message'] = __( 'Backup completed but encountered an error during finalization. Please check logs.', 'museder-restoreone' );
+            return $job;
+        }
+    }
+
+    /**
+     * Unified S3 upload method used by both automatic and manual uploads.
+     * 
+     * @param string $file_path Absolute path to backup archive file.
+     * @return array|WP_Error On success, returns array with 'status' => 'success' and 'object_key'. On failure, returns WP_Error.
+     */
+    public static function upload_backup_to_s3( $file_path ) {
+        $file_path = wp_normalize_path( $file_path );
+        
+        // Validate file exists and is readable
+        if ( ! file_exists( $file_path ) ) {
+            return new WP_Error( 'file_not_found', __( 'Backup file not found.', 'museder-restoreone' ) );
+        }
+        
+        if ( ! is_readable( $file_path ) ) {
+            return new WP_Error( 'file_not_readable', __( 'Backup file is not readable.', 'museder-restoreone' ) );
+        }
+        
+        // Check if S3 service is available
+        if ( ! class_exists( 'Backup_Lite_S3_Service' ) ) {
+            return new WP_Error( 's3_service_unavailable', __( 'S3 service is not available.', 'museder-restoreone' ) );
+        }
+        
+        // Check S3 configuration
+        $s3_settings = backup_lite_get_s3_settings();
+        if ( empty( $s3_settings['enabled'] ) || empty( $s3_settings['bucket'] ) ) {
+            return new WP_Error( 's3_not_configured', __( 'S3 is not configured. Please configure S3 settings first.', 'museder-restoreone' ) );
+        }
+        
+        // Use new Backup_Lite_S3_Uploader class (supports both single-part and multipart upload)
+        // This provides better memory management for large files
+        if ( class_exists( 'Backup_Lite_S3_Uploader' ) ) {
+            try {
+                $uploader = Backup_Lite_S3_Uploader::get_instance();
+                $s3_result = $uploader->upload_backup_file( $file_path );
+            } catch ( Throwable $e ) {
+                // Catch any exceptions from upload_backup_file() itself
+                backup_lite_log( 'error', 'S3 upload_backup_file() threw exception.', [
+                    'message' => $e->getMessage(),
+                    'file' => $e->getFile(),
+                    'line' => $e->getLine(),
+                    'trace' => $e->getTraceAsString(),
+                ] );
+                error_log( '[Backup Lite] S3 upload_backup_file() fatal error: ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine() );
+                return new WP_Error( 's3_upload_exception', __( 'S3 upload failed due to an internal error.', 'museder-restoreone' ) );
+            }
+            
+            // Handle result: Backup_Lite_S3_Uploader::upload_backup_file() returns:
+            // - array with 'status' => 'success' and 'object_key' on success
+            // - WP_Error on failure
+            if ( is_wp_error( $s3_result ) ) {
+                return $s3_result; // Return WP_Error directly
+            } elseif ( is_array( $s3_result ) && isset( $s3_result['status'] ) && 'success' === $s3_result['status'] ) {
+                return $s3_result; // Return success array with object_key
+            } else {
+                // Unexpected result type - convert to WP_Error
+                return new WP_Error( 's3_unexpected_result', __( 'S3 upload returned unexpected result.', 'museder-restoreone' ) );
+            }
+        }
+        
+        // Fallback to old method if Backup_Lite_S3_Uploader is not available
+        // Call S3 service upload with error handling
+        try {
+            $s3_result = Backup_Lite_S3_Service::upload_backup( $file_path );
+        } catch ( Throwable $e ) {
+            // Catch any exceptions from upload_backup() itself
+            backup_lite_log( 'error', 'S3 upload_backup() threw exception.', [
+                'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'trace' => $e->getTraceAsString(),
+            ] );
+            error_log( '[Backup Lite] S3 upload_backup() fatal error: ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine() );
+            return new WP_Error( 's3_upload_exception', __( 'S3 upload failed due to an internal error.', 'museder-restoreone' ) );
+        }
+        
+        // Handle result: Backup_Lite_S3_Service::upload_backup() returns:
+        // - array with 'status' => 'success' and 'object_key' on success
+        // - WP_Error on failure
+        if ( is_wp_error( $s3_result ) ) {
+            return $s3_result; // Return WP_Error directly
+        } elseif ( is_array( $s3_result ) && isset( $s3_result['status'] ) && 'success' === $s3_result['status'] ) {
+            return $s3_result; // Return success array with object_key
+        } else {
+            // Unexpected result type - convert to WP_Error
+            $error_code = is_string( $s3_result ) ? $s3_result : 'unknown_error';
+            $error_message = self::get_s3_error_message( $error_code );
+            return new WP_Error( $error_code, $error_message );
+        }
+    }
+
+    /**
+     * Get user-friendly error message for S3 error code.
+     * 
+     * @param string $error_code S3 error code.
+     * @return string Error message.
+     */
+    private static function get_s3_error_message( $error_code ) {
+        $messages = array(
+            's3_disabled' => __( 'S3 is disabled in settings.', 'museder-restoreone' ),
+            'missing_setting_access_key_id' => __( 'S3 access key ID is missing.', 'museder-restoreone' ),
+            'missing_setting_secret_access_key' => __( 'S3 secret access key is missing.', 'museder-restoreone' ),
+            'missing_setting_region' => __( 'S3 region is missing.', 'museder-restoreone' ),
+            'missing_setting_bucket' => __( 'S3 bucket name is missing.', 'museder-restoreone' ),
+            'file_not_found' => __( 'Backup file not found.', 'museder-restoreone' ),
+            'file_not_readable' => __( 'Backup file is not readable.', 'museder-restoreone' ),
+            'file_size_invalid' => __( 'Backup file size is invalid.', 'museder-restoreone' ),
+            'read_file_error' => __( 'Could not read backup file for S3 upload.', 'museder-restoreone' ),
+            'network_error' => __( 'Network error during S3 upload.', 'museder-restoreone' ),
+            'http_error_403_forbidden' => __( 'S3 access denied. Please check your credentials and bucket permissions.', 'museder-restoreone' ),
+            'http_error_404_not_found' => __( 'S3 bucket not found.', 'museder-restoreone' ),
+            'http_error_500_server_error' => __( 'S3 server error. Please try again later.', 'museder-restoreone' ),
+            'http_error_503_server_error' => __( 'S3 service unavailable. Please try again later.', 'museder-restoreone' ),
+        );
+        
+        return isset( $messages[ $error_code ] ) ? $messages[ $error_code ] : sprintf( __( 'S3 upload failed: %s', 'museder-restoreone' ), $error_code );
     }
 
     private static function export_database_with_mysqldump( $filepath ) {
@@ -1149,17 +1641,13 @@ class Backup_Lite_Backup {
     }
 
     /**
-     * Store backup metadata (labels, etc.).
+     * Store backup metadata (labels, S3 status, etc.).
      * 
      * @param string $filename Backup filename.
-     * @param array  $metadata Metadata to store.
+     * @param array  $metadata Metadata to store (will be merged with existing).
      * @return bool
      */
-    private static function store_backup_metadata( $filename, $metadata ) {
-        if ( ! Backup_Lite_Pro::is_pro_active() ) {
-            return false;
-        }
-
+    public static function store_backup_metadata( $filename, $metadata ) {
         $meta_file = backup_lite_get_backup_dir() . '/.backup-meta.json';
         $all_meta = [];
 
@@ -1168,7 +1656,9 @@ class Backup_Lite_Backup {
             $all_meta = json_decode( $content, true ) ?: [];
         }
 
-        $all_meta[ $filename ] = $metadata;
+        // Merge with existing metadata for this backup
+        $existing = $all_meta[ $filename ] ?? array();
+        $all_meta[ $filename ] = array_merge( $existing, $metadata );
 
         return false !== file_put_contents( $meta_file, wp_json_encode( $all_meta, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ), LOCK_EX );
     }
@@ -1180,10 +1670,6 @@ class Backup_Lite_Backup {
      * @return array
      */
     public static function get_backup_metadata( $filename ) {
-        if ( ! Backup_Lite_Pro::is_pro_active() ) {
-            return [];
-        }
-
         $meta_file = backup_lite_get_backup_dir() . '/.backup-meta.json';
         if ( ! file_exists( $meta_file ) ) {
             return [];
@@ -1192,6 +1678,13 @@ class Backup_Lite_Backup {
         $content = file_get_contents( $meta_file );
         $all_meta = json_decode( $content, true ) ?: [];
 
-        return $all_meta[ $filename ] ?? [];
+        $metadata = $all_meta[ $filename ] ?? [];
+        
+        // Set default s3_status for older backups that don't have this field
+        if ( ! isset( $metadata['s3_status'] ) ) {
+            $metadata['s3_status'] = 'none';
+        }
+        
+        return $metadata;
     }
 }

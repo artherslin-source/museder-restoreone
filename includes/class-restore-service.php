@@ -190,6 +190,13 @@ class Backup_Lite_Restore_Service {
         if ( ! Backup_Lite_Restore_Lock::acquire( $job_id ) ) {
             throw new RuntimeException( esc_html__( 'Failed to acquire restore lock.', 'museder-restoreone' ) );
         }
+        
+        // Set restore timer start (only if not already set)
+        if ( empty( $meta['started_at'] ) ) {
+            $meta['started_at'] = current_time( 'timestamp' );
+            $meta['duration']   = 0;
+            self::write_job_meta( $job_id, $meta );
+        }
 
         try {
             $pre_backup = self::create_pre_backup();
@@ -215,15 +222,36 @@ class Backup_Lite_Restore_Service {
                         
                         $convert_result = Backup_Lite_AI1WM_Converter::convert( $file_to_extract );
                         
-                        if ( ! empty( $convert_result['success'] ) && ! empty( $convert_result['file'] ) && file_exists( $convert_result['file'] ) ) {
-                            // Use converted file for extraction
-                            $file_to_extract = $convert_result['file'];
-                            $meta['file'] = $file_to_extract;
-                            $meta['file_name'] = basename( $file_to_extract );
-                            backup_lite_log( 'info', 'Successfully converted All-in-One backup in restore service.', [
-                                'job_id' => $job_id,
-                                'converted_file' => basename( $file_to_extract ),
-                            ] );
+                        if ( ! empty( $convert_result['success'] ) && ! empty( $convert_result['file'] ) ) {
+                            // Ensure converted file path is absolute
+                            $converted_file = wp_normalize_path( $convert_result['file'] );
+                            
+                            // Check if path is absolute
+                            $is_absolute = ( '/' === $converted_file[0] || ( strlen( $converted_file ) > 2 && ':' === $converted_file[1] && '\\' === $converted_file[2] ) );
+                            
+                            if ( ! $is_absolute ) {
+                                // If path is relative, resolve it relative to backup directory
+                                $backup_dir = backup_lite_get_backup_dir();
+                                $converted_file = wp_normalize_path( trailingslashit( $backup_dir ) . basename( $converted_file ) );
+                            }
+                            
+                            if ( file_exists( $converted_file ) && is_readable( $converted_file ) ) {
+                                // Use converted file for extraction
+                                $file_to_extract = $converted_file;
+                                $meta['file'] = $file_to_extract;
+                                $meta['file_name'] = basename( $file_to_extract );
+                                backup_lite_log( 'info', 'Successfully converted All-in-One backup in restore service.', [
+                                    'job_id' => $job_id,
+                                    'converted_file' => basename( $file_to_extract ),
+                                    'converted_path' => $file_to_extract,
+                                ] );
+                            } else {
+                                backup_lite_log( 'warning', 'Converted file not found or unreadable in restore service, will attempt direct extraction.', [
+                                    'job_id' => $job_id,
+                                    'converted_file' => $converted_file,
+                                    'file_exists' => file_exists( $converted_file ),
+                                ] );
+                            }
                         } else {
                             // Conversion failed or not needed (e.g., .wpress files don't need conversion)
                             $log_level = ( isset( $convert_result['error'] ) && 'wpress_no_conversion_needed' === $convert_result['error'] ) ? 'info' : 'warning';
@@ -365,16 +393,24 @@ class Backup_Lite_Restore_Service {
                 ] );
             }
 
+            // Calculate restore duration
+            $now       = current_time( 'timestamp' );
+            $start_ts  = ! empty( $meta['started_at'] ) ? (int) $meta['started_at'] : $now;
+            $duration  = max( 0, $now - $start_ts );
+            
             $meta['stage']      = 'done';
             $meta['progress']   = 100;
             $meta['message']    = __( 'Restore completed successfully.', 'museder-restoreone' );
             $meta['completed']  = true;
+            $meta['duration']   = $duration;
+            $meta['finished_at'] = $now;
             $meta['updated_at'] = current_time( 'mysql' );
             self::write_job_meta( $job_id, $meta );
 
             backup_lite_log( 'info', 'Restore job executed successfully.', [
                 'job_id' => $job_id,
                 'safe_mode' => $safe_mode_entered,
+                'duration' => $duration,
             ] );
 
             return [

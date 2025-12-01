@@ -392,7 +392,7 @@ function backup_lite_ensure_access_controls() {
     backup_lite_maybe_protect_directory( backup_lite_get_reports_dir() );
     
     // PRO directories
-    if ( class_exists( 'Backup_Lite_Pro' ) && Backup_Lite_Pro::is_pro_active() ) {
+    if ( function_exists( 'backup_lite_has_pro_features' ) && backup_lite_has_pro_features() ) {
         backup_lite_maybe_protect_directory( backup_lite_get_pro_jobs_dir() );
         backup_lite_maybe_protect_directory( backup_lite_get_pro_reports_dir() );
     }
@@ -564,4 +564,226 @@ function backup_lite_get_recent_logs( $limit = 5 ) {
 
 function backup_lite_normalize_bool( $value ) {
     return filter_var( $value, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE );
+}
+
+/**
+ * Check if cloud backups are properly configured.
+ *
+ * @return bool True if cloud storage is enabled and all required settings are present.
+ */
+function museder_restoreone_is_cloud_configured() {
+    $settings = get_option( 'museder_cloud_settings', array() );
+    
+    if ( ! is_array( $settings ) ) {
+        return false;
+    }
+    
+    $enabled = ! empty( $settings['enabled'] );
+    $provider = isset( $settings['provider'] ) ? $settings['provider'] : 'none';
+    $access = ! empty( $settings['s3_access_key'] );
+    $secret = ! empty( $settings['s3_secret_key'] );
+    $bucket = ! empty( $settings['s3_bucket'] );
+    $region = ! empty( $settings['s3_region'] );
+    
+    return ( $enabled && $provider === 's3' && $access && $secret && $bucket && $region );
+}
+
+/**
+ * S3 cloud storage: settings helper
+ * Get S3 settings with defaults.
+ *
+ * @return array
+ */
+/**
+ * S3 Settings option key constant.
+ * 
+ * @var string
+ */
+if ( ! defined( 'BACKUP_LITE_S3_SETTINGS_OPTION' ) ) {
+    define( 'BACKUP_LITE_S3_SETTINGS_OPTION', 'backup_lite_s3_settings' );
+}
+
+function backup_lite_get_s3_settings() {
+    $defaults = array(
+        'enabled'               => false,
+        'mode'                  => 'simple',
+        'access_key_id'         => '',
+        'secret_access_key'     => '',
+        'region'                => 'ap-northeast-1',
+        'bucket'                => '',
+        'prefix'                => '',
+        'endpoint'              => '',
+        'use_path_style_endpoint' => false,
+    );
+    
+    $settings = get_option( BACKUP_LITE_S3_SETTINGS_OPTION, array() );
+    if ( ! is_array( $settings ) ) {
+        $settings = array();
+    }
+    
+    $settings = wp_parse_args( $settings, $defaults );
+    
+    // Sanitize values
+    $settings['enabled']               = ! empty( $settings['enabled'] );
+    $settings['mode']                  = sanitize_text_field( $settings['mode'] );
+    $settings['access_key_id']         = sanitize_text_field( $settings['access_key_id'] );
+    $settings['secret_access_key']     = (string) $settings['secret_access_key'];
+    // Ensure region is not empty, fallback to default if empty
+    $settings['region']                = ! empty( $settings['region'] ) ? sanitize_text_field( $settings['region'] ) : $defaults['region'];
+    $settings['bucket']                = sanitize_text_field( $settings['bucket'] );
+    $settings['prefix']                = ltrim( sanitize_text_field( $settings['prefix'] ), '/' );
+    $settings['endpoint']              = $settings['endpoint'] ? esc_url_raw( $settings['endpoint'] ) : '';
+    $settings['use_path_style_endpoint'] = ! empty( $settings['use_path_style_endpoint'] );
+    
+    return $settings;
+}
+
+/**
+ * S3 cloud storage: settings helper
+ * Check whether S3 cloud backup is fully configured.
+ *
+ * @return bool
+ */
+function backup_lite_is_s3_ready() {
+    $settings = backup_lite_get_s3_settings();
+    
+    if ( empty( $settings['enabled'] ) ) {
+        return false;
+    }
+    
+    if ( empty( $settings['access_key_id'] )
+         || empty( $settings['secret_access_key'] )
+         || empty( $settings['region'] )
+         || empty( $settings['bucket'] )
+    ) {
+        return false;
+    }
+    
+    return true;
+}
+
+/**
+ * Get list of available S3 regions.
+ *
+ * Returns an associative array of region codes => labels.
+ * This list can be filtered using the 'backup_lite_s3_regions' filter.
+ *
+ * @return array Associative array of region_code => label.
+ */
+function backup_lite_get_s3_regions() {
+    $regions = array(
+        // US Regions
+        'us-east-1'      => __( 'US East (N. Virginia)', 'museder-restoreone' ),
+        'us-east-2'      => __( 'US East (Ohio)', 'museder-restoreone' ),
+        'us-west-1'      => __( 'US West (N. California)', 'museder-restoreone' ),
+        'us-west-2'      => __( 'US West (Oregon)', 'museder-restoreone' ),
+
+        // Canada Regions
+        'ca-central-1'   => __( 'Canada (Central)', 'museder-restoreone' ),
+        'ca-west-1'      => __( 'Canada West (Calgary)', 'museder-restoreone' ),
+
+        // Europe Regions
+        'eu-west-1'      => __( 'Europe (Ireland)', 'museder-restoreone' ),
+        'eu-west-2'      => __( 'Europe (London)', 'museder-restoreone' ),
+        'eu-west-3'      => __( 'Europe (Paris)', 'museder-restoreone' ),
+        'eu-north-1'     => __( 'Europe (Stockholm)', 'museder-restoreone' ),
+        'eu-south-1'     => __( 'Europe (Milan)', 'museder-restoreone' ),
+        'eu-south-2'     => __( 'Europe (Spain)', 'museder-restoreone' ),
+        'eu-central-1'   => __( 'Europe (Frankfurt)', 'museder-restoreone' ),
+        'eu-central-2'   => __( 'Europe (Zurich)', 'museder-restoreone' ),
+
+        // Africa Regions
+        'af-south-1'     => __( 'Africa (Cape Town)', 'museder-restoreone' ),
+
+        // Middle East Regions
+        'me-south-1'     => __( 'Middle East (Bahrain)', 'museder-restoreone' ),
+        'me-central-1'   => __( 'Middle East (UAE)', 'museder-restoreone' ),
+
+        // South America Regions
+        'sa-east-1'      => __( 'South America (São Paulo)', 'museder-restoreone' ),
+
+        // Asia Pacific Regions
+        'ap-east-1'      => __( 'Asia Pacific (Hong Kong)', 'museder-restoreone' ),
+        'ap-east-2'      => __( 'Asia Pacific (Taipei)', 'museder-restoreone' ),
+        'ap-south-1'     => __( 'Asia Pacific (Mumbai)', 'museder-restoreone' ),
+        'ap-south-2'     => __( 'Asia Pacific (Hyderabad)', 'museder-restoreone' ),
+        'ap-southeast-1' => __( 'Asia Pacific (Singapore)', 'museder-restoreone' ),
+        'ap-southeast-2' => __( 'Asia Pacific (Sydney)', 'museder-restoreone' ),
+        'ap-southeast-3' => __( 'Asia Pacific (Jakarta)', 'museder-restoreone' ),
+        'ap-southeast-4' => __( 'Asia Pacific (Melbourne)', 'museder-restoreone' ),
+        'ap-northeast-1' => __( 'Asia Pacific (Tokyo)', 'museder-restoreone' ),
+        'ap-northeast-2' => __( 'Asia Pacific (Seoul)', 'museder-restoreone' ),
+        'ap-northeast-3' => __( 'Asia Pacific (Osaka)', 'museder-restoreone' ),
+    );
+
+    /**
+     * Filter the list of available S3 regions.
+     *
+     * Allows developers to add custom regions or modify the region list.
+     *
+     * @param array $regions Associative array of region_code => label.
+     */
+    $regions = apply_filters( 'backup_lite_s3_regions', $regions );
+
+    return $regions;
+}
+
+if ( ! function_exists( 'backup_lite_format_duration' ) ) {
+    /**
+     * Format backup/restore duration (seconds) into a human-readable string.
+     *
+     * @param int $seconds Duration in seconds.
+     * @return string
+     */
+    function backup_lite_format_duration( $seconds ) {
+        $seconds = (int) $seconds;
+
+        if ( $seconds <= 0 ) {
+            return __( '—', 'museder-restoreone' );
+        }
+
+        if ( $seconds < 60 ) {
+            /* translators: %s: number of seconds */
+            return sprintf( _n( '%s second', '%s seconds', $seconds, 'museder-restoreone' ), number_format_i18n( $seconds ) );
+        }
+
+        $minutes = floor( $seconds / 60 );
+        $remain  = $seconds % 60;
+
+        if ( 0 === $remain ) {
+            /* translators: %s: number of minutes */
+            return sprintf( _n( '%s minute', '%s minutes', $minutes, 'museder-restoreone' ), number_format_i18n( $minutes ) );
+        }
+
+        /* translators: 1: minutes, 2: seconds */
+        return sprintf(
+            __( '%1$s min %2$s sec', 'museder-restoreone' ),
+            number_format_i18n( $minutes ),
+            number_format_i18n( $remain )
+        );
+    }
+}
+
+if ( ! function_exists( 'backup_lite_human_readable_duration' ) ) {
+    /**
+     * Alias for backup_lite_format_duration() for backward compatibility.
+     *
+     * @param int $seconds Duration in seconds.
+     * @return string
+     */
+    function backup_lite_human_readable_duration( $seconds ) {
+        return backup_lite_format_duration( $seconds );
+    }
+}
+
+if ( ! function_exists( 'mro_format_duration' ) ) {
+    /**
+     * Alias for backup_lite_human_readable_duration() for backward compatibility.
+     *
+     * @param int $seconds Duration in seconds.
+     * @return string
+     */
+    function mro_format_duration( $seconds ) {
+        return backup_lite_human_readable_duration( $seconds );
+    }
 }

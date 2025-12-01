@@ -18,6 +18,107 @@ var backupJobContext = {
     const messages = $('#backup-lite-messages');
     const spinnerMarkup = '<span class="spinner is-active"></span>';
 
+    /**
+     * Backup timer functions for elapsed time display.
+     */
+    var backupLiteTimerInterval = null;
+    var backupLiteStartTime = null;
+
+    function backupLiteStartTimer() {
+        var $el = jQuery('#backup-lite-elapsed-time');
+        if (!$el.length) {
+            return;
+        }
+
+        backupLiteStartTime = Date.now();
+        $el.text(backupLiteFormatElapsed(0));
+
+        if (backupLiteTimerInterval) {
+            clearInterval(backupLiteTimerInterval);
+        }
+
+        backupLiteTimerInterval = setInterval(function () {
+            var seconds = Math.floor((Date.now() - backupLiteStartTime) / 1000);
+            $el.text(backupLiteFormatElapsed(seconds));
+        }, 1000);
+    }
+
+    function backupLiteStopTimer(finalSeconds) {
+        var $el = jQuery('#backup-lite-elapsed-time');
+        if (backupLiteTimerInterval) {
+            clearInterval(backupLiteTimerInterval);
+            backupLiteTimerInterval = null;
+        }
+        if ($el.length && typeof finalSeconds === 'number') {
+            $el.text(backupLiteFormatElapsed(finalSeconds));
+        }
+    }
+
+    function backupLiteFormatElapsed(seconds) {
+        seconds = seconds || 0;
+        var mins = Math.floor(seconds / 60);
+        var remain = seconds % 60;
+        function pad(n) {
+            return n < 10 ? '0' + n : '' + n;
+        }
+        return 'Elapsed time: ' + pad(mins) + ':' + pad(remain);
+    }
+
+    /**
+     * Play notification sound when a backup or restore completes.
+     *
+     * Uses Web Audio API to synthesize a two-note melody (880Hz → 660Hz).
+     * Each note plays for 0.5 seconds, total duration ~1 second.
+     * No external audio files are required.
+     */
+    function backupLitePlayNotificationSound() {
+        var AudioContextConstructor = window.AudioContext || window.webkitAudioContext;
+        // Gracefully bail if the browser does not support Web Audio API.
+        if (!AudioContextConstructor) {
+            return;
+        }
+        try {
+            var context = new AudioContextConstructor();
+            var now = context.currentTime;
+
+            // First note: 880Hz for 0.5 seconds
+            var osc1 = context.createOscillator();
+            var gain1 = context.createGain();
+            osc1.type = 'sine';
+            osc1.frequency.setValueAtTime(880, now);
+            
+            // Volume envelope for first note
+            gain1.gain.setValueAtTime(0, now);
+            gain1.gain.linearRampToValueAtTime(0.15, now + 0.05);
+            gain1.gain.setValueAtTime(0.15, now + 0.45);
+            gain1.gain.linearRampToValueAtTime(0, now + 0.5);
+
+            osc1.connect(gain1);
+            gain1.connect(context.destination);
+            osc1.start(now);
+            osc1.stop(now + 0.5);
+
+            // Second note: 660Hz for 0.5 seconds (starts after first note)
+            var osc2 = context.createOscillator();
+            var gain2 = context.createGain();
+            osc2.type = 'sine';
+            osc2.frequency.setValueAtTime(660, now + 0.5);
+            
+            // Volume envelope for second note
+            gain2.gain.setValueAtTime(0, now + 0.5);
+            gain2.gain.linearRampToValueAtTime(0.15, now + 0.55);
+            gain2.gain.setValueAtTime(0.15, now + 0.95);
+            gain2.gain.linearRampToValueAtTime(0, now + 1.0);
+
+            osc2.connect(gain2);
+            gain2.connect(context.destination);
+            osc2.start(now + 0.5);
+            osc2.stop(now + 1.0);
+        } catch (error) {
+            // Fail silently – do not break the admin UI if audio fails.
+        }
+    }
+
     function showMessage(type, title, text) {
         messages.removeClass('is-success is-error').addClass('is-visible');
 
@@ -420,6 +521,157 @@ var backupJobContext = {
     var backupProgressText = document.getElementById('backup-progress-text');
     var backupSubmitBtn = null;
     var backupCancelBtn = document.getElementById('bl-backup-cancel-btn');
+    var backupLiteJobRunning = false; // Guard flag to prevent duplicate backup starts
+
+    /**
+     * Lock or unlock the backup form to prevent changes during backup.
+     * 
+     * @param {boolean} isLocked - Whether to lock (true) or unlock (false) the form.
+     */
+    function backupLiteSetFormLocked(isLocked) {
+        var $form = jQuery('#backup-lite-backup-form');
+        var $wrapper = jQuery('#backup-lite-backup-form-wrapper');
+        
+        if (!$form.length) {
+            return;
+        }
+
+        // Disable all inputs, selects, textareas, and buttons INSIDE the form
+        // EXCEPT the "Cancel Backup" button (which is outside the form)
+        $form
+            .find('input, select, textarea, button')
+            .not('#bl-backup-cancel-btn')
+            .prop('disabled', !!isLocked);
+
+        // Toggle CSS class for visual indication
+        if ($wrapper.length) {
+            if (isLocked) {
+                $wrapper.addClass('backup-lite-locked');
+            } else {
+                $wrapper.removeClass('backup-lite-locked');
+            }
+        }
+    }
+
+    /**
+     * Escape HTML to prevent XSS.
+     * 
+     * @param {string} str - String to escape.
+     * @return {string} Escaped string.
+     */
+    function backupLiteEscapeHtml(str) {
+        if (typeof str !== 'string') {
+            str = String(str);
+        }
+        return str
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+
+    /**
+     * Lock backup form using options from server (for page reload persistence).
+     * 
+     * @param {Object} activeJobData - Active job data from server with options.
+     */
+    function backupLiteLockBackupFormFromServer(activeJobData) {
+        if (!activeJobData || !activeJobData.options) {
+            return;
+        }
+        
+        var options = activeJobData.options;
+        
+        // Lock the form
+        backupLiteSetFormLocked(true);
+        
+        // Render settings summary using server-provided options
+        var $container = jQuery('#backup-lite-current-settings');
+        if ($container.length) {
+            var label = options.label || '';
+            var encrypt = options.encrypt || false;
+            var dual = options.create_dual_version || options.dual_version || options.dual || false;
+            var destS3 = options.dest_s3 || false;
+            
+            var html = '<div id="backup-lite-settings-summary" style="margin-top: 12px; padding: 12px; background: #f0f9ff; border-left: 4px solid var(--bl-primary, #3b82f6); border-radius: 4px;">';
+            html += '<strong style="display: block; margin-bottom: 8px;">' + (strings.currentBackupSettings || 'Current backup settings:') + '</strong>';
+            html += '<ul style="margin: 0; padding-left: 20px; list-style: disc;">';
+            html += '<li><strong>Label:</strong> ' + backupLiteEscapeHtml(label || '—') + '</li>';
+            html += '<li><strong>Encrypt:</strong> ' + (encrypt ? (strings.enabled || 'Enabled') : (strings.disabled || 'Disabled')) + '</li>';
+            html += '<li><strong>Dual version:</strong> ' + (dual ? (strings.enabled || 'Enabled') : (strings.disabled || 'Disabled')) + '</li>';
+            html += '<li><strong>Upload to S3:</strong> ' + (destS3 ? (strings.enabled || 'Enabled') : (strings.disabled || 'Disabled')) + '</li>';
+            html += '</ul>';
+            html += '</div>';
+            
+            $container.html(html).show();
+        }
+        
+        // Set busy state
+        setBackupBusy(true);
+    }
+
+    /**
+     * Render current backup settings summary.
+     * Reads form values and displays them in the settings summary container.
+     */
+    function backupLiteRenderSettingsSummary() {
+        var $summary = jQuery('#backup-lite-settings-summary');
+        var $container = jQuery('#backup-lite-current-settings');
+        
+        if (!$summary.length || !$container.length) {
+            return;
+        }
+
+        // Read current form values
+        var label = '';
+        var $labelField = jQuery('#bl-backup-label');
+        if ($labelField.length) {
+            label = $labelField.val() || '';
+        }
+        if (!label) {
+            label = '(no label)';
+        }
+
+        var encrypt = false;
+        var $encryptCheckbox = jQuery('#bl-backup-encrypt');
+        if ($encryptCheckbox.length) {
+            encrypt = $encryptCheckbox.is(':checked');
+        }
+
+        var dual = false;
+        var $dualCheckbox = jQuery('#bl-backup-dual');
+        if ($dualCheckbox.length) {
+            dual = $dualCheckbox.is(':checked');
+        }
+
+        var destS3 = false;
+        var $destS3Checkbox = jQuery('#backup_lite_dest_s3');
+        if ($destS3Checkbox.length) {
+            destS3 = $destS3Checkbox.is(':checked');
+        }
+
+        // Build HTML summary
+        var html = '<ul style="margin: 0; padding-left: 20px;">';
+        html += '<li><strong>' + backupLiteEscapeHtml(getString('backupLabel', 'Label') || 'Label') + ':</strong> ' + backupLiteEscapeHtml(label) + '</li>';
+        html += '<li><strong>' + backupLiteEscapeHtml(getString('encrypt', 'Encrypt') || 'Encrypt') + ':</strong> ' + (encrypt ? (getString('enabled', 'Enabled') || 'Enabled') : (getString('disabled', 'Disabled') || 'Disabled')) + '</li>';
+        html += '<li><strong>' + backupLiteEscapeHtml(getString('dualVersion', 'Dual version (Snapshot + Full)') || 'Dual version (Snapshot + Full)') + ':</strong> ' + (dual ? (getString('enabled', 'Enabled') || 'Enabled') : (getString('disabled', 'Disabled') || 'Disabled')) + '</li>';
+        html += '<li><strong>' + backupLiteEscapeHtml(getString('uploadToS3', 'Upload to S3') || 'Upload to S3') + ':</strong> ' + (destS3 ? (getString('yes', 'Yes') || 'Yes') : (getString('no', 'No') || 'No')) + '</li>';
+        html += '</ul>';
+
+        $summary.html(html);
+        $container.show();
+    }
+
+    /**
+     * Hide settings summary.
+     */
+    function backupLiteHideSettingsSummary() {
+        var $container = jQuery('#backup-lite-current-settings');
+        if ($container.length) {
+            $container.hide();
+        }
+    }
 
     function setBackupFormElements(formEl) {
         backupFormEl = formEl;
@@ -480,6 +732,9 @@ var backupJobContext = {
             return;
         }
 
+        // Stop polling immediately to prevent any further status updates
+        stopBackupJobPolling();
+
         if (backupCancelBtn) {
             backupCancelBtn.disabled = true;
         }
@@ -503,6 +758,9 @@ var backupJobContext = {
             setBackupBusy(false);
             backupJobContext.current = null;
             setBackupCancelable(false);
+            backupLiteJobRunning = false; // Reset flag when job is cancelled
+            backupLiteSetFormLocked(false); // Unlock form when job is cancelled
+            backupLiteHideSettingsSummary(); // Hide settings summary on cancellation
             resetBackupProgress();
             showToast(strings.jobCancelSuccess || 'Backup cancelled.', 'warning');
         }).catch(function (error) {
@@ -512,35 +770,82 @@ var backupJobContext = {
         });
     }
 
+    /**
+     * Collect backup options from form BEFORE locking the UI.
+     * This ensures all checkbox values are captured even if they are disabled later.
+     * 
+     * @return {Object} Object containing all backup options.
+     */
+    function backupLiteCollectBackupOptions() {
+        if (!backupFormEl) {
+            return {};
+        }
+
+        var options = {};
+
+        // S3 checkbox - always collect (not just for PRO)
+        var destS3Checkbox = backupFormEl.querySelector('input[name="backup_lite_dest_s3"]');
+        if (destS3Checkbox) {
+            options.backup_lite_dest_s3 = destS3Checkbox.checked ? '1' : '0';
+        } else {
+            options.backup_lite_dest_s3 = '0';
+        }
+
+        // PRO features
+        if (window.BackupLitePro && window.BackupLitePro.isPro) {
+            var labelField = backupFormEl.querySelector('#bl-backup-label');
+            if (labelField && labelField.value) {
+                options.backup_label = labelField.value;
+            }
+
+            var encryptToggle = backupFormEl.querySelector('#bl-backup-encrypt');
+            if (encryptToggle) {
+                options.backup_encrypt = encryptToggle.checked ? '1' : '0';
+            }
+
+            var dualToggle = backupFormEl.querySelector('#bl-backup-dual');
+            if (dualToggle) {
+                options.backup_dual = dualToggle.checked ? '1' : '0';
+                // Also support backup_lite_create_dual for consistency
+                options.backup_lite_create_dual = dualToggle.checked ? '1' : '0';
+            }
+
+            var cloudSelect = backupFormEl.querySelector('#bl-backup-cloud');
+            if (cloudSelect && cloudSelect.options) {
+                var selected = Array.from(cloudSelect.selectedOptions || [])
+                    .map(function (opt) { return opt.value; })
+                    .filter(Boolean);
+                if (selected.length) {
+                    options.backup_cloud = JSON.stringify(selected);
+                }
+            }
+        }
+
+        return options;
+    }
+
     function appendBackupOptions(payload) {
-        if (!window.BackupLitePro || !window.BackupLitePro.isPro || !backupFormEl) {
+        if (!backupFormEl) {
             return;
         }
 
-        var labelField = backupFormEl.querySelector('#bl-backup-label');
-        if (labelField && labelField.value) {
-            payload.append('backup_label', labelField.value);
-        }
+        // Collect all options BEFORE form is locked
+        var options = backupLiteCollectBackupOptions();
 
-        var encryptToggle = backupFormEl.querySelector('#bl-backup-encrypt');
-        if (encryptToggle && encryptToggle.checked) {
-            payload.append('backup_encrypt', '1');
-        }
+        // Append all collected options to payload
+        Object.keys(options).forEach(function(key) {
+            payload.append(key, options[key]);
+        });
 
-        var dualToggle = backupFormEl.querySelector('#bl-backup-dual');
-        if (dualToggle && dualToggle.checked) {
-            payload.append('backup_dual', '1');
-        }
-
-        var cloudSelect = backupFormEl.querySelector('#bl-backup-cloud');
-        if (cloudSelect && cloudSelect.options) {
-            var selected = Array.from(cloudSelect.selectedOptions || [])
-                .map(function (opt) { return opt.value; })
-                .filter(Boolean);
-            if (selected.length) {
-                payload.append('backup_cloud', JSON.stringify(selected));
+        // Log for debugging (sanitize for console)
+        var logOptions = {};
+        Object.keys(options).forEach(function(key) {
+            // Don't log sensitive data, just show checkbox states
+            if (key.indexOf('backup_lite_dest_s3') !== -1 || key.indexOf('backup_dual') !== -1 || key.indexOf('backup_encrypt') !== -1) {
+                logOptions[key] = options[key];
             }
-        }
+        });
+        console.log('[Backup Lite] Collected backup options:', logOptions);
     }
 
     function setBackupStatusMessage(message, type) {
@@ -555,12 +860,26 @@ var backupJobContext = {
     }
 
     function handleJobResponse(job) {
+        if (!job || !job.id) {
+            // Invalid job response, stop polling
+            stopBackupJobPolling();
+            return;
+        }
+
         backupJobContext.current = job;
-        updateBackupProgress(job.percentage || 0);
+        
+        // Update progress - ensure it reaches 100% when completed
+        var percent = job.percentage || 0;
+        if ('completed' === job.status || percent >= 100) {
+            percent = 100;
+        }
+        updateBackupProgress(percent);
         setBackupCancelable(true);
 
-        if ('completed' === job.status) {
+        // Handle completed status FIRST - this is critical
+        if ('completed' === job.status || percent >= 100) {
             setBackupCancelable(false);
+            stopBackupJobPolling(); // Stop polling immediately
             finishBackupJob(job);
             return;
         }
@@ -568,6 +887,10 @@ var backupJobContext = {
         if ('failed' === job.status) {
             stopBackupJobPolling();
             setBackupBusy(false);
+            backupLiteStopTimer(null);
+            backupLiteJobRunning = false; // Reset flag when job fails
+            backupLiteSetFormLocked(false); // Unlock form when job fails
+            backupLiteHideSettingsSummary(); // Hide settings summary on failure
             handleError({ message: job.message || strings.jobFailed || strings.errorGeneric });
             backupJobContext.current = null;
             setBackupCancelable(false);
@@ -577,6 +900,11 @@ var backupJobContext = {
         if ('cancelled' === job.status) {
             stopBackupJobPolling();
             setBackupBusy(false);
+            backupLiteStopTimer(null);
+            backupLiteJobRunning = false; // Reset flag when job is cancelled
+            backupLiteSetFormLocked(false); // Unlock form when job is cancelled
+            backupLiteHideSettingsSummary(); // Hide settings summary on cancellation
+            resetBackupProgress(); // Reset progress bar
             showMessage('', '', strings.jobCancelled || '');
             backupJobContext.current = null;
             setBackupCancelable(false);
@@ -641,17 +969,77 @@ var backupJobContext = {
             credentials: 'same-origin',
             body: payload
         }).then(function (response) {
+            // Check Content-Type before parsing JSON
+            var contentType = response.headers.get('content-type');
+            if (!contentType || contentType.indexOf('application/json') === -1) {
+                // Server returned HTML instead of JSON (likely a fatal error page)
+                throw new Error('Server returned non-JSON response. Please check logs for details.');
+            }
+            
+            // Check HTTP status first
+            if (!response.ok) {
+                throw new Error('HTTP ' + response.status + ': ' + response.statusText);
+            }
             return response.json();
         }).then(function (json) {
-            if (!json || !json.success || !json.data || !json.data.job) {
-                throw json && json.data ? json.data : json;
+            // Handle JSON response - check for success:false first
+            if (!json || json.success === false) {
+                // Server returned an error (but HTTP 200) - stop polling and show error
+                var errorMsg = json && json.data && json.data.message 
+                    ? json.data.message 
+                    : (strings.backupInternalError || 'Backup status check failed. Please check the Logs tab for details.');
+                
+                console.error('[Backup Lite] Backup status check failed:', json);
+                stopBackupJobPolling();
+                setBackupBusy(false);
+                backupLiteJobRunning = false;
+                backupLiteSetFormLocked(false);
+                backupLiteHideSettingsSummary();
+                backupLiteStopTimer(null);
+                setBackupCancelable(false);
+                handleError({ message: errorMsg });
+                backupJobContext.current = null;
+                return;
             }
+            
+            // Check if job data exists
+            if (!json.data || !json.data.job) {
+                // Job not found - might be completed, stop polling
+                stopBackupJobPolling();
+                setBackupBusy(false);
+                backupLiteJobRunning = false;
+                backupLiteSetFormLocked(false);
+                backupLiteHideSettingsSummary();
+                return;
+            }
+            
             handleJobResponse(json.data.job);
         }).catch(function (error) {
-            stopBackupJobPolling();
-            setBackupBusy(false);
-            handleError(error && error.message ? error : null);
-            backupJobContext.current = null;
+            // Enhanced error handling: stop polling on HTTP 500 or critical errors
+            var errorMessage = error && error.message ? error.message : String(error);
+            var isHttp500 = errorMessage.indexOf('HTTP 500') !== -1 || errorMessage.indexOf('500') !== -1;
+            
+            if (isHttp500) {
+                // HTTP 500 indicates a server error - stop polling and show error
+                console.error('[Backup Lite] Server error during backup polling:', error);
+                stopBackupJobPolling();
+                setBackupBusy(false);
+                backupLiteJobRunning = false;
+                backupLiteSetFormLocked(false);
+                backupLiteHideSettingsSummary();
+                backupLiteStopTimer(null);
+                setBackupCancelable(false);
+                
+                // Show error message to user
+                var errorMsg = strings.backupInternalError || 'Backup status check failed. Please check the Logs tab for details.';
+                handleError({ message: errorMsg });
+                backupJobContext.current = null;
+            } else {
+                // For other errors, log but allow retry (don't reset everything on a single failed poll)
+                console.warn('[Backup Lite] Polling error (will retry):', error);
+                // Don't reset everything on a single polling error - let it retry
+                // Only stop if we get multiple consecutive errors (handled by scheduleBackupJobPolling)
+            }
         });
     }
 
@@ -679,10 +1067,31 @@ var backupJobContext = {
             return false;
         }
 
-        if (backupJobContext.current && backupJobContext.current.status && backupJobContext.current.status !== 'failed' && backupJobContext.current.status !== 'completed') {
+        // Prevent duplicate job starts with explicit flag - check FIRST before any processing
+        if (backupLiteJobRunning) {
+            console.warn('[Backup Lite] Backup job already running, ignoring duplicate start request');
             showToast(strings.jobButtonBusy || 'Backup in progress…', 'info');
             return false;
         }
+
+        if (backupJobContext.current && backupJobContext.current.status && backupJobContext.current.status !== 'failed' && backupJobContext.current.status !== 'completed' && backupJobContext.current.status !== 'cancelled') {
+            showToast(strings.jobButtonBusy || 'Backup in progress…', 'info');
+            return false;
+        }
+
+        // Set running flag IMMEDIATELY at the very start to prevent duplicates
+        backupLiteJobRunning = true;
+        
+        // Disable the form submit button immediately to prevent double-clicks
+        if (backupSubmitBtn) {
+            backupSubmitBtn.disabled = true;
+        }
+
+        // Render settings summary BEFORE locking the form
+        backupLiteRenderSettingsSummary();
+
+        // Lock the form to prevent changes during backup
+        backupLiteSetFormLocked(true);
 
         const payload = new FormData();
         payload.append('action', 'backup_lite_start_backup_job');
@@ -692,6 +1101,7 @@ var backupJobContext = {
         setBackupBusy(true);
         resetBackupProgress();
         setBackupStatusMessage(strings.jobPreparing || strings.runningMessage || '', 'loading');
+        backupLiteStartTimer();
 
         fetch(settings.ajaxUrl, {
             method: 'POST',
@@ -710,6 +1120,10 @@ var backupJobContext = {
             backupJobContext.current = null;
             resetBackupProgress();
             setBackupCancelable(false);
+            backupLiteStopTimer(null);
+            backupLiteJobRunning = false; // Reset flag on error
+            backupLiteSetFormLocked(false); // Unlock form on error
+            backupLiteHideSettingsSummary(); // Hide settings summary on error
             handleError(error && error.message ? error : null);
         });
 
@@ -721,7 +1135,28 @@ var backupJobContext = {
         setBackupBusy(false);
         backupJobContext.current = null;
         setBackupCancelable(false);
+        backupLiteJobRunning = false; // Reset flag when job completes
+        backupLiteSetFormLocked(false); // Unlock form when job completes
+        // Keep settings summary visible to show what was used for this backup
         updateBackupProgress(100);
+
+        // Clear active job transient on server side
+        if (settings && settings.nonce) {
+            var clearPayload = new FormData();
+            clearPayload.append('action', 'backup_lite_clear_active_job');
+            clearPayload.append('nonce', settings.nonce);
+            fetch(settings.ajaxUrl, {
+                method: 'POST',
+                credentials: 'same-origin',
+                body: clearPayload
+            }).catch(function() {
+                // Silent fail - clearing is best effort
+            });
+        }
+
+        // Stop timer with final duration from backend if available
+        var finalDuration = job && typeof job.duration === 'number' ? job.duration : null;
+        backupLiteStopTimer(finalDuration);
 
         var overlayTitle = strings.backupOverlayTitle || strings.successTitle || 'Backup completed';
         var overlayMessage = strings.jobComplete || strings.successBackup || 'Backup completed successfully.';
@@ -754,6 +1189,75 @@ var backupJobContext = {
                 autoClose: 4000
             });
         }
+
+        // Play backup completion sound
+        backupLitePlayNotificationSound();
+
+        // Note: Automatic S3 upload is now handled on the server side in finalize_async_job()
+        // No need to trigger upload from frontend anymore
+    }
+
+    /**
+     * Trigger S3 upload for a backup file (unified handler for both manual and automatic uploads).
+     * 
+     * @param {string} filename - Backup filename to upload.
+     */
+    function triggerBackupS3Upload(filename) {
+        if (!filename || !settings || !settings.nonce) {
+            return;
+        }
+
+        // Show status message
+        showMessage('info', '', strings.uploadingToCloud || 'Uploading backup to cloud storage...');
+
+        var payload = new FormData();
+        payload.append('action', 'backup_lite_upload_existing_backup');
+        payload.append('nonce', settings.nonce);
+        payload.append('filename', filename);
+
+        fetch(settings.ajaxUrl, {
+            method: 'POST',
+            credentials: 'same-origin',
+            body: payload
+        }).then(function (response) {
+            // Check Content-Type before parsing JSON
+            var contentType = response.headers.get('content-type');
+            if (!contentType || contentType.indexOf('application/json') === -1) {
+                // Server returned HTML instead of JSON (likely a fatal error page)
+                throw new Error('Server returned non-JSON response. Please check logs for details.');
+            }
+            
+            if (!response.ok) {
+                throw new Error('HTTP ' + response.status + ': ' + response.statusText);
+            }
+            
+            return response.json();
+        }).then(function (json) {
+            if (json && json.success) {
+                showMessage('success', '', strings.uploadToCloudSuccess || 'Backup uploaded to cloud storage successfully.');
+                // Refresh backups list to update Cloud Storage column
+                if (typeof refreshBackupsList === 'function') {
+                    refreshBackupsList();
+                } else {
+                    // Fallback: reload page after a short delay
+                    setTimeout(function() {
+                        location.reload();
+                    }, 2000);
+                }
+            } else {
+                var errorMsg = json && json.data && json.data.message 
+                    ? json.data.message 
+                    : (strings.uploadToCloudFailed || 'Failed to upload backup to cloud storage.');
+                showMessage('error', '', errorMsg);
+            }
+        }).catch(function (error) {
+            console.error('[Backup Lite] S3 upload error:', error);
+            var errorMsg = strings.uploadToCloudFailed || 'Failed to upload backup to cloud storage.';
+            if (error && error.message && error.message.indexOf('non-JSON') !== -1) {
+                errorMsg = 'Unexpected server response. Please check logs for details.';
+            }
+            showMessage('error', '', errorMsg);
+        });
     }
 
     // Backup form submission handled in DOM ready block.
@@ -814,7 +1318,97 @@ var backupJobContext = {
         });
     });
 
-$(document).on('click', '.backup-lite-delete-backup', function (event) {
+$(document).on('click', '.backup-lite-upload-to-cloud', function (event) {
+        event.preventDefault();
+        var $btn = $(this);
+        var filename = $btn.data('filename');
+        var filepath = $btn.data('path');
+
+        // Double-click protection: check if already uploading
+        if ($btn.data('is-uploading') === true) {
+            return;
+        }
+
+        if (!filename) {
+            showToast('Error: Backup filename is missing.', 'error');
+            return;
+        }
+
+        if (!confirm('Upload this backup to S3? This may take a few minutes depending on file size.')) {
+            return;
+        }
+
+        // Mark as uploading and disable button
+        $btn.data('is-uploading', true);
+        $btn.prop('disabled', true);
+        var originalText = $btn.html();
+        $btn.html('<span class="spinner is-active" style="float: none; margin: 0 4px 0 0;"></span> Uploading...');
+
+        var payload = new FormData();
+        payload.append('action', 'backup_lite_upload_existing_backup');
+        payload.append('nonce', settings.nonce);
+        payload.append('filename', filename);
+
+        fetch(settings.ajaxUrl, {
+            method: 'POST',
+            credentials: 'same-origin',
+            body: payload
+        }).then(function (response) {
+            // Check Content-Type before parsing JSON
+            var contentType = response.headers.get('content-type');
+            if (!contentType || contentType.indexOf('application/json') === -1) {
+                // Server returned HTML instead of JSON (likely a fatal error page)
+                throw new Error('Server returned non-JSON response. Please check logs for details.');
+            }
+            
+            if (!response.ok) {
+                throw new Error('HTTP ' + response.status + ': ' + response.statusText);
+            }
+            
+            return response.json();
+        }).then(function (json) {
+            // Reset uploading state
+            $btn.data('is-uploading', false);
+            
+            if (json && json.success) {
+                showToast('✅ ' + (json.data && json.data.message ? json.data.message : 'Backup uploaded to S3 successfully.'), 'success');
+                // Reload the page to update the Cloud Storage column
+                setTimeout(function () {
+                    window.location.reload();
+                }, 1500);
+            } else {
+                var errorMsg = json && json.data && json.data.message 
+                    ? json.data.message 
+                    : 'Failed to upload backup to S3.';
+                showToast('❌ ' + errorMsg, 'error');
+                $btn.prop('disabled', false);
+                $btn.html(originalText);
+            }
+        }).catch(function (error) {
+            // Reset uploading state
+            $btn.data('is-uploading', false);
+            
+            console.error('[Backup Lite] Upload to cloud error:', error);
+            
+            // Show appropriate error message
+            var errorMsg = 'Failed to upload backup to S3.';
+            if (error && error.message) {
+                if (error.message.indexOf('non-JSON') !== -1 || error.message.indexOf('Server returned non-JSON') !== -1) {
+                    errorMsg = 'Unexpected server response. Please check logs for details.';
+                } else if (error.message.indexOf('HTTP 500') !== -1) {
+                    errorMsg = 'Server error occurred. Please check logs for details.';
+                } else {
+                    errorMsg = error.message;
+                }
+            }
+            
+            showToast('❌ ' + errorMsg, 'error');
+            $btn.prop('disabled', false);
+            $btn.html(originalText);
+        });
+    });
+
+    $(document).on('click', '.backup-lite-delete-backup', function (event) {
         event.preventDefault();
 
         const button = $(this);
@@ -864,6 +1458,67 @@ $(document).on('click', '.backup-lite-delete-backup', function (event) {
 });
 
 function initBackupLiteDomReady() {
+    // Check for active backup job state injected by PHP (persists across page reloads)
+    var $backupPage = jQuery('.backup-lite-backups');
+    if ($backupPage.length) {
+        var activeJobDataAttr = $backupPage.attr('data-backup-lite-active-job');
+        if (activeJobDataAttr) {
+            try {
+                var activeJobData = JSON.parse(activeJobDataAttr);
+                if (activeJobData && activeJobData.is_running === true && activeJobData.options) {
+                    // Lock the form using the stored options from the active job
+                    backupLiteLockBackupFormFromServer(activeJobData);
+                    
+                    // Resume polling if we have a job_id
+                    if (activeJobData.job_id) {
+                        // Check if job is still active and resume polling
+                        var payload = new FormData();
+                        payload.append('action', 'backup_lite_get_job_status');
+                        payload.append('nonce', settings.nonce);
+                        payload.append('job_id', activeJobData.job_id);
+                        
+                        fetch(settings.ajaxUrl, {
+                            method: 'POST',
+                            credentials: 'same-origin',
+                            body: payload
+                        }).then(function (response) {
+                            if (!response.ok) {
+                                throw new Error('HTTP ' + response.status);
+                            }
+                            return response.json();
+                        }).then(function (json) {
+                            if (json && json.success && json.data && json.data.job) {
+                                var job = json.data.job;
+                                // Only resume if job is still running
+                                if (job.status === 'running' || job.status === 'pending' || job.status === 'processing') {
+                                    backupJobContext.current = job;
+                                    scheduleBackupJobPolling(true);
+                                    setBackupBusy(true);
+                                    setBackupCancelable(true);
+                                    updateBackupProgress(job.percentage || 0);
+                                    backupLiteStartTimer();
+                                } else {
+                                    // Job finished, clear the lock
+                                    backupLiteSetFormLocked(false);
+                                    backupLiteHideSettingsSummary();
+                                }
+                            } else {
+                                // Job not found or completed, clear the lock
+                                backupLiteSetFormLocked(false);
+                                backupLiteHideSettingsSummary();
+                            }
+                        }).catch(function (error) {
+                            console.warn('[Backup Lite] Failed to resume job polling:', error);
+                            // On error, still keep form locked but don't start polling
+                            // User can manually refresh or cancel
+                        });
+                    }
+                }
+            } catch (e) {
+                console.warn('[Backup Lite] Failed to parse active job data:', e);
+            }
+        }
+    }
     var localizedSettings = window.BackupLite || {};
     var strings = localizedSettings.strings || {};
     var currentPage = localizedSettings.page || '';
@@ -872,6 +1527,68 @@ function initBackupLiteDomReady() {
     var restoreFormV2 = document.getElementById('backup-lite-restore-form-v2');
     var uploadProgress = document.getElementById('upload-progress');
     var uploadInterval = null;
+
+    // Check for active backup job state injected by PHP (persists across page reloads)
+    var $backupPage = jQuery('.backup-lite-backups');
+    if ($backupPage.length) {
+        var activeJobDataAttr = $backupPage.attr('data-backup-lite-active-job');
+        if (activeJobDataAttr) {
+            try {
+                var activeJobData = JSON.parse(activeJobDataAttr);
+                if (activeJobData && activeJobData.is_running === true && activeJobData.options) {
+                    // Lock the form using the stored options from the active job
+                    backupLiteLockBackupFormFromServer(activeJobData);
+                    
+                    // Resume polling if we have a job_id
+                    if (activeJobData.job_id && settings && settings.nonce) {
+                        // Check if job is still active and resume polling
+                        var payload = new FormData();
+                        payload.append('action', 'backup_lite_get_job_status');
+                        payload.append('nonce', settings.nonce);
+                        payload.append('job_id', activeJobData.job_id);
+                        
+                        fetch(settings.ajaxUrl, {
+                            method: 'POST',
+                            credentials: 'same-origin',
+                            body: payload
+                        }).then(function (response) {
+                            if (!response.ok) {
+                                throw new Error('HTTP ' + response.status);
+                            }
+                            return response.json();
+                        }).then(function (json) {
+                            if (json && json.success && json.data && json.data.job) {
+                                var job = json.data.job;
+                                // Only resume if job is still running
+                                if (job.status === 'running' || job.status === 'pending' || job.status === 'processing') {
+                                    backupJobContext.current = job;
+                                    scheduleBackupJobPolling(true);
+                                    setBackupBusy(true);
+                                    setBackupCancelable(true);
+                                    updateBackupProgress(job.percentage || 0);
+                                    backupLiteStartTimer();
+                                } else {
+                                    // Job finished, clear the lock
+                                    backupLiteSetFormLocked(false);
+                                    backupLiteHideSettingsSummary();
+                                }
+                            } else {
+                                // Job not found or completed, clear the lock
+                                backupLiteSetFormLocked(false);
+                                backupLiteHideSettingsSummary();
+                            }
+                        }).catch(function (error) {
+                            console.warn('[Backup Lite] Failed to resume job polling:', error);
+                            // On error, still keep form locked but don't start polling
+                            // User can manually refresh or cancel
+                        });
+                    }
+                }
+            } catch (e) {
+                console.warn('[Backup Lite] Failed to parse active job data:', e);
+            }
+        }
+    }
 
     var showToast = function () {
         if (window.BackupLiteUI && typeof window.BackupLiteUI.showToast === 'function') {
@@ -918,7 +1635,9 @@ function initBackupLiteDomReady() {
 
     if (backupForm) {
         setBackupFormElements(backupForm);
-        backupForm.addEventListener('submit', startBackupJobRequest);
+        // Remove any existing event listeners to prevent duplicates
+        // Use namespace to ensure proper removal
+        jQuery(backupForm).off('submit.backupLite').on('submit.backupLite', startBackupJobRequest);
     } else {
         resetBackupProgress();
     }
@@ -1415,6 +2134,9 @@ function initRestoreCenter() {
                     confirmText: strings.restoreOverlayConfirm || strings.close || 'Got it'
                 });
                 console.log('[Backup Lite] Completion overlay shown');
+                
+                // Play restore completion sound
+                backupLitePlayNotificationSound();
                 
                 // Verify overlay was actually added to DOM
                 setTimeout(function() {
@@ -4184,9 +4906,11 @@ function initRestoreCenter() {
             notification_email: document.getElementById('bl-setting-notify-email') ? document.getElementById('bl-setting-notify-email').value.trim() : '',
             min_role: document.getElementById('bl-setting-role') ? document.getElementById('bl-setting-role').value : 'administrator',
             ui_theme: document.getElementById('bl-setting-theme-mode') ? document.getElementById('bl-setting-theme-mode').value : 'auto',
+            enable_sounds: document.getElementById('bl-setting-enable-sounds') ? document.getElementById('bl-setting-enable-sounds').checked : false,
             feature_restore_center_v2: getCheckboxValue('bl-feature-restore-center'),
             feature_ui_animation: getCheckboxValue('bl-feature-ui-animation'),
             feature_extended_log: getCheckboxValue('bl-feature-extended-log'),
+            enable_sounds: getCheckboxValue('bl-setting-enable-sounds'),
         };
 
         var debugToggle = document.getElementById('bl-setting-debug-mode');
@@ -4266,6 +4990,8 @@ function initRestoreCenter() {
             if (logToggle) logToggle.checked = !!s.feature_extended_log;
             var cloudToggle = document.getElementById('bl-feature-cloud');
             if (cloudToggle) cloudToggle.checked = !!s.feature_cloud_destinations;
+            var enableSoundsToggle = document.getElementById('bl-setting-enable-sounds');
+            if (enableSoundsToggle) enableSoundsToggle.checked = !!s.enable_sounds;
             var advancedToggle = document.getElementById('bl-feature-advanced');
             if (advancedToggle) advancedToggle.checked = !!s.feature_advanced_filters;
 
@@ -4609,6 +5335,74 @@ function initRestoreCenter() {
         loadEstimate();
     })();
 
+    // Display AI Alert helper function
+    function displayAIAlert(container, alert) {
+        if (!container || !alert || !alert.type) {
+            return;
+        }
+
+        // Remove existing alert if any
+        var existingAlert = container.querySelector('.museder-ai-alert');
+        if (existingAlert) {
+            existingAlert.remove();
+        }
+
+        var alertDiv = document.createElement('div');
+        alertDiv.className = 'museder-ai-alert';
+        alertDiv.style.cssText = 'margin-top: 16px; padding: 12px; border-radius: 4px; border-left: 4px solid;';
+
+        var message = '';
+        var bgColor = '';
+        var borderColor = '';
+        var textColor = '';
+
+        switch (alert.type) {
+            case 'high_risk_free':
+                message = 'High risk detected. Upgrade to Pro to enable email alerts.';
+                bgColor = '#ffeaea';
+                borderColor = '#dc3232';
+                textColor = '#721c24';
+                break;
+            case 'high_risk_no_email':
+                message = 'High risk detected. Please set an alert email address in Museder AI Settings.';
+                bgColor = '#fff3cd';
+                borderColor = '#ffc107';
+                textColor = '#856404';
+                break;
+            case 'high_risk_email_sent':
+                if (alert.rate_limited) {
+                    message = 'High risk detected. An alert email has been sent to ' + (alert.alert_email || 'your email') + '. (Alerts are limited to once per day)';
+                } else {
+                    message = 'High risk detected. An alert email has been sent to ' + (alert.alert_email || 'your email') + '.';
+                }
+                bgColor = '#d4edda';
+                borderColor = '#28a745';
+                textColor = '#155724';
+                break;
+            case 'high_risk_email_failed':
+                message = 'High risk detected, but failed to send alert email. Please check your email configuration.';
+                bgColor = '#ffeaea';
+                borderColor = '#dc3232';
+                textColor = '#721c24';
+                break;
+            default:
+                return; // Unknown alert type
+        }
+
+        alertDiv.style.backgroundColor = bgColor;
+        alertDiv.style.borderLeftColor = borderColor;
+        alertDiv.style.color = textColor;
+        alertDiv.textContent = message;
+
+        // Insert after the results section or at the end of the card
+        var resultsEl = container.querySelector('#museder-ai-scan-results, #museder-ai-backup-report-results, #museder-ai-log-analysis-results, #museder-ai-restore-guide-results');
+        if (resultsEl && resultsEl.parentNode) {
+            resultsEl.parentNode.insertBefore(alertDiv, resultsEl.nextSibling);
+        } else {
+            container.appendChild(alertDiv);
+        }
+    }
+
     // Initialize AI Site Scan (Demo)
     (function initAISiteScan() {
         var scanBtn = document.getElementById('museder-ai-scan-btn');
@@ -4692,6 +5486,11 @@ function initRestoreCenter() {
                         }
 
                         resultsEl.style.display = 'block';
+
+                        // Display alert if high risk detected
+                        if (data.alert && data.alert.type) {
+                            displayAIAlert(scanCard, data.alert);
+                        }
                     } else {
                         // Handle limit reached error
                         if (response.data && response.data.code === 'limit_reached') {
@@ -4847,6 +5646,11 @@ function initRestoreCenter() {
 
                         resultsEl.style.display = 'block';
 
+                        // Display alert if high risk detected
+                        if (data.alert && data.alert.type) {
+                            displayAIAlert(reportCard, data.alert);
+                        }
+
                         // Show success message (optional)
                         if (showToast) {
                             showToast('✅ ' + (strings.settingsSaved || 'Report generated successfully.'), 'success');
@@ -4876,7 +5680,7 @@ function initRestoreCenter() {
 
     // Handle scroll-to anchor links (for Health Score card and other AI features)
     (function initAIScrollLinks() {
-        var links = document.querySelectorAll('[data-museder-scroll]');
+        var links = document.querySelectorAll('[data-museder-scroll], .museder-view-full-report');
         if (!links || !links.length) {
             return;
         }
@@ -4884,18 +5688,21 @@ function initRestoreCenter() {
         links.forEach(function(link) {
             link.addEventListener('click', function(e) {
                 e.preventDefault();
-                var targetSelector = link.getAttribute('data-museder-scroll');
+                var targetSelector = link.getAttribute('data-museder-scroll') || link.getAttribute('href');
                 if (!targetSelector) {
                     return;
+                }
+                // Extract anchor from href if it's a full URL
+                if (targetSelector.indexOf('#') !== 0 && targetSelector.indexOf('#') !== -1) {
+                    targetSelector = '#' + targetSelector.split('#')[1];
                 }
                 var target = document.querySelector(targetSelector);
                 if (target) {
                     target.scrollIntoView({ behavior: 'smooth', block: 'start' });
                 } else {
                     // Fallback to default anchor behavior if target not found
-                    var href = link.getAttribute('href');
-                    if (href && href.indexOf('#') === 0) {
-                        window.location.hash = href;
+                    if (targetSelector.indexOf('#') === 0) {
+                        window.location.hash = targetSelector;
                     }
                 }
             });
@@ -4952,6 +5759,449 @@ function initRestoreCenter() {
         });
     }
 }
+
+    // Initialize AI Log Analysis
+    (function initAILogAnalysis() {
+        var analysisBtn = document.getElementById('museder-ai-log-analysis-run');
+        if (!analysisBtn) {
+            return; // Not on logs page
+        }
+
+        var loadingEl = document.getElementById('museder-ai-log-analysis-loading');
+        var resultsEl = document.getElementById('museder-ai-log-analysis-results');
+        var errorEl = document.getElementById('museder-ai-log-analysis-error');
+        var modeEl = document.getElementById('museder-ai-log-analysis-mode');
+        var summaryText = document.getElementById('museder-ai-log-analysis-summary-text');
+        var riskBadge = document.getElementById('museder-ai-log-analysis-risk-badge');
+        var mainCausesList = document.getElementById('museder-ai-log-analysis-main-causes-list');
+        var recommendationsList = document.getElementById('museder-ai-log-analysis-recommendations-list');
+        var errorMessage = document.getElementById('museder-ai-log-analysis-error-message');
+
+        var localizedSettings = window.BackupLite || {};
+        var strings = localizedSettings.strings || {};
+        var ajaxUrl = localizedSettings.ajaxUrl || '/wp-admin/admin-ajax.php';
+        var nonce = analysisBtn.dataset.nonce || '';
+
+        analysisBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            console.log('AI Log Analysis clicked');
+
+            // Reset UI
+            analysisBtn.disabled = true;
+            loadingEl.style.display = 'block';
+            resultsEl.style.display = 'none';
+            errorEl.style.display = 'none';
+
+            jQuery.ajax({
+                url: ajaxUrl,
+                type: 'POST',
+                data: {
+                    action: 'museder_ai_analyze_error_logs',
+                    _ajax_nonce: nonce
+                },
+                success: function(response) {
+                    analysisBtn.disabled = false;
+                    loadingEl.style.display = 'none';
+
+                    if (response.success && response.data && response.data.report) {
+                        var report = response.data.report;
+
+                        // Display mode indicator
+                        if (modeEl) {
+                            if (report.mode === 'demo') {
+                                modeEl.textContent = 'Demo mode (no external AI call).';
+                            } else if (report.mode === 'live') {
+                                modeEl.textContent = 'Powered by Museder AI (OpenAI).';
+                            } else {
+                                modeEl.textContent = '';
+                            }
+                        }
+
+                        // Display summary
+                        if (summaryText && report.summary) {
+                            summaryText.textContent = report.summary;
+                        }
+
+                        // Display risk badge
+                        if (riskBadge && report.risk_level) {
+                            var risk = report.risk_level.toLowerCase();
+                            var riskColors = {
+                                'low': { bg: '#d4edda', color: '#155724', text: 'Low' },
+                                'medium': { bg: '#fff3cd', color: '#856404', text: 'Medium' },
+                                'high': { bg: '#f8d7da', color: '#721c24', text: 'High' }
+                            };
+                            var riskStyle = riskColors[risk] || riskColors['medium'];
+                            riskBadge.textContent = riskStyle.text;
+                            riskBadge.style.backgroundColor = riskStyle.bg;
+                            riskBadge.style.color = riskStyle.color;
+                        }
+
+                        // Display main causes
+                        if (mainCausesList && report.main_causes && Array.isArray(report.main_causes)) {
+                            mainCausesList.innerHTML = '';
+                            report.main_causes.forEach(function(cause) {
+                                var li = document.createElement('li');
+                                var title = cause.title || 'Unknown';
+                                var desc = cause.description || '';
+                                li.innerHTML = '<strong>' + title + '</strong>' + (desc ? ': ' + desc : '');
+                                mainCausesList.appendChild(li);
+                            });
+                        }
+
+                        // Display recommendations
+                        if (recommendationsList && report.recommendations && Array.isArray(report.recommendations)) {
+                            recommendationsList.innerHTML = '';
+                            report.recommendations.forEach(function(rec) {
+                                var li = document.createElement('li');
+                                li.textContent = typeof rec === 'string' ? rec : (rec.text || '');
+                                recommendationsList.appendChild(li);
+                            });
+                        }
+
+                        resultsEl.style.display = 'block';
+
+                        // Display alert if high risk detected
+                        var analysisCard = document.getElementById('museder-ai-log-analysis-card');
+                        if (response.data && response.data.alert && response.data.alert.type && analysisCard) {
+                            displayAIAlert(analysisCard, response.data.alert);
+                        }
+                    } else {
+                        // Handle limit reached error
+                        if (response.data && response.data.code === 'free_limit_reached') {
+                            errorMessage.textContent = response.data.message || 'You have used your free Error Log AI Analysis for this month. Upgrade to Pro for unlimited analysis.';
+                        } else {
+                            errorMessage.textContent = response.data && response.data.message 
+                                ? response.data.message 
+                                : (strings.errorGeneric || 'An error occurred.');
+                        }
+                        errorEl.style.display = 'block';
+                    }
+                },
+                error: function(xhr, status, error) {
+                    analysisBtn.disabled = false;
+                    loadingEl.style.display = 'none';
+                    errorMessage.textContent = strings.errorGeneric || 'An error occurred. Please try again.';
+                    errorEl.style.display = 'block';
+                }
+            });
+        });
+    })();
+
+    // Initialize AI Restore Guide
+    (function initAIRestoreGuide() {
+        var guideBtn = document.getElementById('museder-ai-restore-guide-run');
+        if (!guideBtn) {
+            return; // Not on restore page
+        }
+
+        var loadingEl = document.getElementById('museder-ai-restore-guide-loading');
+        var resultsEl = document.getElementById('museder-ai-restore-guide-results');
+        var errorEl = document.getElementById('museder-ai-restore-guide-error');
+        var modeEl = document.getElementById('museder-ai-restore-guide-mode');
+        var summaryText = document.getElementById('museder-ai-restore-guide-summary-text');
+        var riskBadge = document.getElementById('museder-ai-restore-guide-risk-badge');
+        var errorMessage = document.getElementById('museder-ai-restore-guide-error-message');
+
+        var localizedSettings = window.BackupLite || {};
+        var strings = localizedSettings.strings || {};
+        var ajaxUrl = localizedSettings.ajaxUrl || '/wp-admin/admin-ajax.php';
+        var nonce = guideBtn.dataset.nonce || '';
+
+        // Update backup ID when user selects a backup from dropdown
+        var existingBackupSelect = document.getElementById('existingBackup');
+        if (existingBackupSelect) {
+            existingBackupSelect.addEventListener('change', function() {
+                var selectedBackup = this.value;
+                if (selectedBackup) {
+                    guideBtn.dataset.backupId = selectedBackup;
+                } else {
+                    guideBtn.dataset.backupId = '';
+                }
+            });
+        }
+
+        // Function to update backup ID from file summary
+        function updateBackupIdFromSummary() {
+            var fileSummary = document.getElementById('fileSummary');
+            if (fileSummary) {
+                var fileInfo = fileSummary.querySelector('p strong');
+                if (fileInfo && fileInfo.textContent.indexOf('File:') !== -1) {
+                    var fileText = fileInfo.nextSibling;
+                    if (fileText && fileText.textContent) {
+                        var filename = fileText.textContent.trim();
+                        if (filename) {
+                            guideBtn.dataset.backupId = filename;
+                            // Also update the AI Guide display text
+                            var guideDescriptions = document.querySelectorAll('#museder-ai-restore-guide-card .description');
+                            if (guideDescriptions.length > 1) {
+                                var currentBackupText = guideDescriptions[1];
+                                if (currentBackupText) {
+                                    currentBackupText.innerHTML = 'Currently analyzing backup: <strong>' + filename + '</strong>';
+                                    // Update color to normal (not error)
+                                    currentBackupText.style.color = '#666';
+                                }
+                            }
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        // Initialize backup ID from file summary on page load
+        updateBackupIdFromSummary();
+
+        // Update backup ID when file summary changes (after Step 1 analysis)
+        // This handles the case when user selects a backup and it gets analyzed
+        var observer = new MutationObserver(function(mutations) {
+            updateBackupIdFromSummary();
+        });
+        
+        var fileSummary = document.getElementById('fileSummary');
+        if (fileSummary) {
+            observer.observe(fileSummary, { childList: true, subtree: true });
+        }
+
+        // Also listen for summary-ready event from restore.js
+        document.addEventListener('backup-lite-summary-ready', function(event) {
+            if (event.detail && event.detail.data && event.detail.data.summary) {
+                var summary = event.detail.data.summary;
+                if (summary.name) {
+                    guideBtn.dataset.backupId = summary.name;
+                    // Update the AI Guide display text
+                    var guideDescriptions = document.querySelectorAll('#museder-ai-restore-guide-card .description');
+                    if (guideDescriptions.length > 1) {
+                        var currentBackupText = guideDescriptions[1];
+                        if (currentBackupText) {
+                            currentBackupText.innerHTML = 'Currently analyzing backup: <strong>' + summary.name + '</strong>';
+                            currentBackupText.style.color = '#666';
+                        }
+                    }
+                }
+            }
+        });
+
+        guideBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            console.log('AI Restore Guide clicked');
+
+            // Try to get backup ID from button, file summary, or existing backup select
+            var backupId = guideBtn.dataset.backupId || '';
+            
+            // If still empty, try to get from file summary
+            if (!backupId) {
+                updateBackupIdFromSummary();
+                backupId = guideBtn.dataset.backupId || '';
+            }
+            
+            // If still empty, try to get from existing backup select
+            if (!backupId && existingBackupSelect) {
+                backupId = existingBackupSelect.value || '';
+                if (backupId) {
+                    guideBtn.dataset.backupId = backupId;
+                }
+            }
+            
+            if (!backupId) {
+                alert(strings.noFileSelected || 'Please select a backup first.');
+                return;
+            }
+
+            // Reset UI
+            guideBtn.disabled = true;
+            loadingEl.style.display = 'block';
+            resultsEl.style.display = 'none';
+            errorEl.style.display = 'none';
+
+            jQuery.ajax({
+                url: ajaxUrl,
+                type: 'POST',
+                data: {
+                    action: 'museder_ai_restore_guide',
+                    _ajax_nonce: nonce,
+                    backup_id: backupId
+                },
+                success: function(response) {
+                    guideBtn.disabled = false;
+                    loadingEl.style.display = 'none';
+
+                    if (response.success && response.data && response.data.report) {
+                        var report = response.data.report;
+                        var tier = response.data.tier || 'free';
+
+                        // Display mode indicator
+                        if (modeEl) {
+                            if (report.mode === 'demo') {
+                                modeEl.textContent = 'Demo mode (no external AI call).';
+                            } else if (report.mode === 'live') {
+                                modeEl.textContent = 'Powered by Museder AI (OpenAI).';
+                            } else {
+                                modeEl.textContent = '';
+                            }
+                        }
+
+                        // Display summary
+                        if (summaryText && report.summary) {
+                            summaryText.textContent = report.summary;
+                        }
+
+                        // Display risk badge
+                        if (riskBadge && report.risk_level) {
+                            var risk = report.risk_level.toLowerCase();
+                            var riskColors = {
+                                'low': { bg: '#d4edda', color: '#155724', text: 'Low' },
+                                'medium': { bg: '#fff3cd', color: '#856404', text: 'Medium' },
+                                'high': { bg: '#f8d7da', color: '#721c24', text: 'High' }
+                            };
+                            var riskStyle = riskColors[risk] || riskColors['medium'];
+                            riskBadge.textContent = riskStyle.text;
+                            riskBadge.style.backgroundColor = riskStyle.bg;
+                            riskBadge.style.color = riskStyle.color;
+                        }
+
+                        // Display steps (new format with title, description, priority)
+                        var stepsContainer = document.getElementById('museder-ai-restore-guide-steps');
+                        if (stepsContainer && report.steps && Array.isArray(report.steps)) {
+                            var stepsList = stepsContainer.querySelector('ol') || stepsContainer.querySelector('ul');
+                            if (!stepsList) {
+                                stepsList = document.createElement('ol');
+                                stepsList.style.margin = '8px 0';
+                                stepsList.style.paddingLeft = '20px';
+                                stepsContainer.appendChild(stepsList);
+                            }
+                            stepsList.innerHTML = '';
+                            var displaySteps = (tier === 'free') ? report.steps.slice(0, 2) : report.steps;
+                            displaySteps.forEach(function(step) {
+                                var li = document.createElement('li');
+                                li.style.marginBottom = '8px';
+                                
+                                var title = document.createElement('strong');
+                                title.textContent = (step.title || 'Step') + ': ';
+                                li.appendChild(title);
+                                
+                                var desc = document.createTextNode(step.description || '');
+                                li.appendChild(desc);
+                                
+                                // Add priority badge
+                                if (step.priority && step.priority !== 'normal') {
+                                    var priorityBadge = document.createElement('span');
+                                    priorityBadge.style.marginLeft = '8px';
+                                    priorityBadge.style.padding = '2px 6px';
+                                    priorityBadge.style.borderRadius = '3px';
+                                    priorityBadge.style.fontSize = '11px';
+                                    priorityBadge.style.fontWeight = '600';
+                                    if (step.priority === 'high') {
+                                        priorityBadge.style.backgroundColor = '#f8d7da';
+                                        priorityBadge.style.color = '#721c24';
+                                        priorityBadge.textContent = 'High Priority';
+                                    } else if (step.priority === 'optional') {
+                                        priorityBadge.style.backgroundColor = '#e2e3e5';
+                                        priorityBadge.style.color = '#383d41';
+                                        priorityBadge.textContent = 'Optional';
+                                    }
+                                    li.appendChild(priorityBadge);
+                                }
+                                
+                                stepsList.appendChild(li);
+                            });
+                            
+                            // Show upgrade message for free tier if there are more steps
+                            if (tier === 'free' && report.steps.length > 2) {
+                                var upgradeMsg = document.createElement('p');
+                                upgradeMsg.style.fontSize = '12px';
+                                upgradeMsg.style.color = '#666';
+                                upgradeMsg.style.fontStyle = 'italic';
+                                upgradeMsg.style.marginTop = '8px';
+                                upgradeMsg.textContent = 'Upgrade to Pro to view full restore guide.';
+                                stepsContainer.appendChild(upgradeMsg);
+                            }
+                        }
+
+                        // Display warnings
+                        var warningsContainer = document.getElementById('museder-ai-restore-guide-warnings');
+                        if (warningsContainer && report.warnings && Array.isArray(report.warnings) && report.warnings.length > 0) {
+                            var warningsList = warningsContainer.querySelector('ul');
+                            if (!warningsList) {
+                                warningsList = document.createElement('ul');
+                                warningsList.style.margin = '8px 0';
+                                warningsList.style.paddingLeft = '20px';
+                                warningsList.style.color = '#856404';
+                                warningsContainer.appendChild(warningsList);
+                            }
+                            warningsList.innerHTML = '';
+                            report.warnings.forEach(function(warning) {
+                                var li = document.createElement('li');
+                                li.textContent = warning;
+                                warningsList.appendChild(li);
+                            });
+                            warningsContainer.style.display = 'block';
+                        } else if (warningsContainer) {
+                            warningsContainer.style.display = 'none';
+                        }
+
+                        // Display notes
+                        var notesContainer = document.getElementById('museder-ai-restore-guide-notes');
+                        if (notesContainer && report.notes && Array.isArray(report.notes) && report.notes.length > 0) {
+                            var notesList = notesContainer.querySelector('ul');
+                            if (!notesList) {
+                                notesList = document.createElement('ul');
+                                notesList.style.margin = '8px 0';
+                                notesList.style.paddingLeft = '20px';
+                                notesList.style.color = '#666';
+                                notesList.style.fontSize = '13px';
+                                notesContainer.appendChild(notesList);
+                            }
+                            notesList.innerHTML = '';
+                            report.notes.forEach(function(note) {
+                                var li = document.createElement('li');
+                                li.textContent = note;
+                                notesList.appendChild(li);
+                            });
+                            notesContainer.style.display = 'block';
+                        } else if (notesContainer) {
+                            notesContainer.style.display = 'none';
+                        }
+
+                        resultsEl.style.display = 'block';
+
+                        // Display alert if high risk detected
+                        var guideCard = document.getElementById('museder-ai-restore-guide-card');
+                        if (response.data && response.data.alert && response.data.alert.type && guideCard) {
+                            displayAIAlert(guideCard, response.data.alert);
+                        }
+                    } else {
+                        // Handle limit reached error
+                        if (response.data && response.data.code === 'free_limit_reached') {
+                            errorMessage.textContent = response.data.message || 'You have used your free Restore AI Guide for this month. Upgrade to Pro for unlimited guides.';
+                        } else {
+                            errorMessage.textContent = response.data && response.data.message 
+                                ? response.data.message 
+                                : (strings.errorGeneric || 'An error occurred.');
+                        }
+                        errorEl.style.display = 'block';
+                    }
+                },
+                error: function(xhr, status, error) {
+                    guideBtn.disabled = false;
+                    loadingEl.style.display = 'none';
+                    errorMessage.textContent = strings.errorGeneric || 'An error occurred. Please try again.';
+                    errorEl.style.display = 'block';
+                }
+            });
+        });
+    })();
+
+    // Handle "Change backup" link smooth scroll
+    jQuery(document).on('click', '.backup-lite-change-backup', function(e) {
+        e.preventDefault();
+        var target = document.querySelector('#backup-lite-source');
+        if (target) {
+            target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+    });
 
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', initBackupLiteDomReady);

@@ -171,7 +171,7 @@ class Backup_Lite_Schedule_Handler {
 
         // Check PRO limit for Free users
         if ( ! $id ) {
-            $is_pro = Backup_Lite_Pro::is_pro_active();
+            $is_pro = function_exists( 'backup_lite_has_pro_features' ) && backup_lite_has_pro_features();
             $existing = self::get_schedules();
             
             if ( ! $is_pro && count( $existing ) >= 1 ) {
@@ -238,7 +238,20 @@ class Backup_Lite_Schedule_Handler {
 
         $schedule['last_run'] = current_time( 'mysql' );
 
-        $result = Backup_Lite_Backup::backup_site();
+        // Prepare backup options for scheduled backup
+        $backup_options = [
+            'schedule_id' => $schedule_id,
+        ];
+        
+        // S3 cloud storage: enable S3 upload if S3 is ready (Pro feature only)
+        if ( function_exists( 'backup_lite_has_pro_features' ) && backup_lite_has_pro_features() && function_exists( 'backup_lite_is_s3_ready' ) && backup_lite_is_s3_ready() ) {
+            $backup_options['upload_to_s3'] = true;
+        } elseif ( class_exists( 'Museder_Cloud_Service' ) && Museder_Cloud_Service::is_enabled() ) {
+            // Legacy: Enable cloud upload if cloud storage is enabled
+            $backup_options['cloud_destination'] = true;
+        }
+
+        $result = Backup_Lite_Backup::backup_site( $backup_options );
 
         if ( ! empty( $result['success'] ) ) {
             $schedule['last_result'] = 'success';
@@ -313,7 +326,7 @@ class Backup_Lite_Schedule_Handler {
         ];
 
         // PRO features
-        if ( Backup_Lite_Pro::is_pro_active() ) {
+        if ( function_exists( 'backup_lite_has_pro_features' ) && backup_lite_has_pro_features() ) {
             // Custom cron pattern
             if ( ! empty( $data['cron_pattern'] ) ) {
                 $schedule['cron_pattern'] = sanitize_text_field( $data['cron_pattern'] );
@@ -377,7 +390,7 @@ class Backup_Lite_Schedule_Handler {
         $schedule['notify']  = $data['notify'];
 
         // PRO features
-        if ( Backup_Lite_Pro::is_pro_active() ) {
+        if ( function_exists( 'backup_lite_has_pro_features' ) && backup_lite_has_pro_features() ) {
             // Custom cron pattern
             if ( isset( $data['cron_pattern'] ) ) {
                 $schedule['cron_pattern'] = ! empty( $data['cron_pattern'] ) ? sanitize_text_field( $data['cron_pattern'] ) : '';
@@ -520,7 +533,20 @@ class Backup_Lite_Schedule_Handler {
         $schedule['last_run']    = current_time( 'mysql' );
         $schedule['retry_count'] = 0;
 
-        $result = Backup_Lite_Backup::backup_site();
+        // Prepare backup options for scheduled backup
+        $backup_options = [
+            'schedule_id' => $schedule_id,
+        ];
+        
+        // S3 cloud storage: enable S3 upload if S3 is ready (Pro feature only)
+        if ( function_exists( 'backup_lite_has_pro_features' ) && backup_lite_has_pro_features() && function_exists( 'backup_lite_is_s3_ready' ) && backup_lite_is_s3_ready() ) {
+            $backup_options['upload_to_s3'] = true;
+        } elseif ( class_exists( 'Museder_Cloud_Service' ) && Museder_Cloud_Service::is_enabled() ) {
+            // Legacy: Enable cloud upload if cloud storage is enabled
+            $backup_options['cloud_destination'] = true;
+        }
+
+        $result = Backup_Lite_Backup::backup_site( $backup_options );
 
         if ( empty( $result['success'] ) ) {
             $schedule['last_result'] = 'failed';
@@ -792,7 +818,7 @@ class Backup_Lite_Schedule_Handler {
         ];
 
         // PRO features
-        if ( Backup_Lite_Pro::is_pro_active() ) {
+        if ( function_exists( 'backup_lite_has_pro_features' ) && backup_lite_has_pro_features() ) {
             // Custom cron pattern
             if ( isset( $decoded['cron_pattern'] ) ) {
                 $result['cron_pattern'] = sanitize_text_field( $decoded['cron_pattern'] );
@@ -866,7 +892,7 @@ class Backup_Lite_Schedule_Handler {
         }
 
         // PRO features defaults
-        if ( class_exists( 'Backup_Lite_Pro' ) && method_exists( 'Backup_Lite_Pro', 'is_pro_active' ) && Backup_Lite_Pro::is_pro_active() ) {
+        if ( function_exists( 'backup_lite_has_pro_features' ) && backup_lite_has_pro_features() ) {
             if ( ! isset( $schedule['cron_pattern'] ) ) {
                 $schedule['cron_pattern'] = '';
             }
@@ -887,7 +913,7 @@ class Backup_Lite_Schedule_Handler {
      * @return array
      */
     public static function get_ai_recommendations() {
-        if ( ! Backup_Lite_Pro::is_pro_active() ) {
+        if ( ! function_exists( 'backup_lite_has_pro_features' ) || ! backup_lite_has_pro_features() ) {
             return [
                 'error'   => 'pro_required',
                 'message' => __( 'This feature requires Museder RestoreOne PRO.', 'museder-restoreone' ),

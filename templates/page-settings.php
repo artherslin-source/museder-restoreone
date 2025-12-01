@@ -12,7 +12,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 $settings         = Backup_Lite_Settings::get_settings();
 $roles            = get_editable_roles();
 $logs_url         = admin_url( 'admin.php?page=backup-lite-logs' );
-$is_pro           = class_exists( 'Backup_Lite_Pro' ) && Backup_Lite_Pro::is_pro_active();
+    $is_pro           = function_exists( 'backup_lite_has_pro_features' ) && backup_lite_has_pro_features();
 $backup_dir       = backup_lite_get_backup_dir();
 $backup_writable  = wp_is_writable( $backup_dir );
 $temp_dir         = function_exists( 'get_temp_dir' ) ? get_temp_dir() : ( function_exists( 'sys_get_temp_dir' ) ? sys_get_temp_dir() : ABSPATH );
@@ -89,6 +89,18 @@ $selected_role    = isset( $settings['min_role'], $roles[ $settings['min_role'] 
                     </div>
                     <div class="bl-toggle bl-toggle--disabled">
                         <input type="checkbox" id="bl-setting-debug-mode" disabled />
+                        <span class="bl-toggle-slider" aria-hidden="true"></span>
+                    </div>
+                </label>
+                <label class="bl-toggle-row">
+                    <div>
+                        <span class="bl-toggle-title">
+                            <?php esc_html_e( 'Enable completion sound for backup and restore', 'museder-restoreone' ); ?>
+                        </span>
+                        <p class="bl-toggle-description"><?php esc_html_e( 'Play a sound notification when backup or restore operations complete.', 'museder-restoreone' ); ?></p>
+                    </div>
+                    <div class="bl-toggle">
+                        <input type="checkbox" id="bl-setting-enable-sounds" value="1" <?php checked( 1, ! empty( $settings['enable_sounds'] ) ); ?> />
                         <span class="bl-toggle-slider" aria-hidden="true"></span>
                     </div>
                 </label>

@@ -233,7 +233,9 @@ class Backup_Lite_AI1WM_Converter {
                 $backup_dir = backup_lite_get_backup_dir();
                 $base_name = pathinfo( $source_file, PATHINFO_FILENAME );
                 $output_file = trailingslashit( $backup_dir ) . sanitize_file_name( $base_name . '-converted.zip' );
-                $output_file = wp_unique_filename( $backup_dir, basename( $output_file ) );
+                // wp_unique_filename returns only filename, so we need to prepend the directory
+                $unique_filename = wp_unique_filename( $backup_dir, basename( $output_file ) );
+                $output_file = trailingslashit( $backup_dir ) . $unique_filename;
             }
 
             $zip_result = self::create_output_zip( $reorganized_dir, $output_file );

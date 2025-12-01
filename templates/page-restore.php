@@ -14,6 +14,14 @@ if ( $safe_mode_active ) {
     $prev_plugins = get_option( 'backup_lite_prev_active_plugins', [] );
     $prev_plugins_count = is_array( $prev_plugins ) ? count( $prev_plugins ) : 0;
 }
+
+// Get AI settings and last restore guide
+$ai_settings = Museder_AI_Service::get_settings();
+// Use global helper for license tier (considers Developer Mode)
+$ai_license_tier = function_exists( 'backup_lite_get_effective_license_tier' ) 
+    ? backup_lite_get_effective_license_tier() 
+    : ( isset( $ai_settings['license_tier'] ) ? $ai_settings['license_tier'] : 'free' );
+$last_restore_guide = Museder_AI_Service::get_last_restore_guide();
 ?>
     <div class="wrap backup-lite-restore">
         <h1>🧩 <?php esc_html_e( 'Restore Center', 'museder-restoreone' ); ?></h1>
@@ -69,6 +77,177 @@ if ( $safe_mode_active ) {
             </div>
         </div>
 
+        <!-- Restore AI Guide (Preview) -->
+        <section class="backup-lite-card" id="museder-ai-restore-guide-card" style="margin-bottom: 24px;">
+            <h2>🤖 <?php esc_html_e( 'Restore AI Guide (Preview)', 'museder-restoreone' ); ?></h2>
+            <p class="description">
+                <?php esc_html_e( 'Use AI to generate a step-by-step guide before running a restore, based on the selected backup and recent logs.', 'museder-restoreone' ); ?>
+            </p>
+            
+            <?php if ( ! empty( $museder_restoreone_summary ) && ! empty( $museder_restoreone_summary['name'] ) ) : ?>
+                <p class="description" style="font-size: 13px; color: #666; margin-top: 8px;">
+                    <?php
+                    printf(
+                        /* translators: %s: backup file name */
+                        esc_html__( 'Currently analyzing backup: %s', 'museder-restoreone' ),
+                        '<strong>' . esc_html( $museder_restoreone_summary['name'] ) . '</strong>'
+                    );
+                    ?>
+                </p>
+            <?php else : ?>
+                <p class="description" style="font-size: 13px; color: #d63638; margin-top: 8px;">
+                    <?php esc_html_e( 'No backup is selected yet. Please select or upload a backup in Step 1 below before using the Restore AI Guide.', 'museder-restoreone' ); ?>
+                </p>
+            <?php endif; ?>
+            
+            <button
+                type="button"
+                id="museder-ai-restore-guide-run"
+                class="button button-primary"
+                data-nonce="<?php echo esc_attr( wp_create_nonce( 'museder_ai_restore_guide' ) ); ?>"
+                data-backup-id="<?php echo ! empty( $museder_restoreone_summary ) && ! empty( $museder_restoreone_summary['name'] ) ? esc_attr( $museder_restoreone_summary['name'] ) : ''; ?>"
+            >
+                <?php esc_html_e( 'Ask AI for Restore Steps', 'museder-restoreone' ); ?>
+            </button>
+            
+            <div id="museder-ai-restore-guide-loading" style="display: none; margin-top: 16px;">
+                <span class="spinner is-active"></span>
+                <span><?php esc_html_e( 'Generating restore guide…', 'museder-restoreone' ); ?></span>
+            </div>
+            
+            <div id="museder-ai-restore-guide-error" class="backup-lite-messages is-error" style="display: none; margin-top: 16px;">
+                <p id="museder-ai-restore-guide-error-message"></p>
+            </div>
+            
+            <div id="museder-ai-restore-guide-results" style="<?php echo ! empty( $last_restore_guide['summary'] ) ? 'display: block;' : 'display: none;'; ?> margin-top: 16px; padding: 16px; background: #f9f9f9; border-radius: 4px;">
+                <h3 style="margin-top: 0;"><?php esc_html_e( 'Restore Guide', 'museder-restoreone' ); ?></h3>
+                
+                <?php if ( ! empty( $last_restore_guide['backup_id'] ) && ! empty( $museder_restoreone_summary ) && $last_restore_guide['backup_id'] !== $museder_restoreone_summary['name'] ) : ?>
+                    <p style="font-size: 12px; color: #666; font-style: italic; margin-bottom: 12px;">
+                        <?php
+                        printf(
+                            esc_html__( 'This guide was generated for backup %s.', 'museder-restoreone' ),
+                            '<strong>' . esc_html( $last_restore_guide['backup_id'] ) . '</strong>'
+                        );
+                        ?>
+                    </p>
+                <?php endif; ?>
+                
+                <div id="museder-ai-restore-guide-mode" style="margin-bottom: 12px; font-size: 12px; color: #666; font-style: italic;">
+                    <?php if ( ! empty( $last_restore_guide['summary'] ) ) : ?>
+                        <?php echo esc_html( $last_restore_guide['mode'] === 'demo' ? 'Demo mode (no external AI call).' : 'Powered by Museder AI (OpenAI).' ); ?>
+                    <?php endif; ?>
+                </div>
+                
+                <div id="museder-ai-restore-guide-summary" style="margin-bottom: 12px;">
+                    <strong><?php esc_html_e( 'Summary:', 'museder-restoreone' ); ?></strong>
+                    <p id="museder-ai-restore-guide-summary-text" style="margin: 8px 0;">
+                        <?php echo ! empty( $last_restore_guide['summary'] ) ? esc_html( $last_restore_guide['summary'] ) : ''; ?>
+                    </p>
+                </div>
+                
+                <div id="museder-ai-restore-guide-risk" style="margin-bottom: 12px;">
+                    <strong><?php esc_html_e( 'Risk Level:', 'museder-restoreone' ); ?></strong>
+                    <span id="museder-ai-restore-guide-risk-badge" style="display: inline-block; margin-left: 8px; padding: 4px 12px; border-radius: 4px; font-weight: 600; <?php
+                        if ( ! empty( $last_restore_guide['risk_level'] ) ) {
+                            $risk = strtolower( $last_restore_guide['risk_level'] );
+                            $risk_colors = [
+                                'low' => [ 'bg' => '#d4edda', 'color' => '#155724', 'text' => __( 'Low', 'museder-restoreone' ) ],
+                                'medium' => [ 'bg' => '#fff3cd', 'color' => '#856404', 'text' => __( 'Medium', 'museder-restoreone' ) ],
+                                'high' => [ 'bg' => '#f8d7da', 'color' => '#721c24', 'text' => __( 'High', 'museder-restoreone' ) ],
+                            ];
+                            $risk_style = $risk_colors[ $risk ] ?? $risk_colors['medium'];
+                            echo 'background-color: ' . esc_attr( $risk_style['bg'] ) . '; color: ' . esc_attr( $risk_style['color'] ) . ';';
+                        }
+                    ?>">
+                        <?php
+                        if ( ! empty( $last_restore_guide['risk_level'] ) ) {
+                            $risk = strtolower( $last_restore_guide['risk_level'] );
+                            $risk_texts = [
+                                'low' => __( 'Low', 'museder-restoreone' ),
+                                'medium' => __( 'Medium', 'museder-restoreone' ),
+                                'high' => __( 'High', 'museder-restoreone' ),
+                            ];
+                            echo esc_html( $risk_texts[ $risk ] ?? $risk_texts['medium'] );
+                        }
+                        ?>
+                    </span>
+                </div>
+                
+                <!-- Steps (new format with title, description, priority) -->
+                <div id="museder-ai-restore-guide-steps" style="margin-top: 16px; margin-bottom: 16px;">
+                    <strong><?php esc_html_e( 'Step-by-Step Guide:', 'museder-restoreone' ); ?></strong>
+                    <ol id="museder-ai-restore-guide-steps-list" style="margin: 8px 0; padding-left: 20px;">
+                        <?php
+                        if ( ! empty( $last_restore_guide['steps'] ) && is_array( $last_restore_guide['steps'] ) ) {
+                            $display_steps = ( $ai_license_tier === 'free' ) ? array_slice( $last_restore_guide['steps'], 0, 2 ) : $last_restore_guide['steps'];
+                            foreach ( $display_steps as $step ) {
+                                if ( is_array( $step ) && isset( $step['title'] ) ) {
+                                    echo '<li style="margin-bottom: 8px;">';
+                                    echo '<strong>' . esc_html( $step['title'] ) . ':</strong> ';
+                                    echo esc_html( $step['description'] ?? '' );
+                                    if ( ! empty( $step['priority'] ) && $step['priority'] !== 'normal' ) {
+                                        $priority_style = '';
+                                        $priority_text = '';
+                                        if ( $step['priority'] === 'high' ) {
+                                            $priority_style = 'background-color: #f8d7da; color: #721c24;';
+                                            $priority_text = __( 'High Priority', 'museder-restoreone' );
+                                        } elseif ( $step['priority'] === 'optional' ) {
+                                            $priority_style = 'background-color: #e2e3e5; color: #383d41;';
+                                            $priority_text = __( 'Optional', 'museder-restoreone' );
+                                        }
+                                        if ( $priority_style ) {
+                                            echo ' <span style="margin-left: 8px; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600; ' . esc_attr( $priority_style ) . '">' . esc_html( $priority_text ) . '</span>';
+                                        }
+                                    }
+                                    echo '</li>';
+                                }
+                            }
+                        }
+                        ?>
+                    </ol>
+                    <?php if ( $ai_license_tier === 'free' && ! empty( $last_restore_guide['steps'] ) && count( $last_restore_guide['steps'] ) > 2 ) : ?>
+                        <p style="font-size: 12px; color: #666; font-style: italic; margin-top: 8px;">
+                            <?php esc_html_e( 'Upgrade to Pro to view full restore guide.', 'museder-restoreone' ); ?>
+                        </p>
+                    <?php endif; ?>
+                </div>
+                
+                <!-- Warnings -->
+                <div id="museder-ai-restore-guide-warnings" style="margin-top: 16px; margin-bottom: 16px; <?php echo ( empty( $last_restore_guide['warnings'] ) || ! is_array( $last_restore_guide['warnings'] ) || count( $last_restore_guide['warnings'] ) === 0 ) ? 'display: none;' : ''; ?>">
+                    <strong style="color: #856404;"><?php esc_html_e( '⚠️ Warnings:', 'museder-restoreone' ); ?></strong>
+                    <ul id="museder-ai-restore-guide-warnings-list" style="margin: 8px 0; padding-left: 20px; color: #856404;">
+                        <?php
+                        if ( ! empty( $last_restore_guide['warnings'] ) && is_array( $last_restore_guide['warnings'] ) ) {
+                            foreach ( $last_restore_guide['warnings'] as $warning ) {
+                                echo '<li>' . esc_html( $warning ) . '</li>';
+                            }
+                        }
+                        ?>
+                    </ul>
+                </div>
+                
+                <!-- Notes -->
+                <div id="museder-ai-restore-guide-notes" style="margin-top: 16px; margin-bottom: 16px; <?php echo ( empty( $last_restore_guide['notes'] ) || ! is_array( $last_restore_guide['notes'] ) || count( $last_restore_guide['notes'] ) === 0 ) ? 'display: none;' : ''; ?>">
+                    <strong style="color: #666;"><?php esc_html_e( '📝 Notes:', 'museder-restoreone' ); ?></strong>
+                    <ul id="museder-ai-restore-guide-notes-list" style="margin: 8px 0; padding-left: 20px; color: #666; font-size: 13px;">
+                        <?php
+                        if ( ! empty( $last_restore_guide['notes'] ) && is_array( $last_restore_guide['notes'] ) ) {
+                            foreach ( $last_restore_guide['notes'] as $note ) {
+                                echo '<li>' . esc_html( $note ) . '</li>';
+                            }
+                        }
+                        ?>
+                    </ul>
+                </div>
+            </div>
+            
+            <div id="museder-ai-restore-guide-error" style="display: none; margin-top: 16px; padding: 12px; background: #ffeaea; border-left: 4px solid #dc3232; border-radius: 4px; color: #721c24;">
+                <strong><?php esc_html_e( 'Error:', 'museder-restoreone' ); ?></strong>
+                <span id="museder-ai-restore-guide-error-message"></span>
+            </div>
+        </section>
+
         <section class="backup-lite-card restore-methods restore-step-card" data-step-card="upload">
             <div class="step-card-header">
                 <div>
@@ -115,6 +294,12 @@ if ( $safe_mode_active ) {
                     <p><strong><?php esc_html_e( 'SHA1:', 'museder-restoreone' ); ?></strong> <code><?php echo esc_html( $museder_restoreone_summary['sha1'] ); ?></code></p>
                 <?php endif; ?>
                 <p><strong><?php esc_html_e( 'Source:', 'museder-restoreone' ); ?></strong> <?php echo esc_html( ucfirst( $museder_restoreone_summary['source'] ) ); ?></p>
+                <p class="description" style="margin-top: 12px; font-size: 13px; color: #666;">
+                    <?php esc_html_e( 'To analyze or restore a different backup, choose it below in Step 1.', 'museder-restoreone' ); ?>
+                    <a href="#backup-lite-source" class="button-link backup-lite-change-backup" style="margin-left: 8px;">
+                        <?php esc_html_e( 'Change backup…', 'museder-restoreone' ); ?>
+                    </a>
+                </p>
             <?php else : ?>
                 <p><?php esc_html_e( 'No file selected yet.', 'museder-restoreone' ); ?></p>
             <?php endif; ?>
@@ -206,3 +391,21 @@ if ( $safe_mode_active ) {
         </table>
     </section>
 </div>
+
+<?php
+// Audio elements for completion sounds
+// Source: assets/audio/backup-complete.mp3 and restore-complete.mp3
+$settings = Backup_Lite_Settings::get_settings();
+$enable_sounds = ! empty( $settings['enable_sounds'] );
+
+if ( $enable_sounds ) :
+    ?>
+    <audio id="backup-lite-sound-backup-complete" preload="auto">
+        <source src="<?php echo esc_url( BACKUP_LITE_URL . 'assets/audio/backup-complete.mp3' ); ?>" type="audio/mpeg">
+    </audio>
+    <audio id="backup-lite-sound-restore-complete" preload="auto">
+        <source src="<?php echo esc_url( BACKUP_LITE_URL . 'assets/audio/restore-complete.mp3' ); ?>" type="audio/mpeg">
+    </audio>
+    <?php
+endif;
+?>

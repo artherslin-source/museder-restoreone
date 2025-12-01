@@ -127,7 +127,7 @@ if ( $museder_restoreone_total_schedules ) {
 
     <?php
     // AI Smart Schedule Advisor (PRO Feature)
-    $is_pro = Backup_Lite_Pro::is_pro_active();
+    $is_pro = function_exists( 'backup_lite_has_pro_features' ) && backup_lite_has_pro_features();
     ?>
     <?php if ( ! $is_pro ) : ?>
         <div class="backup-lite-card" style="background: linear-gradient(135deg, #facc15 0%, #fbbf24 100%); border: none; margin-bottom: 24px;">

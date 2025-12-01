@@ -26,9 +26,13 @@ class Backup_Lite_UI {
         add_action( 'wp_ajax_backup_lite_get_job_status', [ __CLASS__, 'ajax_get_backup_job_status' ] );
         add_action( 'wp_ajax_backup_lite_continue_backup_job', [ __CLASS__, 'ajax_continue_backup_job' ] );
         add_action( 'wp_ajax_backup_lite_cancel_backup_job', [ __CLASS__, 'ajax_cancel_backup_job' ] );
+        add_action( 'wp_ajax_backup_lite_clear_active_job', [ __CLASS__, 'ajax_clear_active_job' ] );
+        add_action( 'wp_ajax_backup_lite_upload_existing_backup', [ __CLASS__, 'ajax_upload_existing_backup' ] );
         add_action( 'wp_ajax_backup_lite_refresh_nonce', [ __CLASS__, 'ajax_refresh_nonce' ] );
         add_action( 'wp_ajax_museder_ai_demo_site_scan', [ __CLASS__, 'ajax_ai_demo_site_scan' ] );
         add_action( 'wp_ajax_museder_ai_backup_report', [ __CLASS__, 'ajax_ai_backup_report' ] );
+        add_action( 'wp_ajax_museder_ai_analyze_error_logs', [ __CLASS__, 'ajax_ai_analyze_error_logs' ] );
+        add_action( 'wp_ajax_museder_ai_restore_guide', [ __CLASS__, 'ajax_ai_restore_guide' ] );
 
         add_action( 'admin_post_backup_lite_download_log', [ __CLASS__, 'handle_log_download' ] );
         add_action( 'admin_post_backup_lite_download_backup', [ __CLASS__, 'handle_backup_download' ] );
@@ -93,7 +97,7 @@ class Backup_Lite_UI {
         );
 
         // Localize PRO status for frontend
-        $is_pro = class_exists( 'Backup_Lite_Pro' ) && Backup_Lite_Pro::is_pro_active();
+        $is_pro = function_exists( 'backup_lite_has_pro_features' ) && backup_lite_has_pro_features();
         $settings = Backup_Lite_Settings::get_settings();
 
         wp_localize_script(
@@ -314,7 +318,16 @@ class Backup_Lite_UI {
     }
 
     public static function handle_backup_request() {
-        self::verify_ajax_request();
+        // Cloud Storage: handle upload_to_cloud flag - permission and nonce check
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_die( esc_html__( 'You do not have permission to run backups.', 'museder-restoreone' ) );
+        }
+
+        if ( ! isset( $_POST['backup_lite_run_backup_nonce'] )
+             || ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['backup_lite_run_backup_nonce'] ) ), 'backup_lite_run_backup' )
+        ) {
+            wp_die( esc_html__( 'Security check failed.', 'museder-restoreone' ) );
+        }
 
         $options = self::get_backup_options_from_request();
 
@@ -333,41 +346,162 @@ class Backup_Lite_UI {
     public static function ajax_start_backup_job() {
         self::verify_ajax_request();
 
+        // Check if a backup job is already running
+        $current_job = get_transient( 'backup_lite_current_job' );
+        if ( $current_job && isset( $current_job['status'] ) && 'running' === $current_job['status'] ) {
+            // @plugin-check: escaped
+            wp_send_json_error( [
+                'code'    => 'backup_already_running',
+                'message' => esc_html__( 'A backup is already running. Please wait until it finishes before starting a new one.', 'museder-restoreone' ),
+            ], 409 );
+        }
+
+        // Server-side guard: prevent duplicate job starts within 3 seconds
+        $options = self::get_backup_options_from_request();
+        $job_key = self::generate_job_key( $options );
+        $lock_key = 'backup_lite_job_lock_' . md5( $job_key );
+        
+        $existing_lock = get_transient( $lock_key );
+        if ( $existing_lock ) {
+            backup_lite_log( 'warning', 'Duplicate backup start request detected and blocked.', [
+                'job_key' => $job_key,
+                'lock_key' => $lock_key,
+            ] );
+            // @plugin-check: escaped
+            wp_send_json_error( [
+                'code'    => 'duplicate_start',
+                'message' => esc_html__( 'Backup job already started.', 'museder-restoreone' ),
+            ], 409 );
+        }
+
+        // Set lock for 3 seconds to prevent duplicate starts
+        set_transient( $lock_key, time(), 3 );
+
         try {
-            $options = self::get_backup_options_from_request();
-            $job     = Backup_Lite_Backup_Jobs::create_job( $options );
+            // Only create full backup job if create_dual_version is false
+            // If create_dual_version is true, the PRO feature will handle creating both snapshot and full
+            if ( ! empty( $options['create_dual_version'] ) && $options['create_dual_version'] ) {
+                // PRO feature: create dual version (snapshot + full)
+                // This will be handled by PRO feature logic if available
+                backup_lite_log( 'info', 'Dual version backup requested (snapshot + full).', [
+                    'create_dual_version' => 'true',
+                ] );
+            } else {
+                // Only create full backup
+                backup_lite_log( 'info', 'Full backup requested (no snapshot).', [
+                    'create_dual_version' => 'false',
+                ] );
+            }
+
+            $job = Backup_Lite_Backup_Jobs::create_job( $options );
+
+            // Mark job as running in transient (for server-side protection)
+            self::mark_job_running( $job['id'], $options );
 
             wp_send_json_success( [
                 'job'     => Backup_Lite_Backup_Jobs::format_job_payload( $job ),
                 // @plugin-check: escaped
                 'message' => esc_html__( 'Backup job created. Processing has started in the background.', 'museder-restoreone' ),
             ] );
-        } catch ( Exception $exception ) {
+        } catch ( Throwable $exception ) {
+            // Clear lock on error
+            delete_transient( $lock_key );
+            
+            // Clear job running state on error
+            self::clear_job_running();
+            
             backup_lite_log( 'error', 'Failed to start backup job.', [
                 'error' => $exception->getMessage(),
+                'trace' => $exception->getTraceAsString(),
             ] );
 
-            // @plugin-check: escaped - exception message is user-facing error
-            wp_send_json_error( [ 'message' => esc_html( $exception->getMessage() ) ], 500 );
+            // @plugin-check: escaped
+            wp_send_json_error( [
+                'code'    => 'backup_internal_error',
+                'message' => esc_html__( 'An internal error occurred while starting the backup. Please check the Logs screen for details.', 'museder-restoreone' ),
+            ], 500 );
         }
     }
 
+    /**
+     * Generate a unique key for a backup job based on options.
+     * Used to detect duplicate start requests.
+     * 
+     * @param array $options Backup options.
+     * @return string
+     */
+    private static function generate_job_key( $options ) {
+        $key_parts = [
+            'label' => isset( $options['label'] ) ? $options['label'] : '',
+            'encrypt' => ! empty( $options['encrypt'] ) ? '1' : '0',
+            'dual' => ! empty( $options['create_dual_version'] ) ? '1' : '0',
+            'dest_s3' => ! empty( $options['dest_s3'] ) ? '1' : '0',
+            'timestamp' => time(), // Round to nearest 3 seconds to catch near-simultaneous requests
+        ];
+        $key_parts['timestamp'] = floor( $key_parts['timestamp'] / 3 ) * 3;
+        return wp_json_encode( $key_parts );
+    }
+
+    /**
+     * Mark a backup job as running in transient.
+     * 
+     * @param string $job_id Job ID.
+     * @param array  $options Backup options used for this job.
+     */
+    private static function mark_job_running( $job_id, $options ) {
+        $data = array(
+            'job_id'  => $job_id,
+            'started' => time(),
+            'status'  => 'running',
+            'options' => $options, // Snapshot of options used for this backup
+        );
+
+        set_transient( 'backup_lite_current_job', $data, HOUR_IN_SECONDS );
+    }
+
+    /**
+     * Clear the running job transient.
+     */
+    public static function clear_job_running() {
+        delete_transient( 'backup_lite_current_job' );
+    }
+
     public static function ajax_get_backup_job_status() {
-        self::verify_ajax_request();
+        try {
+            self::verify_ajax_request();
 
-        $job_id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
-        if ( empty( $job_id ) ) {
+            $job_id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
+            if ( empty( $job_id ) ) {
+                // @plugin-check: escaped
+                wp_send_json_error( [ 'message' => esc_html__( 'Job ID is required.', 'museder-restoreone' ) ] );
+                return;
+            }
+
+            $payload = Backup_Lite_Backup_Jobs::get_job_payload( $job_id );
+            if ( ! $payload ) {
+                // @plugin-check: escaped
+                wp_send_json_error( [ 'message' => esc_html__( 'Backup job not found or already completed.', 'museder-restoreone' ) ] );
+                return;
+            }
+
+            // Ensure percent is 100 when status is completed
+            if ( isset( $payload['status'] ) && 'completed' === $payload['status'] ) {
+                $payload['percentage'] = 100;
+            }
+
+            wp_send_json_success( [ 'job' => $payload ] );
+        } catch ( Throwable $e ) {
+            backup_lite_log( 'error', 'Backup status check failed.', [
+                'message' => $e->getMessage(),
+                'trace'   => $e->getTraceAsString(),
+            ] );
+
             // @plugin-check: escaped
-            wp_send_json_error( [ 'message' => esc_html__( 'Job ID is required.', 'museder-restoreone' ) ], 400 );
+            wp_send_json_error( [
+                'code'    => 'backup_internal_error',
+                'message' => esc_html__( 'An internal error occurred during backup status check. Please check the Logs screen for details.', 'museder-restoreone' ),
+            ] );
         }
-
-        $payload = Backup_Lite_Backup_Jobs::get_job_payload( $job_id );
-        if ( ! $payload ) {
-            // @plugin-check: escaped
-            wp_send_json_error( [ 'message' => esc_html__( 'Backup job not found or already completed.', 'museder-restoreone' ) ], 404 );
-        }
-
-        wp_send_json_success( [ 'job' => $payload ] );
     }
 
     public static function ajax_continue_backup_job() {
@@ -376,13 +510,13 @@ class Backup_Lite_UI {
         $job_id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
         if ( empty( $job_id ) ) {
             // @plugin-check: escaped
-            wp_send_json_error( [ 'message' => esc_html__( 'Job ID is required.', 'museder-restoreone' ) ], 400 );
+            wp_send_json_error( [ 'message' => esc_html__( 'Job ID is required.', 'museder-restoreone' ) ] );
         }
 
         $job = Backup_Lite_Backup_Jobs::process_job_immediately( $job_id, Backup_Lite_Backup_Jobs::AJAX_BATCH_FILES, Backup_Lite_Backup_Jobs::AJAX_BATCH_BYTES );
         if ( ! $job ) {
             // @plugin-check: escaped
-            wp_send_json_error( [ 'message' => esc_html__( 'Backup job not found.', 'museder-restoreone' ) ], 404 );
+            wp_send_json_error( [ 'message' => esc_html__( 'Backup job not found.', 'museder-restoreone' ) ] );
         }
 
         wp_send_json_success( [
@@ -393,21 +527,42 @@ class Backup_Lite_UI {
     }
 
     public static function ajax_cancel_backup_job() {
-        self::verify_ajax_request();
+        try {
+            self::verify_ajax_request();
 
-        $job_id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
-        if ( empty( $job_id ) ) {
+            $job_id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
+            if ( empty( $job_id ) ) {
+                // @plugin-check: escaped
+                wp_send_json_error( [ 'message' => esc_html__( 'Job ID is required.', 'museder-restoreone' ) ] );
+                return;
+            }
+
+            if ( ! Backup_Lite_Backup_Jobs::cancel_job( $job_id ) ) {
+                // @plugin-check: escaped
+                wp_send_json_error( [ 'message' => esc_html__( 'Unable to cancel backup job.', 'museder-restoreone' ) ] );
+                return;
+            }
+
+            // Clear the current job transient to allow new backups
+            self::clear_job_running();
+
             // @plugin-check: escaped
-            wp_send_json_error( [ 'message' => esc_html__( 'Job ID is required.', 'museder-restoreone' ) ], 400 );
-        }
+            wp_send_json_success( [
+                'status'  => 'cancelled',
+                'message' => esc_html__( 'Backup job cancelled.', 'museder-restoreone' ),
+            ] );
+        } catch ( Throwable $e ) {
+            backup_lite_log( 'error', 'Cancel backup job failed.', [
+                'message' => $e->getMessage(),
+                'trace'   => $e->getTraceAsString(),
+            ] );
 
-        if ( ! Backup_Lite_Backup_Jobs::cancel_job( $job_id ) ) {
             // @plugin-check: escaped
-            wp_send_json_error( [ 'message' => esc_html__( 'Unable to cancel backup job.', 'museder-restoreone' ) ], 404 );
+            wp_send_json_error( [
+                'code'    => 'backup_internal_error',
+                'message' => esc_html__( 'Failed to cancel backup job. Please check the Logs screen for details.', 'museder-restoreone' ),
+            ], 500 );
         }
-
-        // @plugin-check: escaped
-        wp_send_json_success( [ 'message' => esc_html__( 'Backup job cancelled.', 'museder-restoreone' ) ] );
     }
 
     public static function handle_restore_request() {
@@ -477,13 +632,187 @@ class Backup_Lite_UI {
         wp_send_json_error( $response );
     }
 
+    /**
+     * AJAX handler to upload an existing backup to S3.
+     */
+    public static function ajax_upload_existing_backup() {
+        try {
+            self::verify_ajax_request();
+
+            $filename = isset( $_POST['filename'] ) ? sanitize_file_name( wp_unslash( $_POST['filename'] ) ) : '';
+            if ( empty( $filename ) ) {
+                // @plugin-check: escaped
+                wp_send_json_error( [ 'message' => esc_html__( 'Backup filename is required.', 'museder-restoreone' ) ] );
+                return;
+            }
+
+            // Validate file path
+            $backup_dir = trailingslashit( backup_lite_get_backup_dir() );
+            $file_path = $backup_dir . basename( $filename );
+            $file_path = wp_normalize_path( $file_path );
+
+            // Security check: ensure file is within backup directory
+            if ( 0 !== strpos( $file_path, wp_normalize_path( $backup_dir ) ) ) {
+                // @plugin-check: escaped
+                wp_send_json_error( [ 'message' => esc_html__( 'Invalid backup file path.', 'museder-restoreone' ) ] );
+                return;
+            }
+
+            if ( ! file_exists( $file_path ) || ! is_readable( $file_path ) ) {
+                // @plugin-check: escaped
+                wp_send_json_error( [ 'message' => esc_html__( 'Backup file not found or not readable.', 'museder-restoreone' ) ] );
+                return;
+            }
+
+            // Check if S3 is configured
+            if ( ! class_exists( 'Backup_Lite_S3_Service' ) ) {
+                // @plugin-check: escaped
+                wp_send_json_error( [ 'message' => esc_html__( 'S3 service is not available.', 'museder-restoreone' ) ] );
+                return;
+            }
+
+            $s3_settings = backup_lite_get_s3_settings();
+            if ( empty( $s3_settings['enabled'] ) || empty( $s3_settings['bucket'] ) ) {
+                // @plugin-check: escaped
+                wp_send_json_error( [ 'message' => esc_html__( 'S3 is not configured. Please configure S3 settings first.', 'museder-restoreone' ) ] );
+                return;
+            }
+
+            // Upload to S3 using new S3 Uploader class
+            backup_lite_log( 'info', 'Manual S3 upload requested for existing backup.', [
+                'file' => $file_path,
+            ] );
+
+            // Use new Backup_Lite_S3_Uploader class (provides clean architecture for future multipart upload)
+            if ( ! class_exists( 'Backup_Lite_S3_Uploader' ) ) {
+                // Fallback to old method if new class not available
+                $s3_upload_result = self::upload_backup_to_s3_unified( $file_path );
+            } else {
+                $uploader = Backup_Lite_S3_Uploader::get_instance();
+                $s3_upload_result = $uploader->upload_backup_file( $file_path );
+                
+                // Convert result format to match expected format
+                if ( is_wp_error( $s3_upload_result ) ) {
+                    // Already in correct format
+                } elseif ( is_array( $s3_upload_result ) && isset( $s3_upload_result['status'] ) && 'success' === $s3_upload_result['status'] ) {
+                    // Convert to expected format with object_key
+                    $s3_upload_result = array(
+                        'status'    => 'success',
+                        'object_key' => isset( $s3_upload_result['object_key'] ) ? $s3_upload_result['object_key'] : '',
+                    );
+                } else {
+                    // Unexpected format, convert to WP_Error
+                    $s3_upload_result = new WP_Error( 's3_unexpected_result', __( 'S3 upload returned unexpected result.', 'museder-restoreone' ) );
+                }
+            }
+
+            // Handle result
+            if ( is_wp_error( $s3_upload_result ) ) {
+                // Upload failed
+                $error_code = $s3_upload_result->get_error_code();
+                $error_message = $s3_upload_result->get_error_message();
+                
+                // Update backup metadata with error
+                try {
+                    $metadata = Backup_Lite_Backup::get_backup_metadata( basename( $file_path ) );
+                    $metadata['s3_status'] = 'error';
+                    $metadata['s3_error'] = $error_code;
+                    Backup_Lite_Backup::store_backup_metadata( basename( $file_path ), $metadata );
+                } catch ( Throwable $meta_error ) {
+                    // Log but don't fail the response
+                    backup_lite_log( 'warning', 'Failed to update backup metadata after S3 upload error.', [
+                        'file' => $file_path,
+                        'meta_error' => $meta_error->getMessage(),
+                    ] );
+                }
+
+                backup_lite_log( 'error', 'Manual S3 upload failed.', [
+                    'file'   => $file_path,
+                    'error_code' => $error_code,
+                    'error_message' => $error_message,
+                ] );
+
+                // @plugin-check: escaped
+                wp_send_json_error( [
+                    'message' => esc_html__( 'S3 upload failed. Please check logs for details.', 'museder-restoreone' ),
+                    'reason'  => $error_code,
+                ] );
+            } else {
+                // Upload succeeded
+                try {
+                    $metadata = Backup_Lite_Backup::get_backup_metadata( basename( $file_path ) );
+                    $metadata['s3_status'] = 'success';
+                    if ( is_array( $s3_upload_result ) && ! empty( $s3_upload_result['object_key'] ) ) {
+                        $metadata['s3_object_key'] = $s3_upload_result['object_key'];
+                    }
+                    // Remove error status if it exists
+                    if ( isset( $metadata['s3_error'] ) ) {
+                        unset( $metadata['s3_error'] );
+                    }
+                    // Preserve existing metadata like duration
+                    Backup_Lite_Backup::store_backup_metadata( basename( $file_path ), $metadata );
+                } catch ( Throwable $meta_error ) {
+                    // Log but don't fail the response
+                    backup_lite_log( 'warning', 'Failed to update backup metadata after S3 upload success.', [
+                        'file' => $file_path,
+                        'meta_error' => $meta_error->getMessage(),
+                    ] );
+                }
+
+                backup_lite_log( 'info', 'Manual S3 upload completed successfully.', [
+                    'file'      => $file_path,
+                    'object_key' => is_array( $s3_upload_result ) && isset( $s3_upload_result['object_key'] ) ? $s3_upload_result['object_key'] : '',
+                ] );
+
+                // @plugin-check: escaped
+                wp_send_json_success( [
+                    'message'   => esc_html__( 'Backup uploaded to S3 successfully.', 'museder-restoreone' ),
+                    'object_key' => is_array( $s3_upload_result ) && isset( $s3_upload_result['object_key'] ) ? $s3_upload_result['object_key'] : '',
+                ] );
+            }
+        } catch ( Throwable $e ) {
+            // Catch any unhandled exceptions/errors
+            backup_lite_log( 'error', 'Manual S3 upload fatal error.', [
+                'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'trace'   => $e->getTraceAsString(),
+            ] );
+            
+            // Also log to PHP error log for easier debugging
+            error_log( '[Backup Lite] Manual S3 upload fatal error: ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine() );
+
+            // @plugin-check: escaped
+            wp_send_json_error( [
+                'message' => esc_html__( 'Manual S3 upload failed. Please check logs for details.', 'museder-restoreone' ),
+                'code' => 'fatal_error',
+            ] );
+        }
+    }
+
+    /**
+     * Public wrapper for unified S3 upload method.
+     * 
+     * @param string $file_path Absolute path to backup archive file.
+     * @return array|WP_Error On success, returns array with 'status' => 'success' and 'object_key'. On failure, returns WP_Error.
+     */
+    public static function upload_backup_to_s3_unified( $file_path ) {
+        // Call the public static method in Backup_Lite_Backup
+        if ( class_exists( 'Backup_Lite_Backup' ) && method_exists( 'Backup_Lite_Backup', 'upload_backup_to_s3' ) ) {
+            return Backup_Lite_Backup::upload_backup_to_s3( $file_path );
+        }
+        
+        // Fallback: return error if method not available
+        return new WP_Error( 'method_unavailable', __( 'S3 upload method is not available.', 'museder-restoreone' ) );
+    }
+
     public static function handle_restore_existing() {
         self::verify_ajax_request();
 
         $filename = isset( $_POST['filename'] ) ? sanitize_text_field( wp_unslash( $_POST['filename'] ) ) : '';
         if ( empty( $filename ) ) {
             // @plugin-check: escaped
-            wp_send_json_error( [ 'message' => esc_html__( 'Backup filename not provided.', 'museder-restoreone' ) ], 400 );
+            wp_send_json_error( [ 'message' => esc_html__( 'Backup filename not provided.', 'museder-restoreone' ) ] );
         }
 
         $backup_dir = backup_lite_get_backup_dir();
@@ -492,12 +821,12 @@ class Backup_Lite_UI {
 
         if ( ! file_exists( $file_path ) || ! is_readable( $file_path ) ) {
             // @plugin-check: escaped
-            wp_send_json_error( [ 'message' => esc_html__( 'Backup file not found or unreadable.', 'museder-restoreone' ) ], 404 );
+            wp_send_json_error( [ 'message' => esc_html__( 'Backup file not found or unreadable.', 'museder-restoreone' ) ] );
         }
 
         if ( strpos( wp_normalize_path( $file_path ), wp_normalize_path( $backup_dir ) ) !== 0 ) {
             // @plugin-check: escaped
-            wp_send_json_error( [ 'message' => esc_html__( 'Invalid backup file path.', 'museder-restoreone' ) ], 403 );
+            wp_send_json_error( [ 'message' => esc_html__( 'Invalid backup file path.', 'museder-restoreone' ) ] );
         }
 
         $options = [];
@@ -551,7 +880,7 @@ class Backup_Lite_UI {
         $filename = isset( $_POST['filename'] ) ? sanitize_text_field( wp_unslash( $_POST['filename'] ) ) : '';
         if ( empty( $filename ) ) {
             // @plugin-check: escaped
-            wp_send_json_error( [ 'message' => esc_html__( 'Backup filename not provided.', 'museder-restoreone' ) ], 400 );
+            wp_send_json_error( [ 'message' => esc_html__( 'Backup filename not provided.', 'museder-restoreone' ) ] );
         }
 
         $backup_dir = backup_lite_get_backup_dir();
@@ -560,12 +889,12 @@ class Backup_Lite_UI {
 
         if ( ! file_exists( $file_path ) ) {
             // @plugin-check: escaped
-            wp_send_json_error( [ 'message' => esc_html__( 'Backup file not found.', 'museder-restoreone' ) ], 404 );
+            wp_send_json_error( [ 'message' => esc_html__( 'Backup file not found.', 'museder-restoreone' ) ] );
         }
 
         if ( strpos( wp_normalize_path( $file_path ), wp_normalize_path( $backup_dir ) ) !== 0 ) {
             // @plugin-check: escaped
-            wp_send_json_error( [ 'message' => esc_html__( 'Invalid backup file path.', 'museder-restoreone' ) ], 403 );
+            wp_send_json_error( [ 'message' => esc_html__( 'Invalid backup file path.', 'museder-restoreone' ) ] );
         }
 
         // @plugin-check: allowed - required for backup/restore file operations
@@ -576,7 +905,7 @@ class Backup_Lite_UI {
         } else {
             backup_lite_log( 'error', 'Failed to delete backup file.', [ 'file' => $file_path ] );
             // @plugin-check: escaped
-            wp_send_json_error( [ 'message' => esc_html__( 'Failed to delete backup file.', 'museder-restoreone' ) ], 500 );
+            wp_send_json_error( [ 'message' => esc_html__( 'Failed to delete backup file.', 'museder-restoreone' ) ] );
         }
     }
 
@@ -604,7 +933,7 @@ class Backup_Lite_UI {
 
         if ( empty( $filenames ) ) {
             // @plugin-check: escaped
-            wp_send_json_error( [ 'message' => esc_html__( 'No backup files selected.', 'museder-restoreone' ) ], 400 );
+            wp_send_json_error( [ 'message' => esc_html__( 'No backup files selected.', 'museder-restoreone' ) ] );
         }
 
         $backup_dir = backup_lite_get_backup_dir();
@@ -637,7 +966,7 @@ class Backup_Lite_UI {
         }
 
         if ( empty( $deleted ) && ! empty( $errors ) ) {
-            wp_send_json_error( [ 'errors' => $errors ], 500 );
+            wp_send_json_error( [ 'errors' => $errors ] );
         }
 
         wp_send_json_success( [
@@ -740,7 +1069,8 @@ class Backup_Lite_UI {
     private static function get_backup_options_from_request() {
         $options = [];
 
-        if ( Backup_Lite_Pro::is_pro_active() ) {
+        // PRO features (if Pro is active)
+        if ( function_exists( 'backup_lite_has_pro_features' ) && backup_lite_has_pro_features() ) {
             $backup_label = '';
             if ( isset( $_POST['backup_label'] ) ) {
                 $backup_label = sanitize_text_field( wp_unslash( $_POST['backup_label'] ) );
@@ -755,10 +1085,88 @@ class Backup_Lite_UI {
                 $options['encrypt'] = true;
             }
 
-            // @plugin-check: validated - checkbox value
-            if ( ! empty( $_POST['backup_dual'] ) ) {
+            // Dual version / snapshot: read from checkbox, default to false if not set
+            $raw_create_dual = isset( $_POST['backup_dual'] ) || isset( $_POST['backup_lite_create_dual'] )
+                ? ( isset( $_POST['backup_dual'] ) ? wp_unslash( $_POST['backup_dual'] ) : wp_unslash( $_POST['backup_lite_create_dual'] ) )
+                : '';
+            $options['create_dual_version'] = ( '1' === $raw_create_dual || 'on' === $raw_create_dual );
+            // Also set legacy format for backward compatibility
+            if ( $options['create_dual_version'] ) {
                 $options['dual_version'] = true;
             }
+        } else {
+            // If PRO is not active, default to false
+            $options['create_dual_version'] = false;
+        }
+        
+        // S3 cloud storage: handle upload_to_s3 flag
+        // Read checkbox value first, then validate in backup process
+        $raw_dest_s3 = '';
+        if ( isset( $_POST['backup_lite_dest_s3'] ) ) {
+            $dest_s3_value = wp_unslash( $_POST['backup_lite_dest_s3'] );
+            // Handle array case: when checkbox is checked, both hidden input (0) and checkbox (1) are sent
+            // Take the last value which should be the checkbox value
+            if ( is_array( $dest_s3_value ) ) {
+                $raw_dest_s3 = ! empty( $dest_s3_value ) ? end( $dest_s3_value ) : '0';
+            } else {
+                $raw_dest_s3 = $dest_s3_value;
+            }
+            $raw_dest_s3 = sanitize_text_field( $raw_dest_s3 );
+        }
+        
+        // Support both new field name (backup_lite_dest_s3) and legacy (backup_lite_upload_to_s3) for backward compatibility
+        if ( empty( $raw_dest_s3 ) && isset( $_POST['backup_lite_upload_to_s3'] ) ) {
+            // Legacy support
+            $legacy_value = wp_unslash( $_POST['backup_lite_upload_to_s3'] );
+            if ( is_array( $legacy_value ) ) {
+                $raw_dest_s3 = ! empty( $legacy_value ) ? end( $legacy_value ) : '0';
+            } else {
+                $raw_dest_s3 = $legacy_value;
+            }
+            $raw_dest_s3 = sanitize_text_field( $raw_dest_s3 );
+        }
+        
+        // Explicitly check for '1' or 'on' to set dest_s3 to true, otherwise false
+        $options['dest_s3'] = ( '1' === $raw_dest_s3 || 'on' === $raw_dest_s3 );
+        
+        // Log backup options collection for debugging (use info level to match user's log)
+        backup_lite_log(
+            'info',
+            'UI collected backup options.',
+            array(
+                'dest_s3_raw'         => $raw_dest_s3,
+                'dest_s3'             => $options['dest_s3'] ? 'true' : 'false',
+                'create_dual_version' => isset( $options['create_dual_version'] ) && $options['create_dual_version'] ? 'true' : 'false',
+            )
+        );
+        
+        // Unified destinations structure
+        $options['destinations'] = array(
+            'local' => true, // Always enabled
+            's3'    => $options['dest_s3'],
+        );
+        
+        // Also set legacy format for backward compatibility
+        if ( $options['dest_s3'] ) {
+            $options['upload_to_s3'] = true;
+        }
+        
+        // Legacy: backup_lite_upload_to_cloud (for backward compatibility)
+        if ( isset( $_POST['backup_lite_upload_to_cloud'] ) ) {
+            $upload_to_cloud = ( '1' === sanitize_text_field( wp_unslash( $_POST['backup_lite_upload_to_cloud'] ) ) );
+            if ( $upload_to_cloud ) {
+                $options['cloud_destination'] = true;
+                $options['upload_to_cloud'] = true;
+            }
+        }
+        
+        // Legacy: backup_lite_cloud_destination (for backward compatibility)
+        // @plugin-check: validated - checkbox value
+        if ( ! empty( $_POST['backup_lite_cloud_destination'] ) ) {
+            $options['cloud_destination'] = true;
+        }
+        
+        // Legacy cloud destinations (for backward compatibility)
             $backup_cloud_raw = '';
             if ( isset( $_POST['backup_cloud'] ) ) {
                 $backup_cloud_raw = wp_unslash( $_POST['backup_cloud'] );
@@ -771,7 +1179,6 @@ class Backup_Lite_UI {
                 } elseif ( is_string( $cloud ) ) {
                     $decoded = json_decode( $cloud, true );
                     $options['cloud_destinations'] = is_array( $decoded ) ? array_map( 'sanitize_text_field', $decoded ) : [];
-                }
             }
         }
 
@@ -781,7 +1188,7 @@ class Backup_Lite_UI {
     public static function verify_ajax_request() {
         if ( ! current_user_can( 'manage_options' ) ) {
             // @plugin-check: escaped
-            wp_send_json_error( [ 'message' => esc_html__( 'Unauthorized.', 'museder-restoreone' ) ], 403 );
+            wp_send_json_error( [ 'message' => esc_html__( 'Unauthorized.', 'museder-restoreone' ) ] );
         }
 
         $nonce = isset( $_REQUEST['nonce'] ) ? sanitize_text_field( wp_unslash( $_REQUEST['nonce'] ) ) : '';
@@ -791,8 +1198,7 @@ class Backup_Lite_UI {
                     'code'    => 'invalid_nonce',
                     // @plugin-check: escaped
                     'message' => esc_html__( 'Your session has expired. Refreshing security token…', 'museder-restoreone' ),
-                ],
-                403
+                ]
             );
         }
     }
@@ -800,7 +1206,7 @@ class Backup_Lite_UI {
     public static function ajax_refresh_nonce() {
         if ( ! current_user_can( 'manage_options' ) ) {
             // @plugin-check: escaped
-            wp_send_json_error( [ 'message' => esc_html__( 'Unauthorized.', 'museder-restoreone' ) ], 403 );
+            wp_send_json_error( [ 'message' => esc_html__( 'Unauthorized.', 'museder-restoreone' ) ] );
         }
 
         wp_send_json_success(
@@ -898,7 +1304,7 @@ class Backup_Lite_UI {
             $result = Museder_AI_Service::send_request( 'site_scan', $payload );
             $mode = 'live';
         } else {
-            $result = Museder_AI_Service::demo_response( 'site_scan', $payload );
+        $result = Museder_AI_Service::demo_response( 'site_scan', $payload );
             $mode = 'demo';
         }
 
@@ -909,6 +1315,12 @@ class Backup_Lite_UI {
 
             // Store the last site scan result
             Museder_AI_Service::store_last_site_scan( $result );
+
+            // Check for high risk and send alert if needed
+            $alert = Museder_AI_Service::maybe_send_alert( 'site_scan', $result );
+            if ( ! empty( $alert ) ) {
+                $result['alert'] = $alert;
+            }
 
             // Prepare response data
             $response_data = [
@@ -923,6 +1335,11 @@ class Backup_Lite_UI {
             $license_tier = $settings['license_tier'] ?? 'free';
             if ( $license_tier === 'free' && isset( $permission['remaining'] ) ) {
                 $response_data['remaining_scans'] = $permission['remaining'] - 1; // Will be 0 after this scan
+            }
+
+            // Add alert to response if exists
+            if ( ! empty( $alert ) ) {
+                $response_data['alert'] = $alert;
             }
 
             // Log successful usage (after preparing response)
@@ -1044,6 +1461,12 @@ class Backup_Lite_UI {
                 Museder_AI_Service::store_last_backup_report( $result );
             }
 
+            // Check for high risk and send alert if needed
+            $alert = Museder_AI_Service::maybe_send_alert( 'backup_report', $result );
+            if ( ! empty( $alert ) ) {
+                $result['alert'] = $alert;
+            }
+
             // Log successful usage
             Museder_AI_Service::log_usage( 'backup_report', 'success' );
 
@@ -1056,6 +1479,11 @@ class Backup_Lite_UI {
                 'recommendations' => $result['recommendations'] ?? [],
                 'mode'            => $mode,
             ];
+
+            // Add alert to response if exists
+            if ( ! empty( $alert ) ) {
+                $response_data['alert'] = $alert;
+            }
 
             wp_send_json_success( $response_data );
         } else {
@@ -1094,15 +1522,29 @@ class Backup_Lite_UI {
             $filename = basename( $file );
             $metadata = Backup_Lite_Backup::get_backup_metadata( $filename );
 
+            // Get file size - ensure file exists and is readable
+            $file_size = 0;
+            if ( file_exists( $file ) && is_readable( $file ) ) {
+                $file_size = filesize( $file );
+                // If filesize returns false, try alternative method
+                if ( false === $file_size ) {
+                    $file_size = 0;
+                }
+            }
+
             $items[] = [
                 'name'    => $filename,
                 'path'    => wp_normalize_path( $file ),
-                'size'    => filesize( $file ),
+                'size'    => $file_size,
                 'type'    => 'site',
                 'created' => backup_lite_local_time( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), filemtime( $file ) ),
                 'download_url' => self::build_backup_download_link( $file ),
                 'label'   => $metadata['label'] ?? '',
                 'encrypted' => ! empty( $metadata['encrypted'] ),
+                's3_status' => $metadata['s3_status'] ?? 'none',
+                's3_object_key' => $metadata['s3_object_key'] ?? '',
+                's3_error' => $metadata['s3_error'] ?? '',
+                'duration' => isset( $metadata['duration'] ) && $metadata['duration'] > 0 ? (int) $metadata['duration'] : 0,
             ];
         }
 
@@ -1151,5 +1593,311 @@ class Backup_Lite_UI {
 
     public static function handle_report_download() {
         Backup_Lite_Reports_Controller::handle_report_download();
+    }
+
+    /**
+     * AJAX handler for generating restore guide with AI.
+     */
+    public static function ajax_ai_restore_guide() {
+        check_ajax_referer( 'museder_ai_restore_guide', '_ajax_nonce' );
+
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( [
+                'code'    => 'unauthorized',
+                'message' => esc_html__( 'You do not have permission to perform this action.', 'museder-restoreone' ),
+            ] );
+        }
+
+        $backup_id = isset( $_POST['backup_id'] ) ? sanitize_text_field( wp_unslash( $_POST['backup_id'] ) ) : '';
+        
+        // If no backup_id provided, try to get from active or latest archive
+        if ( empty( $backup_id ) ) {
+            $archive = Backup_Lite_Restore_Handler::get_active_or_latest_archive();
+            if ( $archive && ! empty( $archive['name'] ) ) {
+                $backup_id = $archive['name'];
+            } else {
+                wp_send_json_error( [
+                    'code'    => 'missing_backup_id',
+                    'message' => esc_html__( 'Backup file not selected. Please select a backup first.', 'museder-restoreone' ),
+                ] );
+            }
+        }
+
+        // Development mode: Bypass all free tier limits
+        if ( function_exists( 'backup_lite_is_developer_mode' ) && backup_lite_is_developer_mode() ) {
+            // Skip limit check in dev mode
+        } else {
+            // Get license tier
+            $tier = Museder_AI_Service::get_license_tier();
+
+            // Check free tier limit (30 days)
+            if ( $tier === 'free' ) {
+                $last_run = get_option( Museder_AI_Service::LAST_RESTORE_GUIDE_FREE_RUN_OPTION, 0 );
+                $days_since = ( current_time( 'timestamp' ) - $last_run ) / DAY_IN_SECONDS;
+
+                if ( $days_since < 30 ) {
+                    wp_send_json_error( [
+                        'code'    => 'free_limit_reached',
+                        'message' => esc_html__( 'You have used your free Restore AI Guide for this month. Upgrade to Pro for unlimited guides.', 'museder-restoreone' ),
+                    ] );
+                }
+            }
+        }
+
+        // Get license tier (needed for later use)
+        $tier = Museder_AI_Service::get_license_tier();
+
+        // Get active archive or latest backup
+        $archive = Backup_Lite_Restore_Handler::get_active_or_latest_archive();
+        if ( ! $archive || empty( $archive['name'] ) ) {
+            wp_send_json_error( [
+                'code'    => 'backup_not_found',
+                'message' => esc_html__( 'Selected backup file not found.', 'museder-restoreone' ),
+            ] );
+        }
+
+        // Get backup summary (use archive data)
+        $backup_summary = [
+            'name'    => $archive['name'],
+            'size'    => isset( $archive['bytes'] ) ? $archive['bytes'] : 0,
+            'created' => isset( $archive['created'] ) ? $archive['created'] : '',
+            'source'  => isset( $archive['source'] ) ? $archive['source'] : 'existing',
+        ];
+
+        // Get recent log content (backup/restore related)
+        $log_content = Backup_Lite_Log_Handler::get_recent_log_content( 10000 );
+
+        // Get restore options from state (if available)
+        // Note: get_state() is private, so we use current_summary() to check if there's an active restore
+        $current_summary = Backup_Lite_Restore_Handler::current_summary();
+        $restore_options = [];
+        // For now, we'll leave restore_options empty or use a simple description
+        // In the future, this can be enhanced to read from restore state
+        if ( $current_summary ) {
+            $restore_options = [
+                'backup_selected' => true,
+                'backup_source' => $current_summary['source'] ?? 'unknown',
+            ];
+        }
+
+        // Get environment information
+        $plugins = [];
+        if ( ! function_exists( 'get_plugins' ) ) {
+            require_once ABSPATH . 'wp-admin/includes/plugin.php';
+        }
+        $all_plugins = get_plugins();
+        $active_plugins = get_option( 'active_plugins', [] );
+        
+        foreach ( $all_plugins as $plugin_file => $plugin_data ) {
+            if ( in_array( $plugin_file, $active_plugins, true ) ) {
+                $plugins[] = [
+                    'name'    => $plugin_data['Name'],
+                    'version' => $plugin_data['Version'],
+                ];
+            }
+        }
+
+        // Filter for major plugins (WooCommerce, Elementor, etc.)
+        $major_plugins = array_filter( $plugins, function( $plugin ) {
+            $name_lower = strtolower( $plugin['name'] );
+            return (
+                strpos( $name_lower, 'woocommerce' ) !== false ||
+                strpos( $name_lower, 'elementor' ) !== false ||
+                strpos( $name_lower, 'beaver' ) !== false ||
+                strpos( $name_lower, 'divi' ) !== false ||
+                strpos( $name_lower, 'avada' ) !== false ||
+                strpos( $name_lower, 'wpml' ) !== false ||
+                strpos( $name_lower, 'polylang' ) !== false
+            );
+        });
+
+        $environment = [
+            'home_url'    => home_url(),
+            'wp_version'  => get_bloginfo( 'version' ),
+            'php_version' => PHP_VERSION,
+            'plugins'     => ! empty( $major_plugins ) ? array_values( $major_plugins ) : array_slice( $plugins, 0, 10 ), // Limit to 10 plugins or major ones
+        ];
+
+        // Prepare payload with new format
+        $payload = [
+            'backup_summary' => $backup_summary,
+            'logs'           => $log_content,
+            'restore_options' => $restore_options,
+            'environment'    => $environment,
+        ];
+
+        // Check if OpenAI API key is configured
+        $settings = Museder_AI_Service::get_settings();
+        $api_key = $settings['openai_api_key'] ?? '';
+
+        // Use live mode if API key is available, otherwise use demo mode
+        if ( ! empty( $api_key ) ) {
+            $result = Museder_AI_Service::send_request( 'restore_guide', $payload );
+            $mode = 'live';
+        } else {
+            $result = Museder_AI_Service::demo_response( 'restore_guide', $payload );
+            $mode = 'demo';
+        }
+
+        // Handle response
+        if ( isset( $result['status'] ) && $result['status'] === 'success' ) {
+            // Store the last restore guide
+            Museder_AI_Service::store_last_restore_guide( $backup_id, $result, $mode );
+
+            // Check for high risk and send alert if needed
+            $alert = Museder_AI_Service::maybe_send_alert( 'restore_guide', $result );
+            if ( ! empty( $alert ) ) {
+                $result['alert'] = $alert;
+            }
+
+            // Update free tier last run timestamp (skip in dev mode)
+            if ( $tier === 'free' && ! ( function_exists( 'backup_lite_is_developer_mode' ) && backup_lite_is_developer_mode() ) ) {
+                update_option( Museder_AI_Service::LAST_RESTORE_GUIDE_FREE_RUN_OPTION, current_time( 'timestamp' ), false );
+            }
+
+            // Log successful usage
+            Museder_AI_Service::log_usage( 'restore_guide', 'success' );
+
+            wp_send_json_success( [
+                'report' => [
+                    'backup_id'  => $backup_id,
+                    'summary'    => $result['summary'] ?? '',
+                    'risk_level' => $result['risk_level'] ?? '',
+                    'steps'      => $result['steps'] ?? [],
+                    'warnings'   => $result['warnings'] ?? [],
+                    'notes'      => $result['notes'] ?? [],
+                    'mode'       => $mode,
+                ],
+                'mode'   => $mode,
+                'tier'   => $tier,
+                'alert'  => $alert ?? null,
+            ] );
+        } else {
+            // Log error usage
+            Museder_AI_Service::log_usage( 'restore_guide', 'error' );
+
+            wp_send_json_error( [
+                'code'    => $result['code'] ?? 'unknown_error',
+                'message' => $result['message'] ?? esc_html__( 'AI request failed.', 'museder-restoreone' ),
+            ] );
+        }
+    }
+
+    /**
+     * AJAX handler for analyzing error logs with AI.
+     */
+    public static function ajax_ai_analyze_error_logs() {
+        check_ajax_referer( 'museder_ai_log_analysis', '_ajax_nonce' );
+
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( [
+                'code'    => 'unauthorized',
+                'message' => esc_html__( 'You do not have permission to perform this action.', 'museder-restoreone' ),
+            ] );
+        }
+
+        // Development mode: Bypass all free tier limits
+        if ( function_exists( 'backup_lite_is_developer_mode' ) && backup_lite_is_developer_mode() ) {
+            // Skip limit check in dev mode
+        } else {
+            // Get license tier (uses global helper which considers Developer Mode)
+            $tier = function_exists( 'backup_lite_get_effective_license_tier' ) 
+                ? backup_lite_get_effective_license_tier() 
+                : Museder_AI_Service::get_license_tier();
+
+            // Check free tier limit (30 days)
+            if ( $tier === 'free' ) {
+                $last_run = get_option( Museder_AI_Service::LAST_ERROR_LOG_FREE_RUN_OPTION, 0 );
+                $days_since = ( current_time( 'timestamp' ) - $last_run ) / DAY_IN_SECONDS;
+
+                if ( $days_since < 30 ) {
+                    wp_send_json_error( [
+                        'code'    => 'free_limit_reached',
+                        'message' => esc_html__( 'You have used your free Error Log AI Analysis for this month. Upgrade to Pro for unlimited analysis.', 'museder-restoreone' ),
+                    ] );
+                }
+            }
+        }
+
+        // Get license tier (needed for later use)
+        $tier = Museder_AI_Service::get_license_tier();
+
+        // Get recent log content
+        $log_content = Backup_Lite_Log_Handler::get_recent_log_content( 20000 );
+
+        if ( empty( $log_content ) ) {
+            wp_send_json_error( [
+                'code'    => 'no_logs',
+                'message' => esc_html__( 'No log files found to analyze.', 'museder-restoreone' ),
+            ] );
+        }
+
+        // Prepare payload
+        $payload = [
+            'site_info' => [
+                'home_url'      => home_url(),
+                'wp_version'    => get_bloginfo( 'version' ),
+                'php_version'   => PHP_VERSION,
+                'plugin_version' => defined( 'BACKUP_LITE_VERSION' ) ? BACKUP_LITE_VERSION : '',
+            ],
+            'log_excerpt' => $log_content,
+        ];
+
+        // Check if OpenAI API key is configured
+        $settings = Museder_AI_Service::get_settings();
+        $api_key = $settings['openai_api_key'] ?? '';
+
+        // Use live mode if API key is available, otherwise use demo mode
+        if ( ! empty( $api_key ) ) {
+            $result = Museder_AI_Service::send_request( 'log_analysis', $payload );
+            $mode = 'live';
+        } else {
+            $result = Museder_AI_Service::demo_response( 'log_analysis', $payload );
+            $mode = 'demo';
+        }
+
+        // Handle response
+        if ( isset( $result['status'] ) && $result['status'] === 'success' ) {
+            // Force high risk in dev mode for testing AI Alerts (before checking alert)
+            if ( defined( 'MUSERDER_DEV_MODE' ) && MUSERDER_DEV_MODE
+                 && defined( 'MUSERDER_FORCE_HIGH_RISK' ) && MUSERDER_FORCE_HIGH_RISK ) {
+                $result['risk_level'] = 'high';
+                $result['risk']       = 'high';
+            }
+
+            // Add mode to result for storage
+            $result['mode'] = $mode;
+
+            // Store the last error log report
+            Museder_AI_Service::store_last_error_log_report( $result );
+
+            // Check for high risk and send alert if needed
+            $alert = Museder_AI_Service::maybe_send_alert( 'error_log', $result );
+            if ( ! empty( $alert ) ) {
+                $result['alert'] = $alert;
+            }
+
+            // Update free tier last run timestamp (skip in dev mode)
+            if ( $tier === 'free' && ! ( function_exists( 'backup_lite_is_developer_mode' ) && backup_lite_is_developer_mode() ) ) {
+                update_option( Museder_AI_Service::LAST_ERROR_LOG_FREE_RUN_OPTION, current_time( 'timestamp' ), false );
+            }
+
+            // Log successful usage
+            Museder_AI_Service::log_usage( 'log_analysis', 'success' );
+
+            wp_send_json_success( [
+                'report' => $result,
+                'mode'   => $mode,
+                'alert'  => $alert ?? null,
+            ] );
+        } else {
+            // Log error usage
+            Museder_AI_Service::log_usage( 'log_analysis', 'error' );
+
+            wp_send_json_error( [
+                'code'    => $result['code'] ?? 'unknown_error',
+                'message' => $result['message'] ?? esc_html__( 'AI request failed.', 'museder-restoreone' ),
+            ] );
+        }
     }
 }

@@ -125,18 +125,37 @@ class Backup_Lite_Restore_Handler {
                     
                     $convert_result = Backup_Lite_AI1WM_Converter::convert( $destination );
                     
-                    if ( ! empty( $convert_result['success'] ) && ! empty( $convert_result['file'] ) && file_exists( $convert_result['file'] ) ) {
-                        // Delete original file and use converted file
-                        if ( function_exists( 'wp_delete_file' ) ) {
-                            wp_delete_file( $destination );
-                        } else {
-                            @unlink( $destination ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_unlink -- required for cleanup, path from plugin-controlled directory
+                    if ( ! empty( $convert_result['success'] ) && ! empty( $convert_result['file'] ) ) {
+                        // Ensure converted file path is absolute
+                        $converted_file = wp_normalize_path( $convert_result['file'] );
+                        
+                        // Check if path is absolute
+                        $is_absolute = ( '/' === $converted_file[0] || ( strlen( $converted_file ) > 2 && ':' === $converted_file[1] && '\\' === $converted_file[2] ) );
+                        
+                        if ( ! $is_absolute ) {
+                            // If path is relative, resolve it relative to backup directory
+                            $converted_file = wp_normalize_path( trailingslashit( $backup_dir ) . basename( $converted_file ) );
                         }
                         
-                        $destination = $convert_result['file'];
-                        backup_lite_log( 'info', 'Successfully converted All-in-One backup.', [
-                            'converted_file' => basename( $destination ),
-                        ] );
+                        if ( file_exists( $converted_file ) && is_readable( $converted_file ) ) {
+                            // Delete original file and use converted file
+                            if ( function_exists( 'wp_delete_file' ) ) {
+                                wp_delete_file( $destination );
+                            } else {
+                                @unlink( $destination ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_unlink -- required for cleanup, path from plugin-controlled directory
+                            }
+                            
+                            $destination = $converted_file;
+                            backup_lite_log( 'info', 'Successfully converted All-in-One backup.', [
+                                'converted_file' => basename( $destination ),
+                                'converted_path' => $destination,
+                            ] );
+                        } else {
+                            backup_lite_log( 'warning', 'Converted file not found or unreadable, using original file.', [
+                                'converted_file' => $converted_file,
+                                'file_exists' => file_exists( $converted_file ),
+                            ] );
+                        }
                     } else {
                         // Conversion failed, but we can still try to restore the original file
                         // Some All-in-One formats might be compatible even without conversion
@@ -201,27 +220,62 @@ class Backup_Lite_Restore_Handler {
         $path       = wp_normalize_path( trailingslashit( $backup_dir ) . basename( $filename ) );
 
         if ( ! file_exists( $path ) || ! is_readable( $path ) ) {
+            // Log detailed error for debugging
+            backup_lite_log( 'error', 'Backup file not found or unreadable in restore_from_backup.', [
+                'filename' => $filename,
+                'path' => $path,
+                'backup_dir' => $backup_dir,
+                'file_exists' => file_exists( $path ),
+                'is_readable' => file_exists( $path ) ? is_readable( $path ) : false,
+            ] );
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'Backup file not found or unreadable.', 'museder-restoreone' ) ], 404 );
         }
 
+        // Skip conversion if file is already converted (has -converted suffix)
+        $is_already_converted = ( strpos( basename( $path ), '-converted' ) !== false );
+        
         // Check if this is an All-in-One WP Migration backup and convert it
         require_once plugin_dir_path( __FILE__ ) . 'class-ai1wm-converter.php';
         
         try {
-            if ( class_exists( 'Backup_Lite_AI1WM_Converter' ) && Backup_Lite_AI1WM_Converter::is_ai1wm_backup( $path ) ) {
+            if ( ! $is_already_converted && class_exists( 'Backup_Lite_AI1WM_Converter' ) && Backup_Lite_AI1WM_Converter::is_ai1wm_backup( $path ) ) {
                 backup_lite_log( 'info', 'Detected All-in-One WP Migration backup, converting to Museder RestoreOne format.', [
                     'file' => basename( $path ),
                 ] );
                 
                 $convert_result = Backup_Lite_AI1WM_Converter::convert( $path );
                 
-                if ( ! empty( $convert_result['success'] ) && ! empty( $convert_result['file'] ) && file_exists( $convert_result['file'] ) ) {
-                    // Use converted file instead of original
-                    $path = $convert_result['file'];
-                    backup_lite_log( 'info', 'Successfully converted All-in-One backup.', [
-                        'converted_file' => basename( $path ),
-                    ] );
+                if ( ! empty( $convert_result['success'] ) && ! empty( $convert_result['file'] ) ) {
+                    // Ensure converted file path is absolute
+                    $converted_file = $convert_result['file'];
+                    
+                    // Normalize the path first
+                    $converted_file = wp_normalize_path( $converted_file );
+                    
+                    // Check if path is absolute (starts with / on Unix or C:\ on Windows)
+                    $is_absolute = ( '/' === $converted_file[0] || ( strlen( $converted_file ) > 2 && ':' === $converted_file[1] && '\\' === $converted_file[2] ) );
+                    
+                    if ( ! $is_absolute ) {
+                        // If path is relative, resolve it relative to backup directory
+                        $converted_file = wp_normalize_path( trailingslashit( $backup_dir ) . basename( $converted_file ) );
+                    }
+                    
+                    if ( file_exists( $converted_file ) && is_readable( $converted_file ) ) {
+                        // Use converted file instead of original
+                        $path = $converted_file;
+                        backup_lite_log( 'info', 'Successfully converted All-in-One backup.', [
+                            'converted_file' => basename( $path ),
+                            'converted_path' => $path,
+                        ] );
+                    } else {
+                        // Conversion file not found or not readable
+                        backup_lite_log( 'warning', 'Converted file not found or unreadable, attempting to restore original file.', [
+                            'converted_file' => $converted_file,
+                            'file_exists' => file_exists( $converted_file ),
+                            'is_readable' => file_exists( $converted_file ) ? is_readable( $converted_file ) : false,
+                        ] );
+                    }
                 } else {
                     // Conversion failed, log warning but continue with original
                     backup_lite_log( 'warning', 'All-in-One conversion failed, attempting to restore original file.', [
@@ -238,8 +292,16 @@ class Backup_Lite_Restore_Handler {
 
         // Prepare session with error handling
         try {
-            if ( ! file_exists( $path ) ) {
-                wp_send_json_error( [ 'message' => esc_html__( 'Backup file not found.', 'museder-restoreone' ) ], 404 );
+            // Double-check file exists and is readable after potential conversion
+            if ( ! file_exists( $path ) || ! is_readable( $path ) ) {
+                // Log detailed error for debugging
+                backup_lite_log( 'error', 'Backup file not found or unreadable before prepare_session.', [
+                    'filename' => $filename,
+                    'path' => $path,
+                    'file_exists' => file_exists( $path ),
+                    'is_readable' => file_exists( $path ) ? is_readable( $path ) : false,
+                ] );
+                wp_send_json_error( [ 'message' => esc_html__( 'Backup file not found or unreadable.', 'museder-restoreone' ) ], 404 );
                 return;
             }
             
@@ -317,18 +379,37 @@ class Backup_Lite_Restore_Handler {
                 
                 $convert_result = Backup_Lite_AI1WM_Converter::convert( $destination );
                 
-                if ( ! empty( $convert_result['success'] ) && ! empty( $convert_result['file'] ) && file_exists( $convert_result['file'] ) ) {
-                    // Delete original file and use converted file
-                    if ( function_exists( 'wp_delete_file' ) ) {
-                        wp_delete_file( $destination );
-                    } else {
-                        @unlink( $destination ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_unlink -- required for cleanup, path from plugin-controlled directory
+                if ( ! empty( $convert_result['success'] ) && ! empty( $convert_result['file'] ) ) {
+                    // Ensure converted file path is absolute
+                    $converted_file = wp_normalize_path( $convert_result['file'] );
+                    
+                    // Check if path is absolute
+                    $is_absolute = ( '/' === $converted_file[0] || ( strlen( $converted_file ) > 2 && ':' === $converted_file[1] && '\\' === $converted_file[2] ) );
+                    
+                    if ( ! $is_absolute ) {
+                        // If path is relative, resolve it relative to backup directory
+                        $converted_file = wp_normalize_path( trailingslashit( $backup_dir ) . basename( $converted_file ) );
                     }
                     
-                    $destination = $convert_result['file'];
-                    backup_lite_log( 'info', 'Successfully converted All-in-One backup.', [
-                        'converted_file' => basename( $destination ),
-                    ] );
+                    if ( file_exists( $converted_file ) && is_readable( $converted_file ) ) {
+                        // Delete original file and use converted file
+                        if ( function_exists( 'wp_delete_file' ) ) {
+                            wp_delete_file( $destination );
+                        } else {
+                            @unlink( $destination ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_unlink -- required for cleanup, path from plugin-controlled directory
+                        }
+                        
+                        $destination = $converted_file;
+                        backup_lite_log( 'info', 'Successfully converted All-in-One backup.', [
+                            'converted_file' => basename( $destination ),
+                            'converted_path' => $destination,
+                        ] );
+                    } else {
+                        backup_lite_log( 'warning', 'Converted file not found or unreadable, using original file.', [
+                            'converted_file' => $converted_file,
+                            'file_exists' => file_exists( $converted_file ),
+                        ] );
+                    }
                 } else {
                     // Conversion failed, but continue with original file
                     backup_lite_log( 'warning', 'All-in-One conversion failed, attempting to restore original file.', [
@@ -715,8 +796,8 @@ class Backup_Lite_Restore_Handler {
 
         $history_entry = isset( $job['history'] ) && is_array( $job['history'] ) ? $job['history'] : [
             'timestamp_utc' => time(), // Store Unix timestamp (UTC) for accurate timezone conversion
-            // @plugin-check: allowed - GMT time for internal logs and backward compatibility
-            'timestamp' => gmdate( 'Y-m-d H:i:s', time() ), // phpcs:ignore WordPress.DateTime.RestrictedFunctions.date_date -- GMT time for internal metadata, not user-facing
+            // Store local time string for display consistency
+            'timestamp' => backup_lite_local_time( 'Y-m-d H:i:s' ), // Use local time for consistency
             'file'      => isset( $state['filename'] ) ? $state['filename'] : basename( $state['file'] ),
             'result'    => 'pending',
             'log'       => '',
@@ -768,8 +849,30 @@ class Backup_Lite_Restore_Handler {
 
             // Pass progress callback to restore_site for detailed progress updates
             // Wrap in try-catch to handle any exceptions during restore
+            // Ensure file path is absolute and exists before restore
+            $restore_file = isset( $state['file'] ) ? wp_normalize_path( $state['file'] ) : '';
+            
+            // If path is relative, resolve it relative to backup directory
+            if ( ! empty( $restore_file ) && ! file_exists( $restore_file ) ) {
+                $backup_dir = backup_lite_get_backup_dir();
+                $relative_path = wp_normalize_path( trailingslashit( $backup_dir ) . basename( $restore_file ) );
+                if ( file_exists( $relative_path ) ) {
+                    $restore_file = $relative_path;
+                }
+            }
+            
+            if ( empty( $restore_file ) || ! file_exists( $restore_file ) || ! is_readable( $restore_file ) ) {
+                backup_lite_log( 'error', 'Restore file not found or unreadable before restore_site.', [
+                    'file' => $restore_file,
+                    'state_file' => isset( $state['file'] ) ? $state['file'] : '',
+                    'file_exists' => ! empty( $restore_file ) ? file_exists( $restore_file ) : false,
+                    'is_readable' => ! empty( $restore_file ) && file_exists( $restore_file ) ? is_readable( $restore_file ) : false,
+                ] );
+                throw new RuntimeException( esc_html__( 'Backup file not found or unreadable.', 'museder-restoreone' ) );
+            }
+            
             try {
-                $restore = Backup_Lite_Restore::restore_site( $state['file'], $options, function( $percent, $message ) use ( $job_id ) {
+                $restore = Backup_Lite_Restore::restore_site( $restore_file, $options, function( $percent, $message ) use ( $job_id ) {
                     // Map restore progress (0-100) to job progress (45-95)
                     // Reserve 45-95 for restore operations, 95-100 for final cleanup
                     $mapped_percent = 45 + ( $percent * 0.5 ); // 45% to 95%
@@ -1272,6 +1375,50 @@ class Backup_Lite_Restore_Handler {
         return self::compose_summary( $state );
     }
 
+    /**
+     * Get the currently active archive for restore.
+     * If none is selected, fallback to the latest successful backup (if available).
+     *
+     * @return array|null Archive summary array or null if no backup available.
+     */
+    public static function get_active_or_latest_archive() {
+        $state = self::get_state();
+        
+        // If there's an active archive in state, use it
+        if ( ! empty( $state['file'] ) ) {
+            return self::compose_summary( $state );
+        }
+        
+        // No active archive, try to get the latest successful backup
+        $backups = Backup_Lite_UI::get_backups_list( 1 ); // Get only the latest one
+        
+        if ( empty( $backups ) ) {
+            return null;
+        }
+        
+        // Get the latest backup (first item in sorted list)
+        $latest_backup = $backups[0];
+        
+        // Build a state-like array from the backup info
+        $backup_path = $latest_backup['path'];
+        $backup_state = [
+            'file'     => $backup_path,
+            'filename' => $latest_backup['name'],
+            'size'     => $latest_backup['size'],
+            'source'   => 'existing',
+            'created'  => $latest_backup['created'],
+        ];
+        
+        // Calculate SHA1 if file is small enough
+        if ( $latest_backup['size'] > 0 && $latest_backup['size'] <= ( 500 * 1024 * 1024 ) ) {
+            if ( file_exists( $backup_path ) ) {
+                $backup_state['sha1'] = sha1_file( $backup_path );
+            }
+        }
+        
+        return self::compose_summary( $backup_state );
+    }
+
     public static function current_summary() {
         $state = self::get_state();
         if ( empty( $state['file'] ) ) {
@@ -1316,31 +1463,26 @@ class Backup_Lite_Restore_Handler {
                 if ( is_numeric( $timestamp_str ) ) {
                     $parsed = (int) $timestamp_str;
                 } else {
-                    // Priority 3: Try to parse as UTC datetime string (new format: gmdate('Y-m-d H:i:s', time()))
-                    // New entries store UTC datetime strings
-                    $parsed = strtotime( $timestamp_str . ' UTC' );
+                    // Priority 3: Try to parse as local datetime string (new format: backup_lite_local_time('Y-m-d H:i:s'))
+                    // New entries store local time strings, so parse as local time
+                    $local_parsed = strtotime( $timestamp_str );
                     
-                    // Priority 4: If that fails, it's likely an old entry stored as local time
-                    // Old entries might have used current_time('mysql') which returns local time
-                    if ( false === $parsed || $parsed <= 0 ) {
-                        // Try parsing without UTC suffix - might be local time string
-                        $local_parsed = strtotime( $timestamp_str );
-                        
-                        if ( false !== $local_parsed && $local_parsed > 0 ) {
-                            // This is likely a local time string from old entries
-                            // We need to convert it to UTC timestamp first
-                            // Get the current timezone offset
-                            $gmt_offset = get_option( 'gmt_offset' );
-                            if ( $gmt_offset ) {
-                                // Convert local time to UTC: subtract offset
-                                // local_time = UTC_time + offset, so UTC_time = local_time - offset
-                                $offset_seconds = (int) ( $gmt_offset * HOUR_IN_SECONDS );
-                                $parsed = $local_parsed - $offset_seconds;
-                            } else {
-                                // No offset set, assume it's already UTC
-                                $parsed = $local_parsed;
-                            }
+                    if ( false !== $local_parsed && $local_parsed > 0 ) {
+                        // This is a local time string, convert to UTC timestamp for consistent handling
+                        // Get the current timezone offset
+                        $gmt_offset = get_option( 'gmt_offset' );
+                        if ( $gmt_offset ) {
+                            // Convert local time to UTC: subtract offset
+                            // local_time = UTC_time + offset, so UTC_time = local_time - offset
+                            $offset_seconds = (int) ( $gmt_offset * HOUR_IN_SECONDS );
+                            $parsed = $local_parsed - $offset_seconds;
+                        } else {
+                            // No offset set, assume it's already UTC
+                            $parsed = $local_parsed;
                         }
+                    } else {
+                        // Try parsing as UTC datetime string (old format: gmdate('Y-m-d H:i:s', time()))
+                        $parsed = strtotime( $timestamp_str . ' UTC' );
                     }
                 }
             }

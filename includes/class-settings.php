@@ -82,10 +82,11 @@ class Backup_Lite_Settings {
             'feature_cloud_destinations' => false,
             'feature_advanced_filters'   => false,
             'debug_mode'                 => false,
+            'enable_sounds'              => ! empty( $value['enable_sounds'] ),
         ];
 
         // PRO Settings
-        if ( Backup_Lite_Pro::is_pro_active() ) {
+        if ( function_exists( 'backup_lite_has_pro_features' ) && backup_lite_has_pro_features() ) {
             $sanitized['debug_mode'] = ! empty( $value['debug_mode'] );
             $sanitized['feature_cloud_destinations'] = ! empty( $value['feature_cloud_destinations'] );
             $sanitized['feature_advanced_filters']   = ! empty( $value['feature_advanced_filters'] );
@@ -150,6 +151,7 @@ class Backup_Lite_Settings {
             'ai_temperature'             => 0.7,
             'ai_enabled'                 => false,
             'ai_log_activity'            => false,
+            'enable_sounds'               => true, // Default: enabled
         ];
 
         $stored = get_option( self::OPTION_KEY, [] );
@@ -166,7 +168,7 @@ class Backup_Lite_Settings {
         $sanitised = self::sanitize( $stored );
 
         // Merge PRO license key
-        if ( Backup_Lite_Pro::is_pro_active() ) {
+        if ( function_exists( 'backup_lite_has_pro_features' ) && backup_lite_has_pro_features() ) {
             $sanitised['pro_license_key'] = Backup_Lite_Pro::get_license_key();
         }
 
@@ -177,6 +179,13 @@ class Backup_Lite_Settings {
      * AJAX: Save settings.
      */
     public static function ajax_save_settings() {
+        // Check if a backup job is currently running
+        $current_job = get_transient( 'backup_lite_current_job' );
+        if ( $current_job && isset( $current_job['status'] ) && 'running' === $current_job['status'] ) {
+            wp_send_json_error( [
+                'message' => esc_html__( 'A backup is currently running. Please try changing settings again after it completes.', 'museder-restoreone' ),
+            ], 409 );
+        }
         Backup_Lite_UI::verify_ajax_request();
 
         // phpcs:ignore WordPress.Security.NonceVerification.Missing -- admin-only tool, access protected by capability checks in verify_ajax_request()
@@ -212,7 +221,7 @@ class Backup_Lite_Settings {
     public static function ajax_verify_license() {
         Backup_Lite_UI::verify_ajax_request();
 
-        if ( ! Backup_Lite_Pro::is_pro_active() ) {
+        if ( ! function_exists( 'backup_lite_has_pro_features' ) || ! backup_lite_has_pro_features() ) {
             wp_send_json_error( [
                 'message' => __( 'PRO version is not active.', 'museder-restoreone' ),
             ] );

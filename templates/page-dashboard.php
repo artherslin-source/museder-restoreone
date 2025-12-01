@@ -28,7 +28,10 @@ if ( $safe_mode_active ) {
 
 // Get AI settings and last results for AI cards
 $ai_settings         = Museder_AI_Service::get_settings();
-$ai_license_tier     = isset( $ai_settings['license_tier'] ) ? $ai_settings['license_tier'] : 'free';
+// Use global helper for license tier (considers Developer Mode)
+$ai_license_tier     = function_exists( 'backup_lite_get_effective_license_tier' ) 
+    ? backup_lite_get_effective_license_tier() 
+    : ( isset( $ai_settings['license_tier'] ) ? $ai_settings['license_tier'] : 'free' );
 $last_backup_report  = Museder_AI_Service::get_last_backup_report();
 $last_backup_score   = isset( $last_backup_report['overall_score'] ) ? (int) $last_backup_report['overall_score'] : null;
 $last_backup_updated = isset( $last_backup_report['updated_at'] ) ? (int) $last_backup_report['updated_at'] : 0;
@@ -236,7 +239,7 @@ $last_site_scan      = Museder_AI_Service::get_last_site_scan();
         // Site Backup Health Score (Pro)
         // Free tier: Show upgrade prompt
         // Pro/Agency tier: Show actual score or prompt to generate report
-        $is_pro_license = in_array( $ai_license_tier, [ 'pro', 'agency' ], true );
+        $is_pro_license = function_exists( 'backup_lite_has_pro_features' ) && backup_lite_has_pro_features();
         ?>
         <div class="backup-lite-card <?php echo esc_attr( $is_pro_license ? '' : 'pro-locked' ); ?>" id="museder-ai-health-score-card">
             <h2>
@@ -312,8 +315,24 @@ $last_site_scan      = Museder_AI_Service::get_last_site_scan();
                         </div>
 
                         <?php if ( ! empty( $last_backup_report['summary'] ) ) : ?>
+                            <?php
+                            // Truncate summary to 100-120 characters using mb_substr for multi-byte support
+                            $summary = $last_backup_report['summary'];
+                            $summary_length = mb_strlen( $summary, 'UTF-8' );
+                            $max_length = 120;
+                            
+                            if ( $summary_length > $max_length ) {
+                                $truncated = mb_substr( $summary, 0, $max_length, 'UTF-8' );
+                                // Try to cut at a word boundary (space or punctuation)
+                                $last_space = mb_strrpos( $truncated, ' ', null, 'UTF-8' );
+                                if ( $last_space !== false && $last_space > 100 ) {
+                                    $truncated = mb_substr( $truncated, 0, $last_space, 'UTF-8' );
+                                }
+                                $summary = $truncated . '...';
+                            }
+                            ?>
                             <p style="margin: 12px 0; color: #555;">
-                                <?php echo esc_html( wp_trim_words( $last_backup_report['summary'], 30, '...' ) ); ?>
+                                <?php echo esc_html( $summary ); ?>
                             </p>
                         <?php endif; ?>
 
@@ -329,38 +348,9 @@ $last_site_scan      = Museder_AI_Service::get_last_site_scan();
                         <?php endif; ?>
 
                         <?php if ( ! empty( $last_backup_report['summary'] ) ) : ?>
-                            <details class="museder-ai-health-report-details" style="margin-top: 16px;">
-                                <summary style="cursor: pointer; padding: 8px 12px; background: #f0f0f0; border-radius: 4px; font-weight: 600; user-select: none;">
-                                    <?php esc_html_e( 'Show full AI report', 'museder-restoreone' ); ?>
-                                </summary>
-                                <div class="museder-ai-health-report-body" style="margin-top: 16px; padding: 16px; background: #f9f9f9; border-radius: 4px;">
-                                    <h4 style="margin-top: 0;"><?php esc_html_e( 'Summary', 'museder-restoreone' ); ?></h4>
-                                    <p><?php echo esc_html( $last_backup_report['summary'] ); ?></p>
-
-                                    <?php if ( ! empty( $last_backup_report['risk_factors'] ) && is_array( $last_backup_report['risk_factors'] ) ) : ?>
-                                        <h4><?php esc_html_e( 'Risk factors', 'museder-restoreone' ); ?></h4>
-                                        <ul>
-                                            <?php foreach ( $last_backup_report['risk_factors'] as $factor ) : ?>
-                                                <li>
-                                                    <strong><?php echo esc_html( $factor['name'] ?? '' ); ?></strong>
-                                                    <?php if ( ! empty( $factor['details'] ) ) : ?>
-                                                        <span>: <?php echo esc_html( $factor['details'] ); ?></span>
-                                                    <?php endif; ?>
-                                                </li>
-                                            <?php endforeach; ?>
-                                        </ul>
-                                    <?php endif; ?>
-
-                                    <?php if ( ! empty( $last_backup_report['recommendations'] ) && is_array( $last_backup_report['recommendations'] ) ) : ?>
-                                        <h4><?php esc_html_e( 'Recommendations', 'museder-restoreone' ); ?></h4>
-                                        <ul>
-                                            <?php foreach ( $last_backup_report['recommendations'] as $rec ) : ?>
-                                                <li><?php echo esc_html( is_array( $rec ) ? ( $rec['text'] ?? '' ) : $rec ); ?></li>
-                                            <?php endforeach; ?>
-                                        </ul>
-                                    <?php endif; ?>
-                                </div>
-                            </details>
+                            <a href="#museder-ai-backup-report" class="button button-secondary museder-view-full-report" style="margin-top: 12px;" data-museder-scroll="#museder-ai-backup-report">
+                                <?php esc_html_e( 'View Full AI Report', 'museder-restoreone' ); ?>
+                            </a>
                         <?php endif; ?>
                     </div>
                 <?php endif; ?>
@@ -377,7 +367,10 @@ $last_site_scan      = Museder_AI_Service::get_last_site_scan();
             <div id="museder-ai-scan-content">
                 <?php
                 $ai_settings = Museder_AI_Service::get_settings();
-                $license_tier = $ai_settings['license_tier'] ?? 'free';
+                // Use global helper for license tier (considers Developer Mode)
+                $license_tier = function_exists( 'backup_lite_get_effective_license_tier' ) 
+                    ? backup_lite_get_effective_license_tier() 
+                    : ( $ai_settings['license_tier'] ?? 'free' );
                 $button_text = ( $license_tier === 'free' ) 
                     ? __( 'Run Free AI Scan (1 per month)', 'museder-restoreone' )
                     : __( 'Run AI Scan', 'museder-restoreone' );
@@ -462,7 +455,10 @@ $last_site_scan      = Museder_AI_Service::get_last_site_scan();
             <div id="museder-ai-backup-report-content">
                 <?php
                 $ai_settings = Museder_AI_Service::get_settings();
-                $license_tier = $ai_settings['license_tier'] ?? 'free';
+                // Use global helper for license tier (considers Developer Mode)
+                $license_tier = function_exists( 'backup_lite_get_effective_license_tier' ) 
+                    ? backup_lite_get_effective_license_tier() 
+                    : ( $ai_settings['license_tier'] ?? 'free' );
                 $button_text = ( $license_tier === 'free' ) 
                     ? __( 'Run Free Backup Report (1 per month)', 'museder-restoreone' )
                     : __( 'Run Backup AI Report', 'museder-restoreone' );
