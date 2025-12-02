@@ -16,28 +16,18 @@ $backups = isset( $backups ) ? $backups : Backup_Lite_UI::get_backups_list();
 <?php
 // Check for active backup job to persist form lock state across page reloads
 $active_job_data = null;
-$current_job_transient = get_transient( 'backup_lite_current_job' );
-if ( $current_job_transient && isset( $current_job_transient['status'] ) && 'running' === $current_job_transient['status'] ) {
-    // Also check Backup_Lite_Backup_Jobs for actual job state
-    $active_job = class_exists( 'Backup_Lite_Backup_Jobs' ) ? Backup_Lite_Backup_Jobs::get_active_job() : null;
-    if ( $active_job ) {
+$active_job = class_exists( 'Backup_Lite_Backup_Jobs' ) ? Backup_Lite_Backup_Jobs::get_active_job() : null;
+if ( $active_job && isset( $active_job['status'] ) ) {
+    $job_status = $active_job['status'];
+    // Only lock form if job is actually running or pending
+    if ( in_array( $job_status, array( Backup_Lite_Backup_Jobs::STATUS_RUNNING, Backup_Lite_Backup_Jobs::STATUS_PENDING ), true ) ) {
         $active_job_data = array(
-            'job_id' => $active_job['id'] ?? $current_job_transient['job_id'] ?? '',
+            'job_id' => $active_job['id'] ?? '',
             'is_running' => true,
-            'started_at' => isset( $active_job['started_at'] ) ? (int) $active_job['started_at'] : ( isset( $current_job_transient['started'] ) ? (int) $current_job_transient['started'] : time() ),
-            'options' => isset( $current_job_transient['options'] ) ? $current_job_transient['options'] : ( isset( $active_job['options'] ) ? $active_job['options'] : array() ),
+            'status' => $job_status,
+            'started_at' => isset( $active_job['started_at'] ) ? (int) $active_job['started_at'] : time(),
+            'options' => isset( $active_job['options'] ) ? $active_job['options'] : array(),
         );
-    } elseif ( isset( $current_job_transient['job_id'] ) ) {
-        // Job might have completed but transient not cleared yet - check job file
-        $job = class_exists( 'Backup_Lite_Backup_Jobs' ) ? Backup_Lite_Backup_Jobs::load_job( $current_job_transient['job_id'] ) : null;
-        if ( $job && ! in_array( $job['status'] ?? '', array( 'completed', 'failed', 'cancelled' ), true ) ) {
-            $active_job_data = array(
-                'job_id' => $current_job_transient['job_id'],
-                'is_running' => true,
-                'started_at' => isset( $current_job_transient['started'] ) ? (int) $current_job_transient['started'] : time(),
-                'options' => isset( $current_job_transient['options'] ) ? $current_job_transient['options'] : array(),
-            );
-        }
     }
 }
 $is_pro = function_exists( 'backup_lite_has_pro_features' ) && backup_lite_has_pro_features();
@@ -163,9 +153,9 @@ $is_pro = function_exists( 'backup_lite_has_pro_features' ) && backup_lite_has_p
                         </label>
 
                         <input type="hidden" name="backup_lite_dest_s3" value="0" />
-                        <label class="mro-backup-destination">
+                        <label class="mro-backup-destination" for="backup-lite-dest-s3">
                             <input type="checkbox"
-                                   id="backup_lite_dest_s3"
+                                   id="backup-lite-dest-s3"
                                    name="backup_lite_dest_s3"
                                    value="1" />
                             <span class="mro-backup-destination-title">
@@ -238,9 +228,9 @@ $is_pro = function_exists( 'backup_lite_has_pro_features' ) && backup_lite_has_p
                         </label>
 
                         <input type="hidden" name="backup_lite_dest_s3" value="0" />
-                        <label class="mro-backup-destination">
+                        <label class="mro-backup-destination" for="backup-lite-dest-s3">
                             <input type="checkbox"
-                                   id="backup_lite_dest_s3"
+                                   id="backup-lite-dest-s3"
                                    name="backup_lite_dest_s3"
                                    value="1" />
                             <span class="mro-backup-destination-title">
@@ -336,6 +326,19 @@ $is_pro = function_exists( 'backup_lite_has_pro_features' ) && backup_lite_has_p
                 <h2>📚 <?php esc_html_e( 'Available Backups', 'museder-restoreone' ); ?></h2>
                 <p class="description"><?php esc_html_e( 'Select, download, or remove backups from your archive.', 'museder-restoreone' ); ?></p>
             </div>
+            <?php
+            $s3_ready = function_exists( 'backup_lite_is_s3_ready' ) && backup_lite_is_s3_ready();
+            if ( $s3_ready ) :
+            ?>
+            <div class="backup-lite-tabs" style="margin-top: 16px; border-bottom: 2px solid #e2e8f0;">
+                <button type="button" class="backup-lite-tab-button active" data-tab="local-backups">
+                    <?php esc_html_e( 'Local Backups', 'museder-restoreone' ); ?>
+                </button>
+                <button type="button" class="backup-lite-tab-button" data-tab="s3-cloud-backups">
+                    <?php esc_html_e( 'S3 Cloud Backups', 'museder-restoreone' ); ?>
+                </button>
+            </div>
+            <?php endif; ?>
             <div class="bl-inline-builder-insight">
                 <span class="headline">✨ <?php esc_html_e( 'Tip', 'museder-restoreone' ); ?></span>
                 <p><?php esc_html_e( 'Keep at least 3 recent backups and rotate weekly for optimal coverage.', 'museder-restoreone' ); ?></p>
@@ -347,6 +350,9 @@ $is_pro = function_exists( 'backup_lite_has_pro_features' ) && backup_lite_has_p
             <button type="button" class="button button-primary" id="bl-download-selected"><?php esc_html_e( 'Download Selected', 'museder-restoreone' ); ?></button>
             <button type="button" class="button button-primary" id="bl-delete-selected"><?php esc_html_e( 'Delete Selected', 'museder-restoreone' ); ?></button>
         </div>
+        
+        <!-- Local Backups Tab Content -->
+        <div id="local-backups-tab" class="backup-lite-tab-content active">
         <?php if ( empty( $backups ) ) : ?>
             <p><?php esc_html_e( 'No backups found yet.', 'museder-restoreone' ); ?></p>
         <?php else : ?>
@@ -400,21 +406,29 @@ $is_pro = function_exists( 'backup_lite_has_pro_features' ) && backup_lite_has_p
                             </td>
                             <td>
                                 <?php
+                                // Use unified status values: 'stored', 'failed', 'none'
                                 $s3_status = $item['s3_status'] ?? 'none';
+                                // Normalize legacy status values for backward compatibility
+                                if ( 'success' === $s3_status ) {
+                                    $s3_status = 'stored';
+                                } elseif ( 'error' === $s3_status ) {
+                                    $s3_status = 'failed';
+                                }
+                                
                                 $s3_error = $item['s3_error'] ?? '';
                                 
-                                if ( 'success' === $s3_status ) :
+                                if ( 'stored' === $s3_status ) :
                                     ?>
-                                    <span class="bl-tag" style="background: var(--bl-success); color: #fff; padding: 2px 8px; border-radius: 4px; font-size: 11px;" title="<?php esc_attr_e( 'Stored in S3', 'museder-restoreone' ); ?>">
-                                        ✅ <?php esc_html_e( 'Stored in S3', 'museder-restoreone' ); ?>
+                                    <span class="bl-tag" style="background: var(--bl-success); color: #fff; padding: 2px 8px; border-radius: 4px; font-size: 11px;" title="<?php esc_attr_e( 'STORED IN S3', 'museder-restoreone' ); ?>">
+                                        ✅ <?php esc_html_e( 'STORED IN S3', 'museder-restoreone' ); ?>
                                     </span>
                                 <?php elseif ( 'pending' === $s3_status ) : ?>
                                     <span class="bl-tag" style="background: #f59e0b; color: #fff; padding: 2px 8px; border-radius: 4px; font-size: 11px;" title="<?php esc_attr_e( 'Pending S3 upload', 'museder-restoreone' ); ?>">
                                         ⏳ <?php esc_html_e( 'Pending S3 upload', 'museder-restoreone' ); ?>
                                     </span>
-                                <?php elseif ( 'error' === $s3_status ) : ?>
-                                    <span class="bl-tag" style="background: var(--bl-danger); color: #fff; padding: 2px 8px; border-radius: 4px; font-size: 11px; cursor: help;" title="<?php echo esc_attr( ! empty( $s3_error ) ? sprintf( __( 'S3 upload failed: %s', 'museder-restoreone' ), $s3_error ) : __( 'S3 upload failed', 'museder-restoreone' ) ); ?>">
-                                        ❌ <?php esc_html_e( 'S3 upload failed', 'museder-restoreone' ); ?>
+                                <?php elseif ( 'failed' === $s3_status ) : ?>
+                                    <span class="bl-tag" style="background: var(--bl-danger); color: #fff; padding: 2px 8px; border-radius: 4px; font-size: 11px; cursor: help;" title="<?php echo esc_attr( ! empty( $s3_error ) ? sprintf( __( 'S3 UPLOAD FAILED: %s', 'museder-restoreone' ), esc_html( $s3_error ) ) : __( 'S3 UPLOAD FAILED', 'museder-restoreone' ) ); ?>" data-s3-error="<?php echo esc_attr( $s3_error ); ?>">
+                                        ❌ <?php esc_html_e( 'S3 UPLOAD FAILED', 'museder-restoreone' ); ?>
                                     </span>
                                 <?php else : ?>
                                     <span style="color: #999; font-size: 12px;">—</span>
@@ -427,12 +441,23 @@ $is_pro = function_exists( 'backup_lite_has_pro_features' ) && backup_lite_has_p
                                         <button type="button" class="button backup-lite-restore-existing" data-filename="<?php echo esc_attr( $item['name'] ); ?>">▶️ <?php esc_html_e( 'Restore', 'museder-restoreone' ); ?></button>
                                         <a class="button" href="<?php echo esc_url( $item['download_url'] ); ?>">⬇️ <?php esc_html_e( 'Download', 'museder-restoreone' ); ?></a>
                                         <?php
-                                        // Show "Upload to Cloud" only if S3 is configured and backup is not already uploaded
+                                        // Show "Upload to Cloud" or "Re-upload to Cloud" if S3 is configured
                                         $s3_status = $item['s3_status'] ?? 'none';
+                                        // Normalize legacy status values
+                                        if ( 'success' === $s3_status ) {
+                                            $s3_status = 'stored';
+                                        } elseif ( 'error' === $s3_status ) {
+                                            $s3_status = 'failed';
+                                        }
                                         $s3_configured = function_exists( 'backup_lite_get_s3_settings' ) && ! empty( backup_lite_get_s3_settings()['enabled'] ) && ! empty( backup_lite_get_s3_settings()['bucket'] );
-                                        if ( $s3_configured && 'success' !== $s3_status ) :
-                                            ?>
-                                            <button type="button" class="button backup-lite-upload-to-cloud" data-filename="<?php echo esc_attr( $item['name'] ); ?>" data-path="<?php echo esc_attr( $item['path'] ); ?>">☁️ <?php esc_html_e( 'Upload to Cloud', 'museder-restoreone' ); ?></button>
+                                        if ( $s3_configured ) :
+                                            if ( 'stored' === $s3_status ) :
+                                                ?>
+                                                <button type="button" class="button backup-lite-upload-to-cloud" data-filename="<?php echo esc_attr( $item['name'] ); ?>" data-path="<?php echo esc_attr( $item['path'] ); ?>">☁️ <?php esc_html_e( 'Re-upload to Cloud', 'museder-restoreone' ); ?></button>
+                                                <button type="button" class="button backup-lite-reset-s3-status" data-filename="<?php echo esc_attr( $item['name'] ); ?>">🔄 <?php esc_html_e( 'Reset S3 Record', 'museder-restoreone' ); ?></button>
+                                            <?php else : ?>
+                                                <button type="button" class="button backup-lite-upload-to-cloud" data-filename="<?php echo esc_attr( $item['name'] ); ?>" data-path="<?php echo esc_attr( $item['path'] ); ?>">☁️ <?php esc_html_e( 'Upload to Cloud', 'museder-restoreone' ); ?></button>
+                                            <?php endif; ?>
                                         <?php endif; ?>
                                         <button type="button" class="button backup-lite-delete-backup" data-filename="<?php echo esc_attr( $item['name'] ); ?>">🗑️ <?php esc_html_e( 'Delete', 'museder-restoreone' ); ?></button>
                                     </div>
@@ -442,6 +467,37 @@ $is_pro = function_exists( 'backup_lite_has_pro_features' ) && backup_lite_has_p
                     <?php endforeach; ?>
                 </tbody>
             </table>
+        <?php endif; ?>
+        </div>
+        
+        <!-- S3 Cloud Backups Tab Content -->
+        <?php if ( $s3_ready ) : ?>
+        <div id="s3-cloud-backups-tab" class="backup-lite-tab-content" style="display: none;">
+            <div id="s3-backups-loading" style="text-align: center; padding: 40px;">
+                <span class="spinner is-active"></span>
+                <p><?php esc_html_e( 'Loading S3 backups...', 'museder-restoreone' ); ?></p>
+            </div>
+            <div id="s3-backups-list" style="display: none;">
+                <p id="s3-backups-empty" style="display: none;"><?php esc_html_e( 'No backups found in S3.', 'museder-restoreone' ); ?></p>
+                <table class="backup-lite-table" id="s3-backups-table" style="display: none;">
+                    <thead>
+                        <tr>
+                            <th><?php esc_html_e( 'File Name', 'museder-restoreone' ); ?></th>
+                            <th><?php esc_html_e( 'Size', 'museder-restoreone' ); ?></th>
+                            <th><?php esc_html_e( 'Last Modified', 'museder-restoreone' ); ?></th>
+                            <th><?php esc_html_e( 'Actions', 'museder-restoreone' ); ?></th>
+                        </tr>
+                    </thead>
+                    <tbody id="s3-backups-tbody">
+                        <!-- S3 backups will be populated by JavaScript -->
+                    </tbody>
+                </table>
+            </div>
+            <div id="s3-backups-error" style="display: none; padding: 20px; background: #fee; border-left: 4px solid #f00; border-radius: 4px;">
+                <strong><?php esc_html_e( 'Error loading S3 backups:', 'museder-restoreone' ); ?></strong>
+                <p id="s3-backups-error-message"></p>
+            </div>
+        </div>
         <?php endif; ?>
     </div>
 

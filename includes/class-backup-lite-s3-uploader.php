@@ -92,13 +92,9 @@ class Backup_Lite_S3_Uploader {
         // Build object key
         $object_key = $this->build_object_key( $file_path, $settings );
 
-        // Choose upload method based on file size
-        // Files <= 10MB: use single-part upload (faster for small files)
-        // Files > 10MB: use multipart upload (avoids memory issues)
-        if ( $file_size > self::MULTIPART_THRESHOLD ) {
-            return $this->upload_multipart( $file_path, $object_key, $settings );
-        }
-
+        // Always use single-part upload (simple PUT)
+        // Multipart upload is temporarily disabled to ensure stability
+        // TODO: Re-enable multipart upload for large files in future version
         return $this->upload_single_part( $file_path, $object_key, $settings );
     }
 
@@ -118,7 +114,7 @@ class Backup_Lite_S3_Uploader {
     protected function upload_single_part( $file_path, $object_key, $settings ) {
         $file_size = filesize( $file_path );
 
-        backup_lite_log( 'info', 'S3 upload: starting single-part upload.', [
+        backup_lite_log( 'info', 'S3 upload: starting single-part upload (simple PUT).', [
             'file' => $file_path,
             'size' => $file_size,
             'key'  => $object_key,

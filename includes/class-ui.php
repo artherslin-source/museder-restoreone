@@ -28,6 +28,7 @@ class Backup_Lite_UI {
         add_action( 'wp_ajax_backup_lite_cancel_backup_job', [ __CLASS__, 'ajax_cancel_backup_job' ] );
         add_action( 'wp_ajax_backup_lite_clear_active_job', [ __CLASS__, 'ajax_clear_active_job' ] );
         add_action( 'wp_ajax_backup_lite_upload_existing_backup', [ __CLASS__, 'ajax_upload_existing_backup' ] );
+        add_action( 'wp_ajax_backup_lite_reset_s3_status', [ __CLASS__, 'ajax_reset_s3_status' ] );
         add_action( 'wp_ajax_backup_lite_refresh_nonce', [ __CLASS__, 'ajax_refresh_nonce' ] );
         add_action( 'wp_ajax_museder_ai_demo_site_scan', [ __CLASS__, 'ajax_ai_demo_site_scan' ] );
         add_action( 'wp_ajax_museder_ai_backup_report', [ __CLASS__, 'ajax_ai_backup_report' ] );
@@ -95,6 +96,9 @@ class Backup_Lite_UI {
             BACKUP_LITE_VERSION,
             false
         );
+
+        // Note: admin-dashboard.js is now enqueued in museder-restoreone.php
+        // in backup_lite_render_dashboard() to ensure proper loading order
 
         // Localize PRO status for frontend
         $is_pro = function_exists( 'backup_lite_has_pro_features' ) && backup_lite_has_pro_features();
@@ -167,6 +171,7 @@ class Backup_Lite_UI {
             'ajaxUrl'        => admin_url( 'admin-ajax.php' ),
             'nonce'          => wp_create_nonce( self::NONCE ),
             'nonceV2'        => $nonce_v2,
+            'cloudNonce'     => wp_create_nonce( Backup_Lite_Cloud_Controller::NONCE ),
             'restUrlV2'      => $rest_url_v2,
             'page'           => $current_page,
             'activeJob'      => $active_job,
@@ -346,18 +351,19 @@ class Backup_Lite_UI {
     public static function ajax_start_backup_job() {
         self::verify_ajax_request();
 
-        // Check if a backup job is already running
-        $current_job = get_transient( 'backup_lite_current_job' );
-        if ( $current_job && isset( $current_job['status'] ) && 'running' === $current_job['status'] ) {
+        // Check if a backup job is already running (using the new job status system)
+        $active_job = Backup_Lite_Backup_Jobs::get_active_job();
+        if ( $active_job && isset( $active_job['status'] ) && Backup_Lite_Backup_Jobs::STATUS_RUNNING === $active_job['status'] ) {
             // @plugin-check: escaped
             wp_send_json_error( [
                 'code'    => 'backup_already_running',
                 'message' => esc_html__( 'A backup is already running. Please wait until it finishes before starting a new one.', 'museder-restoreone' ),
+                'active_job_id' => $active_job['id'] ?? '',
             ], 409 );
         }
 
         // Server-side guard: prevent duplicate job starts within 3 seconds
-        $options = self::get_backup_options_from_request();
+            $options = self::get_backup_options_from_request();
         $job_key = self::generate_job_key( $options );
         $lock_key = 'backup_lite_job_lock_' . md5( $job_key );
         
@@ -394,6 +400,20 @@ class Backup_Lite_UI {
             }
 
             $job = Backup_Lite_Backup_Jobs::create_job( $options );
+
+            // Check if create_job returned WP_Error
+            if ( is_wp_error( $job ) ) {
+                // Clear lock on error
+                delete_transient( $lock_key );
+                
+                // @plugin-check: escaped
+                wp_send_json_error( [
+                    'code'    => $job->get_error_code(),
+                    'message' => esc_html( $job->get_error_message() ),
+                    'data'    => $job->get_error_data(),
+                ], 409 );
+                return;
+            }
 
             // Mark job as running in transient (for server-side protection)
             self::mark_job_running( $job['id'], $options );
@@ -468,18 +488,18 @@ class Backup_Lite_UI {
 
     public static function ajax_get_backup_job_status() {
         try {
-            self::verify_ajax_request();
+        self::verify_ajax_request();
 
-            $job_id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
-            if ( empty( $job_id ) ) {
-                // @plugin-check: escaped
+        $job_id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
+        if ( empty( $job_id ) ) {
+            // @plugin-check: escaped
                 wp_send_json_error( [ 'message' => esc_html__( 'Job ID is required.', 'museder-restoreone' ) ] );
                 return;
-            }
+        }
 
-            $payload = Backup_Lite_Backup_Jobs::get_job_payload( $job_id );
-            if ( ! $payload ) {
-                // @plugin-check: escaped
+        $payload = Backup_Lite_Backup_Jobs::get_job_payload( $job_id );
+        if ( ! $payload ) {
+            // @plugin-check: escaped
                 wp_send_json_error( [ 'message' => esc_html__( 'Backup job not found or already completed.', 'museder-restoreone' ) ] );
                 return;
             }
@@ -487,9 +507,9 @@ class Backup_Lite_UI {
             // Ensure percent is 100 when status is completed
             if ( isset( $payload['status'] ) && 'completed' === $payload['status'] ) {
                 $payload['percentage'] = 100;
-            }
+        }
 
-            wp_send_json_success( [ 'job' => $payload ] );
+        wp_send_json_success( [ 'job' => $payload ] );
         } catch ( Throwable $e ) {
             backup_lite_log( 'error', 'Backup status check failed.', [
                 'message' => $e->getMessage(),
@@ -528,25 +548,25 @@ class Backup_Lite_UI {
 
     public static function ajax_cancel_backup_job() {
         try {
-            self::verify_ajax_request();
+        self::verify_ajax_request();
 
-            $job_id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
-            if ( empty( $job_id ) ) {
-                // @plugin-check: escaped
+        $job_id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
+        if ( empty( $job_id ) ) {
+            // @plugin-check: escaped
                 wp_send_json_error( [ 'message' => esc_html__( 'Job ID is required.', 'museder-restoreone' ) ] );
                 return;
-            }
+        }
 
-            if ( ! Backup_Lite_Backup_Jobs::cancel_job( $job_id ) ) {
-                // @plugin-check: escaped
+        if ( ! Backup_Lite_Backup_Jobs::cancel_job( $job_id ) ) {
+            // @plugin-check: escaped
                 wp_send_json_error( [ 'message' => esc_html__( 'Unable to cancel backup job.', 'museder-restoreone' ) ] );
                 return;
-            }
+        }
 
             // Clear the current job transient to allow new backups
             self::clear_job_running();
 
-            // @plugin-check: escaped
+        // @plugin-check: escaped
             wp_send_json_success( [
                 'status'  => 'cancelled',
                 'message' => esc_html__( 'Backup job cancelled.', 'museder-restoreone' ),
@@ -634,159 +654,246 @@ class Backup_Lite_UI {
 
     /**
      * AJAX handler to upload an existing backup to S3.
+     * 
+     * This handler ensures all responses are valid JSON and follows WordPress AJAX best practices:
+     * - Capability check (current_user_can)
+     * - Nonce verification (check_ajax_referer)
+     * - Input sanitization (sanitize_text_field, sanitize_file_name)
+     * - Consistent JSON responses (wp_send_json_success / wp_send_json_error)
+     * - Comprehensive error handling (try-catch for all exceptions)
      */
     public static function ajax_upload_existing_backup() {
+        // 1. Capability check
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error(
+                array(
+                    'message' => __( 'You do not have permission to perform this action.', 'museder-restoreone' ),
+                )
+            );
+        }
+
+        // 2. Nonce verification (using check_ajax_referer for WordPress best practices)
+        check_ajax_referer( self::NONCE, 'nonce' );
+
+        // 3. Read and sanitize parameters
+        $filename = isset( $_POST['filename'] ) ? sanitize_file_name( wp_unslash( $_POST['filename'] ) ) : '';
+
+        if ( empty( $filename ) ) {
+            wp_send_json_error(
+                array(
+                    'message' => __( 'Missing backup file name.', 'museder-restoreone' ),
+                )
+            );
+        }
+
+        // 4. Build backup file path
+        $backup_dir = trailingslashit( backup_lite_get_backup_dir() );
+        $file_path  = $backup_dir . basename( $filename );
+        $file_path  = wp_normalize_path( $file_path );
+
+        // Security check: ensure file is within backup directory
+        if ( 0 !== strpos( $file_path, wp_normalize_path( $backup_dir ) ) ) {
+            wp_send_json_error(
+                array(
+                    'message' => __( 'Invalid backup file path.', 'museder-restoreone' ),
+                )
+            );
+        }
+
+        if ( ! file_exists( $file_path ) || ! is_readable( $file_path ) ) {
+            wp_send_json_error(
+                array(
+                    'message' => sprintf(
+                        __( 'Backup file not found: %s', 'museder-restoreone' ),
+                        esc_html( $filename )
+                    ),
+                )
+            );
+        }
+
+        // 5. Read S3 settings
+        $s3_settings = backup_lite_get_s3_settings();
+
+        if ( empty( $s3_settings['enabled'] ) || empty( $s3_settings['bucket'] ) || empty( $s3_settings['access_key_id'] ) || empty( $s3_settings['secret_access_key'] ) ) {
+            wp_send_json_error(
+                array(
+                    'message' => __( 'S3 settings are incomplete. Please configure S3 in plugin settings.', 'museder-restoreone' ),
+                )
+            );
+        }
+
+        // 6. Upload to S3 using simple PUT method
+        backup_lite_log( 'info', 'Manual S3 upload requested for existing backup (simple PUT).', [
+            'file' => $file_path,
+        ] );
+
         try {
-            self::verify_ajax_request();
-
-            $filename = isset( $_POST['filename'] ) ? sanitize_file_name( wp_unslash( $_POST['filename'] ) ) : '';
-            if ( empty( $filename ) ) {
-                // @plugin-check: escaped
-                wp_send_json_error( [ 'message' => esc_html__( 'Backup filename is required.', 'museder-restoreone' ) ] );
-                return;
-            }
-
-            // Validate file path
-            $backup_dir = trailingslashit( backup_lite_get_backup_dir() );
-            $file_path = $backup_dir . basename( $filename );
-            $file_path = wp_normalize_path( $file_path );
-
-            // Security check: ensure file is within backup directory
-            if ( 0 !== strpos( $file_path, wp_normalize_path( $backup_dir ) ) ) {
-                // @plugin-check: escaped
-                wp_send_json_error( [ 'message' => esc_html__( 'Invalid backup file path.', 'museder-restoreone' ) ] );
-                return;
-            }
-
-            if ( ! file_exists( $file_path ) || ! is_readable( $file_path ) ) {
-                // @plugin-check: escaped
-                wp_send_json_error( [ 'message' => esc_html__( 'Backup file not found or not readable.', 'museder-restoreone' ) ] );
-                return;
-            }
-
-            // Check if S3 is configured
+            // Use Backup_Lite_S3_Service::upload_backup() directly (simple PUT)
             if ( ! class_exists( 'Backup_Lite_S3_Service' ) ) {
-                // @plugin-check: escaped
-                wp_send_json_error( [ 'message' => esc_html__( 'S3 service is not available.', 'museder-restoreone' ) ] );
-                return;
+                backup_lite_log( 'error', 'S3 service class not available.', [] );
+                wp_send_json_error(
+                    array(
+                        'message' => __( 'S3 service is not available.', 'museder-restoreone' ),
+                    )
+                );
             }
 
-            $s3_settings = backup_lite_get_s3_settings();
-            if ( empty( $s3_settings['enabled'] ) || empty( $s3_settings['bucket'] ) ) {
-                // @plugin-check: escaped
-                wp_send_json_error( [ 'message' => esc_html__( 'S3 is not configured. Please configure S3 settings first.', 'museder-restoreone' ) ] );
-                return;
-            }
+            $s3_upload_result = Backup_Lite_S3_Service::upload_backup( $file_path );
 
-            // Upload to S3 using new S3 Uploader class
-            backup_lite_log( 'info', 'Manual S3 upload requested for existing backup.', [
-                'file' => $file_path,
-            ] );
-
-            // Use new Backup_Lite_S3_Uploader class (provides clean architecture for future multipart upload)
-            if ( ! class_exists( 'Backup_Lite_S3_Uploader' ) ) {
-                // Fallback to old method if new class not available
-                $s3_upload_result = self::upload_backup_to_s3_unified( $file_path );
-            } else {
-                $uploader = Backup_Lite_S3_Uploader::get_instance();
-                $s3_upload_result = $uploader->upload_backup_file( $file_path );
-                
-                // Convert result format to match expected format
-                if ( is_wp_error( $s3_upload_result ) ) {
-                    // Already in correct format
-                } elseif ( is_array( $s3_upload_result ) && isset( $s3_upload_result['status'] ) && 'success' === $s3_upload_result['status'] ) {
-                    // Convert to expected format with object_key
-                    $s3_upload_result = array(
-                        'status'    => 'success',
-                        'object_key' => isset( $s3_upload_result['object_key'] ) ? $s3_upload_result['object_key'] : '',
-                    );
-                } else {
-                    // Unexpected format, convert to WP_Error
-                    $s3_upload_result = new WP_Error( 's3_unexpected_result', __( 'S3 upload returned unexpected result.', 'museder-restoreone' ) );
-                }
-            }
-
-            // Handle result
-            if ( is_wp_error( $s3_upload_result ) ) {
-                // Upload failed
-                $error_code = $s3_upload_result->get_error_code();
-                $error_message = $s3_upload_result->get_error_message();
-                
-                // Update backup metadata with error
-                try {
-                    $metadata = Backup_Lite_Backup::get_backup_metadata( basename( $file_path ) );
-                    $metadata['s3_status'] = 'error';
-                    $metadata['s3_error'] = $error_code;
-                    Backup_Lite_Backup::store_backup_metadata( basename( $file_path ), $metadata );
-                } catch ( Throwable $meta_error ) {
-                    // Log but don't fail the response
-                    backup_lite_log( 'warning', 'Failed to update backup metadata after S3 upload error.', [
-                        'file' => $file_path,
-                        'meta_error' => $meta_error->getMessage(),
-                    ] );
-                }
-
-                backup_lite_log( 'error', 'Manual S3 upload failed.', [
-                    'file'   => $file_path,
-                    'error_code' => $error_code,
-                    'error_message' => $error_message,
-                ] );
-
-                // @plugin-check: escaped
-                wp_send_json_error( [
-                    'message' => esc_html__( 'S3 upload failed. Please check logs for details.', 'museder-restoreone' ),
-                    'reason'  => $error_code,
-                ] );
-            } else {
-                // Upload succeeded
-                try {
-                    $metadata = Backup_Lite_Backup::get_backup_metadata( basename( $file_path ) );
-                    $metadata['s3_status'] = 'success';
-                    if ( is_array( $s3_upload_result ) && ! empty( $s3_upload_result['object_key'] ) ) {
-                        $metadata['s3_object_key'] = $s3_upload_result['object_key'];
-                    }
-                    // Remove error status if it exists
-                    if ( isset( $metadata['s3_error'] ) ) {
-                        unset( $metadata['s3_error'] );
-                    }
-                    // Preserve existing metadata like duration
-                    Backup_Lite_Backup::store_backup_metadata( basename( $file_path ), $metadata );
-                } catch ( Throwable $meta_error ) {
-                    // Log but don't fail the response
-                    backup_lite_log( 'warning', 'Failed to update backup metadata after S3 upload success.', [
-                        'file' => $file_path,
-                        'meta_error' => $meta_error->getMessage(),
-                    ] );
-                }
-
-                backup_lite_log( 'info', 'Manual S3 upload completed successfully.', [
-                    'file'      => $file_path,
-                    'object_key' => is_array( $s3_upload_result ) && isset( $s3_upload_result['object_key'] ) ? $s3_upload_result['object_key'] : '',
-                ] );
-
-                // @plugin-check: escaped
-                wp_send_json_success( [
-                    'message'   => esc_html__( 'Backup uploaded to S3 successfully.', 'museder-restoreone' ),
-                    'object_key' => is_array( $s3_upload_result ) && isset( $s3_upload_result['object_key'] ) ? $s3_upload_result['object_key'] : '',
-                ] );
-            }
         } catch ( Throwable $e ) {
-            // Catch any unhandled exceptions/errors
-            backup_lite_log( 'error', 'Manual S3 upload fatal error.', [
+            backup_lite_log( 'error', 'AJAX upload_to_cloud threw exception.', [
                 'message' => $e->getMessage(),
                 'file' => $e->getFile(),
                 'line' => $e->getLine(),
-                'trace'   => $e->getTraceAsString(),
+                'trace' => substr( $e->getTraceAsString(), 0, 1000 ),
             ] );
-            
-            // Also log to PHP error log for easier debugging
-            error_log( '[Backup Lite] Manual S3 upload fatal error: ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine() );
 
-            // @plugin-check: escaped
-            wp_send_json_error( [
-                'message' => esc_html__( 'Manual S3 upload failed. Please check logs for details.', 'museder-restoreone' ),
-                'code' => 'fatal_error',
+            // Also log to PHP error log for easier debugging
+            error_log( '[Backup Lite] AJAX upload_to_cloud fatal error: ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine() );
+
+            wp_send_json_error(
+                array(
+                    'message' => __( 'Unexpected error while uploading to S3. Please check logs for details.', 'museder-restoreone' ),
+                )
+            );
+        }
+
+        // 7. Handle result
+        if ( is_wp_error( $s3_upload_result ) ) {
+            $error_code = $s3_upload_result->get_error_code();
+            $error_message = $s3_upload_result->get_error_message();
+
+            // Update backup metadata with error (use unified status: 'failed')
+            try {
+                $metadata = Backup_Lite_Backup::get_backup_metadata( basename( $file_path ) );
+                $metadata['s3_status'] = 'failed';
+                $metadata['s3_error'] = $error_message; // Store sanitized error message
+                Backup_Lite_Backup::store_backup_metadata( basename( $file_path ), $metadata );
+            } catch ( Throwable $meta_error ) {
+                // Log but don't fail the response
+                backup_lite_log( 'warning', 'Failed to update backup metadata after S3 upload error.', [
+                    'file' => $file_path,
+                    'meta_error' => $meta_error->getMessage(),
+                ] );
+            }
+
+            backup_lite_log( 'error', 'Upload to S3 failed (from backup list).', [
+                'file' => $file_path,
+                'error_code' => $error_code,
+                'error_message' => $error_message,
             ] );
+
+            wp_send_json_error(
+                array(
+                    'message' => $error_message,
+                    'code'    => $error_code,
+                    'status'  => 'failed',
+                ),
+                500
+            );
+        }
+
+        // 8. Success - update metadata and return success response
+        try {
+            $metadata = Backup_Lite_Backup::get_backup_metadata( basename( $file_path ) );
+            $metadata['s3_status'] = 'stored'; // Use unified status: 'stored'
+            if ( is_array( $s3_upload_result ) && ! empty( $s3_upload_result['object_key'] ) ) {
+                $metadata['s3_object_key'] = $s3_upload_result['object_key'];
+            }
+            // Remove error status if it exists
+            if ( isset( $metadata['s3_error'] ) ) {
+                unset( $metadata['s3_error'] );
+            }
+            Backup_Lite_Backup::store_backup_metadata( basename( $file_path ), $metadata );
+        } catch ( Throwable $meta_error ) {
+            // Log but don't fail the response
+            backup_lite_log( 'warning', 'Failed to update backup metadata after S3 upload success.', [
+                'file' => $file_path,
+                'meta_error' => $meta_error->getMessage(),
+            ] );
+        }
+
+        backup_lite_log( 'info', 'Upload to S3 completed successfully (from backup list).', [
+            'file' => $file_path,
+            'object_key' => is_array( $s3_upload_result ) && isset( $s3_upload_result['object_key'] ) ? $s3_upload_result['object_key'] : '',
+        ] );
+
+        wp_send_json_success(
+            array(
+                'message' => __( 'Backup uploaded to S3 successfully.', 'museder-restoreone' ),
+                'status'  => 'stored',
+            )
+        );
+    }
+
+    /**
+     * AJAX handler to reset S3 upload status for a backup.
+     * 
+     * This allows users to clear the S3 upload record and re-upload a backup.
+     * 
+     * @return void
+     */
+    public static function ajax_reset_s3_status() {
+        // 1. Capability check
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error(
+                array(
+                    'message' => __( 'You do not have permission to perform this action.', 'museder-restoreone' ),
+                )
+            );
+        }
+
+        // 2. Nonce verification
+        check_ajax_referer( self::NONCE, 'nonce' );
+
+        // 3. Read and sanitize parameters
+        $filename = isset( $_POST['filename'] ) ? sanitize_file_name( wp_unslash( $_POST['filename'] ) ) : '';
+
+        if ( empty( $filename ) ) {
+            wp_send_json_error(
+                array(
+                    'message' => __( 'Missing backup file name.', 'museder-restoreone' ),
+                )
+            );
+        }
+
+        // 4. Get backup metadata
+        try {
+            $metadata = Backup_Lite_Backup::get_backup_metadata( $filename );
+            
+            // Reset S3-related fields
+            $metadata['s3_status'] = 'none';
+            if ( isset( $metadata['s3_error'] ) ) {
+                unset( $metadata['s3_error'] );
+            }
+            if ( isset( $metadata['s3_object_key'] ) ) {
+                unset( $metadata['s3_object_key'] );
+            }
+            
+            // Store updated metadata
+            Backup_Lite_Backup::store_backup_metadata( $filename, $metadata );
+            
+            backup_lite_log( 'info', 'S3 upload status reset for backup.', [
+                'file' => $filename,
+            ] );
+
+            wp_send_json_success(
+                array(
+                    'message' => __( 'S3 upload record has been reset. You can now re-upload this backup.', 'museder-restoreone' ),
+                )
+            );
+        } catch ( Throwable $e ) {
+            backup_lite_log( 'error', 'Failed to reset S3 status.', [
+                'file' => $filename,
+                'message' => $e->getMessage(),
+                'trace' => substr( $e->getTraceAsString(), 0, 500 ),
+            ] );
+
+            wp_send_json_error(
+                array(
+                    'message' => __( 'Failed to reset S3 upload record. Please try again.', 'museder-restoreone' ),
+                )
+            );
         }
     }
 
@@ -895,6 +1002,18 @@ class Backup_Lite_UI {
         if ( strpos( wp_normalize_path( $file_path ), wp_normalize_path( $backup_dir ) ) !== 0 ) {
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'Invalid backup file path.', 'museder-restoreone' ) ] );
+        }
+
+        // Also delete backup metadata if exists
+        $meta_file = trailingslashit( $backup_dir ) . '.backup-meta.json';
+        if ( file_exists( $meta_file ) ) {
+            $all_meta = [];
+            $content = file_get_contents( $meta_file );
+            $all_meta = json_decode( $content, true ) ?: [];
+            if ( isset( $all_meta[ $filename ] ) ) {
+                unset( $all_meta[ $filename ] );
+                file_put_contents( $meta_file, wp_json_encode( $all_meta, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ), LOCK_EX );
+            }
         }
 
         // @plugin-check: allowed - required for backup/restore file operations
@@ -1511,7 +1630,12 @@ class Backup_Lite_UI {
             return [];
         }
 
-        rsort( $glob );
+        // Sort by file modification time (newest first) instead of filename
+        usort( $glob, function( $a, $b ) {
+            $time_a = filemtime( $a );
+            $time_b = filemtime( $b );
+            return $time_b - $time_a; // Descending order (newest first)
+        } );
 
         $items = [];
         foreach ( $glob as $index => $file ) {
@@ -1545,10 +1669,54 @@ class Backup_Lite_UI {
                 's3_object_key' => $metadata['s3_object_key'] ?? '',
                 's3_error' => $metadata['s3_error'] ?? '',
                 'duration' => isset( $metadata['duration'] ) && $metadata['duration'] > 0 ? (int) $metadata['duration'] : 0,
+                'created_timestamp' => filemtime( $file ),
             ];
         }
 
         return $items;
+    }
+
+    /**
+     * Get the last successful local backup (excluding safety backups).
+     * 
+     * This method reuses get_backups_list() logic but filters for:
+     * - Successful backups (file exists and is readable)
+     * - Non-safety backups (not marked as safety backup in metadata)
+     * - Local backups (file exists on local filesystem)
+     * 
+     * @return array|null Backup item array or null if no successful backup found.
+     */
+    public static function get_last_successful_local_backup() {
+        $backups = self::get_backups_list( 0 ); // Get all backups
+        
+        if ( empty( $backups ) ) {
+            return null;
+        }
+
+        // Filter for successful local backups (exclude safety backups)
+        foreach ( $backups as $backup ) {
+            // Check if file exists and is readable (successful backup)
+            if ( empty( $backup['path'] ) || ! file_exists( $backup['path'] ) || ! is_readable( $backup['path'] ) ) {
+                continue;
+            }
+
+            // Get metadata to check for safety backup flag
+            $filename = $backup['name'];
+            $metadata = Backup_Lite_Backup::get_backup_metadata( $filename );
+            
+            // Exclude safety backups (if metadata has is_safety_backup flag set to true)
+            // Note: Currently safety backups are not explicitly marked in metadata,
+            // but we can check for patterns in filename or other indicators if needed
+            // For now, we assume all backups in the list are valid unless explicitly marked
+            if ( ! empty( $metadata['is_safety_backup'] ) && true === $metadata['is_safety_backup'] ) {
+                continue;
+            }
+
+            // This is a successful local backup
+            return $backup;
+        }
+
+        return null;
     }
 
     public static function get_logs_list( $limit = 0 ) {

@@ -231,15 +231,15 @@ class Backup_Lite_Backup {
                     'error_message' => $error_message,
                 ] );
                 
-                // Store error status
+                // Store error status (use unified status: 'failed')
                 $s3_result = array(
-                    'status' => 'error',
-                    'error' => $error_code,
+                    'status' => 'failed',
+                    'error' => $error_message, // Store sanitized error message
                 );
             } else {
-                // Upload succeeded
+                // Upload succeeded (use unified status: 'stored')
                 $s3_result = array(
-                    'status' => 'success',
+                    'status' => 'stored',
                 );
                 if ( is_array( $s3_upload_result ) && isset( $s3_upload_result['object_key'] ) ) {
                     $s3_result['object_key'] = $s3_upload_result['object_key'];
@@ -309,7 +309,7 @@ class Backup_Lite_Backup {
         self::store_backup_metadata( basename( $archive_path ), $metadata );
         
         // Display admin notice if S3 upload failed (only in admin context)
-        if ( ! empty( $s3_result ) && $s3_result['status'] === 'error' && is_admin() ) {
+        if ( ! empty( $s3_result ) && $s3_result['status'] === 'failed' && is_admin() ) {
             add_action( 'admin_notices', function() use ( $s3_result ) {
                 printf(
                     '<div class="notice notice-warning is-dismissible"><p>%s</p></div>',
@@ -680,6 +680,14 @@ class Backup_Lite_Backup {
      * @return array
      */
     public static function process_job_batch( array $job, $max_files = 200, $max_bytes = 52428800 ) {
+        // Check if job has been cancelled before processing
+        if ( isset( $job['status'] ) && Backup_Lite_Backup_Jobs::STATUS_CANCELLED === $job['status'] ) {
+            backup_lite_log( 'info', 'Backup job cancelled by user, stopping batch processing.', [
+                'job_id' => $job['id'] ?? '',
+            ] );
+            return $job;
+        }
+
         self::optimize_runtime_environment();
 
         $manifest = self::load_manifest_for_job( $job );
@@ -688,6 +696,10 @@ class Backup_Lite_Backup {
         $pointer  = max( 0, min( $pointer, $total ) );
 
         if ( $total <= 0 || $pointer >= $total ) {
+            // Check again before finalizing
+            if ( isset( $job['status'] ) && Backup_Lite_Backup_Jobs::STATUS_CANCELLED === $job['status'] ) {
+                return $job;
+            }
             return self::finalize_async_job( $job );
         }
 
@@ -715,8 +727,18 @@ class Backup_Lite_Backup {
             $index++;
         }
 
+        // Check if cancelled before processing batch
+        if ( isset( $job['status'] ) && Backup_Lite_Backup_Jobs::STATUS_CANCELLED === $job['status'] ) {
+            return $job;
+        }
+
         if ( ! empty( $batch ) ) {
             self::append_files_to_zip( $job['archive_path'], $batch );
+        }
+
+        // Check again after processing batch
+        if ( isset( $job['status'] ) && Backup_Lite_Backup_Jobs::STATUS_CANCELLED === $job['status'] ) {
+            return $job;
         }
 
         $job['pointer']         = $index;
@@ -728,11 +750,19 @@ class Backup_Lite_Backup {
             max( $total_bytes, 1 ),
             max( $current, $current + (int) $bytes )
         );
-        $job['status']  = 'running';
+        
+        // Only update status to running if not cancelled
+        if ( ! isset( $job['status'] ) || Backup_Lite_Backup_Jobs::STATUS_CANCELLED !== $job['status'] ) {
+            $job['status']  = Backup_Lite_Backup_Jobs::STATUS_RUNNING;
         $job['stage']   = 'packing';
         $job['message'] = __( 'Backup running…', 'museder-restoreone' );
+        }
 
         if ( $job['pointer'] >= $total ) {
+            // Check again before finalizing
+            if ( isset( $job['status'] ) && Backup_Lite_Backup_Jobs::STATUS_CANCELLED === $job['status'] ) {
+                return $job;
+            }
             return self::finalize_async_job( $job );
         }
 
@@ -884,10 +914,18 @@ class Backup_Lite_Backup {
      * @return array
      */
     private static function finalize_async_job( array $job ) {
+        // Check if job was cancelled before finalizing
+        if ( isset( $job['status'] ) && Backup_Lite_Backup_Jobs::STATUS_CANCELLED === $job['status'] ) {
+            backup_lite_log( 'info', 'Backup job cancelled by user, skipping finalization.', [
+                'job_id' => $job['id'] ?? '',
+            ] );
+            return $job;
+        }
+
         try {
-            $job['status']          = 'completed';
-        $job['stage']           = 'completed';
-        $job['message']         = esc_html__( 'Backup completed successfully.', 'museder-restoreone' );
+            $job['status']          = Backup_Lite_Backup_Jobs::STATUS_COMPLETED;
+            $job['stage']           = 'completed';
+            $job['message']         = esc_html__( 'Backup completed successfully.', 'museder-restoreone' );
         $job['processed_files'] = isset( $job['total_files'] ) ? (int) $job['total_files'] : $job['processed_files'];
         $job['processed_bytes'] = isset( $job['total_bytes'] ) ? (int) $job['total_bytes'] : $job['processed_bytes'];
 
@@ -960,15 +998,15 @@ class Backup_Lite_Backup {
                         'error_message' => $error_message,
                     ] );
                     
-                    // Store error status in metadata
+                    // Store error status in metadata (use unified status: 'failed')
                     $s3_result = array(
-                        'status' => 'error',
-                        'error' => $error_code,
+                        'status' => 'failed',
+                        'error' => $error_message, // Store sanitized error message
                     );
                 } else {
-                    // Upload succeeded
+                    // Upload succeeded (use unified status: 'stored')
                     $s3_result = array(
-                        'status' => 'success',
+                        'status' => 'stored',
                     );
                     if ( is_array( $s3_upload_result ) && isset( $s3_upload_result['object_key'] ) ) {
                         $s3_result['object_key'] = $s3_upload_result['object_key'];
@@ -981,16 +1019,20 @@ class Backup_Lite_Backup {
                 }
             } catch ( Throwable $e ) {
                 // Catch any unhandled exceptions during S3 upload
+                $error_message = class_exists( 'Backup_Lite_S3_Service' ) && method_exists( 'Backup_Lite_S3_Service', 'sanitize_s3_error_message' ) 
+                    ? Backup_Lite_S3_Service::sanitize_s3_error_message( $e->getMessage() )
+                    : $e->getMessage();
+                
                 backup_lite_log( 'error', 'S3 upload exception during backup completion.', [
                     'file' => $job['archive_path'],
                     'message' => $e->getMessage(),
                     'trace' => $e->getTraceAsString(),
                 ] );
                 
-                // Store error status in metadata
+                // Store error status in metadata (use unified status: 'failed')
                 $s3_result = array(
-                    'status' => 'error',
-                    'error' => 'exception',
+                    'status' => 'failed',
+                    'error' => $error_message,
                 );
             }
         } else {
@@ -1113,9 +1155,11 @@ class Backup_Lite_Backup {
                 }
             }
             
-            // Return job with error status
-            $job['status'] = 'failed';
-            $job['message'] = __( 'Backup completed but encountered an error during finalization. Please check logs.', 'museder-restoreone' );
+            // Only mark as failed if not cancelled
+            if ( ! isset( $job['status'] ) || Backup_Lite_Backup_Jobs::STATUS_CANCELLED !== $job['status'] ) {
+                $job['status'] = Backup_Lite_Backup_Jobs::STATUS_FAILED;
+                $job['message'] = __( 'Backup completed but encountered an error during finalization. Please check logs.', 'museder-restoreone' );
+            }
             return $job;
         }
     }
@@ -1172,7 +1216,7 @@ class Backup_Lite_Backup {
             // - WP_Error on failure
             if ( is_wp_error( $s3_result ) ) {
                 return $s3_result; // Return WP_Error directly
-            } elseif ( is_array( $s3_result ) && isset( $s3_result['status'] ) && 'success' === $s3_result['status'] ) {
+            } elseif ( is_array( $s3_result ) && ( isset( $s3_result['status'] ) && 'success' === $s3_result['status'] ) || ( isset( $s3_result['success'] ) && $s3_result['success'] ) ) {
                 return $s3_result; // Return success array with object_key
             } else {
                 // Unexpected result type - convert to WP_Error
@@ -1201,7 +1245,7 @@ class Backup_Lite_Backup {
         // - WP_Error on failure
         if ( is_wp_error( $s3_result ) ) {
             return $s3_result; // Return WP_Error directly
-        } elseif ( is_array( $s3_result ) && isset( $s3_result['status'] ) && 'success' === $s3_result['status'] ) {
+        } elseif ( is_array( $s3_result ) && ( ( isset( $s3_result['status'] ) && 'success' === $s3_result['status'] ) || ( isset( $s3_result['success'] ) && $s3_result['success'] ) ) ) {
             return $s3_result; // Return success array with object_key
         } else {
             // Unexpected result type - convert to WP_Error

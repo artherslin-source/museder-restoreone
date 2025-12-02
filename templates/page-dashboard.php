@@ -9,14 +9,25 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
+// Permission check
+if ( ! current_user_can( 'manage_options' ) ) {
+    wp_die( esc_html__( 'You do not have permission to access this page.', 'museder-restoreone' ) );
+}
+
 $status                   = isset( $status ) ? $status : Backup_Lite_UI::get_environment_status();
 $dashboard_recent_backups = isset( $dashboard_recent_backups ) ? $dashboard_recent_backups : Backup_Lite_Dashboard::get_recent_backups( 3 );
 $schedule_overview        = isset( $schedule_overview ) ? $schedule_overview : Backup_Lite_Dashboard::get_schedule_overview();
 $activity_stats           = isset( $activity_stats ) ? $activity_stats : Backup_Lite_Dashboard::get_activity_stats();
-$recent_logs              = isset( $recent_logs ) ? $recent_logs : Backup_Lite_Log_Handler::get_logs( 3 );
+$recent_logs              = isset( $recent_logs ) ? $recent_logs : Backup_Lite_Log_Handler::get_logs( 5 );
 
-$chart_success = isset( $activity_stats['success'] ) ? (int) $activity_stats['success'] : 0;
-$chart_failed  = isset( $activity_stats['failed'] ) ? (int) $activity_stats['failed'] : 0;
+// Get status summaries for dashboard
+$last_backup_summary  = isset( $last_backup_summary ) ? $last_backup_summary : Backup_Lite_Status_Service::get_last_backup_summary();
+$last_restore_summary  = isset( $last_restore_summary ) ? $last_restore_summary : Backup_Lite_Status_Service::get_last_restore_summary();
+$recent_backup_stats  = isset( $recent_backup_stats ) ? $recent_backup_stats : Backup_Lite_Status_Service::get_recent_backup_stats( 7 );
+
+// Use recent_backup_stats for chart (consistent with "Recent 7 Days" display)
+$chart_success = isset( $recent_backup_stats['success_count'] ) ? (int) $recent_backup_stats['success_count'] : 0;
+$chart_failed  = isset( $recent_backup_stats['failed_count'] ) ? (int) $recent_backup_stats['failed_count'] : 0;
 
 // Check if safe mode is active
 $safe_mode_active = get_option( 'backup_lite_safe_mode', '' ) === '1';
@@ -220,19 +231,218 @@ $last_site_scan      = Museder_AI_Service::get_last_site_scan();
         </div>
 
         <div class="backup-lite-card">
-            <h2>🔥 <?php esc_html_e( 'Latest Logs', 'museder-restoreone' ); ?></h2>
-            <?php if ( empty( $recent_logs ) ) : ?>
-                <p class="description"><?php esc_html_e( 'No log entries yet.', 'museder-restoreone' ); ?></p>
-            <?php else : ?>
-                <ul class="backup-lite-list">
-                    <?php foreach ( $recent_logs as $log ) : ?>
-                        <li>
-                            <strong><?php echo esc_html( $log['name'] ); ?></strong>
-                            <span><?php echo esc_html( $log['modified'] ?? '' ); ?> · <?php echo esc_html( $log['size'] ?? '' ); ?></span>
-                        </li>
-                    <?php endforeach; ?>
-                </ul>
-            <?php endif; ?>
+            <h2>📊 <?php esc_html_e( 'System Status & Latest Logs', 'museder-restoreone' ); ?></h2>
+            
+            <!-- Status Summary Section -->
+            <div class="mrestore-status-summary" style="margin-bottom: 24px; padding-bottom: 24px; border-bottom: 1px solid #e2e8f0;">
+                <!-- Last Backup -->
+                <div class="mrestore-status-row" style="display: flex; align-items: center; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid #f1f5f9;">
+                    <div style="flex: 1;">
+                        <span class="mrestore-status-label" style="font-weight: 600; display: block; margin-bottom: 4px;">
+                            <?php esc_html_e( 'Last Backup', 'museder-restoreone' ); ?>
+                        </span>
+                        <?php if ( ! $last_backup_summary['exists'] ) : ?>
+                            <p class="description" style="margin: 0; color: #64748b;">
+                                <?php esc_html_e( 'No backup has been executed yet.', 'museder-restoreone' ); ?>
+                            </p>
+                        <?php else : ?>
+                            <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                                <?php
+                                $backup_status = $last_backup_summary['status'];
+                                $status_badge_class = 'pending';
+                                $status_badge_text = __( 'Unknown', 'museder-restoreone' );
+                                $status_badge_icon = '⏳';
+                                
+                                if ( 'success' === $backup_status ) {
+                                    $status_badge_class = 'success';
+                                    $status_badge_text = __( 'Success', 'museder-restoreone' );
+                                    $status_badge_icon = '✅';
+                                } elseif ( 'failed' === $backup_status ) {
+                                    $status_badge_class = 'error';
+                                    $status_badge_text = __( 'Failed', 'museder-restoreone' );
+                                    $status_badge_icon = '❌';
+                                } elseif ( 'in_progress' === $backup_status ) {
+                                    $status_badge_class = 'pending';
+                                    $status_badge_text = __( 'In Progress', 'museder-restoreone' );
+                                    $status_badge_icon = '⏳';
+                                }
+                                ?>
+                                <span class="badge <?php echo esc_attr( $status_badge_class ); ?>" style="display: inline-flex; align-items: center; gap: 4px;">
+                                    <?php echo esc_html( $status_badge_icon . ' ' . $status_badge_text ); ?>
+                                </span>
+                                <span style="color: #64748b; font-size: 13px;">
+                                    <?php
+                                    $parts = [];
+                                    
+                                    // Job type
+                                    if ( ! empty( $last_backup_summary['job_type'] ) ) {
+                                        $job_type_map = [
+                                            'full' => __( 'Full backup', 'museder-restoreone' ),
+                                            'dual' => __( 'Dual version', 'museder-restoreone' ),
+                                        ];
+                                        $parts[] = $job_type_map[ $last_backup_summary['job_type'] ] ?? ucfirst( $last_backup_summary['job_type'] );
+                                    }
+                                    
+                                    // Date and time
+                                    if ( ! empty( $last_backup_summary['finished_at'] ) ) {
+                                        $parts[] = date_i18n( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), $last_backup_summary['finished_at'] );
+                                    } elseif ( ! empty( $last_backup_summary['started_at'] ) ) {
+                                        $parts[] = date_i18n( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), $last_backup_summary['started_at'] );
+                                    }
+                                    
+                                    // Size
+                                    if ( ! empty( $last_backup_summary['size_bytes'] ) ) {
+                                        $parts[] = size_format( $last_backup_summary['size_bytes'], 2 );
+                                    }
+                                    
+                                    // Destinations
+                                    if ( ! empty( $last_backup_summary['destinations'] ) ) {
+                                        $dest_map = [
+                                            'local' => __( 'Local', 'museder-restoreone' ),
+                                            's3'    => __( 'S3', 'museder-restoreone' ),
+                                        ];
+                                        $dest_parts = array_map( function( $dest ) use ( $dest_map ) {
+                                            return $dest_map[ $dest ] ?? $dest;
+                                        }, $last_backup_summary['destinations'] );
+                                        $parts[] = implode( ' + ', $dest_parts );
+                                    }
+                                    
+                                    echo esc_html( implode( ' · ', $parts ) );
+                                    ?>
+                                </span>
+                            </div>
+                        <?php endif; ?>
+                    </div>
+                </div>
+                
+                <!-- Last Restore -->
+                <div class="mrestore-status-row" style="display: flex; align-items: center; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid #f1f5f9;">
+                    <div style="flex: 1;">
+                        <span class="mrestore-status-label" style="font-weight: 600; display: block; margin-bottom: 4px;">
+                            <?php esc_html_e( 'Last Restore', 'museder-restoreone' ); ?>
+                        </span>
+                        <?php if ( ! $last_restore_summary['exists'] ) : ?>
+                            <p class="description" style="margin: 0; color: #64748b;">
+                                <?php esc_html_e( 'No restore has been executed yet.', 'museder-restoreone' ); ?>
+                            </p>
+                        <?php else : ?>
+                            <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                                <?php
+                                $restore_status = $last_restore_summary['status'];
+                                $restore_badge_class = 'pending';
+                                $restore_badge_text = __( 'Unknown', 'museder-restoreone' );
+                                $restore_badge_icon = '⏳';
+                                
+                                if ( 'success' === $restore_status ) {
+                                    $restore_badge_class = 'success';
+                                    $restore_badge_text = __( 'Success', 'museder-restoreone' );
+                                    $restore_badge_icon = '✅';
+                                } elseif ( 'failed' === $restore_status ) {
+                                    $restore_badge_class = 'error';
+                                    $restore_badge_text = __( 'Failed', 'museder-restoreone' );
+                                    $restore_badge_icon = '❌';
+                                } elseif ( 'in_progress' === $restore_status ) {
+                                    $restore_badge_class = 'pending';
+                                    $restore_badge_text = __( 'In Progress', 'museder-restoreone' );
+                                    $restore_badge_icon = '⏳';
+                                }
+                                ?>
+                                <span class="badge <?php echo esc_attr( $restore_badge_class ); ?>" style="display: inline-flex; align-items: center; gap: 4px;">
+                                    <?php echo esc_html( $restore_badge_icon . ' ' . $restore_badge_text ); ?>
+                                </span>
+                                <span style="color: #64748b; font-size: 13px;">
+                                    <?php
+                                    $restore_parts = [];
+                                    
+                                    // Get restore file name from history
+                                    $restore_file = '';
+                                    $last_restore = backup_lite_get_last_successful_restore();
+                                    if ( $last_restore && ! empty( $last_restore['file'] ) ) {
+                                        $restore_file = basename( $last_restore['file'] );
+                                    }
+                                    
+                                    // Status badge text
+                                    $restore_parts[] = $restore_badge_text;
+                                    
+                                    // Date and time
+                                    if ( ! empty( $last_restore_summary['finished_at'] ) ) {
+                                        $restore_parts[] = date_i18n( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), $last_restore_summary['finished_at'] );
+                                    } elseif ( ! empty( $last_restore_summary['started_at'] ) ) {
+                                        $restore_parts[] = date_i18n( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), $last_restore_summary['started_at'] );
+                                    }
+                                    
+                                    // File name
+                                    if ( ! empty( $restore_file ) ) {
+                                        $restore_parts[] = esc_html( $restore_file );
+                                    }
+                                    
+                                    echo esc_html( implode( ' · ', $restore_parts ) );
+                                    ?>
+                                </span>
+                            </div>
+                        <?php endif; ?>
+                    </div>
+                </div>
+                
+                <!-- Recent 7 Days -->
+                <div class="mrestore-status-row" style="display: flex; align-items: center; justify-content: space-between; padding: 12px 0;">
+                    <div style="flex: 1;">
+                        <span class="mrestore-status-label" style="font-weight: 600; display: block; margin-bottom: 4px;">
+                            <?php esc_html_e( 'Recent 7 Days', 'museder-restoreone' ); ?>
+                        </span>
+                        <?php if ( $recent_backup_stats['total_count'] === 0 ) : ?>
+                            <p class="description" style="margin: 0; color: #64748b;">
+                                <?php esc_html_e( 'No backups have been executed in the last 7 days.', 'museder-restoreone' ); ?>
+                            </p>
+                        <?php else : ?>
+                            <p style="margin: 0; color: #64748b; font-size: 13px;">
+                                <?php
+                                printf(
+                                    /* translators: 1: Number of successful backups, 2: Number of failed backups, 3: Number of days */
+                                    esc_html__( '%1$d successful backup(s), %2$d failed (last %3$d days)', 'museder-restoreone' ),
+                                    (int) $recent_backup_stats['success_count'],
+                                    (int) $recent_backup_stats['failed_count'],
+                                    (int) $recent_backup_stats['days']
+                                );
+                                ?>
+                            </p>
+                        <?php endif; ?>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Latest Logs Section -->
+            <div class="mrestore-latest-logs backup-lite-latest-logs">
+                <h3 style="margin-top: 0; margin-bottom: 12px; font-size: 14px; font-weight: 600;">
+                    <?php esc_html_e( 'Latest Logs', 'museder-restoreone' ); ?>
+                </h3>
+                <?php if ( empty( $recent_logs ) ) : ?>
+                    <p class="description"><?php esc_html_e( 'No log files available.', 'museder-restoreone' ); ?></p>
+                <?php else : ?>
+                    <ul class="backup-lite-log-list backup-lite-list" data-collapsed="true">
+                        <?php foreach ( $recent_logs as $index => $log ) : ?>
+                            <li class="backup-lite-log-item <?php echo $index >= 3 ? 'is-extra' : ''; ?>">
+                                <div class="backup-lite-log-title">
+                                    <strong><?php echo esc_html( $log['name'] ); ?></strong>
+                                </div>
+                                <div class="backup-lite-log-meta">
+                                    <span><?php echo esc_html( $log['modified'] ?? '' ); ?> · <?php echo esc_html( $log['size'] ?? '' ); ?></span>
+                                </div>
+                                <?php if ( ! empty( $log['download_url'] ) ) : ?>
+                                    <a href="<?php echo esc_url( $log['download_url'] ); ?>" class="button button-small button-secondary" style="margin-left: 8px;">
+                                        <?php esc_html_e( 'View', 'museder-restoreone' ); ?>
+                                    </a>
+                                <?php endif; ?>
+                            </li>
+                        <?php endforeach; ?>
+                    </ul>
+                    <?php if ( count( $recent_logs ) > 3 ) : ?>
+                        <button type="button" class="button-link backup-lite-toggle-logs" aria-expanded="false" style="margin-top: 8px;">
+                            <?php esc_html_e( 'Show all logs', 'museder-restoreone' ); ?>
+                        </button>
+                    <?php endif; ?>
+                <?php endif; ?>
+            </div>
         </div>
 
         <?php

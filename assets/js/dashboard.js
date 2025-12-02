@@ -68,10 +68,10 @@
             emptyState.hidden = true;
         }
 
+        // Use fixed colors: blue for success, red for failed
         var ctx = chartCanvas.getContext('2d');
-        var gradient = ctx.createLinearGradient(0, 0, 0, chartCanvas.height || 240);
-        gradient.addColorStop(0, '#34d399');
-        gradient.addColorStop(1, '#2563eb');
+        var successColor = '#2563eb'; // Blue
+        var failedColor = '#ef4444';  // Red
 
         new window.Chart(ctx, {
             type: 'doughnut',
@@ -82,7 +82,7 @@
                 ],
                 datasets: [{
                     data: [successCount, failedCount],
-                    backgroundColor: [gradient, 'rgba(239, 68, 68, 0.85)'],
+                    backgroundColor: [successColor, failedColor],
                     borderWidth: 0
                 }]
             },
@@ -94,6 +94,15 @@
                         position: 'bottom',
                         labels: {
                             color: strings.legendColor || '#1f2937'
+                        }
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function (context) {
+                                var value = context.raw;
+                                var percent = total ? Math.round((value / total) * 100) : 0;
+                                return context.label + ': ' + value + ' (' + percent + '%)';
+                            }
                         }
                     }
                 },

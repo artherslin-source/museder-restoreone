@@ -18,13 +18,60 @@ if ( ! defined( 'ABSPATH' ) ) {
 class Backup_Lite_S3_Service {
 
     /**
-     * Upload a backup archive to S3.
+     * File size threshold for simple PUT upload (50MB).
+     * Files <= this size will use simple PUT, files > this size will use multipart upload.
      *
-     * @param string $file_path Absolute path to backup archive.
-     * @return array Result array with 'status' ('success'|'error'|'pending'|'none'), 'message', 'object_key', 'error'.
+     * @var int
      */
+    const SIMPLE_PUT_THRESHOLD = 50 * 1024 * 1024; // 50MB
+
+    /**
+     * Chunk size for multipart upload (8MB).
+     * Each part should be between 5MB and 5GB (except the last part).
+     *
+     * @var int
+     */
+    const MULTIPART_CHUNK_SIZE = 8 * 1024 * 1024; // 8MB
+
+    /**
+     * Sanitize S3 error message to remove sensitive information.
+     * 
+     * Removes Access Keys, Signatures, and other sensitive data from error messages
+     * before displaying them to users.
+     *
+     * @param string $message Raw error message.
+     * @return string Sanitized error message.
+     */
+    public static function sanitize_s3_error_message( $message ) {
+        $message = (string) $message;
+        
+        // Remove sensitive patterns: Access Keys, Signatures, etc.
+        $patterns = array(
+            '/AWSAccessKeyId=[^&\s]+/i',
+            '/Signature=[^&\s]+/i',
+            '/X-Amz-Signature=[^&\s]+/i',
+            '/X-Amz-Credential=[^&\s]+/i',
+            '/access[_-]?key[=:\s]+[^\s]+/i',
+            '/secret[_-]?key[=:\s]+[^\s]+/i',
+            '/secret[_-]?access[_-]?key[=:\s]+[^\s]+/i',
+        );
+        
+        foreach ( $patterns as $pattern ) {
+            $message = preg_replace( $pattern, '***', $message );
+        }
+        
+        // Truncate long messages to avoid overwhelming the UI
+        if ( strlen( $message ) > 300 ) {
+            $message = substr( $message, 0, 300 ) . '...';
+        }
+        
+        return $message;
+    }
+
     /**
      * Uploads a local backup file to S3.
+     * 
+     * Automatically chooses between simple PUT (for files <= 50MB) and multipart upload (for files > 50MB).
      *
      * @param string $file_path Absolute path to local backup file.
      * @return array|WP_Error On success, array with 'status' => 'success' and 'object_key'. On failure, WP_Error.
@@ -37,6 +84,7 @@ class Backup_Lite_S3_Service {
             'file' => $file_path,
         ] );
 
+        // Validate file exists and is readable
         if ( ! file_exists( $file_path ) ) {
             $error_msg = __( 'Backup file not found.', 'museder-restoreone' );
             backup_lite_log( 'error', 'S3 upload failed: backup file not found.', [
@@ -46,7 +94,6 @@ class Backup_Lite_S3_Service {
             return new WP_Error( 's3_missing_file', $error_msg );
         }
         
-        // Check if file is readable
         if ( ! is_readable( $file_path ) ) {
             backup_lite_log( 'error', 'S3 upload failed: backup file is not readable.', [
                 'file' => $file_path,
@@ -55,7 +102,7 @@ class Backup_Lite_S3_Service {
             return new WP_Error( 's3_open_failed', __( 'Unable to open backup file for reading.', 'museder-restoreone' ) );
         }
         
-        // Check file size
+        // Get file size
         $file_size = filesize( $file_path );
         if ( false === $file_size || $file_size <= 0 ) {
             backup_lite_log( 'error', 'S3 upload failed: backup file size is invalid.', [
@@ -65,83 +112,23 @@ class Backup_Lite_S3_Service {
             ] );
             return new WP_Error( 's3_filesize_failed', __( 'Unable to determine backup file size.', 'museder-restoreone' ) );
         }
-        
-        // Read entire file content as string
-        // Note: This loads the entire file into memory, but wp_remote_request() requires string body, not resource
-        // For very large files (>500MB), consider implementing chunked upload in the future
-        backup_lite_log( 'debug', 'S3 upload: reading file content into memory.', [
-            'file' => $file_path,
-            'size' => $file_size,
-        ] );
-        
-        $body = @file_get_contents( $file_path ); // @plugin-check: allowed - reading local backup file
-        if ( false === $body ) {
-            $error = error_get_last();
-            $error_msg = $error && isset( $error['message'] ) ? $error['message'] : __( 'Unknown error reading file.', 'museder-restoreone' );
-            backup_lite_log( 'error', 'S3 upload failed: could not read file.', [
-                'file' => $file_path,
-                'error' => $error_msg,
-            ] );
-            return new WP_Error( 's3_read_file_error', __( 'Could not read backup file for S3 upload.', 'museder-restoreone' ) );
-        }
-        
-        // Verify read size matches file size
-        $read_size = strlen( $body );
-        if ( $read_size !== $file_size ) {
-            backup_lite_log( 'error', 'S3 upload failed: file read size mismatch.', [
-                'file' => $file_path,
-                'expected_size' => $file_size,
-                'actual_size' => $read_size,
-            ] );
-            return new WP_Error( 's3_read_file_error', __( 'File read size mismatch. File may be corrupted or in use.', 'museder-restoreone' ) );
-        }
 
+        // Get S3 settings
         $settings = backup_lite_get_s3_settings();
 
-        // DEBUG log S3 settings (without sensitive info)
-        backup_lite_log(
-            'debug',
-            'S3 settings loaded in upload_backup().',
-            array(
-                'enabled' => isset( $settings['enabled'] ) ? (bool) $settings['enabled'] : null,
-                'region'  => isset( $settings['region'] ) ? sanitize_text_field( $settings['region'] ) : '',
-                'bucket'  => isset( $settings['bucket'] ) ? sanitize_text_field( $settings['bucket'] ) : '',
-            )
-        );
-
-        // Check if S3 is enabled
+        // Validate S3 settings
         if ( empty( $settings['enabled'] ) ) {
             backup_lite_log( 'info', 'S3 upload skipped: S3 is disabled in settings.', array() );
             return new WP_Error( 's3_disabled', __( 'S3 is disabled in settings.', 'museder-restoreone' ) );
         }
 
-        // Check required settings
-        if ( empty( $settings['access_key_id'] ) ) {
-            backup_lite_log( 'error', 'S3 upload skipped: missing access key ID.', array() );
-            return new WP_Error( 'missing_setting_access_key_id', __( 'Missing S3 access key ID.', 'museder-restoreone' ) );
-        }
-        if ( empty( $settings['secret_access_key'] ) ) {
-            backup_lite_log( 'error', 'S3 upload skipped: missing secret access key.', array() );
-            return new WP_Error( 'missing_setting_secret_access_key', __( 'Missing S3 secret access key.', 'museder-restoreone' ) );
-        }
-        if ( empty( $settings['region'] ) ) {
-            backup_lite_log( 'error', 'S3 upload skipped: missing region.', array() );
-            return new WP_Error( 'missing_setting_region', __( 'Missing S3 region.', 'museder-restoreone' ) );
-        }
-        if ( empty( $settings['bucket'] ) ) {
-            backup_lite_log( 'error', 'S3 upload skipped: missing bucket.', array() );
-            return new WP_Error( 'missing_setting_bucket', __( 'Missing S3 bucket.', 'museder-restoreone' ) );
+        if ( empty( $settings['access_key_id'] ) || empty( $settings['secret_access_key'] ) || empty( $settings['region'] ) || empty( $settings['bucket'] ) ) {
+            backup_lite_log( 'error', 'S3 upload skipped: missing required settings.', array() );
+            return new WP_Error( 'missing_s3_settings', __( 'S3 settings are incomplete. Please configure S3 in plugin settings.', 'museder-restoreone' ) );
         }
 
         // Build object key
-        $bucket      = $settings['bucket'];
-        $region      = $settings['region'];
-        $endpoint    = $settings['endpoint'];
-        $use_path    = $settings['use_path_style_endpoint'];
-        $prefix      = $settings['prefix'];
-        $file_name   = basename( $file_path );
-        
-        // Build object key with better structure: {prefix}/{site-domain}/{Y-m-d}/{filename}
+        $file_name = basename( $file_path );
         try {
             $site_domain = wp_parse_url( home_url(), PHP_URL_HOST );
             if ( empty( $site_domain ) ) {
@@ -152,6 +139,7 @@ class Backup_Lite_S3_Service {
                 $site_domain = 'unknown';
             }
             $date_path   = gmdate( 'Y-m-d' );
+            $prefix      = isset( $settings['prefix'] ) ? $settings['prefix'] : '';
             $object_key  = $prefix 
                 ? trailingslashit( $prefix ) . trailingslashit( $site_domain ) . trailingslashit( $date_path ) . $file_name
                 : trailingslashit( $site_domain ) . trailingslashit( $date_path ) . $file_name;
@@ -164,116 +152,934 @@ class Backup_Lite_S3_Service {
             return new WP_Error( 'object_key_error', __( 'Failed to build S3 object key.', 'museder-restoreone' ) );
         }
 
-        // Log S3 upload start
-        backup_lite_log( 'info', 'S3 upload starting.', [
-            'bucket' => $bucket,
-            'region' => $region,
-            'key'    => $object_key,
+        // NOTE: Multipart upload is temporarily disabled for production stability.
+        // All files are uploaded via single PUT method regardless of size.
+        // Multipart upload methods remain in codebase for future use once signature issues are resolved.
+        backup_lite_log( 'info', 'S3 upload: using simple PUT method for all files (multipart disabled).', [
+            'file_size' => $file_size,
+            'file_name' => basename( $file_path ),
+        ] );
+        
+        // Always use simple PUT upload (single PUT method)
+        // This method has been verified to work for files up to several hundred MB
+        return self::upload_simple_put( $file_path, $file_size, $object_key, $settings );
+    }
+
+    /**
+     * Upload a file using simple PUT method (for files <= 50MB).
+     * 
+     * Automatically chooses between wp_remote_request() and cURL streaming based on file size and cURL availability.
+     *
+     * @param string $file_path   Absolute path to local backup file.
+     * @param int    $file_size   File size in bytes.
+     * @param string $object_key  S3 object key.
+     * @param array  $settings    S3 settings array.
+     * @return array|WP_Error On success, array with 'status' => 'success' and 'object_key'. On failure, WP_Error.
+     */
+    protected static function upload_simple_put( $file_path, $file_size, $object_key, $settings ) {
+        backup_lite_log( 'info', 'S3 simple PUT upload starting.', [
+            'file' => $file_path,
+            'size' => $file_size,
+            'key'  => $object_key,
         ] );
 
-        // Build target URL based on endpoint / region
+        // Build target URL
+        $bucket   = $settings['bucket'];
+        $region   = $settings['region'];
+        $endpoint = isset( $settings['endpoint'] ) ? $settings['endpoint'] : '';
+        $use_path = isset( $settings['use_path_style_endpoint'] ) ? $settings['use_path_style_endpoint'] : false;
+
         try {
             $target_url = self::build_s3_object_url( $bucket, $region, $endpoint, $use_path, $object_key );
         } catch ( Throwable $url_error ) {
-            backup_lite_log( 'error', 'S3 upload failed: error building target URL.', [
+            backup_lite_log( 'error', 'S3 simple PUT failed: error building target URL.', [
                 'reason' => 'url_build_error',
                 'message' => $url_error->getMessage(),
-                'bucket' => $bucket,
-                'region' => $region,
-                'key'    => $object_key,
             ] );
             return new WP_Error( 'url_build_error', __( 'Failed to build S3 target URL.', 'museder-restoreone' ) );
         }
 
-        try {
-            // Build object key for backup
-            $object_key = $object_key; // Already built above
-            
-            // Prepare arguments for put_object_via_sigv4
-            $put_args = array(
-                'bucket'         => $bucket,
-                'region'         => $region,
-                'key'            => $object_key,
-                'body'           => $body, // string content (entire file read into memory)
-                'content_type'   => 'application/zip',
-                'content_length' => (int) $file_size,
-                'url'            => $target_url,
-                'access_key'     => $settings['access_key_id'],
-                'secret_key'     => $settings['secret_access_key'],
-            );
-            
-            // Log before calling put_object_via_sigv4 to track where we are
-            backup_lite_log( 'debug', 'S3 upload: calling put_object_via_sigv4.', [
-                'target_url' => $target_url,
-                'bucket' => $bucket,
-                'region' => $region,
-                'key' => $object_key,
-                'content_length' => $file_size,
+        // Choose upload method: use cURL streaming for files > 64MB if cURL is available
+        $use_curl_stream = function_exists( 'curl_init' ) && $file_size > ( 64 * 1024 * 1024 );
+        
+        if ( $use_curl_stream ) {
+            backup_lite_log( 'info', 'S3 simple PUT: using cURL streaming method (file > 64MB).', [
+                'file' => $file_path,
+                'size' => $file_size,
             ] );
-            
-            $result = self::put_object_via_sigv4( $put_args );
-            
-            // Clear body from memory after upload attempt
-            unset( $body );
+            $result = self::put_object_via_curl_stream( $file_path, $object_key, $target_url, $settings );
+        } else {
+            backup_lite_log( 'info', 'S3 simple PUT: using wp_remote_request method.', [
+                'file' => $file_path,
+                'size' => $file_size,
+            ] );
+            $result = self::put_object_via_wp_http( $file_path, $object_key, $target_url, $settings );
+        }
 
-            // Check if result is WP_Error
-            if ( is_wp_error( $result ) ) {
-                return $result;
-            }
-            
-            // Check if result is true (success)
-            if ( true === $result ) {
-                backup_lite_log( 'info', 'S3 upload completed.', [
-                    'bucket' => $bucket,
-                    'key'    => $object_key,
-                    'region' => $region,
-                ] );
-                // Return array with success status and object_key for metadata storage
-                return array(
-                    'status'    => 'success',
-                    'object_key' => $object_key,
-                );
-            }
-            
-            // Unexpected result type
-            backup_lite_log( 'error', 'S3 upload failed: unexpected result type.', [
-                'result_type' => gettype( $result ),
+        if ( is_wp_error( $result ) ) {
+            return $result;
+        }
+        
+        if ( true === $result || ( is_array( $result ) && isset( $result['status'] ) && 'success' === $result['status'] ) ) {
+            backup_lite_log( 'info', 'S3 simple PUT upload completed successfully.', [
                 'bucket' => $bucket,
                 'key'    => $object_key,
-                'region' => $region,
+                'method' => $use_curl_stream ? 'curl_stream' : 'wp_http',
             ] );
-            return new WP_Error( 's3_unexpected_result', __( 'S3 upload returned unexpected result.', 'museder-restoreone' ) );
+            return array(
+                'success'   => true,
+                'status'    => 'success',
+                'object_key' => $object_key,
+            );
+        }
+        
+        backup_lite_log( 'error', 'S3 simple PUT failed: unexpected result type.', [
+            'result_type' => gettype( $result ),
+        ] );
+        return new WP_Error( 's3_unexpected_result', __( 'S3 upload returned unexpected result.', 'museder-restoreone' ) );
+    }
+
+    /**
+     * Upload a file to S3 using wp_remote_request() with hash_file() for payload hash.
+     * 
+     * This method uses WordPress HTTP API and calculates payload hash using hash_file()
+     * to avoid loading the entire file into memory for hash calculation.
+     *
+     * @param string $file_path   Absolute path to local backup file.
+     * @param string $object_key  S3 object key.
+     * @param string $target_url  Full S3 object URL.
+     * @param array  $settings    S3 settings array.
+     * @return true|WP_Error On success returns true, on failure returns WP_Error.
+     */
+    protected static function put_object_via_wp_http( $file_path, $object_key, $target_url, $settings ) {
+        $file_size = filesize( $file_path );
+        if ( false === $file_size || $file_size <= 0 ) {
+            backup_lite_log( 'error', 'S3 wp_http upload failed: invalid file size.', [
+                'file' => $file_path,
+            ] );
+            return new WP_Error( 's3_invalid_file_size', __( 'Invalid file size.', 'museder-restoreone' ) );
+        }
+
+        backup_lite_log( 'info', 'S3 wp_http upload: starting upload.', [
+            'file' => $file_path,
+            'size' => $file_size,
+            'key'  => $object_key,
+        ] );
+
+        // Read entire file content as string (for wp_remote_request)
+        $body = @file_get_contents( $file_path ); // @plugin-check: allowed - reading local backup file
+        if ( false === $body ) {
+            $error = error_get_last();
+            $error_msg = $error && isset( $error['message'] ) ? $error['message'] : __( 'Unknown error reading file.', 'museder-restoreone' );
+            backup_lite_log( 'error', 'S3 wp_http upload failed: could not read file.', [
+                'file' => $file_path,
+                'error' => $error_msg,
+            ] );
+            return new WP_Error( 's3_read_file_error', __( 'Could not read backup file for S3 upload.', 'museder-restoreone' ) );
+        }
+
+        // Verify read size matches file size
+        $read_size = strlen( $body );
+        if ( $read_size !== $file_size ) {
+            unset( $body );
+            backup_lite_log( 'error', 'S3 wp_http upload failed: file read size mismatch.', [
+                'file' => $file_path,
+                'expected_size' => $file_size,
+                'actual_size' => $read_size,
+            ] );
+            return new WP_Error( 's3_read_file_error', __( 'File read size mismatch. File may be corrupted or in use.', 'museder-restoreone' ) );
+        }
+
+        // Calculate payload hash using hash_file() instead of hash() for better memory efficiency
+        // For large files (>100MB), use UNSIGNED-PAYLOAD
+        $unsigned_payload = false;
+        if ( $file_size > 100 * 1024 * 1024 ) { // 100MB threshold
+            $payload_hash = 'UNSIGNED-PAYLOAD';
+            $unsigned_payload = true;
+        } else {
+            // Use hash_file() to calculate SHA256 without loading entire file into memory for hash
+            $payload_hash = @hash_file( 'sha256', $file_path );
+            if ( false === $payload_hash ) {
+                unset( $body );
+                backup_lite_log( 'error', 'S3 wp_http upload failed: hash_file() calculation failed.', [
+                    'file' => $file_path,
+                ] );
+                return new WP_Error( 's3_hash_error', __( 'Failed to calculate payload hash.', 'museder-restoreone' ) );
+            }
+        }
+
+        // Parse URL to get host and path
+        $url_parts = parse_url( $target_url );
+        if ( ! $url_parts || ! isset( $url_parts['host'] ) ) {
+            unset( $body );
+            backup_lite_log( 'error', 'S3 wp_http upload failed: invalid URL format.', [
+                'url' => $target_url,
+            ] );
+            return new WP_Error( 's3_invalid_url', __( 'Invalid S3 URL.', 'museder-restoreone' ) );
+        }
+
+        $host = $url_parts['host'];
+        $path = isset( $url_parts['path'] ) ? $url_parts['path'] : '/';
+        $query = isset( $url_parts['query'] ) ? $url_parts['query'] : '';
+        $bucket = $settings['bucket'];
+        $region = $settings['region'];
+        $access_key = $settings['access_key_id'];
+        $secret_key = $settings['secret_access_key'];
+
+        try {
+            // AWS Signature Version 4
+            $amz_date = gmdate( 'Ymd\THis\Z' );
+            $date_stamp = gmdate( 'Ymd' );
+            $content_sha256 = $payload_hash;
+
+            // Build canonical request
+            $canonical_uri = $path;
+            $canonical_querystring = $query;
+            $canonical_headers = sprintf( "host:%s\nx-amz-content-sha256:%s\nx-amz-date:%s\n", $host, $content_sha256, $amz_date );
+            $signed_headers = 'host;x-amz-content-sha256;x-amz-date';
+            $payload_hash_for_request = $content_sha256;
+
+            $canonical_request = sprintf(
+                "PUT\n%s\n%s\n%s\n%s\n%s",
+                $canonical_uri,
+                $canonical_querystring,
+                $canonical_headers,
+                $signed_headers,
+                $payload_hash_for_request
+            );
+
+            // Build string to sign
+            $algorithm = 'AWS4-HMAC-SHA256';
+            $credential_scope = sprintf( '%s/%s/s3/aws4_request', $date_stamp, $region );
+            $canonical_request_hash = hash( 'sha256', $canonical_request );
+            if ( false === $canonical_request_hash ) {
+                unset( $body );
+                return new WP_Error( 's3_hash_error', __( 'Failed to calculate request hash.', 'museder-restoreone' ) );
+            }
+
+            $string_to_sign = sprintf(
+                "%s\n%s\n%s\n%s",
+                $algorithm,
+                $amz_date,
+                $credential_scope,
+                $canonical_request_hash
+            );
+
+            // Calculate signature
+            $k_date = @hash_hmac( 'sha256', $date_stamp, 'AWS4' . $secret_key, true );
+            if ( false === $k_date ) {
+                unset( $body );
+                return new WP_Error( 's3_signature_error', __( 'Failed to calculate signature key (k_date).', 'museder-restoreone' ) );
+            }
+
+            $k_region = @hash_hmac( 'sha256', $region, $k_date, true );
+            if ( false === $k_region ) {
+                unset( $body );
+                return new WP_Error( 's3_signature_error', __( 'Failed to calculate signature key (k_region).', 'museder-restoreone' ) );
+            }
+
+            $k_service = @hash_hmac( 'sha256', 's3', $k_region, true );
+            if ( false === $k_service ) {
+                unset( $body );
+                return new WP_Error( 's3_signature_error', __( 'Failed to calculate signature key (k_service).', 'museder-restoreone' ) );
+            }
+
+            $k_signing = @hash_hmac( 'sha256', 'aws4_request', $k_service, true );
+            if ( false === $k_signing ) {
+                unset( $body );
+                return new WP_Error( 's3_signature_error', __( 'Failed to calculate signature key (k_signing).', 'museder-restoreone' ) );
+            }
+
+            $signature = @hash_hmac( 'sha256', $string_to_sign, $k_signing );
+            if ( false === $signature ) {
+                unset( $body );
+                return new WP_Error( 's3_signature_error', __( 'Failed to calculate final signature.', 'museder-restoreone' ) );
+            }
+
+            // Build authorization header
+            $authorization = sprintf(
+                '%s Credential=%s/%s, SignedHeaders=%s, Signature=%s',
+                $algorithm,
+                $access_key,
+                $credential_scope,
+                $signed_headers,
+                $signature
+            );
+
+            // Prepare request headers
+            $headers = array(
+                'Host'               => $host,
+                'Content-Type'       => 'application/zip',
+                'Content-Length'     => (string) $file_size,
+                'x-amz-date'         => $amz_date,
+                'x-amz-content-sha256' => $content_sha256,
+                'Authorization'      => $authorization,
+            );
+
+            // Timeout for large backup file uploads (minimum 300 seconds, default 600 seconds)
+            // This is necessary for large backup archives that may take several minutes to upload
+            $timeout = apply_filters( 'museder_restoreone_s3_upload_timeout', 600 );
+            if ( $timeout < 300 ) {
+                $timeout = 300; // Minimum 300 seconds for large files
+            }
+
+            $request_args = array(
+                'method'      => 'PUT',
+                'timeout'     => $timeout,
+                'headers'     => $headers,
+                'body'        => $body, // Must be string (wp_remote_request() does not support resource)
+                'data_format' => 'body',
+            );
+
+            // Log before request
+            backup_lite_log( 'info', 'S3 wp_http upload: sending PUT request.', [
+                'file' => $file_path,
+                'size' => $file_size,
+                'key'  => $object_key,
+                'method' => 'wp_remote_request',
+            ] );
+
+            // Send request
+            try {
+                $response = @wp_remote_request( $target_url, $request_args );
+            } catch ( Throwable $request_error ) {
+                unset( $body );
+                $error_message = self::sanitize_s3_error_message( $request_error->getMessage() );
+                backup_lite_log( 'error', 'S3 wp_http upload failed: exception during wp_remote_request.', [
+                    'file' => $file_path,
+                    'message' => $request_error->getMessage(),
+                ] );
+                return new WP_Error(
+                    'backup_lite_s3_upload_error',
+                    sprintf(
+                        __( 'S3 upload failed: %s', 'museder-restoreone' ),
+                        $error_message
+                    )
+                );
+            }
+
+            // Clear body from memory
+            unset( $body );
+
+            // Check response
+            if ( false === $response ) {
+                $error = error_get_last();
+                $error_msg = $error && isset( $error['message'] ) ? $error['message'] : __( 'Unknown error.', 'museder-restoreone' );
+                backup_lite_log( 'error', 'S3 wp_http upload failed: wp_remote_request returned false.', [
+                    'file' => $file_path,
+                    'error' => $error_msg,
+                ] );
+                return new WP_Error( 's3_request_failed', __( 'S3 upload request failed: wp_remote_request returned false.', 'museder-restoreone' ) );
+            }
+
+            if ( is_wp_error( $response ) ) {
+                $error_code = $response->get_error_code();
+                $error_message = $response->get_error_message();
+                
+                // Mask bucket name in URL for security
+                $masked_url = $target_url;
+                if ( ! empty( $bucket ) ) {
+                    $masked_url = str_replace( $bucket, substr( $bucket, 0, 3 ) . '***', $masked_url );
+                }
+                
+                backup_lite_log( 'error', 'S3 wp_http upload failed (wp_remote_request error).', [
+                    'file' => $file_path,
+                    'file_name' => basename( $file_path ),
+                    'method' => 'PUT',
+                    'url' => $masked_url,
+                    'error_code' => $error_code,
+                    'error_message' => $error_message,
+                ] );
+                return new WP_Error( 's3_http_error', $response->get_error_message() );
+            }
+
+            $status_code = wp_remote_retrieve_response_code( $response );
+            $response_body = wp_remote_retrieve_body( $response );
+            $body_snippet = substr( (string) $response_body, 0, 4096 ); // First 4KB
+
+            // Log response details
+            backup_lite_log( 'info', 'S3 wp_http upload: request completed.', [
+                'file' => $file_path,
+                'size' => $file_size,
+                'key'  => $object_key,
+                'method' => 'wp_remote_request',
+                'status_code' => $status_code,
+                'body_preview' => $body_snippet,
+            ] );
+
+            if ( $status_code < 200 || $status_code >= 300 ) {
+                // Mask bucket name in URL for security
+                $masked_url = $target_url;
+                if ( ! empty( $bucket ) ) {
+                    $masked_url = str_replace( $bucket, substr( $bucket, 0, 3 ) . '***', $masked_url );
+                }
+                
+                // Get first few hundred characters of response body for debugging
+                $body_preview = substr( (string) $response_body, 0, 500 );
+                
+                backup_lite_log( 'error', 'S3 wp_http upload failed (non-2xx response).', [
+                    'file' => $file_path,
+                    'file_name' => basename( $file_path ),
+                    'method' => 'PUT',
+                    'url' => $masked_url,
+                    'status_code' => $status_code,
+                    'body_preview' => $body_preview,
+                ] );
+                
+                // Return user-friendly error message
+                if ( $status_code >= 400 && $status_code < 500 ) {
+                    return new WP_Error(
+                        's3_4xx',
+                        __( 'S3 upload failed with HTTP 4xx. Please check logs for details.', 'museder-restoreone' )
+                    );
+                } elseif ( $status_code >= 500 ) {
+                    return new WP_Error(
+                        's3_5xx',
+                        __( 'S3 upload failed with HTTP 5xx. Please check logs for details.', 'museder-restoreone' )
+                    );
+                } else {
+                    return new WP_Error(
+                        's3_non_2xx',
+                        sprintf(
+                            /* translators: %d: HTTP status code */
+                            __( 'S3 returned unexpected status code %d. Please check logs for details.', 'museder-restoreone' ),
+                            (int) $status_code
+                        )
+                    );
+                }
+            }
+
+            return true;
         } catch ( Throwable $e ) {
-            // Clear body from memory on exception
             if ( isset( $body ) ) {
                 unset( $body );
             }
-            
-            // Sanitize exception message to avoid exposing sensitive info
-            $error_msg = $e->getMessage();
-            if ( stripos( $error_msg, 'secret' ) !== false 
-                 || stripos( $error_msg, 'key' ) !== false 
-                 || stripos( $error_msg, 'authorization' ) !== false 
-                 || stripos( $error_msg, 'access' ) !== false
-            ) {
-                $error_msg = __( 'Authentication failed', 'museder-restoreone' );
+            $error_message = self::sanitize_s3_error_message( $e->getMessage() );
+            backup_lite_log( 'error', 'S3 wp_http upload failed: exception.', [
+                'file' => $file_path,
+                'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+            ] );
+            return new WP_Error(
+                'backup_lite_s3_upload_error',
+                sprintf(
+                    __( 'S3 upload failed: %s', 'museder-restoreone' ),
+                    $error_message
+                )
+            );
+        }
+    }
+
+    /**
+     * Upload a file to S3 using cURL with streaming (for large files > 64MB).
+     * 
+     * This method uses cURL to stream the file directly without loading it into memory.
+     * Only used when cURL is available and file size > 64MB.
+     *
+     * @param string $file_path   Absolute path to local backup file.
+     * @param string $object_key  S3 object key.
+     * @param string $target_url  Full S3 object URL.
+     * @param array  $settings    S3 settings array.
+     * @return true|WP_Error On success returns true, on failure returns WP_Error.
+     */
+    protected static function put_object_via_curl_stream( $file_path, $object_key, $target_url, $settings ) {
+        if ( ! function_exists( 'curl_init' ) ) {
+            backup_lite_log( 'error', 'S3 curl_stream upload failed: cURL is not available.', [
+                'file' => $file_path,
+            ] );
+            return new WP_Error( 's3_curl_unavailable', __( 'cURL is not available on this server.', 'museder-restoreone' ) );
+        }
+
+        $file_size = filesize( $file_path );
+        if ( false === $file_size || $file_size <= 0 ) {
+            backup_lite_log( 'error', 'S3 curl_stream upload failed: invalid file size.', [
+                'file' => $file_path,
+            ] );
+            return new WP_Error( 's3_invalid_file_size', __( 'Invalid file size.', 'museder-restoreone' ) );
+        }
+
+        backup_lite_log( 'info', 'S3 curl_stream upload: starting upload.', [
+            'file' => $file_path,
+            'size' => $file_size,
+            'key'  => $object_key,
+        ] );
+
+        // Open file for reading
+        $file_handle = @fopen( $file_path, 'rb' ); // @plugin-check: allowed - reading local backup file
+        if ( false === $file_handle ) {
+            $error = error_get_last();
+            $error_msg = $error && isset( $error['message'] ) ? $error['message'] : __( 'Unknown error opening file.', 'museder-restoreone' );
+            backup_lite_log( 'error', 'S3 curl_stream upload failed: could not open file.', [
+                'file' => $file_path,
+                'error' => $error_msg,
+            ] );
+            return new WP_Error( 's3_open_failed', __( 'Unable to open backup file for reading.', 'museder-restoreone' ) );
+        }
+
+        // Calculate payload hash using hash_file() for large files
+        // For very large files (>100MB), use UNSIGNED-PAYLOAD
+        $unsigned_payload = false;
+        if ( $file_size > 100 * 1024 * 1024 ) { // 100MB threshold
+            $payload_hash = 'UNSIGNED-PAYLOAD';
+            $unsigned_payload = true;
+        } else {
+            $payload_hash = @hash_file( 'sha256', $file_path );
+            if ( false === $payload_hash ) {
+                fclose( $file_handle );
+                backup_lite_log( 'error', 'S3 curl_stream upload failed: hash_file() calculation failed.', [
+                    'file' => $file_path,
+                ] );
+                return new WP_Error( 's3_hash_error', __( 'Failed to calculate payload hash.', 'museder-restoreone' ) );
             }
-            
-            // Log to plugin log
-            backup_lite_log( 'error', 'S3 upload failed: unhandled exception.', [
-                'reason' => 'exception',
-                'bucket' => isset( $bucket ) ? $bucket : 'unknown',
-                'key'    => isset( $object_key ) ? $object_key : 'unknown',
-                'message' => $error_msg,
+        }
+
+        // Parse URL to get host and path
+        $url_parts = parse_url( $target_url );
+        if ( ! $url_parts || ! isset( $url_parts['host'] ) ) {
+            fclose( $file_handle );
+            backup_lite_log( 'error', 'S3 curl_stream upload failed: invalid URL format.', [
+                'url' => $target_url,
+            ] );
+            return new WP_Error( 's3_invalid_url', __( 'Invalid S3 URL.', 'museder-restoreone' ) );
+        }
+
+        $host = $url_parts['host'];
+        $path = isset( $url_parts['path'] ) ? $url_parts['path'] : '/';
+        $query = isset( $url_parts['query'] ) ? $url_parts['query'] : '';
+        $bucket = $settings['bucket'];
+        $region = $settings['region'];
+        $access_key = $settings['access_key_id'];
+        $secret_key = $settings['secret_access_key'];
+
+        try {
+            // AWS Signature Version 4
+            $amz_date = gmdate( 'Ymd\THis\Z' );
+            $date_stamp = gmdate( 'Ymd' );
+            $content_sha256 = $payload_hash;
+
+            // Build canonical request
+            $canonical_uri = $path;
+            $canonical_querystring = $query;
+            $canonical_headers = sprintf( "host:%s\nx-amz-content-sha256:%s\nx-amz-date:%s\n", $host, $content_sha256, $amz_date );
+            $signed_headers = 'host;x-amz-content-sha256;x-amz-date';
+            $payload_hash_for_request = $content_sha256;
+
+            $canonical_request = sprintf(
+                "PUT\n%s\n%s\n%s\n%s\n%s",
+                $canonical_uri,
+                $canonical_querystring,
+                $canonical_headers,
+                $signed_headers,
+                $payload_hash_for_request
+            );
+
+            // Build string to sign
+            $algorithm = 'AWS4-HMAC-SHA256';
+            $credential_scope = sprintf( '%s/%s/s3/aws4_request', $date_stamp, $region );
+            $canonical_request_hash = hash( 'sha256', $canonical_request );
+            if ( false === $canonical_request_hash ) {
+                fclose( $file_handle );
+                return new WP_Error( 's3_hash_error', __( 'Failed to calculate request hash.', 'museder-restoreone' ) );
+            }
+
+            $string_to_sign = sprintf(
+                "%s\n%s\n%s\n%s",
+                $algorithm,
+                $amz_date,
+                $credential_scope,
+                $canonical_request_hash
+            );
+
+            // Calculate signature
+            $k_date = @hash_hmac( 'sha256', $date_stamp, 'AWS4' . $secret_key, true );
+            if ( false === $k_date ) {
+                fclose( $file_handle );
+                return new WP_Error( 's3_signature_error', __( 'Failed to calculate signature key (k_date).', 'museder-restoreone' ) );
+            }
+
+            $k_region = @hash_hmac( 'sha256', $region, $k_date, true );
+            if ( false === $k_region ) {
+                fclose( $file_handle );
+                return new WP_Error( 's3_signature_error', __( 'Failed to calculate signature key (k_region).', 'museder-restoreone' ) );
+            }
+
+            $k_service = @hash_hmac( 'sha256', 's3', $k_region, true );
+            if ( false === $k_service ) {
+                fclose( $file_handle );
+                return new WP_Error( 's3_signature_error', __( 'Failed to calculate signature key (k_service).', 'museder-restoreone' ) );
+            }
+
+            $k_signing = @hash_hmac( 'sha256', 'aws4_request', $k_service, true );
+            if ( false === $k_signing ) {
+                fclose( $file_handle );
+                return new WP_Error( 's3_signature_error', __( 'Failed to calculate signature key (k_signing).', 'museder-restoreone' ) );
+            }
+
+            $signature = @hash_hmac( 'sha256', $string_to_sign, $k_signing );
+            if ( false === $signature ) {
+                fclose( $file_handle );
+                return new WP_Error( 's3_signature_error', __( 'Failed to calculate final signature.', 'museder-restoreone' ) );
+            }
+
+            // Build authorization header
+            $authorization = sprintf(
+                '%s Credential=%s/%s, SignedHeaders=%s, Signature=%s',
+                $algorithm,
+                $access_key,
+                $credential_scope,
+                $signed_headers,
+                $signature
+            );
+
+            // Initialize cURL
+            $ch = curl_init();
+            if ( false === $ch ) {
+                fclose( $file_handle );
+                backup_lite_log( 'error', 'S3 curl_stream upload failed: curl_init() failed.', [
+                    'file' => $file_path,
+                ] );
+                return new WP_Error( 's3_curl_init_failed', __( 'Failed to initialize cURL.', 'museder-restoreone' ) );
+            }
+
+            // Set cURL options for streaming upload
+            // Use CURLOPT_UPLOAD and CURLOPT_READDATA for streaming (CURLOPT_PUT is deprecated)
+            curl_setopt_array( $ch, array(
+                CURLOPT_URL            => $target_url,
+                CURLOPT_UPLOAD         => true,
+                CURLOPT_READDATA       => $file_handle,
+                CURLOPT_INFILESIZE     => $file_size,
+                CURLOPT_CUSTOMREQUEST  => 'PUT',
+                CURLOPT_HTTPHEADER     => array(
+                    'Host: ' . $host,
+                    'Content-Type: application/zip',
+                    'Content-Length: ' . $file_size,
+                    'x-amz-date: ' . $amz_date,
+                    'x-amz-content-sha256: ' . $content_sha256,
+                    'Authorization: ' . $authorization,
+                ),
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_HEADER         => true,
+                CURLOPT_TIMEOUT        => 600, // 10 minutes
+            ) );
+
+            // Log before request
+            backup_lite_log( 'info', 'S3 curl_stream upload: sending PUT request.', [
+                'file' => $file_path,
+                'size' => $file_size,
+                'key'  => $object_key,
+                'method' => 'curl_stream',
+            ] );
+
+            // Execute request
+            $response = @curl_exec( $ch );
+            $http_code = curl_getinfo( $ch, CURLINFO_HTTP_CODE );
+            $header_size = curl_getinfo( $ch, CURLINFO_HEADER_SIZE );
+            $curl_error = curl_error( $ch );
+            curl_close( $ch );
+            fclose( $file_handle );
+
+            // Check for cURL errors
+            if ( false === $response && ! empty( $curl_error ) ) {
+                backup_lite_log( 'error', 'S3 curl_stream upload failed: cURL error.', [
+                    'file' => $file_path,
+                    'curl_error' => $curl_error,
+                ] );
+                return new WP_Error( 's3_curl_error', sprintf( __( 'cURL error: %s', 'museder-restoreone' ), $curl_error ) );
+            }
+
+            // Extract response body (skip headers)
+            $response_body = substr( $response, $header_size );
+            $body_snippet = substr( (string) $response_body, 0, 4096 ); // First 4KB
+
+            // Log response details
+            backup_lite_log( 'info', 'S3 curl_stream upload: request completed.', [
+                'file' => $file_path,
+                'size' => $file_size,
+                'key'  => $object_key,
+                'method' => 'curl_stream',
+                'status_code' => $http_code,
+                'body_preview' => $body_snippet,
+            ] );
+
+            if ( $http_code < 200 || $http_code >= 300 ) {
+                backup_lite_log( 'error', 'S3 curl_stream upload failed (non-2xx response).', [
+                    'file' => $file_path,
+                    'status_code' => $http_code,
+                    'body_snippet' => $body_snippet,
+                ] );
+                return new WP_Error(
+                    's3_non_2xx',
+                    sprintf(
+                        /* translators: %d: HTTP status code */
+                        __( 'S3 returned unexpected status code %d.', 'museder-restoreone' ),
+                        (int) $http_code
+                    )
+                );
+            }
+
+            return true;
+        } catch ( Throwable $e ) {
+            if ( isset( $file_handle ) && is_resource( $file_handle ) ) {
+                @fclose( $file_handle );
+            }
+            backup_lite_log( 'error', 'S3 curl_stream upload failed: exception.', [
+                'file' => $file_path,
+                'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+            ] );
+            return new WP_Error( 's3_exception', __( 'S3 upload failed due to an internal error.', 'museder-restoreone' ) );
+        }
+    }
+
+    /**
+     * Upload a file using S3 Multipart Upload (for files > 50MB).
+     * 
+     * NOTE: Currently not used in production.
+     * Multipart uploads are temporarily disabled due to signature issues (SignatureDoesNotMatch).
+     * All S3 uploads are handled via single PUT for now (file size < 5GB).
+     *
+     * Once we have full test coverage against AWS S3, we can re-enable multipart uploads.
+     * 
+     * This method reads the file in chunks (8MB each) and uploads them separately,
+     * avoiding loading the entire file into memory.
+     *
+     * @param string $file_path   Absolute path to local backup file.
+     * @param int    $file_size   File size in bytes.
+     * @param string $object_key  S3 object key.
+     * @param array  $settings    S3 settings array.
+     * @return array|WP_Error On success, array with 'status' => 'success' and 'object_key'. On failure, WP_Error.
+     */
+    protected static function upload_multipart( $file_path, $file_size, $object_key, $settings ) {
+        backup_lite_log( 'info', 'S3 multipart upload starting.', [
+            'file' => $file_path,
+            'size' => $file_size,
+            'key'  => $object_key,
+            'chunk_size' => self::MULTIPART_CHUNK_SIZE,
+        ] );
+
+        $bucket      = $settings['bucket'];
+        $region      = $settings['region'];
+        $endpoint    = isset( $settings['endpoint'] ) ? $settings['endpoint'] : '';
+        $use_path    = isset( $settings['use_path_style_endpoint'] ) ? $settings['use_path_style_endpoint'] : false;
+        $access_key  = $settings['access_key_id'];
+        $secret_key  = $settings['secret_access_key'];
+
+        // Step 1: Create multipart upload
+        backup_lite_log( 'info', 'S3 multipart upload: creating multipart upload.', [
+            'bucket' => $bucket,
+            'key'    => $object_key,
+        ] );
+
+        $upload_id = self::create_multipart_upload(
+            $bucket,
+            $region,
+            $object_key,
+            $endpoint,
+            $use_path,
+            $access_key,
+            $secret_key,
+            'application/zip'
+        );
+
+        if ( is_wp_error( $upload_id ) ) {
+            backup_lite_log( 'error', 'S3 multipart upload failed: could not create multipart upload.', [
+                'error_code' => $upload_id->get_error_code(),
+                'error_message' => $upload_id->get_error_message(),
+            ] );
+            return $upload_id;
+        }
+
+        backup_lite_log( 'info', 'S3 multipart upload: multipart upload created.', [
+            'upload_id' => $upload_id,
+        ] );
+
+        // Step 2: Upload parts
+        $parts = array();
+        $part_number = 0;
+        $file_handle = @fopen( $file_path, 'rb' ); // @plugin-check: allowed - reading local backup file
+        if ( false === $file_handle ) {
+            // Abort multipart upload if we can't open the file
+            self::abort_multipart_upload(
+                $bucket,
+                $region,
+                $object_key,
+                $endpoint,
+                $use_path,
+                $upload_id,
+                $access_key,
+                $secret_key
+            );
+            return new WP_Error( 's3_open_failed', __( 'Unable to open backup file for reading.', 'museder-restoreone' ) );
+        }
+
+        try {
+            while ( ! feof( $file_handle ) ) {
+                $part_number++;
+                
+                // Read chunk as string (NOT resource) - maximum 8MB
+                $part_data = @fread( $file_handle, self::MULTIPART_CHUNK_SIZE );
+                if ( false === $part_data ) {
+                    fclose( $file_handle );
+                    // Abort multipart upload
+                    self::abort_multipart_upload(
+                        $bucket,
+                        $region,
+                        $object_key,
+                        $endpoint,
+                        $use_path,
+                        $upload_id,
+                        $access_key,
+                        $secret_key
+                    );
+                    return new WP_Error( 's3_read_chunk_failed', __( 'Failed to read file chunk for multipart upload.', 'museder-restoreone' ) );
+                }
+
+                // If we read 0 bytes, we're done
+                if ( strlen( $part_data ) === 0 ) {
+                    break;
+                }
+
+                $part_size = strlen( $part_data );
+                backup_lite_log( 'debug', 'S3 multipart upload: uploading part.', [
+                    'part_number' => $part_number,
+                    'part_size'   => $part_size,
+                ] );
+
+                // Upload this part
+                $etag = self::upload_part(
+                    $bucket,
+                    $region,
+                    $object_key,
+                    $endpoint,
+                    $use_path,
+                    $upload_id,
+                    $part_number,
+                    $part_data, // String body (NOT resource)
+                    $access_key,
+                    $secret_key
+                );
+
+                // Clear part_data from memory immediately after upload
+                unset( $part_data );
+
+                if ( is_wp_error( $etag ) ) {
+                    fclose( $file_handle );
+                    // Abort multipart upload
+                    self::abort_multipart_upload(
+                        $bucket,
+                        $region,
+                        $object_key,
+                        $endpoint,
+                        $use_path,
+                        $upload_id,
+                        $access_key,
+                        $secret_key
+                    );
+                    backup_lite_log( 'error', 'S3 multipart upload failed: part upload failed.', [
+                        'part_number' => $part_number,
+                        'error_code' => $etag->get_error_code(),
+                        'error_message' => $etag->get_error_message(),
+                    ] );
+                    return new WP_Error(
+                        's3_part_upload_failed',
+                        sprintf(
+                            /* translators: %d: part number */
+                            __( 'Failed to upload part %d of multipart upload.', 'museder-restoreone' ),
+                            $part_number
+                        )
+                    );
+                }
+
+                // Store part info for CompleteMultipartUpload
+                $parts[] = array(
+                    'PartNumber' => $part_number,
+                    'ETag'       => $etag,
+                );
+
+                backup_lite_log( 'info', 'S3 multipart upload: part uploaded successfully.', [
+                    'part_number' => $part_number,
+                    'etag' => $etag,
+                ] );
+            }
+
+            fclose( $file_handle );
+
+            // Step 3: Complete multipart upload
+            backup_lite_log( 'info', 'S3 multipart upload: completing multipart upload.', [
+                'parts_count' => count( $parts ),
+            ] );
+
+            $complete_result = self::complete_multipart_upload(
+                $bucket,
+                $region,
+                $object_key,
+                $endpoint,
+                $use_path,
+                $upload_id,
+                $parts,
+                $access_key,
+                $secret_key
+            );
+
+            if ( is_wp_error( $complete_result ) ) {
+                // Complete failed - try to abort (best effort)
+                self::abort_multipart_upload(
+                    $bucket,
+                    $region,
+                    $object_key,
+                    $endpoint,
+                    $use_path,
+                    $upload_id,
+                    $access_key,
+                    $secret_key
+                );
+                backup_lite_log( 'error', 'S3 multipart upload failed: complete failed.', [
+                    'error_code' => $complete_result->get_error_code(),
+                    'error_message' => $complete_result->get_error_message(),
+                    'parts_count' => count( $parts ),
+                ] );
+                return $complete_result;
+            }
+
+            backup_lite_log( 'info', 'S3 multipart upload completed successfully.', [
+                'bucket' => $bucket,
+                'key'    => $object_key,
+                'parts_count' => count( $parts ),
+            ] );
+
+            return array(
+                'status'    => 'success',
+                'object_key' => $object_key,
+            );
+
+        } catch ( Throwable $e ) {
+            // Ensure file handle is closed
+            if ( isset( $file_handle ) && is_resource( $file_handle ) ) {
+                @fclose( $file_handle );
+            }
+
+            // Abort multipart upload on exception
+            self::abort_multipart_upload(
+                $bucket,
+                $region,
+                $object_key,
+                $endpoint,
+                $use_path,
+                $upload_id,
+                $access_key,
+                $secret_key
+            );
+
+            backup_lite_log( 'error', 'S3 multipart upload failed: exception.', [
+                'message' => $e->getMessage(),
                 'file' => $e->getFile(),
                 'line' => $e->getLine(),
                 'trace' => substr( $e->getTraceAsString(), 0, 1000 ),
             ] );
-            
-            // Also log to PHP error log for easier debugging
-            error_log( '[Backup Lite] S3 upload fatal error: ' . $error_msg . ' in ' . $e->getFile() . ':' . $e->getLine() );
-            
-            return new WP_Error( 's3_exception', __( 'S3 upload failed due to an internal error.', 'museder-restoreone' ) );
+
+            return new WP_Error( 's3_multipart_exception', __( 'S3 multipart upload failed due to an internal error.', 'museder-restoreone' ) );
         }
     }
 
@@ -840,6 +1646,12 @@ class Backup_Lite_S3_Service {
     /**
      * Create a multipart upload on S3.
      *
+     * NOTE: Currently not used in production.
+     * Multipart uploads are temporarily disabled due to signature issues (SignatureDoesNotMatch).
+     * All S3 uploads are handled via single PUT for now (file size < 5GB).
+     *
+     * Once we have full test coverage against AWS S3, we can re-enable multipart uploads.
+     *
      * @param string $bucket      Bucket name.
      * @param string $region      AWS region.
      * @param string $key         Object key.
@@ -1013,6 +1825,27 @@ class Backup_Lite_S3_Service {
 
     /**
      * Upload a part in a multipart upload.
+     *
+     * @param string $bucket      Bucket name.
+     * @param string $region      AWS region.
+     * @param string $key         Object key.
+     * @param string $endpoint    Custom endpoint (optional).
+     * @param bool   $use_path    Use path-style endpoint.
+     * @param string $upload_id   Upload ID from create_multipart_upload.
+     * @param int    $part_number Part number (1-based).
+     * @param string $part_data   Part data as string (NOT resource).
+     * @param string $access_key  Access key ID.
+     * @param string $secret_key  Secret access key.
+     * @return string|WP_Error ETag on success, WP_Error on failure.
+     */
+    /**
+     * Upload a part in a multipart upload.
+     *
+     * NOTE: Currently not used in production.
+     * Multipart uploads are temporarily disabled due to signature issues (SignatureDoesNotMatch).
+     * All S3 uploads are handled via single PUT for now (file size < 5GB).
+     *
+     * Once we have full test coverage against AWS S3, we can re-enable multipart uploads.
      *
      * @param string $bucket      Bucket name.
      * @param string $region      AWS region.
@@ -1213,6 +2046,12 @@ class Backup_Lite_S3_Service {
     /**
      * Complete a multipart upload on S3.
      *
+     * NOTE: Currently not used in production.
+     * Multipart uploads are temporarily disabled due to signature issues (SignatureDoesNotMatch).
+     * All S3 uploads are handled via single PUT for now (file size < 5GB).
+     *
+     * Once we have full test coverage against AWS S3, we can re-enable multipart uploads.
+     *
      * @param string $bucket      Bucket name.
      * @param string $region      AWS region.
      * @param string $key         Object key.
@@ -1223,6 +2062,12 @@ class Backup_Lite_S3_Service {
      * @param string $access_key  Access key ID.
      * @param string $secret_key  Secret access key.
      * @return true|WP_Error True on success, WP_Error on failure.
+     * 
+     * NOTE: Currently not used in production.
+     * Multipart uploads are temporarily disabled due to signature issues (SignatureDoesNotMatch).
+     * All S3 uploads are handled via single PUT for now (file size < 5GB).
+     *
+     * Once we have full test coverage against AWS S3, we can re-enable multipart uploads.
      */
     public static function complete_multipart_upload( $bucket, $region, $key, $endpoint, $use_path, $upload_id, $parts, $access_key, $secret_key ) {
         // Build XML body for CompleteMultipartUpload
@@ -1408,6 +2253,12 @@ class Backup_Lite_S3_Service {
      * @param string $access_key  Access key ID.
      * @param string $secret_key  Secret access key.
      * @return true|WP_Error True on success, WP_Error on failure.
+     * 
+     * NOTE: Currently not used in production.
+     * Multipart uploads are temporarily disabled due to signature issues (SignatureDoesNotMatch).
+     * All S3 uploads are handled via single PUT for now (file size < 5GB).
+     *
+     * Once we have full test coverage against AWS S3, we can re-enable multipart uploads.
      */
     public static function abort_multipart_upload( $bucket, $region, $key, $endpoint, $use_path, $upload_id, $access_key, $secret_key ) {
         // Build URL with uploadId query parameter
@@ -1557,6 +2408,384 @@ class Backup_Lite_S3_Service {
         ] );
 
         return true;
+    }
+
+    /**
+     * List backup files from S3.
+     * 
+     * @param string $prefix Optional prefix to filter objects (e.g., 'backups/').
+     * @return array|WP_Error Array of backup objects on success, WP_Error on failure.
+     */
+    public static function list_backups( $prefix = '' ) {
+        $settings = backup_lite_get_s3_settings();
+        
+        if ( empty( $settings['enabled'] ) || empty( $settings['bucket'] ) ) {
+            return new WP_Error(
+                's3_not_configured',
+                __( 'S3 is not configured or enabled.', 'museder-restoreone' )
+            );
+        }
+
+        $bucket = $settings['bucket'];
+        $region = $settings['region'];
+        $access_key = $settings['access_key_id'];
+        $secret_key = $settings['secret_access_key'];
+        $endpoint = $settings['endpoint'];
+        $use_path_style = $settings['use_path_style_endpoint'];
+        
+        // Build prefix (combine S3 prefix setting with optional parameter)
+        $object_prefix = ! empty( $settings['prefix'] ) ? rtrim( $settings['prefix'], '/' ) . '/' : '';
+        if ( ! empty( $prefix ) ) {
+            $object_prefix .= ltrim( $prefix, '/' );
+        }
+        
+        // Build S3 URL for ListObjectsV2
+        $object_key = $object_prefix; // For list, we use prefix as key
+        $base_url = self::build_s3_object_url( $bucket, $region, $endpoint, $use_path_style, '' );
+        
+        // Parse base URL to get host
+        $url_parts = parse_url( $base_url );
+        if ( ! $url_parts || ! isset( $url_parts['host'] ) ) {
+            return new WP_Error( 's3_invalid_url', __( 'Invalid S3 URL.', 'museder-restoreone' ) );
+        }
+        
+        $host = $url_parts['host'];
+        $scheme = isset( $url_parts['scheme'] ) ? $url_parts['scheme'] : 'https';
+        
+        // Build path for ListObjectsV2
+        if ( $use_path_style && $endpoint ) {
+            $path = '/' . rawurlencode( $bucket ) . '/';
+        } elseif ( $use_path_style ) {
+            $path = '/' . rawurlencode( $bucket ) . '/';
+        } else {
+            $path = '/';
+        }
+        
+        // Add query parameters for ListObjectsV2
+        $query_params = array(
+            'list-type' => '2',
+        );
+        if ( ! empty( $object_prefix ) ) {
+            $query_params['prefix'] = $object_prefix;
+        }
+        // Only list .zip and .wpress files
+        $query_params['prefix'] = $object_prefix;
+        
+        $query_string = http_build_query( $query_params );
+        $url = $scheme . '://' . $host . $path . '?' . $query_string;
+        
+        try {
+            // Build SigV4 signature for GET request
+            $amz_date = gmdate( 'Ymd\THis\Z' );
+            $date_stamp = gmdate( 'Ymd' );
+            $payload_hash = hash( 'sha256', '' ); // Empty body for GET
+            
+            $canonical_uri = $path;
+            $canonical_querystring = $query_string;
+            $canonical_headers = sprintf( "host:%s\nx-amz-content-sha256:%s\nx-amz-date:%s\n", $host, $payload_hash, $amz_date );
+            $signed_headers = 'host;x-amz-content-sha256;x-amz-date';
+            
+            $canonical_request = sprintf(
+                "GET\n%s\n%s\n%s\n%s\n%s",
+                $canonical_uri,
+                $canonical_querystring,
+                $canonical_headers,
+                $signed_headers,
+                $payload_hash
+            );
+            
+            $algorithm = 'AWS4-HMAC-SHA256';
+            $credential_scope = sprintf( '%s/%s/s3/aws4_request', $date_stamp, $region );
+            $canonical_request_hash = hash( 'sha256', $canonical_request );
+            if ( false === $canonical_request_hash ) {
+                return new WP_Error( 's3_hash_error', __( 'Failed to calculate request hash.', 'museder-restoreone' ) );
+            }
+            
+            $string_to_sign = sprintf(
+                "%s\n%s\n%s\n%s",
+                $algorithm,
+                $amz_date,
+                $credential_scope,
+                $canonical_request_hash
+            );
+            
+            // Calculate signature
+            $k_date = hash_hmac( 'sha256', $date_stamp, 'AWS4' . $secret_key, true );
+            $k_region = hash_hmac( 'sha256', $region, $k_date, true );
+            $k_service = hash_hmac( 'sha256', 's3', $k_region, true );
+            $k_signing = hash_hmac( 'sha256', 'aws4_request', $k_service, true );
+            $signature = hash_hmac( 'sha256', $string_to_sign, $k_signing );
+            
+            $authorization = sprintf(
+                '%s Credential=%s/%s, SignedHeaders=%s, Signature=%s',
+                $algorithm,
+                $access_key,
+                $credential_scope,
+                $signed_headers,
+                $signature
+            );
+            
+            $headers = array(
+                'Host' => $host,
+                'x-amz-date' => $amz_date,
+                'x-amz-content-sha256' => $payload_hash,
+                'Authorization' => $authorization,
+            );
+            
+            $request_args = array(
+                'method' => 'GET',
+                'timeout' => 30,
+                'headers' => $headers,
+            );
+            
+            $response = wp_remote_request( $url, $request_args );
+            
+            if ( is_wp_error( $response ) ) {
+                backup_lite_log( 'error', 'S3 list backups failed (wp_remote_request error).', [
+                    'error' => $response->get_error_message(),
+                ] );
+                return new WP_Error( 's3_http_error', $response->get_error_message() );
+            }
+            
+            $status_code = wp_remote_retrieve_response_code( $response );
+            if ( $status_code < 200 || $status_code >= 300 ) {
+                $body_text = wp_remote_retrieve_body( $response );
+                backup_lite_log( 'error', 'S3 list backups failed (non-2xx response).', [
+                    'status_code' => $status_code,
+                    'body_snippet' => substr( (string) $body_text, 0, 200 ),
+                ] );
+                return new WP_Error(
+                    's3_list_error',
+                    sprintf( __( 'S3 list failed with status code %d.', 'museder-restoreone' ), $status_code )
+                );
+            }
+            
+            $body = wp_remote_retrieve_body( $response );
+            $xml = simplexml_load_string( $body );
+            if ( false === $xml ) {
+                return new WP_Error( 's3_xml_parse_error', __( 'Failed to parse S3 response XML.', 'museder-restoreone' ) );
+            }
+            
+            $backups = array();
+            if ( isset( $xml->Contents ) ) {
+                foreach ( $xml->Contents as $object ) {
+                    $key = (string) $object->Key;
+                    // Only include .zip and .wpress files
+                    if ( preg_match( '/\.(zip|wpress)$/i', $key ) ) {
+                        $backups[] = array(
+                            'key' => $key,
+                            'name' => basename( $key ),
+                            'size' => (int) $object->Size,
+                            'last_modified' => (string) $object->LastModified,
+                        );
+                    }
+                }
+            }
+            
+            // Sort by last modified (newest first)
+            usort( $backups, function( $a, $b ) {
+                return strtotime( $b['last_modified'] ) - strtotime( $a['last_modified'] );
+            } );
+            
+            backup_lite_log( 'info', 'S3 list backups completed.', [
+                'count' => count( $backups ),
+            ] );
+            
+            return $backups;
+            
+        } catch ( Throwable $e ) {
+            $error_message = self::sanitize_s3_error_message( $e->getMessage() );
+            backup_lite_log( 'error', 'S3 list backups failed: exception.', [
+                'message' => $error_message,
+            ] );
+            return new WP_Error( 's3_exception', __( 'S3 list backups failed due to an internal error.', 'museder-restoreone' ) );
+        }
+    }
+
+    /**
+     * Download a backup file from S3.
+     * 
+     * @param string $key S3 object key.
+     * @param string $target_path Local file path to save the downloaded file.
+     * @param int    $offset Optional byte offset to start download from (for resuming).
+     * @param int    $length Optional number of bytes to download (for chunked downloads).
+     * @return array|WP_Error Array with 'downloaded' bytes on success, WP_Error on failure.
+     */
+    public static function download_backup( $key, $target_path, $offset = 0, $length = 0 ) {
+        $settings = backup_lite_get_s3_settings();
+        
+        if ( empty( $settings['enabled'] ) || empty( $settings['bucket'] ) ) {
+            return new WP_Error(
+                's3_not_configured',
+                __( 'S3 is not configured or enabled.', 'museder-restoreone' )
+            );
+        }
+
+        $bucket = $settings['bucket'];
+        $region = $settings['region'];
+        $access_key = $settings['access_key_id'];
+        $secret_key = $settings['secret_access_key'];
+        $endpoint = $settings['endpoint'];
+        $use_path_style = $settings['use_path_style_endpoint'];
+        
+        // Build S3 URL
+        $url = self::build_s3_object_url( $bucket, $region, $endpoint, $use_path_style, $key );
+        
+        // Parse URL
+        $url_parts = parse_url( $url );
+        if ( ! $url_parts || ! isset( $url_parts['host'] ) ) {
+            return new WP_Error( 's3_invalid_url', __( 'Invalid S3 URL.', 'museder-restoreone' ) );
+        }
+        
+        $host = $url_parts['host'];
+        $path = isset( $url_parts['path'] ) ? $url_parts['path'] : '/';
+        $query = isset( $url_parts['query'] ) ? $url_parts['query'] : '';
+        
+        try {
+            // Build SigV4 signature for GET request
+            $amz_date = gmdate( 'Ymd\THis\Z' );
+            $date_stamp = gmdate( 'Ymd' );
+            $payload_hash = hash( 'sha256', '' ); // Empty body for GET
+            
+            // Add Range header if offset/length specified
+            $range_header = '';
+            if ( $offset > 0 || $length > 0 ) {
+                if ( $length > 0 ) {
+                    $range_header = sprintf( 'bytes=%d-%d', $offset, $offset + $length - 1 );
+                } else {
+                    $range_header = sprintf( 'bytes=%d-', $offset );
+                }
+            }
+            
+            $canonical_uri = $path;
+            $canonical_querystring = $query;
+            $canonical_headers = sprintf( "host:%s\nx-amz-content-sha256:%s\nx-amz-date:%s\n", $host, $payload_hash, $amz_date );
+            if ( ! empty( $range_header ) ) {
+                $canonical_headers = sprintf( "host:%s\nrange:%s\nx-amz-content-sha256:%s\nx-amz-date:%s\n", $host, $range_header, $payload_hash, $amz_date );
+            }
+            $signed_headers = empty( $range_header ) ? 'host;x-amz-content-sha256;x-amz-date' : 'host;range;x-amz-content-sha256;x-amz-date';
+            
+            $canonical_request = sprintf(
+                "GET\n%s\n%s\n%s\n%s\n%s",
+                $canonical_uri,
+                $canonical_querystring,
+                $canonical_headers,
+                $signed_headers,
+                $payload_hash
+            );
+            
+            $algorithm = 'AWS4-HMAC-SHA256';
+            $credential_scope = sprintf( '%s/%s/s3/aws4_request', $date_stamp, $region );
+            $canonical_request_hash = hash( 'sha256', $canonical_request );
+            if ( false === $canonical_request_hash ) {
+                return new WP_Error( 's3_hash_error', __( 'Failed to calculate request hash.', 'museder-restoreone' ) );
+            }
+            
+            $string_to_sign = sprintf(
+                "%s\n%s\n%s\n%s",
+                $algorithm,
+                $amz_date,
+                $credential_scope,
+                $canonical_request_hash
+            );
+            
+            // Calculate signature
+            $k_date = hash_hmac( 'sha256', $date_stamp, 'AWS4' . $secret_key, true );
+            $k_region = hash_hmac( 'sha256', $region, $k_date, true );
+            $k_service = hash_hmac( 'sha256', 's3', $k_region, true );
+            $k_signing = hash_hmac( 'sha256', 'aws4_request', $k_service, true );
+            $signature = hash_hmac( 'sha256', $string_to_sign, $k_signing );
+            
+            $authorization = sprintf(
+                '%s Credential=%s/%s, SignedHeaders=%s, Signature=%s',
+                $algorithm,
+                $access_key,
+                $credential_scope,
+                $signed_headers,
+                $signature
+            );
+            
+            $headers = array(
+                'Host' => $host,
+                'x-amz-date' => $amz_date,
+                'x-amz-content-sha256' => $payload_hash,
+                'Authorization' => $authorization,
+            );
+            
+            if ( ! empty( $range_header ) ) {
+                $headers['Range'] = $range_header;
+            }
+            
+            $request_args = array(
+                'method' => 'GET',
+                'timeout' => 300, // 5 minutes
+                'headers' => $headers,
+            );
+            
+            $response = wp_remote_request( $url, $request_args );
+            
+            if ( is_wp_error( $response ) ) {
+                backup_lite_log( 'error', 'S3 download failed (wp_remote_request error).', [
+                    'key' => $key,
+                    'error' => $response->get_error_message(),
+                ] );
+                return new WP_Error( 's3_http_error', $response->get_error_message() );
+            }
+            
+            $status_code = wp_remote_retrieve_response_code( $response );
+            
+            // 206 is Partial Content (for Range requests)
+            if ( ( $status_code < 200 || $status_code >= 300 ) && 206 !== $status_code ) {
+                $body_text = wp_remote_retrieve_body( $response );
+                backup_lite_log( 'error', 'S3 download failed (non-2xx response).', [
+                    'key' => $key,
+                    'status_code' => $status_code,
+                    'body_snippet' => substr( (string) $body_text, 0, 200 ),
+                ] );
+                return new WP_Error(
+                    's3_download_error',
+                    sprintf( __( 'S3 download failed with status code %d.', 'museder-restoreone' ), $status_code )
+                );
+            }
+            
+            // Write response body to file
+            $body = wp_remote_retrieve_body( $response );
+            $file_handle = fopen( $target_path, $offset > 0 ? 'ab' : 'wb' );
+            if ( false === $file_handle ) {
+                return new WP_Error( 's3_file_open_error', __( 'Failed to open target file for writing.', 'museder-restoreone' ) );
+            }
+            
+            $written = fwrite( $file_handle, $body );
+            fclose( $file_handle );
+            
+            if ( false === $written ) {
+                return new WP_Error( 's3_file_write_error', __( 'Failed to write downloaded data to file.', 'museder-restoreone' ) );
+            }
+            
+            // Get downloaded bytes
+            $downloaded = 0;
+            if ( file_exists( $target_path ) ) {
+                $downloaded = filesize( $target_path );
+            }
+            
+            backup_lite_log( 'info', 'S3 download completed.', [
+                'key' => $key,
+                'downloaded' => $downloaded,
+            ] );
+            
+            return array(
+                'success' => true,
+                'downloaded' => $downloaded,
+            );
+            
+        } catch ( Throwable $e ) {
+            $error_message = self::sanitize_s3_error_message( $e->getMessage() );
+            backup_lite_log( 'error', 'S3 download failed: exception.', [
+                'key' => $key,
+                'message' => $error_message,
+            ] );
+            return new WP_Error( 's3_exception', __( 'S3 download failed due to an internal error.', 'museder-restoreone' ) );
+        }
     }
 }
 

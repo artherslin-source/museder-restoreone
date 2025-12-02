@@ -1229,4 +1229,70 @@ class Backup_Lite_Restore_Service {
         self::copy_files_from_extract( $extract );
         self::cleanup_job_tmp( $job_id, $extract );
     }
+
+    /**
+     * Register a downloaded backup file as a local backup.
+     * 
+     * This method creates backup metadata so the file appears in the "Available Backups" list.
+     *
+     * @param string $file_path Absolute path to the downloaded backup file.
+     * @param string $source    Source of the backup (e.g., 's3').
+     * @return true|WP_Error True on success, WP_Error on failure.
+     */
+    public static function register_downloaded_backup( $file_path, $source = 's3' ) {
+        if ( ! file_exists( $file_path ) || ! is_readable( $file_path ) ) {
+            return new WP_Error(
+                'backup_file_not_found',
+                __( 'Downloaded backup file not found or unreadable.', 'museder-restoreone' )
+            );
+        }
+
+        $filename = basename( $file_path );
+        $file_size = filesize( $file_path );
+        $created_at = current_time( 'mysql' );
+
+        // Determine backup type from filename
+        $type = 'full'; // Default to full backup
+        if ( strpos( $filename, 'database' ) !== false ) {
+            $type = 'database';
+        } elseif ( strpos( $filename, 'files' ) !== false ) {
+            $type = 'files';
+        }
+
+        // Build metadata
+        $metadata = array(
+            'name' => $filename,
+            'size' => $file_size,
+            'created_at' => $created_at,
+            'type' => $type,
+            'duration' => null, // Duration not available for downloaded backups
+            'source' => $source,
+            's3_status' => 'stored', // Mark as stored in S3 since it came from S3
+        );
+
+        // Store metadata using Backup_Lite_Backup::store_backup_metadata()
+        if ( ! class_exists( 'Backup_Lite_Backup' ) || ! method_exists( 'Backup_Lite_Backup', 'store_backup_metadata' ) ) {
+            return new WP_Error(
+                'backup_class_not_available',
+                __( 'Backup class is not available.', 'museder-restoreone' )
+            );
+        }
+
+        $result = Backup_Lite_Backup::store_backup_metadata( $filename, $metadata );
+
+        if ( false === $result ) {
+            return new WP_Error(
+                'backup_metadata_store_failed',
+                __( 'Failed to store backup metadata.', 'museder-restoreone' )
+            );
+        }
+
+        backup_lite_log( 'info', 'Downloaded backup registered.', [
+            'file' => $filename,
+            'source' => $source,
+            'size' => $file_size,
+        ] );
+
+        return true;
+    }
 }

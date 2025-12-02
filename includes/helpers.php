@@ -191,6 +191,39 @@ function backup_lite_get_restore_history( $limit = 0 ) {
     return $data;
 }
 
+/**
+ * Get the last successful restore from restore history.
+ * 
+ * This method reuses backup_lite_get_restore_history() logic but filters for:
+ * - Successful restores (result === 'success')
+ * - Returns the most recent one (first in the sorted history)
+ * 
+ * @return array|null Restore history entry or null if no successful restore found.
+ */
+function backup_lite_get_last_successful_restore() {
+    $history = backup_lite_get_restore_history( 0 ); // Get all history entries
+    
+    if ( empty( $history ) ) {
+        return null;
+    }
+
+    // History is already sorted with newest first (array_unshift in append function)
+    // Find the first successful restore
+    foreach ( $history as $entry ) {
+        if ( ! is_array( $entry ) ) {
+            continue;
+        }
+
+        // Check if this is a successful restore
+        $result = isset( $entry['result'] ) ? strtolower( $entry['result'] ) : '';
+        if ( 'success' === $result ) {
+            return $entry;
+        }
+    }
+
+    return null;
+}
+
 function backup_lite_append_restore_history( $entry ) {
     if ( empty( $entry ) || ! is_array( $entry ) ) {
         return false;

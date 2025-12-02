@@ -592,15 +592,24 @@ var backupJobContext = {
             var label = options.label || '';
             var encrypt = options.encrypt || false;
             var dual = options.create_dual_version || options.dual_version || options.dual || false;
-            var destS3 = options.dest_s3 || false;
+            
+            // Check dest_s3 from multiple possible locations for backward compatibility
+            var destS3 = false;
+            if (options.dest_s3 !== undefined && options.dest_s3 !== null) {
+                destS3 = Boolean(options.dest_s3);
+            } else if (options.destinations && options.destinations.s3 !== undefined) {
+                destS3 = Boolean(options.destinations.s3);
+            } else if (options.upload_to_s3 !== undefined && options.upload_to_s3 !== null) {
+                destS3 = Boolean(options.upload_to_s3);
+            }
             
             var html = '<div id="backup-lite-settings-summary" style="margin-top: 12px; padding: 12px; background: #f0f9ff; border-left: 4px solid var(--bl-primary, #3b82f6); border-radius: 4px;">';
             html += '<strong style="display: block; margin-bottom: 8px;">' + (strings.currentBackupSettings || 'Current backup settings:') + '</strong>';
             html += '<ul style="margin: 0; padding-left: 20px; list-style: disc;">';
-            html += '<li><strong>Label:</strong> ' + backupLiteEscapeHtml(label || '—') + '</li>';
-            html += '<li><strong>Encrypt:</strong> ' + (encrypt ? (strings.enabled || 'Enabled') : (strings.disabled || 'Disabled')) + '</li>';
-            html += '<li><strong>Dual version:</strong> ' + (dual ? (strings.enabled || 'Enabled') : (strings.disabled || 'Disabled')) + '</li>';
-            html += '<li><strong>Upload to S3:</strong> ' + (destS3 ? (strings.enabled || 'Enabled') : (strings.disabled || 'Disabled')) + '</li>';
+            html += '<li><strong>Label:</strong> ' + backupLiteEscapeHtml(label || '(no label)') + '</li>';
+            html += '<li><strong>Encrypt:</strong> ' + (encrypt ? (getString('enabled', 'Enabled') || 'Enabled') : (getString('disabled', 'Disabled') || 'Disabled')) + '</li>';
+            html += '<li><strong>Dual version (Snapshot + Full):</strong> ' + (dual ? (getString('enabled', 'Enabled') || 'Enabled') : (getString('disabled', 'Disabled') || 'Disabled')) + '</li>';
+            html += '<li><strong>Upload to S3:</strong> ' + (destS3 ? (getString('yes', 'Yes') || 'Yes') : (getString('no', 'No') || 'No')) + '</li>';
             html += '</ul>';
             html += '</div>';
             
@@ -732,6 +741,12 @@ var backupJobContext = {
             return;
         }
 
+        // Check if already cancelled
+        if (backupJobContext.current.status === 'cancelled') {
+            showToast(strings.jobCancelled || 'Backup already cancelled.', 'warning');
+            return;
+        }
+
         // Stop polling immediately to prevent any further status updates
         stopBackupJobPolling();
 
@@ -749,11 +764,15 @@ var backupJobContext = {
             credentials: 'same-origin',
             body: payload
         }).then(function (response) {
+            if (!response.ok) {
+                throw new Error('HTTP ' + response.status);
+            }
             return response.json();
         }).then(function (json) {
             if (!json || json.success !== true) {
                 throw json && json.data ? json.data : json;
             }
+            // Stop polling and reset state
             stopBackupJobPolling();
             setBackupBusy(false);
             backupJobContext.current = null;
@@ -762,10 +781,12 @@ var backupJobContext = {
             backupLiteSetFormLocked(false); // Unlock form when job is cancelled
             backupLiteHideSettingsSummary(); // Hide settings summary on cancellation
             resetBackupProgress();
+            backupLiteStopTimer(null);
             showToast(strings.jobCancelSuccess || 'Backup cancelled.', 'warning');
         }).catch(function (error) {
             var message = (error && error.message) ? error.message : (strings.jobCancelFailed || 'Unable to cancel backup.');
             showToast(message, 'error');
+            // Re-enable cancel button if job still exists
             setBackupCancelable(!!(backupJobContext.current && backupJobContext.current.id));
         });
     }
@@ -784,7 +805,8 @@ var backupJobContext = {
         var options = {};
 
         // S3 checkbox - always collect (not just for PRO)
-        var destS3Checkbox = backupFormEl.querySelector('input[name="backup_lite_dest_s3"]');
+        // Try to find by id first (backup-lite-dest-s3), then fallback to name attribute
+        var destS3Checkbox = backupFormEl.querySelector('#backup-lite-dest-s3') || backupFormEl.querySelector('input[name="backup_lite_dest_s3"]');
         if (destS3Checkbox) {
             options.backup_lite_dest_s3 = destS3Checkbox.checked ? '1' : '0';
         } else {
@@ -867,6 +889,11 @@ var backupJobContext = {
         }
 
         backupJobContext.current = job;
+        
+        // Update settings summary from job options if available
+        if (job.options) {
+            backupLiteLockBackupFormFromServer(job);
+        }
         
         // Update progress - ensure it reaches 100% when completed
         var percent = job.percentage || 0;
@@ -1114,6 +1141,12 @@ var backupJobContext = {
                 throw json && json.data ? json.data : json;
             }
             backupJobContext.current = json.data.job;
+            
+            // Update settings summary from job options if available
+            if (json.data.job && json.data.job.options) {
+                backupLiteLockBackupFormFromServer(json.data.job);
+            }
+            
             scheduleBackupJobPolling(true);
         }).catch(function (error) {
             setBackupBusy(false);
@@ -1371,15 +1404,38 @@ $(document).on('click', '.backup-lite-upload-to-cloud', function (event) {
             $btn.data('is-uploading', false);
             
             if (json && json.success) {
-                showToast('✅ ' + (json.data && json.data.message ? json.data.message : 'Backup uploaded to S3 successfully.'), 'success');
-                // Reload the page to update the Cloud Storage column
+                // Success: update Cloud Storage badge to "STORED IN S3"
+                var $row = $btn.closest('tr');
+                var $cloudCell = $row.find('td').eq(6); // Cloud Storage column (7th column, 0-indexed)
+                if ($cloudCell.length) {
+                    $cloudCell.html('<span class="bl-tag" style="background: var(--bl-success); color: #fff; padding: 2px 8px; border-radius: 4px; font-size: 11px;" title="STORED IN S3">✅ STORED IN S3</span>');
+                }
+                
+                // Show success toast
+                var successMsg = json.data && json.data.message 
+                    ? json.data.message 
+                    : 'Backup uploaded to S3 successfully.';
+                showToast('✅ ' + successMsg, 'success');
+                
+                // Reload the page after a short delay to ensure all data is updated
                 setTimeout(function () {
                     window.location.reload();
                 }, 1500);
             } else {
+                // Failure: update Cloud Storage badge to "S3 UPLOAD FAILED"
+                var $row = $btn.closest('tr');
+                var $cloudCell = $row.find('td').eq(6); // Cloud Storage column (7th column, 0-indexed)
+                if ($cloudCell.length) {
+                    var errorMsg = json && json.data && json.data.message 
+                        ? json.data.message 
+                        : 'S3 upload failed';
+                    $cloudCell.html('<span class="bl-tag" style="background: var(--bl-danger); color: #fff; padding: 2px 8px; border-radius: 4px; font-size: 11px; cursor: help;" title="' + errorMsg + '">❌ S3 UPLOAD FAILED</span>');
+                }
+                
+                // Show error toast
                 var errorMsg = json && json.data && json.data.message 
                     ? json.data.message 
-                    : 'Failed to upload backup to S3.';
+                    : 'S3 upload failed. Please check logs for details.';
                 showToast('❌ ' + errorMsg, 'error');
                 $btn.prop('disabled', false);
                 $btn.html(originalText);
@@ -1390,8 +1446,91 @@ $(document).on('click', '.backup-lite-upload-to-cloud', function (event) {
             
             console.error('[Backup Lite] Upload to cloud error:', error);
             
+            // Update Cloud Storage badge to "S3 UPLOAD FAILED"
+            var $row = $btn.closest('tr');
+            var $cloudCell = $row.find('td').eq(6); // Cloud Storage column (7th column, 0-indexed)
+            if ($cloudCell.length) {
+                $cloudCell.html('<span class="bl-tag" style="background: var(--bl-danger); color: #fff; padding: 2px 8px; border-radius: 4px; font-size: 11px; cursor: help;" title="S3 upload failed">❌ S3 UPLOAD FAILED</span>');
+            }
+            
             // Show appropriate error message
-            var errorMsg = 'Failed to upload backup to S3.';
+            var errorMsg = 'S3 upload failed. Please check logs for details.';
+            if (error && error.message) {
+                if (error.message.indexOf('non-JSON') !== -1 || error.message.indexOf('Server returned non-JSON') !== -1) {
+                    errorMsg = 'Unexpected server response. Please check logs for details.';
+                } else if (error.message.indexOf('HTTP 500') !== -1) {
+                    errorMsg = 'Server error occurred. Please check logs for details.';
+                } else {
+                    errorMsg = error.message;
+                }
+            }
+            
+            showToast('❌ ' + errorMsg, 'error');
+            $btn.prop('disabled', false);
+            $btn.html(originalText);
+        });
+    });
+
+    // Handle reset S3 status button click
+    $(document).on('click', '.backup-lite-reset-s3-status', function (event) {
+        event.preventDefault();
+        var $btn = $(this);
+        var filename = $btn.data('filename');
+
+        if (!filename) {
+            showToast('Error: Backup filename is missing.', 'error');
+            return;
+        }
+
+        if (!confirm('Reset S3 upload record for this backup? This will clear the upload status and allow you to re-upload.')) {
+            return;
+        }
+
+        // Disable button and show loading state
+        $btn.prop('disabled', true);
+        var originalText = $btn.html();
+        $btn.html('<span class="spinner is-active" style="float: none; margin: 0 4px 0 0;"></span> Resetting...');
+
+        var payload = new FormData();
+        payload.append('action', 'backup_lite_reset_s3_status');
+        payload.append('nonce', settings.nonce);
+        payload.append('filename', filename);
+
+        fetch(settings.ajaxUrl, {
+            method: 'POST',
+            credentials: 'same-origin',
+            body: payload
+        }).then(function (response) {
+            // Check Content-Type before parsing JSON
+            var contentType = response.headers.get('content-type');
+            if (!contentType || contentType.indexOf('application/json') === -1) {
+                throw new Error('Server returned non-JSON response. Please check logs for details.');
+            }
+            
+            if (!response.ok) {
+                throw new Error('HTTP ' + response.status + ': ' + response.statusText);
+            }
+            
+            return response.json();
+        }).then(function (json) {
+            if (json && json.success) {
+                showToast('✅ ' + (json.data && json.data.message ? json.data.message : 'S3 upload record has been reset.'), 'success');
+                // Reload the page to update the Cloud Storage column
+                setTimeout(function () {
+                    window.location.reload();
+                }, 1500);
+            } else {
+                var errorMsg = json && json.data && json.data.message 
+                    ? json.data.message 
+                    : 'Failed to reset S3 upload record.';
+                showToast('❌ ' + errorMsg, 'error');
+                $btn.prop('disabled', false);
+                $btn.html(originalText);
+            }
+        }).catch(function (error) {
+            console.error('[Backup Lite] Reset S3 status error:', error);
+            
+            var errorMsg = 'Failed to reset S3 upload record.';
             if (error && error.message) {
                 if (error.message.indexOf('non-JSON') !== -1 || error.message.indexOf('Server returned non-JSON') !== -1) {
                     errorMsg = 'Unexpected server response. Please check logs for details.';
@@ -1410,6 +1549,7 @@ $(document).on('click', '.backup-lite-upload-to-cloud', function (event) {
 
     $(document).on('click', '.backup-lite-delete-backup', function (event) {
         event.preventDefault();
+        event.stopPropagation(); // Prevent event bubbling to details element
 
         const button = $(this);
         const filename = button.data('filename');
@@ -1417,6 +1557,12 @@ $(document).on('click', '.backup-lite-upload-to-cloud', function (event) {
         if (!filename) {
             handleError({ message: strings.noFileSelected || 'No backup file selected.' });
             return;
+        }
+
+        // Close the actions menu (details element)
+        var $details = button.closest('details.bl-actions-menu');
+        if ($details.length) {
+            $details.prop('open', false);
         }
 
         if (!confirm(strings.confirmDelete || 'Are you sure you want to delete this backup? This action cannot be undone.')) {
@@ -1435,25 +1581,56 @@ $(document).on('click', '.backup-lite-upload-to-cloud', function (event) {
             credentials: 'same-origin',
             body: payload
         }).then(function (response) {
+            // Check if response is ok
+            if (!response.ok) {
+                throw new Error('HTTP error! status: ' + response.status);
+            }
+            // Check content type
+            var contentType = response.headers.get('content-type');
+            if (!contentType || !contentType.includes('application/json')) {
+                throw new Error('Server returned non-JSON response. Please check logs for details.');
+            }
             return response.json();
         }).then(function (json) {
             button.prop('disabled', false);
 
-            if (!json.success) {
-                handleError(json.data || json);
+            if (!json || !json.success) {
+                var errorMsg = (json && json.data && json.data.message) ? json.data.message : 'Failed to delete backup.';
+                handleError(json && json.data ? json.data : { message: errorMsg });
                 return;
             }
 
             const data = json.data || {};
             const message = data.message || 'Backup deleted successfully.';
-            showMessage('success', strings.successTitle || '', message);
             
-            button.closest('tr').fadeOut(300, function () {
-                $(this).remove();
-            });
-        }).catch(function () {
+            // Show success message
+            if (typeof showToast === 'function') {
+                showToast('✅ ' + message, 'success');
+            } else {
+                showMessage('success', strings.successTitle || '', message);
+            }
+            
+            // Reload page after a short delay to refresh the list
+            // This ensures the backup list is updated and metadata is consistent
+            // Use a slightly longer delay to ensure toast message is visible
+            setTimeout(function() {
+                try {
+                    window.location.reload();
+                } catch (e) {
+                    // Fallback if reload fails
+                    console.error('Failed to reload page:', e);
+                    // Try alternative reload method
+                    window.location.href = window.location.href;
+                }
+            }, 1500);
+        }).catch(function (error) {
             button.prop('disabled', false);
-            handleError();
+            console.error('Delete backup error:', error);
+            var errorMsg = 'Network error while deleting backup. Please try again.';
+            if (error && error.message) {
+                errorMsg = error.message;
+            }
+            handleError({ message: errorMsg });
         });
 });
 
@@ -1656,13 +1833,35 @@ function initBackupLiteDomReady() {
         });
     }
 
+    // Check for active job on page load - only resume if status is running or pending
     if (localizedSettings.activeJob && localizedSettings.activeJob.id) {
-        backupJobContext.current = localizedSettings.activeJob;
-        setBackupBusy(true);
-        updateBackupProgress(localizedSettings.activeJob.percentage || 0);
-        setBackupStatusMessage(strings.jobResuming || strings.runningMessage || '', 'loading');
-        setBackupCancelable(true);
-        scheduleBackupJobPolling(true);
+        var jobStatus = localizedSettings.activeJob.status || '';
+        // Only resume if job is actually running or pending
+        if (jobStatus === 'running' || jobStatus === 'pending') {
+            backupJobContext.current = localizedSettings.activeJob;
+            setBackupBusy(true);
+            updateBackupProgress(localizedSettings.activeJob.percentage || 0);
+            setBackupStatusMessage(strings.jobResuming || strings.runningMessage || '', 'loading');
+            setBackupCancelable(true);
+            backupLiteJobRunning = true;
+            backupLiteSetFormLocked(true);
+            scheduleBackupJobPolling(true);
+        } else if (jobStatus === 'cancelled') {
+            // Job was cancelled, don't resume
+            backupJobContext.current = null;
+            setBackupBusy(false);
+            setBackupCancelable(false);
+            backupLiteJobRunning = false;
+            backupLiteSetFormLocked(false);
+            showToast(strings.jobCancelled || 'Backup cancelled.', 'warning');
+        } else if (jobStatus === 'completed' || jobStatus === 'failed') {
+            // Job is finished, don't resume
+            backupJobContext.current = null;
+            setBackupBusy(false);
+            setBackupCancelable(false);
+            backupLiteJobRunning = false;
+            backupLiteSetFormLocked(false);
+        }
     }
 
     if (restoreFormV2 && uploadProgress) {
@@ -3352,7 +3551,7 @@ function initRestoreCenter() {
         // Function to load backups list via AJAX
         function loadBackupsList() {
             if (!existingSelect) {
-                return;
+                return Promise.resolve([]);
             }
             
             // Show loading state
@@ -3362,10 +3561,11 @@ function initRestoreCenter() {
             
             var formData = prepareFormData('backup_lite_get_backups_list');
             
-            ajaxRequest(formData).then(function (json) {
+            return ajaxRequest(formData).then(function (json) {
                 existingSelect.disabled = false;
+                var backups = [];
                 if (json && json.success && json.data && json.data.backups) {
-                    var backups = json.data.backups;
+                    backups = json.data.backups;
                     existingSelect.innerHTML = '<option value="">' + (strings.selectBackup || 'Select a backup…') + '</option>';
                     backups.forEach(function (backup) {
                         var option = document.createElement('option');
@@ -3376,6 +3576,7 @@ function initRestoreCenter() {
                 } else {
                     existingSelect.innerHTML = '<option value="">' + (strings.noBackups || 'No backups available.') + '</option>';
                 }
+                return backups;
             }).catch(function (error) {
                 existingSelect.disabled = false;
                 existingSelect.innerHTML = '<option value="">' + (strings.errorLoadingBackups || 'Error loading backups.') + '</option>';
@@ -3383,6 +3584,7 @@ function initRestoreCenter() {
                 if (error && error.message) {
                     notifyError({ message: error.message });
                 }
+                return [];
             });
         }
 
@@ -3391,8 +3593,36 @@ function initRestoreCenter() {
         }
         if (existingSelect) {
             existingSelect.addEventListener('change', resetAnalysisState);
-            // Load backups once on page load so the dropdown is always current
-            loadBackupsList();
+            
+            // Check for restore_file parameter in URL and pre-select backup
+            var urlParams = new URLSearchParams(window.location.search);
+            var restoreFile = urlParams.get('restore_file');
+            
+            if (restoreFile) {
+                // Switch to "Select from Backups" tab first
+                var existingButton = document.querySelector('.method-tabs button[data-method="existing"]');
+                if (existingButton) {
+                    existingButton.click();
+                }
+                
+                // Load backups list and then select the file
+                loadBackupsList().then(function(backups) {
+                    // Find and select the backup file
+                    if (existingSelect && restoreFile) {
+                        for (var i = 0; i < existingSelect.options.length; i++) {
+                            var option = existingSelect.options[i];
+                            if (option.value === restoreFile || option.value.indexOf(restoreFile) !== -1) {
+                                existingSelect.value = option.value;
+                                existingSelect.dispatchEvent(new Event('change', { bubbles: true }));
+                                break;
+                            }
+                        }
+                    }
+                });
+            } else {
+                // Load backups once on page load so the dropdown is always current
+                loadBackupsList();
+            }
         }
         if (remoteInput) {
             remoteInput.addEventListener('input', resetAnalysisState);
@@ -6202,6 +6432,407 @@ function initRestoreCenter() {
             target.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
     });
+
+    // S3 Cloud Backups Tab Functionality
+    (function() {
+        var $tabs = jQuery('.backup-lite-tab-button');
+        var $tabContents = jQuery('.backup-lite-tab-content');
+        var activeDownloads = {}; // Track active downloads: { download_id: { interval, progressBar } }
+
+        // Tab switching
+        $tabs.on('click', function() {
+            var tabName = jQuery(this).data('tab');
+            $tabs.removeClass('active');
+            jQuery(this).addClass('active');
+            $tabContents.removeClass('active').hide();
+            jQuery('#' + tabName + '-tab').addClass('active').show();
+
+            // Load S3 backups when switching to S3 tab
+            if (tabName === 's3-cloud-backups') {
+                loadS3Backups();
+            }
+        });
+
+        // Load S3 backups list
+        function loadS3Backups() {
+            var $loading = jQuery('#s3-backups-loading');
+            var $list = jQuery('#s3-backups-list');
+            var $error = jQuery('#s3-backups-error');
+            var $table = jQuery('#s3-backups-table');
+            var $empty = jQuery('#s3-backups-empty');
+            var $tbody = jQuery('#s3-backups-tbody');
+
+            $loading.show();
+            $list.hide();
+            $error.hide();
+            $table.hide();
+            $empty.hide();
+
+            jQuery.ajax({
+                url: BackupLite.ajaxUrl,
+                method: 'POST',
+                data: {
+                    action: 'museder_list_s3_backups',
+                    nonce: BackupLite.cloudNonce,
+                },
+                success: function(response) {
+                    $loading.hide();
+                    if (response.success && response.data && response.data.backups) {
+                        var backups = response.data.backups;
+                        if (backups.length === 0) {
+                            $empty.show();
+                            $list.show();
+                        } else {
+                            $tbody.empty();
+                            backups.forEach(function(backup) {
+                                var buttonHtml = '';
+                                var statusHtml = '';
+                                
+                                // Check if already downloaded
+                                if (backup.is_downloaded) {
+                                    buttonHtml = '<button type="button" class="button button-primary backup-lite-s3-download download-completed" ' +
+                                        'data-key="' + escapeHtml(backup.key) + '" ' +
+                                        'data-size="' + backup.size + '" ' +
+                                        'data-name="' + escapeHtml(backup.name) + '" disabled>' +
+                                        'Download Complete' +
+                                        '</button>';
+                                    statusHtml = '<div style="margin-top: 4px; font-size: 12px; color: #10b981;">' +
+                                        '<strong>Download completed!</strong> ' +
+                                        '<a href="#" class="backup-lite-restore-now" data-filename="' + escapeHtml(backup.name) + '" style="margin-left: 8px; color: #3b82f6; text-decoration: underline; cursor: pointer;">Restore Now</a>' +
+                                        '</div>';
+                                } else if (backup.download_state && backup.download_id) {
+                                    // Active download in progress
+                                    var downloadId = backup.download_id;
+                                    var downloadState = backup.download_state;
+                                    var percentage = downloadState.total > 0 
+                                        ? Math.min(100, Math.max(0, Math.round((downloadState.downloaded / downloadState.total) * 100 * 10) / 10))
+                                        : 0;
+                                    
+                                    buttonHtml = '<button type="button" class="button button-primary backup-lite-s3-download downloading" ' +
+                                        'data-key="' + escapeHtml(backup.key) + '" ' +
+                                        'data-size="' + backup.size + '" ' +
+                                        'data-name="' + escapeHtml(backup.name) + '" disabled>' +
+                                        '<span class="spinner is-active" style="float: none; margin: 0 4px 0 0;"></span> Downloading...' +
+                                        '</button>';
+                                    
+                                    statusHtml = '<div style="margin-top: 8px;">' +
+                                        '<div class="progress-bar" style="position: relative; height: 20px; border-radius: 5px; background: #e2e8f0; overflow: hidden;">' +
+                                        '<div class="progress-bar-fill backup-lite-s3-progress" style="height: 100%; border-radius: 5px; width: ' + percentage + '%; background: var(--bl-primary, #3b82f6); transition: width 0.3s ease;"></div>' +
+                                        '<span class="backup-lite-s3-progress-text" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 11px; font-weight: 600; color: #ffffff; z-index: 10; text-shadow: 0 1px 2px rgba(0,0,0,0.3);">' + percentage.toFixed(1) + '%</span>' +
+                                        '</div>' +
+                                        '<p class="backup-lite-s3-status" style="margin: 4px 0 0 0; font-size: 12px; color: #666;">' + formatBytes(downloadState.downloaded || 0) + ' / ' + formatBytes(downloadState.total || 0) + '</p>' +
+                                        '</div>';
+                                    
+                                    // Resume polling for this download
+                                    setTimeout(function() {
+                                        var $btn = jQuery('[data-key="' + escapeHtml(backup.key) + '"]');
+                                        if ($btn.length) {
+                                            startDownloadPolling(downloadId, $btn, backup.name);
+                                        }
+                                    }, 100);
+                                } else {
+                                    buttonHtml = '<button type="button" class="button button-primary backup-lite-s3-download" ' +
+                                        'data-key="' + escapeHtml(backup.key) + '" ' +
+                                        'data-size="' + backup.size + '" ' +
+                                        'data-name="' + escapeHtml(backup.name) + '">' +
+                                        'Download to this site' +
+                                        '</button>';
+                                }
+                                
+                                var row = '<tr>' +
+                                    '<td>' + escapeHtml(backup.name) + '</td>' +
+                                    '<td>' + formatBytes(backup.size) + '</td>' +
+                                    '<td>' + formatDate(backup.last_modified) + '</td>' +
+                                    '<td>' + buttonHtml + statusHtml + '</td>' +
+                                    '</tr>';
+                                $tbody.append(row);
+                            });
+                            $table.show();
+                            $list.show();
+                        }
+                    } else {
+                        showS3Error(response.data && response.data.message 
+                            ? response.data.message 
+                            : 'Failed to load S3 backups.');
+                    }
+                },
+                error: function(xhr, status, error) {
+                    $loading.hide();
+                    showS3Error('Network error while loading S3 backups.');
+                }
+            });
+        }
+
+        function showS3Error(message) {
+            jQuery('#s3-backups-error-message').text(message);
+            jQuery('#s3-backups-error').show();
+            jQuery('#s3-backups-list').show();
+        }
+
+        // Start S3 download
+        jQuery(document).on('click', '.backup-lite-s3-download', function() {
+            var $btn = jQuery(this);
+            var key = $btn.data('key');
+            var size = $btn.data('size');
+            var name = $btn.data('name');
+
+            // Prevent re-download if already completed
+            if ($btn.hasClass('download-completed')) {
+                if (typeof showToast === 'function') {
+                    showToast('ℹ️ This backup has already been downloaded. Please use "Restore Now" to restore it.', 'info');
+                }
+                return;
+            }
+
+            if ($btn.hasClass('downloading')) {
+                return; // Already downloading
+            }
+
+            $btn.addClass('downloading').prop('disabled', true);
+            var originalText = $btn.html();
+            $btn.html('<span class="spinner is-active" style="float: none; margin: 0 4px 0 0;"></span> Starting...');
+
+            jQuery.ajax({
+                url: BackupLite.ajaxUrl,
+                method: 'POST',
+                data: {
+                    action: 'museder_start_s3_download',
+                    nonce: BackupLite.cloudNonce,
+                    key: key,
+                    size: size,
+                },
+                success: function(response) {
+                    if (response.success && response.data && response.data.download_id) {
+                        var downloadId = response.data.download_id;
+                        startDownloadPolling(downloadId, $btn, name);
+                    } else {
+                        $btn.removeClass('downloading').prop('disabled', false).html(originalText);
+                        var errorMsg = response.data && response.data.message 
+                            ? response.data.message 
+                            : 'Failed to start download.';
+                        if (typeof showToast === 'function') {
+                            showToast('❌ ' + errorMsg, 'error');
+                        } else {
+                            alert(errorMsg);
+                        }
+                    }
+                },
+                error: function() {
+                    $btn.removeClass('downloading').prop('disabled', false).html(originalText);
+                    if (typeof showToast === 'function') {
+                        showToast('❌ Network error while starting download.', 'error');
+                    } else {
+                        alert('Network error while starting download.');
+                    }
+                }
+            });
+        });
+
+        // Poll download progress
+        function startDownloadPolling(downloadId, $btn, fileName) {
+            var progressHtml = '<div style="margin-top: 8px;">' +
+                '<div class="progress-bar" style="position: relative; height: 20px; border-radius: 5px; background: #e2e8f0; overflow: hidden;">' +
+                '<div class="progress-bar-fill backup-lite-s3-progress" style="height: 100%; border-radius: 5px; width: 0; background: var(--bl-primary, #3b82f6); transition: width 0.3s ease;"></div>' +
+                '<span class="backup-lite-s3-progress-text" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 11px; font-weight: 600; color: #ffffff; z-index: 10; text-shadow: 0 1px 2px rgba(0,0,0,0.3);">0%</span>' +
+                '</div>' +
+                '<p class="backup-lite-s3-status" style="margin: 4px 0 0 0; font-size: 12px; color: #666;">Downloading...</p>' +
+                '</div>';
+            $btn.after(progressHtml);
+
+            var $progressBar = $btn.next().find('.backup-lite-s3-progress');
+            var $progressText = $btn.next().find('.backup-lite-s3-progress-text');
+            var $status = $btn.next().find('.backup-lite-s3-status');
+
+            var pollInterval = setInterval(function() {
+                jQuery.ajax({
+                    url: BackupLite.ajaxUrl,
+                    method: 'POST',
+                    data: {
+                        action: 'museder_poll_s3_download',
+                        nonce: BackupLite.cloudNonce,
+                        download_id: downloadId,
+                    },
+                    success: function(response) {
+                        if (response.success && response.data) {
+                            var data = response.data;
+                            var percentage = Math.min(100, Math.max(0, data.percentage || 0)); // Limit to 0-100%
+                            var downloaded = data.downloaded || 0;
+                            var total = data.total || 0;
+
+                            $progressBar.css('width', percentage + '%');
+                            $progressText.text(percentage.toFixed(1) + '%');
+                            $status.text(formatBytes(downloaded) + ' / ' + formatBytes(total));
+
+                            if (data.status === 'completed') {
+                                clearInterval(pollInterval);
+                                delete activeDownloads[downloadId];
+                                // Mark button as completed to prevent re-download
+                                $btn.removeClass('downloading').addClass('download-completed').prop('disabled', false);
+                                $btn.html('Download Complete');
+                                // Get filename from response or use stored name
+                                var downloadedFilename = data.filename || fileName || $btn.data('name') || '';
+                                $btn.data('downloaded-filename', downloadedFilename);
+                                $status.html('<strong style="color: #10b981;">Download completed!</strong> ' +
+                                    '<a href="#" class="backup-lite-restore-now" data-filename="' + escapeHtml(downloadedFilename) + '" style="margin-left: 8px; color: #3b82f6; text-decoration: underline; cursor: pointer;">Restore Now</a>');
+                                if (typeof showToast === 'function') {
+                                    showToast('✅ Download completed! The backup is now available in Local Backups.', 'success');
+                                }
+                                // Reload local backups list after a short delay
+                                setTimeout(function() {
+                                    if (jQuery('#local-backups-tab').is(':visible')) {
+                                        location.reload();
+                                    }
+                                }, 2000);
+                            } else if (data.status === 'failed') {
+                                clearInterval(pollInterval);
+                                delete activeDownloads[downloadId];
+                                $btn.removeClass('downloading').prop('disabled', false);
+                                $btn.html('Download to this site');
+                                $status.html('<strong style="color: #ef4444;">Download failed:</strong> ' + (data.message || ''));
+                                if (typeof showToast === 'function') {
+                                    showToast('❌ ' + (data.message || 'Download failed.'), 'error');
+                                }
+                            }
+                        }
+                    },
+                    error: function() {
+                        // Continue polling on error (network issues might be temporary)
+                    }
+                });
+            }, 2000); // Poll every 2 seconds
+
+            activeDownloads[downloadId] = { interval: pollInterval, progressBar: $progressBar };
+        }
+
+        // Helper functions
+        function escapeHtml(text) {
+            var div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            var k = 1024;
+            var sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+            var i = Math.floor(Math.log(bytes) / Math.log(k));
+            return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+        }
+
+        function formatDate(dateString) {
+            var date = new Date(dateString);
+            return date.toLocaleString();
+        }
+
+        // Handle "Restore Now" click for S3 downloaded backups
+        jQuery(document).on('click', '.backup-lite-restore-now', function(e) {
+            e.preventDefault();
+            var $link = jQuery(this);
+            var filename = $link.data('filename') || $link.closest('tr').find('.backup-lite-s3-download').data('name');
+
+            if (!filename) {
+                if (typeof showToast === 'function') {
+                    showToast('❌ Backup filename not found.', 'error');
+                } else {
+                    alert('Backup filename not found.');
+                }
+                return;
+            }
+
+            // Confirm restore action
+            if (!confirm('Are you sure you want to restore this backup? This will overwrite your current site files and database.')) {
+                return;
+            }
+
+            // Disable link and show loading
+            $link.prop('disabled', true).css('pointer-events', 'none');
+            var originalText = $link.html();
+            $link.html('<span class="spinner is-active" style="float: none; margin: 0 4px 0 0;"></span> Starting restore...');
+
+            // Step 1: Prepare restore session
+            var payload = new FormData();
+            payload.append('action', 'backup_lite_restore_from_backup');
+            payload.append('nonce', BackupLite.nonce);
+            payload.append('filename', filename);
+
+            jQuery.ajax({
+                url: BackupLite.ajaxUrl,
+                method: 'POST',
+                processData: false,
+                contentType: false,
+                data: payload,
+                success: function(response) {
+                    if (response.success) {
+                        // Step 2: Enqueue restore job to start the actual restore process
+                        var enqueuePayload = new FormData();
+                        enqueuePayload.append('action', 'backup_lite_restore_enqueue');
+                        enqueuePayload.append('nonce', BackupLite.nonce);
+
+                        jQuery.ajax({
+                            url: BackupLite.ajaxUrl,
+                            method: 'POST',
+                            processData: false,
+                            contentType: false,
+                            data: enqueuePayload,
+                            success: function(enqueueResponse) {
+                                if (enqueueResponse.success) {
+                                    if (typeof showToast === 'function') {
+                                        showToast('✅ Restore process started. Redirecting to restore page...', 'success');
+                                    }
+                                    // Redirect to restore page with filename parameter
+                                    setTimeout(function() {
+                                        var restoreUrl = window.location.href.replace('page=backup-lite-backups', 'page=backup-lite-restore');
+                                        if (restoreUrl.indexOf('?') === -1) {
+                                            restoreUrl += '?restore_file=' + encodeURIComponent(filename);
+                                        } else {
+                                            restoreUrl += '&restore_file=' + encodeURIComponent(filename);
+                                        }
+                                        window.location.href = restoreUrl;
+                                    }, 1500);
+                                } else {
+                                    $link.prop('disabled', false).css('pointer-events', 'auto').html(originalText);
+                                    var errorMsg = enqueueResponse.data && enqueueResponse.data.message 
+                                        ? enqueueResponse.data.message 
+                                        : 'Failed to start restore job.';
+                                    if (typeof showToast === 'function') {
+                                        showToast('❌ ' + errorMsg, 'error');
+                                    } else {
+                                        alert(errorMsg);
+                                    }
+                                }
+                            },
+                            error: function(xhr, status, error) {
+                                $link.prop('disabled', false).css('pointer-events', 'auto').html(originalText);
+                                if (typeof showToast === 'function') {
+                                    showToast('❌ Network error while starting restore job.', 'error');
+                                } else {
+                                    alert('Network error while starting restore job.');
+                                }
+                            }
+                        });
+                    } else {
+                        $link.prop('disabled', false).css('pointer-events', 'auto').html(originalText);
+                        var errorMsg = response.data && response.data.message 
+                            ? response.data.message 
+                            : 'Failed to prepare restore session.';
+                        if (typeof showToast === 'function') {
+                            showToast('❌ ' + errorMsg, 'error');
+                        } else {
+                            alert(errorMsg);
+                        }
+                    }
+                },
+                error: function(xhr, status, error) {
+                    $link.prop('disabled', false).css('pointer-events', 'auto').html(originalText);
+                    if (typeof showToast === 'function') {
+                        showToast('❌ Network error while preparing restore session.', 'error');
+                    } else {
+                        alert('Network error while preparing restore session.');
+                    }
+                }
+            });
+        });
+    })();
 
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', initBackupLiteDomReady);

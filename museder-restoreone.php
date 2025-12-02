@@ -3,7 +3,7 @@
 Plugin Name: Museder RestoreOne
 Plugin URI: https://museder.com/restoreone
 Description: Museder RestoreOne is a simple backup & restore plugin for WordPress.
-Version: 2.7.80
+Version: 2.8.00
 Requires at least: 5.8
 Tested up to: 6.7
 Requires PHP: 7.4
@@ -17,7 +17,7 @@ Domain Path: /languages
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-define( 'BACKUP_LITE_VERSION', '2.7.80' );
+define( 'BACKUP_LITE_VERSION', '2.8.00' );
 define( 'BACKUP_LITE_PATH', plugin_dir_path( __FILE__ ) );
 define( 'BACKUP_LITE_URL', plugin_dir_url( __FILE__ ) );
 
@@ -38,7 +38,9 @@ require_once BACKUP_LITE_PATH . 'includes/class-restore-controller.php';
 require_once BACKUP_LITE_PATH . 'includes/class-schedule-handler.php';
 require_once BACKUP_LITE_PATH . 'includes/class-log-handler.php';
 require_once BACKUP_LITE_PATH . 'includes/class-dashboard.php';
+require_once BACKUP_LITE_PATH . 'includes/class-backup-lite-status-service.php';
 require_once BACKUP_LITE_PATH . 'includes/class-email-handler.php';
+require_once BACKUP_LITE_PATH . 'includes/class-backup-lite-cloud-controller.php';
 require_once BACKUP_LITE_PATH . 'includes/class-settings.php';
 require_once BACKUP_LITE_PATH . 'includes/class-chunk-handler.php';
 require_once BACKUP_LITE_PATH . 'includes/class-chunk-handler-v2.php';
@@ -141,6 +143,7 @@ function backup_lite_bootstrap() {
     Backup_Lite_Email_Handler::init();
     Backup_Lite_Settings::init();
     Backup_Lite_Chunk_Handler::init();
+    Backup_Lite_Cloud_Controller::init();
     Backup_Lite_Chunk_V2::init();
     Backup_Lite_Estimate_Size::init();
     Museder_AI_Settings_Page::init();
@@ -239,7 +242,12 @@ function backup_lite_render_dashboard() {
     $dashboard_recent_backups = Backup_Lite_Dashboard::get_recent_backups( 3 );
     $schedule_overview        = Backup_Lite_Dashboard::get_schedule_overview();
     $activity_stats           = Backup_Lite_Dashboard::get_activity_stats();
-    $recent_logs              = Backup_Lite_Log_Handler::get_logs( 3 );
+    $recent_logs              = Backup_Lite_Log_Handler::get_logs( 5 );
+    
+    // Get status summaries for dashboard
+    $last_backup_summary  = Backup_Lite_Status_Service::get_last_backup_summary();
+    $last_restore_summary  = Backup_Lite_Status_Service::get_last_restore_summary();
+    $recent_backup_stats  = Backup_Lite_Status_Service::get_recent_backup_stats( 7 );
 
     wp_enqueue_script(
         'chartjs',
@@ -257,8 +265,9 @@ function backup_lite_render_dashboard() {
         true
     );
 
-    $chart_success = isset( $activity_stats['success'] ) ? (int) $activity_stats['success'] : 0;
-    $chart_failed  = isset( $activity_stats['failed'] ) ? (int) $activity_stats['failed'] : 0;
+    // Use recent_backup_stats for chart (consistent with "Recent 7 Days" display)
+    $chart_success = isset( $recent_backup_stats['success_count'] ) ? (int) $recent_backup_stats['success_count'] : 0;
+    $chart_failed  = isset( $recent_backup_stats['failed_count'] ) ? (int) $recent_backup_stats['failed_count'] : 0;
     $next_run      = isset( $schedule_overview['next_run'] ) ? (int) $schedule_overview['next_run'] : 0;
 
     wp_localize_script(
@@ -276,6 +285,24 @@ function backup_lite_render_dashboard() {
                 'successLabel' => __( 'Success', 'museder-restoreone' ),
                 'failedLabel'  => __( 'Failed', 'museder-restoreone' ),
             ],
+        ]
+    );
+
+    // Also enqueue admin-dashboard.js for Latest Logs toggle functionality
+    wp_enqueue_script(
+        'backup-lite-admin-dashboard',
+        BACKUP_LITE_URL . 'assets/js/admin-dashboard.js',
+        [],
+        BACKUP_LITE_VERSION,
+        true
+    );
+
+    wp_localize_script(
+        'backup-lite-admin-dashboard',
+        'backupLiteDashboard',
+        [
+            'showAllLogsLabel'  => __( 'Show all logs', 'museder-restoreone' ),
+            'hideExtraLogsLabel' => __( 'Hide extra logs', 'museder-restoreone' ),
         ]
     );
 
@@ -347,6 +374,8 @@ function backup_lite_render_restore_page() {
         [
             'restURL' => esc_url_raw( rest_url( 'backup-lite/v2/' ) ),
             'nonce'   => wp_create_nonce( 'wp_rest' ),
+            'ajaxUrl' => admin_url( 'admin-ajax.php' ),
+            'ajaxNonce' => wp_create_nonce( Backup_Lite_UI::NONCE ),
             'ajaxUrl' => admin_url( 'admin-ajax.php' ),
             'ajaxNonce' => wp_create_nonce( Backup_Lite_UI::NONCE ),
             'siteURL' => home_url(),

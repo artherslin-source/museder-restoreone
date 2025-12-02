@@ -97,6 +97,44 @@
     display: none;
 }
 
+/* Latest Logs Collapsible Styles */
+.backup-lite-latest-logs .backup-lite-log-list[data-collapsed="true"] .backup-lite-log-item.is-extra {
+    display: none !important;
+}
+
+.backup-lite-latest-logs .backup-lite-log-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 0;
+}
+
+.backup-lite-latest-logs .backup-lite-log-title {
+    flex: 1;
+}
+
+.backup-lite-latest-logs .backup-lite-log-meta {
+    color: #64748b;
+    font-size: 13px;
+}
+
+.backup-lite-latest-logs .backup-lite-toggle-logs {
+    margin-top: 8px;
+    padding: 4px 8px;
+    font-size: 13px;
+    text-decoration: none;
+    color: #2271b1;
+    cursor: pointer;
+    border: none;
+    background: none;
+    cursor: pointer;
+}
+
+.backup-lite-latest-logs .backup-lite-toggle-logs:hover {
+    color: #135e96;
+    text-decoration: underline;
+}
+
 .backup-lite-progress.is-visible {
     display: block;
 }

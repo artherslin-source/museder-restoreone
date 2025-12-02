@@ -14,6 +14,13 @@ class Backup_Lite_Backup_Jobs {
     const CRON_BATCH_FILES  = 600;
     const CRON_BATCH_BYTES  = 120 * 1024 * 1024; // 120MB
 
+    // Job status constants
+    const STATUS_PENDING   = 'pending';
+    const STATUS_RUNNING   = 'running';
+    const STATUS_COMPLETED = 'completed';
+    const STATUS_FAILED    = 'failed';
+    const STATUS_CANCELLED = 'cancelled';
+
     public static function init() {
         add_action( self::CRON_HOOK, [ __CLASS__, 'cron_process_job' ], 10, 1 );
     }
@@ -22,14 +29,34 @@ class Backup_Lite_Backup_Jobs {
      * Create a new backup job.
      *
      * @param array $options Optional backup options.
-     * @return array
+     * @return array|WP_Error Job array on success, WP_Error on failure.
      */
     public static function create_job( $options = [] ) {
+        // Check if there's already a running job
+        $active_job = self::get_active_job();
+        if ( $active_job && isset( $active_job['status'] ) && self::STATUS_RUNNING === $active_job['status'] ) {
+            return new WP_Error(
+                'backup_job_already_running',
+                __( 'Another backup is already in progress. Please wait for it to finish or cancel it first.', 'museder-restoreone' ),
+                array(
+                    'active_job_id' => $active_job['id'] ?? '',
+                )
+            );
+        }
+
+        // Clean up any stale active job (completed, failed, or cancelled)
+        if ( $active_job && isset( $active_job['status'] ) && in_array( $active_job['status'], array( self::STATUS_COMPLETED, self::STATUS_FAILED, self::STATUS_CANCELLED ), true ) ) {
+            self::clear_active_job( $active_job['id'] );
+        }
+
         $job_id = wp_generate_uuid4();
 
         $context = Backup_Lite_Backup::prepare_async_job( $job_id, $options );
         if ( empty( $context['manifest_file'] ) || empty( $context['manifest_count'] ) ) {
-            throw new RuntimeException( esc_html__( 'Unable to build file manifest for backup.', 'museder-restoreone' ) );
+            return new WP_Error(
+                'backup_job_prepare_failed',
+                __( 'Unable to build file manifest for backup.', 'museder-restoreone' )
+            );
         }
 
         // Store started_at timestamp when job is actually queued
@@ -37,7 +64,7 @@ class Backup_Lite_Backup_Jobs {
         
         $job = [
             'id'              => $job_id,
-            'status'          => 'pending',
+            'status'          => self::STATUS_PENDING,
             'stage'           => 'preparing',
             'message'         => __( 'Preparing backup…', 'museder-restoreone' ),
             'created_at'      => current_time( 'mysql' ),
@@ -52,7 +79,7 @@ class Backup_Lite_Backup_Jobs {
             'download_url'    => backup_lite_get_download_url( $context['archive_path'] ),
             'temp_dir'        => $context['temp_dir'],
             'manifest_file'   => $context['manifest_file'],
-            'options'         => $context['options'],
+            'options'         => $context['options'], // Store complete options snapshot
             'started_at'      => $started_at, // Store timestamp when job is queued
             'last_activity'   => time(),
         ];
@@ -90,7 +117,7 @@ class Backup_Lite_Backup_Jobs {
         }
 
         $job = self::load_job( $job_id );
-        if ( empty( $job ) || in_array( $job['status'], [ 'completed', 'failed', 'cancelled' ], true ) ) {
+        if ( empty( $job ) || in_array( $job['status'], array( self::STATUS_COMPLETED, self::STATUS_FAILED, self::STATUS_CANCELLED ), true ) ) {
             delete_option( self::STATE_OPTION );
             return null;
         }
@@ -143,8 +170,17 @@ class Backup_Lite_Backup_Jobs {
             return $job;
         }
 
+        // Check if job has been cancelled before processing
+        if ( isset( $job['status'] ) && self::STATUS_CANCELLED === $job['status'] ) {
+            $job['processing'] = false;
+            $job['last_activity'] = time();
+            $job['updated_at'] = current_time( 'mysql' );
+            self::save_job( $job );
+            return $job;
+        }
+
         $job['stage'] = 'packing';
-        $job['status'] = 'running';
+        $job['status'] = self::STATUS_RUNNING;
         self::save_job( $job );
 
         $limits    = self::resolve_batch_limits( $job, $max_files, $max_bytes );
@@ -154,22 +190,31 @@ class Backup_Lite_Backup_Jobs {
         try {
             $job = Backup_Lite_Backup::process_job_batch( $job, $max_files, $max_bytes );
 
-            if ( in_array( $job['status'], [ 'completed', 'failed', 'cancelled' ], true ) ) {
+            // Check if job was cancelled during processing
+            if ( isset( $job['status'] ) && self::STATUS_CANCELLED === $job['status'] ) {
+                backup_lite_log( 'info', 'Backup job cancelled by user during processing.', [
+                    'job_id' => $job_id,
+                ] );
+                // Don't change status, keep it as cancelled
+            } elseif ( in_array( $job['status'], array( self::STATUS_COMPLETED, self::STATUS_FAILED, self::STATUS_CANCELLED ), true ) ) {
                 self::clear_active_job( $job['id'] );
             }
         } catch ( Throwable $exception ) {
-            backup_lite_log( 'error', 'Error processing backup job batch.', [
-                'job_id' => $job_id,
-                'message' => $exception->getMessage(),
-                'trace' => $exception->getTraceAsString(),
-            ] );
-            
-            $job['status']  = 'failed';
-            $job['stage']   = 'failed';
-            $job['message'] = __( 'Backup failed due to an internal error. Please check logs for details.', 'museder-restoreone' );
+            // Only mark as failed if not already cancelled
+            if ( ! isset( $job['status'] ) || self::STATUS_CANCELLED !== $job['status'] ) {
+                backup_lite_log( 'error', 'Error processing backup job batch.', [
+                    'job_id' => $job_id,
+                    'message' => $exception->getMessage(),
+                    'trace' => $exception->getTraceAsString(),
+                ] );
+                
+                $job['status']  = self::STATUS_FAILED;
+                $job['stage']   = 'failed';
+                $job['message'] = __( 'Backup failed due to an internal error. Please check logs for details.', 'museder-restoreone' );
+            }
         }
 
-        if ( in_array( $job['status'], [ 'completed', 'failed', 'cancelled' ], true ) ) {
+        if ( in_array( $job['status'], array( self::STATUS_COMPLETED, self::STATUS_FAILED, self::STATUS_CANCELLED ), true ) ) {
             self::clear_active_job( $job['id'] );
         }
 
@@ -208,7 +253,7 @@ class Backup_Lite_Backup_Jobs {
      * Cancel and clean up a job.
      *
      * @param string $job_id Job ID.
-     * @return bool
+     * @return bool True on success, false on failure.
      */
     public static function cancel_job( $job_id ) {
         $job = self::load_job( $job_id );
@@ -216,13 +261,30 @@ class Backup_Lite_Backup_Jobs {
             return false;
         }
 
-        $job['status']  = 'cancelled';
-        $job['stage']   = 'cancelled';
-        $job['message'] = __( 'Backup cancelled by user.', 'museder-restoreone' );
-        $job['processing'] = false;
+        // Don't cancel if already completed or failed
+        if ( isset( $job['status'] ) && in_array( $job['status'], array( self::STATUS_COMPLETED, self::STATUS_FAILED ), true ) ) {
+            return false;
+        }
+
+        // If already cancelled, return true (idempotent)
+        if ( isset( $job['status'] ) && self::STATUS_CANCELLED === $job['status'] ) {
+            return true;
+        }
+
+        $job['status']      = self::STATUS_CANCELLED;
+        $job['stage']       = 'cancelled';
+        $job['message']     = __( 'Backup cancelled by user.', 'museder-restoreone' );
+        $job['processing']  = false;
+        $job['cancelled_at'] = current_time( 'mysql' );
+        $job['updated_at']  = current_time( 'mysql' );
+        
         self::save_job( $job );
         self::cleanup_job( $job );
         self::clear_active_job( $job_id );
+
+        backup_lite_log( 'info', 'Backup job cancelled by user.', [
+            'job_id' => $job_id,
+        ] );
 
         return true;
     }
@@ -327,8 +389,10 @@ class Backup_Lite_Backup_Jobs {
             $payload['duration'] = (int) $job['duration'];
         }
 
-        // Note: S3 upload is now handled server-side in finalize_async_job()
-        // No need to pass flags to frontend anymore
+        // Include options for frontend display (Current backup settings)
+        if ( isset( $job['options'] ) && is_array( $job['options'] ) ) {
+            $payload['options'] = $job['options'];
+        }
 
         return $payload;
     }
@@ -417,7 +481,7 @@ class Backup_Lite_Backup_Jobs {
         update_option( self::STATE_OPTION, $job_id, false );
     }
 
-    private static function clear_active_job( $job_id ) {
+    public static function clear_active_job( $job_id ) {
         $stored = get_option( self::STATE_OPTION, '' );
         if ( $stored === $job_id ) {
             delete_option( self::STATE_OPTION );

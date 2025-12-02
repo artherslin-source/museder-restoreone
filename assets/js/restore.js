@@ -25,18 +25,57 @@
         },
         refs: {},
         init: function () {
+            var _this = this;
             this.cacheDOM();
             this.bindEvents();
             this.renderBackupList();
             this.setAutoScroll(true);
-            this.log('尚未開始還原作業，請先選擇備份檔並建立還原作業。', 'info');
+            
+            // Check for active restore job from config (passed from PHP)
+            if (config.job && config.job.id) {
+                // Active job found, restore UI state
+                this.state.jobId = config.job.id;
+                this.state.status = config.job;
+                
+                // If job has a file, try to pre-select it
+                if (config.job.file) {
+                    var filename = config.job.file.split('/').pop() || config.job.file;
+                    this.selectBackupFromFilename(filename);
+                    this.state.selectedBackup = filename;
+                }
+                
+                // Update UI with job status
+                this.updateHeader();
+                this.updateStepIndicator();
+                this.updateProgress(config.job);
+                
+                // If job is not completed, start polling
+                if (!config.job.completed && config.job.status !== 'failed') {
+                    this.log('發現進行中的還原作業，正在恢復狀態…', 'info');
+                    this.pollStatus(true);
+                } else {
+                    this.log('還原作業已完成或已失敗。', 'info');
+                }
+            } else {
+                // No active job, check if there's a restore file parameter
+                var urlParams = new URLSearchParams(window.location.search);
+                var restoreFile = urlParams.get('restore_file');
+                if (restoreFile) {
+                    // Pre-select the backup file
+                    this.selectBackupFromFilename(restoreFile);
+                }
+                this.log('尚未開始還原作業，請先選擇備份檔並建立還原作業。', 'info');
+            }
+            
             this.updateHeader();
             this.updateStepIndicator();
             this.updateSafetyPanel();
             this.updateDryRunPanel();
             this.updateExecutePanel();
             this.updateRollbackPanel();
-            this.updateProgress({ progress: 0, message: '等待流程開始…' });
+            if (!this.state.status) {
+                this.updateProgress({ progress: 0, message: '等待流程開始…' });
+            }
         },
         cacheDOM: function () {
             this.refs.backupRows = document.querySelector('#bl-restore-backup-list');
@@ -184,6 +223,77 @@
             if (row) {
                 row.classList.add('is-selected');
             }
+        },
+        selectBackupFromFilename: function (filename) {
+            if (!this.refs.backupRows || !filename) {
+                return false;
+            }
+            var rows = this.refs.backupRows.querySelectorAll('tr[data-backup-name]');
+            for (var i = 0; i < rows.length; i++) {
+                var row = rows[i];
+                var backupName = row.dataset.backupName;
+                if (backupName === filename || backupName.indexOf(filename) !== -1) {
+                    var radio = row.querySelector('input[type="radio"]');
+                    if (radio) {
+                        radio.checked = true;
+                        this.selectBackup(backupName, row);
+                        return true;
+                    }
+                }
+            }
+            return false;
+        },
+        checkActiveJob: function () {
+            var _this = this;
+            var ajaxUrl = config.ajaxUrl || (typeof ajaxurl !== 'undefined' ? ajaxurl : '/wp-admin/admin-ajax.php');
+            var ajaxNonce = config.ajaxNonce || nonce || '';
+            
+            // Use AJAX endpoint which can return active job without job_id
+            return fetch(ajaxUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                credentials: 'same-origin',
+                body: 'action=backup_lite_restore_job_status&nonce=' + encodeURIComponent(ajaxNonce)
+            }).then(function (res) {
+                if (!res.ok) {
+                    return res.json().catch(function () {
+                        return { success: false };
+                    });
+                }
+                return res.json();
+            }).then(function (data) {
+                if (!data || !data.success || !data.data) {
+                    return false;
+                }
+                var jobData = data.data;
+                // Check if there's an active job
+                if (jobData.job && jobData.job.id) {
+                    _this.state.jobId = jobData.job.id;
+                    _this.state.status = jobData.job;
+                    
+                    // If job has a file, try to pre-select it
+                    if (jobData.job.file) {
+                        var filename = jobData.job.file.split('/').pop() || jobData.job.file;
+                        _this.selectBackupFromFilename(filename);
+                        _this.state.selectedBackup = filename;
+                    }
+                    
+                    // Update UI with job status
+                    _this.updateHeader();
+                    _this.updateStepIndicator();
+                    _this.updateProgress(jobData.job);
+                    
+                    // If job is not completed, start polling
+                    if (!jobData.job.completed && jobData.job.status !== 'failed') {
+                        return true;
+                    }
+                }
+                return false;
+            }).catch(function () {
+                return false;
+            });
         },
         buildRequest: function (path, options) {
             var opts = options || {};

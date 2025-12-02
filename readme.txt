@@ -4,13 +4,255 @@ Tags: backup, migration, restore, site-backup, database-backup
 Requires at least: 6.8
 Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 2.7.80
+Stable tag: 2.8.00
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
 A lightweight WordPress backup & restore plugin focused on compatibility, single-file site snapshots, and clean restore workflows.
 
 == Changelog ==
+
+= 2.8.00 =
+* Fix: Fixed "Upload to S3: No" display issue - backup progress now correctly shows S3 upload setting from job options
+* Fix: format_job_payload() now includes options in response for frontend display
+* Enhancement: Improved dest_s3 detection in frontend - checks multiple possible locations (dest_s3, destinations.s3, upload_to_s3) for backward compatibility
+* Enhancement: Settings summary now updates from job options when job response is received
+* Technical: Added options to job payload in format_job_payload() method
+* Technical: Enhanced backupLiteLockBackupFormFromServer() to properly detect S3 upload setting from various option formats
+* Technical: Settings summary now updates both on job creation and during polling updates
+
+= 2.7.99 =
+* Fix: Fixed "Show all logs" button not working - added preventDefault and stopPropagation, improved event delegation
+* Fix: Fixed Activity pie chart colors and proportions - now uses recent_backup_stats data with fixed blue/red colors
+* Fix: Fixed Last Backup timestamp - now correctly sorts backups by file modification time instead of filename
+* Enhancement: Backup list now sorted by file modification time (newest first) for accurate last backup display
+* Enhancement: Activity chart now uses fixed colors (blue #2563eb for success, red #ef4444 for failed) with proper tooltip percentages
+* Enhancement: Improved CSS specificity for log list collapse functionality with !important flag
+* Technical: Updated get_backups_list() to use usort() with filemtime() for proper chronological sorting
+* Technical: Activity chart data now synchronized with "Recent 7 Days" statistics using recent_backup_stats
+* Technical: admin-dashboard.js now properly enqueued in backup_lite_render_dashboard() function
+* Technical: Removed duplicate admin-dashboard.js enqueue from class-ui.php to avoid conflicts
+
+= 2.7.98 =
+* Fix: Fixed Dashboard "Show all logs" button not working - now uses event delegation for proper toggle functionality
+* Fix: Fixed Activity (Last 7 Days) pie chart colors and proportions - now correctly displays success (blue) and failed (red) based on actual statistics
+* Enhancement: Dashboard Latest Logs toggle now works reliably with event delegation instead of direct event binding
+* Enhancement: Activity chart now uses Chart.js with proper data binding from recent backup statistics
+* Enhancement: Activity chart displays gray "No data" state when no backups executed in last 7 days
+* Technical: Updated admin-dashboard.js to use event delegation for toggle button handling
+* Technical: Added Chart.js dependency registration and enqueue for Activity chart functionality
+* Technical: Activity chart data now synchronized with "Recent 7 Days" statistics display
+* Technical: All chart labels and tooltips properly internationalized
+* UX: Improved Activity chart tooltip shows count and percentage for each segment
+* UX: Better visual feedback for Activity chart - blue for success, red for failed, gray for no data
+
+= 2.7.97 =
+* Fix: Fixed Dashboard "Last Backup" display - now correctly shows latest successful backup from Available Backups list
+* Fix: Fixed Dashboard "Last Restore" display - now correctly shows latest successful restore from Restore History
+* Feature: Added Backup_Lite_UI::get_last_successful_local_backup() method to retrieve latest successful local backup (excluding safety backups)
+* Feature: Added backup_lite_get_last_successful_restore() helper function to retrieve latest successful restore from history
+* Enhancement: Dashboard Last Backup now displays backup type (Full/Dual), date/time, size, and destinations (Local/S3)
+* Enhancement: Dashboard Last Restore now displays status, date/time, and backup file name
+* Enhancement: Latest Logs card now uses collapsible list - shows 3 logs by default with "Show all logs" / "Hide extra logs" toggle
+* UX: Improved Dashboard Latest Logs visibility - prevents long list from breaking dashboard layout
+* UX: Better log list organization - extra logs are hidden by default, can be expanded on demand
+* Technical: Refactored Status Service to use repository methods for consistent data source
+* Technical: All backup/restore queries now use shared repository methods to avoid duplicate logic
+* Technical: Added admin-dashboard.js for Latest Logs toggle functionality
+* Technical: Added CSS styles for collapsible log list with smooth transitions
+* Technical: All dashboard text properly internationalized with esc_html() and translation functions
+
+= 2.7.96 =
+* Feature: Upgraded Dashboard "Latest Logs" card to "System Status & Latest Logs" panel
+* Feature: Added status summary section showing last backup status, last restore status, and recent 7 days statistics
+* Feature: New Backup_Lite_Status_Service class providing summary data for dashboard
+* Enhancement: Dashboard now displays comprehensive backup/restore status at a glance
+* Enhancement: Last backup summary shows job type, time, size, and destinations (Local + S3)
+* Enhancement: Last restore summary shows source type (Local/S3) and completion time
+* Enhancement: Recent 7 days statistics show success/failed backup counts
+* UX: Improved Dashboard visibility - users can see backup/restore status without checking logs
+* UX: Better status badges with icons (Success ✅, Failed ❌, In Progress ⏳)
+* Technical: Added get_last_backup_summary() method to retrieve backup status from logs and files
+* Technical: Added get_last_restore_summary() method to retrieve restore status from job metadata
+* Technical: Added get_recent_backup_stats() method for activity statistics
+* Technical: Enhanced log display - now shows 5 recent logs instead of 3, with View links
+
+= 2.7.95 =
+* Major: Refactored backup job lifecycle and cancellation mechanism for improved stability
+* Feature: Unified backup job status system with constants (pending, running, completed, failed, cancelled)
+* Feature: Prevent duplicate backup job starts - checks for running jobs before creating new ones
+* Feature: Enhanced cancel backup functionality - now properly stops job processing and prevents resurrection
+* Feature: Backup settings lock mechanism - locks backup options during active backup to prevent changes
+* Fix: Fixed issue where cancelled backups would resume after page reload
+* Fix: Fixed issue where backup would require clicking cancel button twice
+* Fix: Improved job state persistence - only resumes running/pending jobs, not completed/failed/cancelled ones
+* Enhancement: Added cancelled_at timestamp to track when backup was cancelled
+* Enhancement: Added graceful cancellation checks throughout backup processing pipeline
+* Enhancement: Improved error handling in backup job creation - returns WP_Error instead of throwing exceptions
+* UX: Better user feedback when attempting to start duplicate backups
+* UX: Improved cancel button behavior - prevents multiple clicks and shows proper status
+* Technical: All job status checks now use unified constants instead of magic strings
+* Technical: Enhanced AJAX handlers with proper WP_Error handling and validation
+* Technical: Improved frontend polling logic to respect job status and prevent unnecessary polling
+
+= 2.7.94 =
+* Feature: Enhanced restore workflow from S3 backup list - automatically redirects to Restore page after clicking "Restore Now"
+* Feature: Automatic tab switching to "Select from Backups" when navigating from S3 backup list
+* Enhancement: Restore page now automatically pre-selects backup file in dropdown when restore_file parameter is present in URL
+* Enhancement: Improved loadBackupsList() function to return Promise for better async handling
+* UX: Seamless transition from S3 backup list to Restore page with automatic file selection
+* UX: Users no longer need to manually select backup file when coming from S3 backup list
+* Technical: Added URL parameter detection for restore_file to enable automatic backup selection
+* Technical: Enhanced backup list loading to support Promise-based selection workflow
+
+= 2.7.93 =
+* Fix: Fixed S3 download progress bar text color - changed from dark gray to white for better visibility on blue background
+* Fix: Fixed download percentage exceeding 100% - now properly limited to 0-100% range in both frontend and backend
+* Feature: S3 backup list now automatically detects and restores download state when user returns to the page
+* Feature: S3 backup list now checks if backup files already exist locally and maintains "Download Complete" status
+* Enhancement: Added automatic download state persistence - active downloads are automatically resumed when page is reloaded
+* Enhancement: S3 backup list now shows download progress and status for active downloads
+* Enhancement: Downloaded backups automatically show "Download Complete" button and "Restore Now" link
+* UX: Improved S3 backup list UI - downloaded backups are clearly marked and cannot be re-downloaded unless file is deleted
+* Technical: Enhanced ajax_list_s3_backups to check local file existence and active download states
+* Technical: Added download state recovery logic to automatically resume interrupted downloads
+
+= 2.7.92 =
+* Feature: Enhanced "Restore Now" functionality for S3 downloaded backups - now automatically starts restore process
+* Feature: Added automatic restore job enqueue after restore session preparation
+* Enhancement: Restore page now automatically detects and restores active restore job state on page load
+* Enhancement: Added automatic backup file pre-selection based on active restore job or URL parameter
+* Enhancement: Restore page initialization now checks for active jobs and restores UI state (progress, stage, etc.)
+* UX: Improved restore workflow - users can leave and return to restore page without losing progress
+* UX: Automatic file pre-selection when navigating to restore page with restore_file parameter
+* Technical: Added selectBackupFromFilename() method for automatic backup file selection
+* Technical: Enhanced restore page initialization to handle active jobs from PHP configuration
+* Technical: Added ajaxUrl and ajaxNonce to BackupLiteRestore configuration for better AJAX support
+
+= 2.7.91 =
+* Fix: Fixed page reload not working after backup deletion - simplified reload logic and added fallback mechanism
+* Fix: Improved delete functionality with better error handling and response validation
+* Enhancement: Added response status check and content-type validation for delete operation
+* Enhancement: Added try-catch error handling for page reload with fallback to window.location.href
+* UX: Increased reload delay to 1.5 seconds to ensure success message is visible before reload
+* Technical: Simplified delete success handler by removing complex fade-out animation logic
+* Technical: Added comprehensive error handling for fetch API response validation
+
+= 2.7.90 =
+* Fix: Fixed backup delete functionality in Actions menu - delete button now works correctly
+* Fix: Added event.stopPropagation() to prevent event bubbling in Actions menu
+* Fix: Delete action now properly closes Actions menu before showing confirmation dialog
+* Enhancement: Backup list now automatically refreshes after successful deletion
+* Enhancement: Improved delete functionality with fade-out animation before page reload
+* Enhancement: Delete operation now also removes backup metadata for data consistency
+* UX: Better user feedback with success toast messages and smooth animations
+* Technical: Delete handler now properly cleans up both backup file and metadata
+
+= 2.7.89 =
+* Fix: Fixed "Restore Now" link functionality for S3 downloaded backups - now properly triggers restore process
+* Fix: Fixed "Download Complete" button re-triggering download - added download-completed state check
+* Enhancement: Added download state tracking to prevent duplicate downloads
+* Enhancement: Improved user feedback when attempting to re-download completed backups
+* UX: "Restore Now" link now includes confirmation dialog and proper error handling
+* UX: Better visual feedback for completed downloads with disabled re-download functionality
+* Technical: Download completion state now properly persisted and checked before allowing new downloads
+* Technical: Filename now included in download completion response for restore functionality
+
+= 2.7.88 =
+* Feature: Added S3 Cloud Backups tab in Backups page to list and download backups from S3
+* Feature: Implemented S3 backup listing functionality (list_backups method)
+* Feature: Implemented S3 backup download functionality with progress tracking (download_backup method)
+* Feature: Added Backup_Lite_Cloud_Controller class for handling S3 cloud operations via AJAX
+* Feature: Added register_downloaded_backup() method to register downloaded S3 backups as local backups
+* Enhancement: S3 downloads support chunked downloads (8MB chunks) for large files
+* Enhancement: Real-time download progress bar with percentage and file size display
+* Enhancement: Automatic backup registration after successful S3 download
+* Technical: All S3 download operations use Signature Version 4 (SigV4) authentication
+* Technical: Download state stored in wp_options for progress tracking across requests
+* UX: Tab-based UI for switching between Local Backups and S3 Cloud Backups
+* UX: Clear error messages and loading states for S3 operations
+* Security: All AJAX handlers include permission checks and nonce verification
+* Security: All S3 error messages are sanitized to prevent credential exposure
+
+= 2.7.87 =
+* Refactor: Unified S3 status and error message display across the plugin
+* Feature: Added sanitize_s3_error_message() method to remove sensitive information from error messages
+* Feature: Unified S3 status values: 'stored' (success), 'failed' (error), 'none' (not uploaded)
+* Enhancement: Cloud Storage column now displays consistent badges: "STORED IN S3" (green) and "S3 UPLOAD FAILED" (red)
+* Enhancement: All S3 error messages are now sanitized to prevent exposing Access Keys, Signatures, etc.
+* Enhancement: JS now dynamically updates Cloud Storage badge without page reload
+* Technical: All S3 service methods now return consistent format: array with 'success' => true on success, WP_Error on failure
+* Technical: All AJAX handlers now use wp_send_json_success/error with unified status values
+* Technical: Backup metadata now uses unified s3_status values ('stored', 'failed', 'none')
+* Security: Error messages are sanitized to remove sensitive AWS credentials and signatures
+* UX: Improved error messages with user-friendly text and proper i18n support
+* Compatibility: Backward compatible with legacy status values ('success' → 'stored', 'error' → 'failed')
+
+= 2.7.86 =
+* Fix: Fixed S3 auto-upload checkbox not being passed from backup page to backend job options
+* Fix: Updated S3 checkbox id to "backup-lite-dest-s3" for consistency
+* Fix: Fixed clear_active_job() visibility error (changed from private to public static)
+* Enhancement: Improved JS checkbox collection logic to use id first, then fallback to name attribute
+* Enhancement: Enhanced backup options collection with better error handling
+* Technical: S3 auto-upload now uses the same upload flow as manual "Upload to S3" action
+* Technical: All backup jobs now correctly read and store dest_s3 option from checkbox
+* UX: Backup page checkbox state is now properly propagated to backup job options
+* Stability: Fixed fatal error when clearing active backup jobs
+
+= 2.7.85 =
+* Fix: Temporarily disabled multipart upload for production stability - all files now use single PUT method
+* Fix: Improved error handling with detailed logging (file path, size, method, HTTP status, response body preview)
+* Enhancement: Added configurable timeout via filter (museder_restoreone_s3_upload_timeout, minimum 300 seconds)
+* Enhancement: Enhanced error messages for 4xx/5xx HTTP status codes with user-friendly messages
+* Technical: All S3 uploads now use upload_simple_put() regardless of file size
+* Technical: Multipart upload methods (create_multipart_upload, upload_part, etc.) remain in codebase but are not called
+* Technical: Added PHPDoc notes to all multipart methods indicating they are temporarily disabled
+* Security: Masked bucket names in error logs for security
+* Stability: Single PUT method has been verified to work for files up to several hundred MB
+
+= 2.7.84 =
+* Refactor: Split simple PUT upload into two methods: wp_remote_request() and cURL streaming
+* Feature: Automatic selection between wp_remote_request() and cURL streaming based on file size and cURL availability
+* Enhancement: Use hash_file() for payload hash calculation to avoid loading entire file into memory
+* Enhancement: Implemented cURL streaming upload for large files (>64MB) when cURL is available
+* Enhancement: Added comprehensive logging for all upload methods (file path, size, method, HTTP status, body preview)
+* Technical: Created put_object_via_wp_http() method using wp_remote_request() with hash_file()
+* Technical: Created put_object_via_curl_stream() method using cURL streaming (CURLOPT_UPLOAD, CURLOPT_READDATA)
+* Technical: Small files always use WordPress HTTP API, cURL only used when technically necessary (>64MB)
+* Performance: Large files can now upload via streaming without memory exhaustion
+* Security: Maintained all existing SigV4 signature logic and security practices
+
+= 2.7.83 =
+* Refactor: Completely refactored S3 upload service with automatic method selection
+* Feature: Automatic selection between simple PUT (<=50MB) and multipart upload (>50MB)
+* Feature: Implemented true S3 Multipart Upload for large files (>50MB) using 8MB chunks
+* Enhancement: Large files now upload incrementally without loading entire file into memory
+* Enhancement: Added detailed logging for multipart upload process (create, parts, complete/abort)
+* Technical: Added SIMPLE_PUT_THRESHOLD (50MB) and MULTIPART_CHUNK_SIZE (8MB) constants
+* Technical: Separated upload_simple_put() and upload_multipart() methods for better code organization
+* Technical: All multipart methods correctly handle SigV4 signature with query string parameters
+* Performance: Large files (150MB+) can now upload successfully without memory/timeout issues
+* Security: All HTTP requests use wp_remote_request() (WordPress HTTP API), no direct cURL calls
+* Fix: Fixed memory exhaustion issues when uploading large backup files to S3
+
+= 2.7.82 =
+* Feature: Added "Reset S3 Record" button in backup list Actions menu to clear S3 upload status
+* Feature: Allow re-uploading backups that have already been uploaded to S3
+* Enhancement: Backup list now shows "Re-upload to Cloud" button for successfully uploaded backups
+* Enhancement: Users can now reset S3 upload records and re-upload backups without deleting them
+* Technical: Added new AJAX handler (ajax_reset_s3_status) to reset S3 upload metadata
+* Technical: Updated backup list Actions menu to show different buttons based on S3 upload status
+* UX: Improved backup management workflow with ability to retry failed or reset successful S3 uploads
+
+= 2.7.81 =
+* Fix: Disabled multipart upload - all S3 uploads now use simple PUT method for stability
+* Fix: Fixed AJAX handler (ajax_upload_existing_backup) to ensure all responses are valid JSON
+* Fix: Updated AJAX handler to use check_ajax_referer() and current_user_can() for WordPress best practices
+* Enhancement: Updated all S3 upload log messages to indicate "simple PUT" method
+* Enhancement: Improved error handling in AJAX handler with comprehensive try-catch blocks
+* Technical: Backup_Lite_S3_Uploader now always uses upload_single_part() regardless of file size
+* Technical: Multipart upload methods (create_multipart_upload, upload_part, etc.) remain in codebase for future use but are not called
+* Security: AJAX handler now properly sanitizes all inputs and uses wp_send_json_success/error for all responses
 
 = 2.7.80 =
 * Feature: Implemented S3 Multipart Upload for large files (>10MB)
