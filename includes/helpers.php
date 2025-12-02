@@ -10,16 +10,33 @@ if ( ! function_exists( 'backup_lite_local_time' ) ) {
      * @param int|null $timestamp Optional Unix timestamp.
      * @return string
      */
+    /**
+     * Return a timestamp formatted using the site's local timezone.
+     * 
+     * @param string   $format    Date format string.
+     * @param int|null $timestamp Optional Unix timestamp (assumed to be UTC).
+     * @return string Formatted date/time in site's local timezone.
+     */
     function backup_lite_local_time( $format = 'Y-m-d H:i:s', $timestamp = null ) {
+        // Use wp_date() for WordPress 5.3+ (handles timezone conversion automatically)
         if ( function_exists( 'wp_date' ) ) {
-            return wp_date( $format, $timestamp );
+            // wp_date() expects UTC timestamp and converts to local timezone
+            if ( null === $timestamp ) {
+                $timestamp = time(); // Use current UTC time
+            }
+            return wp_date( $format, $timestamp, wp_timezone() );
         }
 
+        // Fallback for older WordPress versions
         if ( null === $timestamp ) {
-            $timestamp = current_time( 'timestamp' );
+            $timestamp = time(); // Use current UTC time
         }
-
-        return date_i18n( $format, $timestamp );
+        
+        // date_i18n() expects local timestamp, so we need to convert UTC to local
+        $gmt_offset = get_option( 'gmt_offset' ) * HOUR_IN_SECONDS;
+        $local_timestamp = $timestamp + $gmt_offset;
+        
+        return date_i18n( $format, $local_timestamp );
     }
 }
 

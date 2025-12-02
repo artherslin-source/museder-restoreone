@@ -266,6 +266,7 @@ class Backup_Lite_AI1WM_Converter {
             
             return [
                 'success' => false,
+                /* translators: %s: Error message from exception. */
                 'message' => sprintf( __( 'Conversion failed: %s', 'museder-restoreone' ), $e->getMessage() ),
                 'error'   => 'conversion_exception',
             ];
@@ -475,13 +476,16 @@ class Backup_Lite_AI1WM_Converter {
      * @return string|null Site URL or null if not found
      */
     protected static function extract_site_url_from_sql( $sql_file ) {
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for reading SQL file, path validated and sanitized
         $handle = fopen( $sql_file, 'rb' );
         if ( ! $handle ) {
             return null;
         }
 
         // Read first 1MB to find site URL
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- required for reading SQL file sample
         $sample = fread( $handle, 1048576 );
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen
         fclose( $handle );
 
         // Look for siteurl option

@@ -548,13 +548,15 @@ class Backup_Lite_Chunk_Handler {
                     esc_html( $expected_sha1 ),
                     esc_html( $actual_sha1_safe )
                 );
-                // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message already escaped via esc_html__ + esc_html
+                // phpcs:disable WordPress.Security.EscapeOutput.ExceptionNotEscaped
+                // Message and array values are already sanitized and escaped above.
                 throw new Backup_Lite_Chunk_Exception(
                     'chunk_sha1_mismatch',
                     $message,
-                    [ 'expected' => $args['chunk_sha1'], 'actual' => $actual_sha1, 'code' => 'chunk_sha1_mismatch' ],
+                    [ 'expected' => esc_html( $expected_sha1 ), 'actual' => esc_html( $actual_sha1_safe ), 'code' => 'chunk_sha1_mismatch' ],
                     400
                 );
+                // phpcs:enable WordPress.Security.EscapeOutput.ExceptionNotEscaped
             }
         }
 
@@ -582,13 +584,15 @@ class Backup_Lite_Chunk_Handler {
                 esc_html__( 'Upload incomplete. Missing chunks: %s', 'museder-restoreone' ),
                 esc_html( $missing_text )
             );
-            // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message already escaped via esc_html__ + esc_html
+            // phpcs:disable WordPress.Security.EscapeOutput.ExceptionNotEscaped
+            // Message and array values are already sanitized and escaped above.
             throw new Backup_Lite_Chunk_Exception(
                 'missing_chunks',
                 $message,
-                [ 'missing_chunks' => $missing ],
+                [ 'missing_chunks' => array_map( 'esc_html', $missing_safe ) ],
                 409
             );
+            // phpcs:enable WordPress.Security.EscapeOutput.ExceptionNotEscaped
         }
 
         $lock_path = trailingslashit( $meta['_base'] ) . self::LOCK_FILENAME;
@@ -777,18 +781,21 @@ class Backup_Lite_Chunk_Handler {
             // @plugin-check: sanitized & escaped - exception message may be displayed as HTML
             $exception_message_raw = $exception instanceof Exception ? $exception->getMessage() : (string) $exception;
             $exception_message = sanitize_text_field( $exception_message_raw ); // @plugin-check: sanitized
+            $exception_message_escaped = esc_html( $exception_message ); // @plugin-check: escaped
             $message = sprintf(
                 // translators: %s: Exception error message.
                 esc_html__( 'Finalize error: %s', 'museder-restoreone' ),
-                esc_html( $exception_message )
+                $exception_message_escaped
             );
-            // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message already escaped via esc_html__ + esc_html
+            // phpcs:disable WordPress.Security.EscapeOutput.ExceptionNotEscaped
+            // Message and array values are already sanitized and escaped above.
             throw new Backup_Lite_Chunk_Exception(
                 'finalize_error',
                 $message,
-                [ 'stage' => 'merge', 'message' => $exception_message ],
+                [ 'stage' => 'merge', 'message' => $exception_message_escaped ],
                 500
             );
+            // phpcs:enable WordPress.Security.EscapeOutput.ExceptionNotEscaped
         } finally {
             // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
             // $lock_path is from plugin-controlled temp directory
@@ -863,18 +870,21 @@ class Backup_Lite_Chunk_Handler {
                 // @plugin-check: sanitized & escaped - exception message may be displayed as HTML
                 $chunk_index_raw = isset( $chunk['index'] ) ? (int) $chunk['index'] : 0;
                 $chunk_index = sanitize_text_field( (string) $chunk_index_raw ); // @plugin-check: sanitized
+                $chunk_index_escaped = esc_html( $chunk_index ); // @plugin-check: escaped
                 $message = sprintf(
                     // translators: %s: Invalid chunk index number.
                     esc_html__( 'Failed to read chunk during merge. Invalid chunk index: %s', 'museder-restoreone' ),
-                    esc_html( $chunk_index )
+                    $chunk_index_escaped
                 );
-                // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message already escaped via esc_html__ + esc_html
+                // phpcs:disable WordPress.Security.EscapeOutput.ExceptionNotEscaped
+                // Message and array values are already sanitized and escaped above.
                 throw new Backup_Lite_Chunk_Exception(
                     'merge_failed',
                     $message,
-                    [ 'stage' => 'merge', 'chunk_index' => $chunk['index'] ],
+                    [ 'stage' => 'merge', 'chunk_index' => $chunk_index_escaped ],
                     500
                 );
+                // phpcs:enable WordPress.Security.EscapeOutput.ExceptionNotEscaped
             }
 
             if ( stream_copy_to_stream( $read, $merged ) === false ) {
@@ -886,18 +896,21 @@ class Backup_Lite_Chunk_Handler {
                 // @plugin-check: sanitized & escaped - exception message may be displayed as HTML
                 $chunk_index_raw = isset( $chunk['index'] ) ? (int) $chunk['index'] : 0;
                 $chunk_index = sanitize_text_field( (string) $chunk_index_raw ); // @plugin-check: sanitized
+                $chunk_index_escaped = esc_html( $chunk_index ); // @plugin-check: escaped
                 $message = sprintf(
                     // translators: %s: Invalid chunk index number.
                     esc_html__( 'Error while merging chunks. Invalid chunk index: %s', 'museder-restoreone' ),
-                    esc_html( $chunk_index )
+                    $chunk_index_escaped
                 );
-                // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- message already escaped via esc_html__ + esc_html
+                // phpcs:disable WordPress.Security.EscapeOutput.ExceptionNotEscaped
+                // Message and array values are already sanitized and escaped above.
                 throw new Backup_Lite_Chunk_Exception(
                     'merge_failed',
                     $message,
-                    [ 'stage' => 'merge', 'chunk_index' => $chunk['index'] ],
+                    [ 'stage' => 'merge', 'chunk_index' => $chunk_index_escaped ],
                     500
                 );
+                // phpcs:enable WordPress.Security.EscapeOutput.ExceptionNotEscaped
             }
 
             // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen.

@@ -153,7 +153,11 @@ class Backup_Lite_UI {
         $rest_url_v2 = rest_url( 'backup-lite/v2/' );
         $nonce_v2    = wp_create_nonce( self::NONCE_V2 );
 
+        // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- page parameter is for UI display only, not for security-sensitive operations
         $current_page = isset( $_GET['page'] ) ? sanitize_key( wp_unslash( $_GET['page'] ) ) : '';
+
+        // Add inline styles and scripts for specific pages
+        self::add_page_specific_inline_assets( $current_page );
 
         $active_job = Backup_Lite_Backup_Jobs::get_active_job_summary();
 
@@ -353,6 +357,7 @@ class Backup_Lite_UI {
     public static function ajax_get_backup_job_status() {
         self::verify_ajax_request();
 
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() above
         $job_id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
         if ( empty( $job_id ) ) {
             // @plugin-check: escaped
@@ -371,6 +376,7 @@ class Backup_Lite_UI {
     public static function ajax_continue_backup_job() {
         self::verify_ajax_request();
 
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() above
         $job_id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
         if ( empty( $job_id ) ) {
             // @plugin-check: escaped
@@ -393,6 +399,7 @@ class Backup_Lite_UI {
     public static function ajax_cancel_backup_job() {
         self::verify_ajax_request();
 
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() above
         $job_id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
         if ( empty( $job_id ) ) {
             // @plugin-check: escaped
@@ -411,22 +418,25 @@ class Backup_Lite_UI {
     public static function handle_restore_request() {
         self::verify_ajax_request();
 
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() above
         // @plugin-check: sanitized + nonce - verified via verify_ajax_request() above
         $confirm = isset( $_POST['confirm'] ) ? sanitize_text_field( wp_unslash( $_POST['confirm'] ) ) : '';
+        // phpcs:enable WordPress.Security.NonceVerification.Missing
         if ( empty( $confirm ) || '1' !== $confirm ) {
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'Restore not confirmed by user.', 'museder-restoreone' ) ] );
         }
 
+        // phpcs:disable WordPress.Security.NonceVerification.Missing,WordPress.Security.ValidatedSanitizedInput.InputNotValidated,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+        // Nonce verified in verify_ajax_request() above, $_FILES array validated via isset() and is_uploaded_file(), using PHP upload file array provided by the system
         // @plugin-check: sanitized + nonce - verified via verify_ajax_request() above
         $uploaded_file = null;
         if ( isset( $_FILES['restoreFile'] ) && is_uploaded_file( $_FILES['restoreFile']['tmp_name'] ) ) {
-            // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- using PHP upload file array provided by the system
             $uploaded_file = $_FILES['restoreFile'];
         } elseif ( isset( $_FILES['restore_file'] ) && is_uploaded_file( $_FILES['restore_file']['tmp_name'] ) ) {
-            // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- using PHP upload file array provided by the system
             $uploaded_file = $_FILES['restore_file'];
         }
+        // phpcs:enable WordPress.Security.NonceVerification.Missing,WordPress.Security.ValidatedSanitizedInput.InputNotValidated,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
 
         if ( empty( $uploaded_file ) ) {
             // @plugin-check: escaped
@@ -454,6 +464,7 @@ class Backup_Lite_UI {
         $backup_dir = backup_lite_get_backup_dir();
         $unique     = wp_unique_filename( $backup_dir, basename( $file_path ) );
         $destination = trailingslashit( $backup_dir ) . $unique;
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- required for moving uploaded restore file, paths validated and sanitized
         if ( @rename( $file_path, $destination ) ) {
             $file_path = $destination;
         }
@@ -478,6 +489,7 @@ class Backup_Lite_UI {
     public static function handle_restore_existing() {
         self::verify_ajax_request();
 
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() above
         $filename = isset( $_POST['filename'] ) ? sanitize_text_field( wp_unslash( $_POST['filename'] ) ) : '';
         if ( empty( $filename ) ) {
             // @plugin-check: escaped
@@ -500,14 +512,22 @@ class Backup_Lite_UI {
 
         $options = [];
         $search_replace_raw = '';
+        // phpcs:disable WordPress.Security.NonceVerification.Missing,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified in verify_ajax_request() above, will be sanitized after json_decode()
         if ( isset( $_POST['search_replace'] ) ) {
             $search_replace_raw = wp_unslash( $_POST['search_replace'] );
         }
-        // @plugin-check: validated - JSON will be decoded and validated
+        // phpcs:enable WordPress.Security.NonceVerification.Missing,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+        // @plugin-check: validated - JSON will be decoded and sanitized
         if ( ! empty( $search_replace_raw ) ) {
             $decoded = json_decode( $search_replace_raw, true );
             if ( is_array( $decoded ) ) {
-                $options['search_replace'] = $decoded;
+                // Sanitize all string values in the array recursively
+                $options['search_replace'] = array_map( function( $item ) {
+                    if ( is_array( $item ) ) {
+                        return array_map( 'sanitize_text_field', $item );
+                    }
+                    return sanitize_text_field( $item );
+                }, $decoded );
             }
         }
 
@@ -546,6 +566,7 @@ class Backup_Lite_UI {
     public static function handle_delete_backup() {
         self::verify_ajax_request();
 
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() above
         $filename = isset( $_POST['filename'] ) ? sanitize_text_field( wp_unslash( $_POST['filename'] ) ) : '';
         if ( empty( $filename ) ) {
             // @plugin-check: escaped
@@ -568,6 +589,7 @@ class Backup_Lite_UI {
 
         // @plugin-check: allowed - required for backup/restore file operations
         // Path is validated and sanitized before use
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- required for deleting backup files, path validated and sanitized
         if ( @unlink( $file_path ) ) {
             backup_lite_log( 'info', 'Backup file deleted.', [ 'file' => $file_path ] );
             wp_send_json_success( [ 'message' => esc_html__( 'Backup deleted successfully.', 'museder-restoreone' ) ] );
@@ -581,10 +603,12 @@ class Backup_Lite_UI {
     public static function handle_delete_backups() {
         self::verify_ajax_request();
 
+        // phpcs:disable WordPress.Security.NonceVerification.Missing,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified in verify_ajax_request() above, will be sanitized in array_map below
         $raw = array();
         if ( isset( $_POST['filenames'] ) ) {
             $raw = wp_unslash( $_POST['filenames'] );
         }
+        // phpcs:enable WordPress.Security.NonceVerification.Missing,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
         // @plugin-check: validated - will be sanitized in array_map below
 
         if ( is_string( $raw ) ) {
@@ -625,7 +649,8 @@ class Backup_Lite_UI {
 
             // @plugin-check: allowed - required for backup/restore file operations
             // Path is validated and sanitized before use
-            if ( @unlink( $file_path ) ) {
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- required for deleting backup files, path validated and sanitized
+        if ( @unlink( $file_path ) ) {
                 $deleted[] = $filename;
                 backup_lite_log( 'info', 'Backup file deleted (bulk).', [ 'file' => $file_path ] );
             } else {
@@ -665,6 +690,7 @@ class Backup_Lite_UI {
         header( 'Content-Disposition: attachment; filename="' . $download_filename . '"' );
         header( 'Content-Length: ' . filesize( $path ) );
 
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_readfile -- required for streaming log files, path validated and sanitized
         readfile( $path );
         exit;
     }
@@ -712,6 +738,7 @@ class Backup_Lite_UI {
         header( 'Content-Transfer-Encoding: binary' );
 
         $chunk_size = 1024 * 1024; // 1MB
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for streaming large backup files, path validated and sanitized
         $handle     = fopen( $path, 'rb' );
         if ( ! $handle ) {
             wp_die( esc_html__( 'Unable to read backup file.', 'museder-restoreone' ), esc_html__( 'Download error', 'museder-restoreone' ), 500 );
@@ -719,9 +746,9 @@ class Backup_Lite_UI {
 
         while ( ! feof( $handle ) ) {
             // Only reads plugin-generated backup files, path is validated and sanitized.
-            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread
-            // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- streaming binary file contents, not HTML output
+            // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fread,WordPress.Security.EscapeOutput.OutputNotEscaped -- required for streaming large backup files, path validated and sanitized, streaming binary file contents not HTML output
             echo fread( $handle, $chunk_size );
+            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fread,WordPress.Security.EscapeOutput.OutputNotEscaped
             flush();
         }
 
@@ -738,6 +765,7 @@ class Backup_Lite_UI {
     private static function get_backup_options_from_request() {
         $options = [];
 
+        // phpcs:disable WordPress.Security.NonceVerification.Missing,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified in calling function (handle_backup_request or ajax_start_backup_job) via verify_ajax_request()
         if ( Backup_Lite_Pro::is_pro_active() ) {
             $backup_label = '';
             if ( isset( $_POST['backup_label'] ) ) {
@@ -772,6 +800,7 @@ class Backup_Lite_UI {
                 }
             }
         }
+        // phpcs:enable WordPress.Security.NonceVerification.Missing,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
 
         return $options;
     }
@@ -873,6 +902,95 @@ class Backup_Lite_UI {
             'mysql_cli'  => backup_lite_can_use_mysql_cli(),
             'ziparchive' => backup_lite_can_use_ziparchive(),
         ];
+    }
+
+    /**
+     * Add page-specific inline styles and scripts.
+     *
+     * @param string $current_page Current page slug.
+     */
+    private static function add_page_specific_inline_assets( $current_page ) {
+        // Common PRO page styles
+        $pro_page_css = '
+.backup-lite-pro-page.pro-locked-overlay::before,
+.backup-lite-reports.pro-locked-overlay::before {
+    content: "";
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(255, 255, 255, 0.3);
+    backdrop-filter: blur(2px);
+    z-index: 1;
+    pointer-events: none;
+}
+.backup-lite-pro-page.pro-locked-overlay .bl-container,
+.backup-lite-reports.pro-locked-overlay .bl-container {
+    position: relative;
+    z-index: 2;
+}
+.backup-lite-pro-page .notice:not(.backup-lite-notice),
+.backup-lite-pro-page .update-nag:not(.backup-lite-notice),
+.backup-lite-pro-page .error:not(.backup-lite-notice),
+.backup-lite-pro-page .updated:not(.backup-lite-notice),
+.backup-lite-reports .notice:not(.backup-lite-notice),
+.backup-lite-reports .update-nag:not(.backup-lite-notice),
+.backup-lite-reports .error:not(.backup-lite-notice),
+.backup-lite-reports .updated:not(.backup-lite-notice),
+.backup-lite-schedules .notice:not(.backup-lite-notice),
+.backup-lite-schedules .update-nag:not(.backup-lite-notice),
+.backup-lite-schedules .error:not(.backup-lite-notice),
+.backup-lite-schedules .updated:not(.backup-lite-notice) {
+    display: none !important;
+}
+.backup-lite-pro-page > .notice,
+.backup-lite-pro-page > .update-nag,
+.backup-lite-pro-page > .error,
+.backup-lite-pro-page > .updated,
+.backup-lite-reports > .notice,
+.backup-lite-reports > .update-nag,
+.backup-lite-reports > .error,
+.backup-lite-reports > .updated,
+.backup-lite-schedules > .notice,
+.backup-lite-schedules > .update-nag,
+.backup-lite-schedules > .error,
+.backup-lite-schedules > .updated {
+    display: none !important;
+}
+.bl-button-sm {
+    padding: 6px 12px;
+    font-size: 13px;
+}';
+
+        // Common notice removal script
+        $notice_removal_js = '
+(function() {
+    document.addEventListener("DOMContentLoaded", function() {
+        var pages = [".backup-lite-pro-page", ".backup-lite-reports", ".backup-lite-schedules"];
+        pages.forEach(function(selector) {
+            var page = document.querySelector(selector);
+            if (page) {
+                var pageWrapper = page.closest(".wrap") || page.parentElement;
+                if (pageWrapper) {
+                    var notices = pageWrapper.querySelectorAll(".notice:not(.backup-lite-notice), .update-nag:not(.backup-lite-notice), .error:not(.backup-lite-notice), .updated:not(.backup-lite-notice)");
+                    notices.forEach(function(notice) {
+                        var heroSection = page.querySelector(".bl-card, .schedule-hero");
+                        if (heroSection && notice.compareDocumentPosition(heroSection) & Node.DOCUMENT_POSITION_FOLLOWING) {
+                            notice.style.display = "none";
+                        }
+                    });
+                }
+            }
+        });
+    });
+})();';
+
+        // Add inline styles for PRO pages, reports, and schedules
+        if ( in_array( $current_page, [ 'backup-lite-pro', 'backup-lite-pro-features', 'backup-lite-pro-cloud', 'backup-lite-pro-ai', 'backup-lite-pro-filters', 'backup-lite-pro-retention', 'backup-lite-pro-reports', 'backup-lite-reports', 'backup-lite-schedules' ], true ) ) {
+            wp_add_inline_style( 'backup-lite-theme', $pro_page_css );
+            wp_add_inline_script( 'backup-lite-admin', $notice_removal_js, 'after' );
+        }
     }
 
     private static function build_backup_download_link( $file ) {

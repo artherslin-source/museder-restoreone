@@ -271,7 +271,8 @@ class Backup_Lite_Restore {
                 if ( function_exists( 'wp_delete_file' ) ) {
                     wp_delete_file( $prepared_sql['path'] );
                 } else {
-                    @unlink( $prepared_sql['path'] ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_unlink -- required for cleanup, path from plugin-controlled temp directory
+                    // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- required for cleanup, path from plugin-controlled temp directory
+                    @unlink( $prepared_sql['path'] );
                 }
             }
         }
@@ -303,6 +304,7 @@ class Backup_Lite_Restore {
         if ( $handle ) {
             // Only reads plugin-generated backup files, path is validated and sanitized.
             // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- required for reading SQL file sample
             $sample = fread( $handle, 1048576 ); // 1MB sample.
             if ( false !== strpos( $sample, $placeholder ) ) {
                 $needs_normalize = true;
@@ -325,14 +327,18 @@ class Backup_Lite_Restore {
         }
 
         $normalized = $sql_file . '.normalized.sql';
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for reading SQL file, path validated and sanitized
         $in         = fopen( $sql_file, 'rb' );
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for writing normalized SQL file, path from plugin-controlled directory
         $out        = fopen( $normalized, 'wb' );
 
         if ( ! $in || ! $out ) {
             if ( $in ) {
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen
                 fclose( $in );
             }
             if ( $out ) {
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen
                 fclose( $out );
             }
             backup_lite_log( 'warning', 'Unable to create normalized SQL file for SERVMASK export.', [ 'source' => $sql_file ] );
@@ -352,6 +358,7 @@ class Backup_Lite_Restore {
 
         // First pass: streaming replacement with overlap buffer
         while ( ! feof( $in ) ) {
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- required for reading SQL file chunks
             $chunk = fread( $in, $chunk_size );
             if ( false === $chunk ) {
                 break;
@@ -372,16 +379,20 @@ class Backup_Lite_Restore {
 
             // Replace placeholder in the chunk we're about to write
             $chunk_to_write = str_replace( $placeholder, $prefix, $chunk_to_write );
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing normalized SQL file
             fwrite( $out, $chunk_to_write );
         }
 
         // Write remaining buffer
         if ( $buffer !== '' ) {
             $buffer = str_replace( $placeholder, $prefix, $buffer );
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing normalized SQL file
             fwrite( $out, $buffer );
         }
 
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen
         fclose( $in );
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen
         fclose( $out );
 
         // For large files (1GB+), always do a second pass to ensure 100% replacement
@@ -393,8 +404,11 @@ class Backup_Lite_Restore {
             ] );
             
             $temp_file = $normalized . '.tmp';
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- required for creating temp file for second pass, paths from plugin-controlled directory
             if ( rename( $normalized, $temp_file ) ) {
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for reading temp file, path from plugin-controlled directory
                 $in2 = fopen( $temp_file, 'rb' );
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for writing normalized SQL file, path from plugin-controlled directory
                 $out2 = fopen( $normalized, 'wb' );
                 
                 if ( $in2 && $out2 ) {
@@ -422,23 +436,28 @@ class Backup_Lite_Restore {
                         
                         // Replace any remaining placeholders
                         $chunk_to_write2 = str_replace( $placeholder, $prefix, $chunk_to_write2 );
+                        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing normalized SQL file
                         fwrite( $out2, $chunk_to_write2 );
                     }
                     
                     // Write remaining buffer
                     if ( $second_buffer !== '' ) {
                         $second_buffer = str_replace( $placeholder, $prefix, $second_buffer );
+                        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing normalized SQL file
                         fwrite( $out2, $second_buffer );
                     }
                     
+                    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen
                     fclose( $in2 );
+                    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen
                     fclose( $out2 );
                     // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
                     // $temp_file is from plugin-controlled temp directory
                     if ( function_exists( 'wp_delete_file' ) ) {
                         wp_delete_file( $temp_file );
                     } else {
-                        @unlink( $temp_file ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_unlink -- required for cleanup, path from plugin-controlled temp directory
+                        // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- required for cleanup, path from plugin-controlled temp directory
+                        @unlink( $temp_file );
                     }
                     
                     backup_lite_log( 'info', 'Second normalization pass completed for large file.', [ 'file' => basename( $normalized ) ] );
@@ -699,9 +718,11 @@ class Backup_Lite_Restore {
                 break;
             }
 
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for writing extracted files, path validated and sanitized
             $output = fopen( $target, 'wb' );
             if ( ! $output ) {
                 backup_lite_log( 'error', 'Unable to write extracted file.', [ 'target' => $target ] );
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen
                 fclose( $input );
                 $error_code = 'entry_unwritable';
                 break;
@@ -716,6 +737,7 @@ class Backup_Lite_Restore {
                     $error_code = 'stream_read_error';
                     break;
                 }
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing extracted files
                 if ( false === fwrite( $output, $buffer ) ) {
                     backup_lite_log( 'error', 'Unable to write buffer during extraction.', [ 'target' => $target ] );
                     $error_code = 'stream_write_error';
@@ -776,10 +798,13 @@ class Backup_Lite_Restore {
         $destination_escaped = escapeshellarg( $destination );
 
         // Detect file format by reading first few bytes
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for reading archive header, path validated and sanitized
         $file_handle = fopen( $archive, 'rb' );
         $file_header = '';
         if ( $file_handle ) {
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- required for reading archive header
             $file_header = fread( $file_handle, 512 ); // Read first 512 bytes
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen
             fclose( $file_handle );
         }
 
@@ -966,6 +991,7 @@ class Backup_Lite_Restore {
         }
         
         // Read file header to determine format
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for reading WPRESS file header, path validated and sanitized
         $file_handle = fopen( $archive, 'rb' );
         if ( ! $file_handle ) {
             return [
@@ -975,7 +1001,9 @@ class Backup_Lite_Restore {
             ];
         }
         
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- required for reading WPRESS file header
         $header = fread( $file_handle, 1024 );
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen
         fclose( $file_handle );
         
         // Check for gzip magic bytes (0x1f 0x8b)
@@ -1131,7 +1159,8 @@ class Backup_Lite_Restore {
                         if ( function_exists( 'wp_delete_file' ) ) {
                             wp_delete_file( $target );
                         } else {
-                            @unlink( $target ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_unlink -- required for suspicious file removal, path from plugin-controlled directory
+                            // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- required for suspicious file removal, path from plugin-controlled directory
+                            @unlink( $target );
                         }
                         $removed_count++;
                         backup_lite_log( 'warning', 'zip_entry_removed_after_extraction', [
@@ -1375,6 +1404,7 @@ class Backup_Lite_Restore {
     private static function import_database_with_php( $sql_file, $progress_cb = null ) {
         global $wpdb;
 
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for reading SQL file, path validated and sanitized
         $handle = fopen( $sql_file, 'r' );
         if ( ! $handle ) {
             backup_lite_log( 'error', 'Unable to open SQL file for reading.', [ 'path' => $sql_file ] );
@@ -1388,6 +1418,7 @@ class Backup_Lite_Restore {
         }
         // @plugin-check: safe - increase memory limit for large restore operations
         // This is necessary to handle large database imports and file operations
+        // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- required for large restore operations
         @ini_set( 'memory_limit', '512M' );
 
         $query    = '';
@@ -1493,6 +1524,7 @@ class Backup_Lite_Restore {
         }
 
         $active_plugins = [];
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for reading SQL file, path validated and sanitized
         $handle = fopen( $sql_file, 'rb' );
         if ( ! $handle ) {
             return [];

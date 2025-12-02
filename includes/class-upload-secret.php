@@ -60,6 +60,7 @@ class Backup_Lite_Upload_Secret {
     private static function write_secret( $path, $secret ) {
         $contents = "<?php\nreturn '" . addslashes( $secret ) . "';\n";
         file_put_contents( $path, $contents, LOCK_EX );
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- required for security file permissions, path from plugin-controlled directory
         @chmod( $path, 0640 );
     }
 

@@ -105,7 +105,8 @@ class Backup_Lite_Backup {
             if ( function_exists( 'wp_delete_file' ) ) {
                 wp_delete_file( $archive_path );
             } else {
-                @unlink( $archive_path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_unlink -- required for cleanup, path from plugin-controlled backup directory
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- required for cleanup, path from plugin-controlled backup directory
+                @unlink( $archive_path );
             }
         }
 
@@ -456,7 +457,8 @@ class Backup_Lite_Backup {
             if ( function_exists( 'wp_delete_file' ) ) {
                 wp_delete_file( $archive_path );
             } else {
-                @unlink( $archive_path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_unlink -- required for cleanup, path from plugin-controlled backup directory
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- required for cleanup, path from plugin-controlled backup directory
+                @unlink( $archive_path );
             }
         }
 
@@ -768,6 +770,7 @@ class Backup_Lite_Backup {
     private static function export_database_with_php( $filepath ) {
         global $wpdb;
 
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for writing SQL dump file, path validated and sanitized
         $handle = fopen( $filepath, 'w' );
         if ( ! $handle ) {
             backup_lite_log( 'error', 'Unable to open SQL file for writing.', [ 'path' => $filepath ] );
@@ -781,11 +784,14 @@ class Backup_Lite_Backup {
             @set_time_limit( 0 );
         }
 
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing SQL dump file
         fwrite( $handle, "SET sql_mode = 'NO_AUTO_VALUE_ON_ZERO';\n" );
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing SQL dump file
         fwrite( $handle, "SET time_zone = '+00:00';\n\n" );
 
         $tables = self::get_tables();
         if ( empty( $tables ) ) {
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen
             fclose( $handle );
             backup_lite_log( 'warning', 'No database tables found for export.' );
             return true;
@@ -800,19 +806,23 @@ class Backup_Lite_Backup {
                 continue;
             }
 
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing SQL dump file
             fwrite( $handle, sprintf( "-- Table structure for table `%s`\n\n", $safe_table ) );
 
             // @plugin-check: allowed - schema introspection for backup, table name from whitelist only
             // Cannot use prepare() because SHOW CREATE TABLE doesn't support placeholders
             $create = $wpdb->get_row( $wpdb->prepare( "SHOW CREATE TABLE `%s`", $safe_table ), ARRAY_N ); // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- safe: table name sanitized from SHOW TABLES result
             if ( isset( $create[1] ) ) {
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing SQL dump file
                 fwrite( $handle, "DROP TABLE IF EXISTS `{$safe_table}`;\n" );
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing SQL dump file
                 fwrite( $handle, $create[1] . ";\n\n" );
             }
 
             // @plugin-check: safe table name from whitelist
             $row_count = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM `%s`", $safe_table ) );
             if ( $row_count === 0 ) {
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing SQL dump file
                 fwrite( $handle, "\n" );
                 continue;
             }
@@ -850,15 +860,18 @@ class Backup_Lite_Backup {
                         implode( ",\n", $values )
                     );
 
+                    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing SQL dump file
                     fwrite( $handle, $sql );
                 }
 
                 $offset += self::CHUNK_SIZE;
             }
 
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing SQL dump file
             fwrite( $handle, "\n" );
         }
 
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen
         fclose( $handle );
 
         return true;
@@ -1018,6 +1031,7 @@ class Backup_Lite_Backup {
         // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running backup/restore operations
         if ( function_exists( 'set_time_limit' ) ) {
             // @plugin-check: okay - needed for long running backup/restore operations
+            // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running backup/restore operations
             @set_time_limit( 0 );
         }
 
@@ -1042,6 +1056,7 @@ class Backup_Lite_Backup {
             if ( $target_bytes > 0 && ( $current_bytes <= 0 || $current_bytes < $target_bytes ) ) {
                 // @plugin-check: safe - increase memory limit for large backup operations
                 // This is necessary to handle large file archives and database exports
+                // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- required for large backup operations
                 @ini_set( 'memory_limit', '1024M' );
             }
         }

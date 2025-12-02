@@ -44,7 +44,7 @@ if ( $safe_mode_active ) {
                     printf(
                         /* translators: %d: Number of plugins that were deactivated. */
                         esc_html__( 'RestoreOne has enabled safe mode after restore, temporarily disabling %d plugin(s) to prevent conflicts. Please verify your site is working correctly, then click the button below to restore all plugins.', 'museder-restoreone' ),
-                        $prev_plugins_count
+                        absint( $prev_plugins_count )
                     );
                     ?>
                 </p>

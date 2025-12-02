@@ -79,53 +79,6 @@ if ( $museder_restoreone_total_schedules ) {
     </div>
 
     <?php
-    // Hide other plugins' admin notices on this page to avoid confusion
-    // These notices appear in the WordPress admin area and can be mistaken for our plugin's content
-    ?>
-    <style>
-        /* Hide other plugins' admin notices on the schedules page */
-        .backup-lite-schedules .notice:not(.backup-lite-notice),
-        .backup-lite-schedules .update-nag:not(.backup-lite-notice),
-        .backup-lite-schedules .error:not(.backup-lite-notice),
-        .backup-lite-schedules .updated:not(.backup-lite-notice) {
-            display: none !important;
-        }
-        /* Specifically target common plugin notice containers */
-        .backup-lite-schedules > .notice,
-        .backup-lite-schedules > .update-nag,
-        .backup-lite-schedules > .error,
-        .backup-lite-schedules > .updated {
-            display: none !important;
-        }
-    </style>
-    <script>
-        (function() {
-            // Remove other plugins' admin notices that appear before our content
-            // This prevents confusion where users might think these are our plugin's features
-            document.addEventListener('DOMContentLoaded', function() {
-                var schedulesPage = document.querySelector('.backup-lite-schedules');
-                if (schedulesPage) {
-                    // Find all notices that are siblings of our page content
-                    var pageWrapper = schedulesPage.closest('.wrap') || schedulesPage.parentElement;
-                    if (pageWrapper) {
-                        // Remove notices that are not from our plugin
-                        var notices = pageWrapper.querySelectorAll('.notice:not(.backup-lite-notice), .update-nag:not(.backup-lite-notice), .error:not(.backup-lite-notice), .updated:not(.backup-lite-notice)');
-                        notices.forEach(function(notice) {
-                            // Only remove if it's not immediately after our hero section
-                            // This allows WordPress core notices to still show
-                            var heroSection = schedulesPage.querySelector('.schedule-hero');
-                            if (heroSection && notice.compareDocumentPosition(heroSection) & Node.DOCUMENT_POSITION_FOLLOWING) {
-                                // Notice is before our hero, remove it
-                                notice.style.display = 'none';
-                            }
-                        });
-                    }
-                }
-            });
-        })();
-    </script>
-
-    <?php
     // AI Smart Schedule Advisor (PRO Feature)
     $is_pro = Backup_Lite_Pro::is_pro_active();
     ?>

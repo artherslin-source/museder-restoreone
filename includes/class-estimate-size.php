@@ -68,6 +68,7 @@ class Backup_Lite_Estimate_Size {
             $table_prefix . '%'
         );
 
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- $query is prepared via $wpdb->prepare() above
         $result = $wpdb->get_var( $query );
 
         if ( $result !== null ) {
@@ -97,7 +98,8 @@ class Backup_Lite_Estimate_Size {
 
         // Check cache validity
         $cached_time = get_option( self::CACHE_TIME_KEY, 0 );
-        $force = isset( $_POST['force'] ) && $_POST['force'] === 'true';
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax() above
+        $force = isset( $_POST['force'] ) && sanitize_text_field( wp_unslash( $_POST['force'] ) ) === 'true';
 
         if ( ! $force && ( time() - $cached_time ) < self::CACHE_TTL ) {
             wp_send_json_success( [

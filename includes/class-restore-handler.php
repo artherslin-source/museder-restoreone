@@ -32,16 +32,17 @@ class Backup_Lite_Restore_Handler {
         // Optimize runtime environment for large file processing
         self::optimize_runtime_environment();
 
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() above
         // @plugin-check: sanitized + nonce - verified via verify_ajax_request() above
         $file = null;
         if ( isset( $_FILES['file'] ) && is_uploaded_file( $_FILES['file']['tmp_name'] ) ) {
-            // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- using PHP upload file array provided by the system
+            // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotValidated,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- $_FILES array validated via isset() and is_uploaded_file(), using PHP upload file array provided by the system
             $file = $_FILES['file'];
         } elseif ( isset( $_FILES['restoreFile'] ) && is_uploaded_file( $_FILES['restoreFile']['tmp_name'] ) ) {
-            // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- using PHP upload file array provided by the system
+            // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotValidated,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- $_FILES array validated via isset() and is_uploaded_file(), using PHP upload file array provided by the system
             $file = $_FILES['restoreFile'];
         } elseif ( isset( $_FILES['restore_file'] ) && is_uploaded_file( $_FILES['restore_file']['tmp_name'] ) ) {
-            // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- using PHP upload file array provided by the system
+            // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotValidated,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- $_FILES array validated via isset() and is_uploaded_file(), using PHP upload file array provided by the system
             $file = $_FILES['restore_file'];
         }
         if ( empty( $file ) ) {
@@ -69,7 +70,8 @@ class Backup_Lite_Restore_Handler {
             if ( function_exists( 'wp_delete_file' ) ) {
                 wp_delete_file( $file_path );
             } else {
-                @unlink( $file_path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_unlink -- required for cleanup, path from wp_handle_upload()
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- required for cleanup, path from wp_handle_upload()
+                @unlink( $file_path );
             }
             wp_send_json_error( [ 'message' => esc_html__( 'Unsupported file type. Allowed: zip, wpress.', 'museder-restoreone' ) ], 415 );
         }
@@ -715,8 +717,8 @@ class Backup_Lite_Restore_Handler {
 
         $history_entry = isset( $job['history'] ) && is_array( $job['history'] ) ? $job['history'] : [
             'timestamp_utc' => time(), // Store Unix timestamp (UTC) for accurate timezone conversion
-            // @plugin-check: allowed - GMT time for internal logs and backward compatibility
-            'timestamp' => gmdate( 'Y-m-d H:i:s', time() ), // phpcs:ignore WordPress.DateTime.RestrictedFunctions.date_date -- GMT time for internal metadata, not user-facing
+            // @plugin-check: allowed - UTC datetime string for backward compatibility and logging
+            'timestamp' => gmdate( 'Y-m-d H:i:s', time() ), // phpcs:ignore WordPress.DateTime.RestrictedFunctions.date_date -- UTC datetime for internal metadata, not user-facing
             'file'      => isset( $state['filename'] ) ? $state['filename'] : basename( $state['file'] ),
             'result'    => 'pending',
             'log'       => '',
@@ -934,11 +936,17 @@ class Backup_Lite_Restore_Handler {
         if ( isset( $_POST['searchReplace'] ) ) {
             $search_replace_raw = wp_unslash( $_POST['searchReplace'] );
         }
-        // @plugin-check: validated - JSON will be decoded and validated
+        // @plugin-check: validated - JSON will be decoded and sanitized
         if ( ! empty( $search_replace_raw ) ) {
             $decoded = json_decode( $search_replace_raw, true );
             if ( is_array( $decoded ) ) {
-                $options['search_replace'] = $decoded;
+                // Sanitize all string values in the array recursively
+                $options['search_replace'] = array_map( function( $item ) {
+                    if ( is_array( $item ) ) {
+                        return array_map( 'sanitize_text_field', $item );
+                    }
+                    return sanitize_text_field( $item );
+                }, $decoded );
             }
         }
 
@@ -1127,6 +1135,7 @@ class Backup_Lite_Restore_Handler {
         $final_name = wp_unique_filename( $backup_dir, $meta['filename'] );
         $final_path = trailingslashit( $backup_dir ) . $final_name;
 
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for creating merged archive, path from plugin-controlled directory
         $output = fopen( $final_path, 'wb' );
         if ( ! $output ) {
             self::delete_chunk_session( $session_id );
@@ -1135,18 +1144,22 @@ class Backup_Lite_Restore_Handler {
         }
 
         foreach ( $chunks as $chunk_path ) {
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for reading chunk files, path from plugin-controlled directory
             $input = fopen( $chunk_path, 'rb' );
             if ( ! $input ) {
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen
                 fclose( $output );
                 self::delete_chunk_session( $session_id );
                 // @plugin-check: escaped
                 wp_send_json_error( [ 'message' => esc_html__( 'Unable to read uploaded chunk.', 'museder-restoreone' ) ], 500 );
             }
             stream_copy_to_stream( $input, $output );
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen
             fclose( $input );
         }
 
         fflush( $output );
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen
         fclose( $output );
 
         self::delete_chunk_session( $session_id );
@@ -1346,18 +1359,28 @@ class Backup_Lite_Restore_Handler {
             }
             
             if ( false !== $parsed && $parsed > 0 ) {
-                // Use backup_lite_local_time to format with WordPress timezone settings
-                // Use the same format as Log Files page for consistency: 'Y-m-d H:i'
-                // backup_lite_local_time() expects UTC timestamp and converts to local timezone
-                // wp_date() and date_i18n() both handle timezone conversion automatically
-                // $parsed is already a UTC Unix timestamp at this point
-                $row['timestamp'] = backup_lite_local_time( 
-                    'Y-m-d H:i', 
-                    $parsed 
-                );
+                // @plugin-check: wp_date with local timezone - converts UTC timestamp to site's local timezone
+                // Use wp_date() directly for consistent timezone handling
+                // $parsed is a UTC Unix timestamp, wp_date() converts it to local timezone
+                if ( function_exists( 'wp_date' ) ) {
+                    $row['timestamp'] = wp_date( 'Y-m-d H:i', $parsed, wp_timezone() );
+                } else {
+                    // Fallback for older WordPress versions
+                    $row['timestamp'] = backup_lite_local_time( 'Y-m-d H:i', $parsed );
+                }
             } elseif ( ! empty( $entry['timestamp'] ) ) {
-                // If parsing fails, use the original string as fallback
-                $row['timestamp'] = $entry['timestamp'];
+                // If parsing fails, try to parse the original string as UTC and convert
+                $fallback_parsed = strtotime( $entry['timestamp'] . ' UTC' );
+                if ( false !== $fallback_parsed && $fallback_parsed > 0 ) {
+                    if ( function_exists( 'wp_date' ) ) {
+                        $row['timestamp'] = wp_date( 'Y-m-d H:i', $fallback_parsed, wp_timezone() );
+                    } else {
+                        $row['timestamp'] = backup_lite_local_time( 'Y-m-d H:i', $fallback_parsed );
+                    }
+                } else {
+                    // Last resort: use original string (should not happen with proper data)
+                    $row['timestamp'] = $entry['timestamp'];
+                }
             }
             
             if ( ! empty( $entry['log'] ) ) {
@@ -1382,6 +1405,7 @@ class Backup_Lite_Restore_Handler {
     }
 
     private static function move_file( $source, $destination ) {
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- required for moving files, paths from plugin-controlled directories
         if ( @rename( $source, $destination ) ) {
             return true;
         }

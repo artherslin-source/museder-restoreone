@@ -181,28 +181,3 @@ if ( $museder_restoreone_is_pro && isset( $museder_restoreone_system_check['erro
     </div>
 </div>
 
-<style>
-.backup-lite-reports.pro-locked-overlay::before {
-    content: '';
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(255, 255, 255, 0.3);
-    backdrop-filter: blur(2px);
-    z-index: 1;
-    pointer-events: none;
-}
-
-.backup-lite-reports.pro-locked-overlay .bl-container {
-    position: relative;
-    z-index: 2;
-}
-
-.bl-button-sm {
-    padding: 6px 12px;
-    font-size: 13px;
-}
-</style>
-

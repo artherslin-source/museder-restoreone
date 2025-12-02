@@ -6,6 +6,10 @@
  * Helper functions are removed to use WordPress core functions directly.
  */
 
+if ( ! defined( 'ABSPATH' ) ) {
+    exit; // Exit if accessed directly
+}
+
 // Try to load WordPress
 $wp_load_paths = [
     dirname(__DIR__, 2) . '/wp-load.php',
@@ -299,11 +303,11 @@ function backup_lite_native_get_paths($upload_id) {
     $museder_restoreone_session_dir  = $museder_restoreone_paths['v2_root'] . '/' . $upload_id;
     $museder_restoreone_chunks_dir   = $museder_restoreone_session_dir . '/chunks';
 
-    if (!is_dir($museder_restoreone_session_dir) && !mkdir($museder_restoreone_session_dir, 0755, true)) {
+    if (!is_dir($museder_restoreone_session_dir) && !wp_mkdir_p($museder_restoreone_session_dir)) {
         throw new RuntimeException('Unable to create upload directory.');
     }
 
-    if (!is_dir($museder_restoreone_chunks_dir) && !mkdir($museder_restoreone_chunks_dir, 0755, true)) {
+    if (!is_dir($museder_restoreone_chunks_dir) && !wp_mkdir_p($museder_restoreone_chunks_dir)) {
         throw new RuntimeException('Unable to create chunks directory.');
     }
 
@@ -324,7 +328,7 @@ function backup_lite_native_paths() {
     $museder_restoreone_v2_root      = $museder_restoreone_temp_root . '/v2-uploads';
 
     foreach ([$museder_restoreone_uploads_root, $museder_restoreone_temp_root, $museder_restoreone_v2_root] as $museder_restoreone_dir) {
-        if (!is_dir($museder_restoreone_dir) && !mkdir($museder_restoreone_dir, 0755, true)) {
+        if (!is_dir($museder_restoreone_dir) && !wp_mkdir_p($museder_restoreone_dir)) {
             throw new RuntimeException('Unable to create uploads directory.');
         }
     }

@@ -219,6 +219,7 @@ class Backup_Lite_Reports_Controller {
         header( 'Content-Disposition: attachment; filename="' . $download_filename . '"' );
         header( 'Content-Length: ' . filesize( $path ) );
 
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_readfile -- required for streaming large backup files, path validated and sanitized
         readfile( $path );
         exit;
     }
