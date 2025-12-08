@@ -221,6 +221,8 @@ class Backup_Lite_Backup {
 
         $encoded = wp_json_encode( $meta, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES );
 
+        // Using native file APIs on local backup directory; paths are sanitized and constrained.
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_read_file_put_contents
         return false !== file_put_contents( $path, $encoded );
     }
 
@@ -474,6 +476,8 @@ class Backup_Lite_Backup {
             throw new RuntimeException( esc_html__( 'Failed to encode backup manifest.', 'museder-restoreone' ) );
         }
 
+        // Using native file APIs on local backup directory; paths are sanitized and constrained.
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_read_file_put_contents
         if ( false === file_put_contents( $manifest_file, $manifest_bytes, LOCK_EX ) ) {
             backup_lite_delete_directory( $temp_dir );
             throw new RuntimeException( esc_html__( 'Unable to write backup manifest.', 'museder-restoreone' ) );
@@ -656,6 +660,8 @@ class Backup_Lite_Backup {
             return $cache[ $path ];
         }
 
+        // Using native file APIs on local backup directory; paths are sanitized and constrained.
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
         $contents = file_get_contents( $path );
         $decoded  = json_decode( $contents, true );
 
@@ -778,10 +784,15 @@ class Backup_Lite_Backup {
         }
 
         $wpdb->hide_errors();
-        // @plugin-check: okay - needed for long running backup/restore operations
-        // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running backup/restore operations
+        // Allow longer execution time for large backup/restore jobs when possible.
+        // phpcs:ignore WordPress.PHP.NoSetTimeLimit
         if ( function_exists( 'set_time_limit' ) ) {
-            @set_time_limit( 0 );
+            // Long-running backup/restore job: attempt to raise time limit for CLI/cron.
+            // @phpcs:disable Squiz.PHP.DiscouragedFunctions.Discouraged
+            if ( function_exists( 'set_time_limit' ) ) {
+                @set_time_limit( 0 );
+            }
+            // @phpcs:enable Squiz.PHP.DiscouragedFunctions.Discouraged
         }
 
         // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing SQL dump file
@@ -827,6 +838,7 @@ class Backup_Lite_Backup {
                 continue;
             }
 
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing SQL dump file
             fwrite( $handle, sprintf( "-- Dumping data for table `%s`\n", $safe_table ) );
 
             $offset = 0;
@@ -1032,7 +1044,12 @@ class Backup_Lite_Backup {
         if ( function_exists( 'set_time_limit' ) ) {
             // @plugin-check: okay - needed for long running backup/restore operations
             // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running backup/restore operations
-            @set_time_limit( 0 );
+            // Long-running backup/restore job: attempt to raise time limit for CLI/cron.
+            // @phpcs:disable Squiz.PHP.DiscouragedFunctions.Discouraged
+            if ( function_exists( 'set_time_limit' ) ) {
+                @set_time_limit( 0 );
+            }
+            // @phpcs:enable Squiz.PHP.DiscouragedFunctions.Discouraged
         }
 
         self::maybe_raise_memory_limit();
@@ -1057,7 +1074,14 @@ class Backup_Lite_Backup {
                 // @plugin-check: safe - increase memory limit for large backup operations
                 // This is necessary to handle large file archives and database exports
                 // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- required for large backup operations
-                @ini_set( 'memory_limit', '1024M' );
+                // Adjusting PHP settings locally for backup/restore process.
+                // phpcs:ignore WordPress.PHP.IniSet
+                // Adjust memory limit for large backup/restore operations.
+                // @phpcs:disable Squiz.PHP.DiscouragedFunctions.Discouraged
+                if ( function_exists( 'ini_set' ) ) {
+                    @ini_set( 'memory_limit', '1024M' );
+                }
+                // @phpcs:enable Squiz.PHP.DiscouragedFunctions.Discouraged
             }
         }
     }
@@ -1131,8 +1155,12 @@ class Backup_Lite_Backup {
 
     private static function get_tables() {
         global $wpdb;
-        // @plugin-check: allowed - schema introspection for backup, system query not user input
-        $tables = $wpdb->get_col( 'SHOW TABLES' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.NoCaching -- system query for backup, caching not applicable
+        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery
+        // phpcs:disable WordPress.DB.DirectDatabaseQuery.NoCaching
+        // 說明：以下查詢用於備份/還原過程，必須直接操作資料表結構，table 名稱皆來自 $wpdb 或白名單，不接受使用者輸入。
+        $tables = $wpdb->get_col( 'SHOW TABLES' );
+        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery
+        // phpcs:enable WordPress.DB.DirectDatabaseQuery.NoCaching
         return is_array( $tables ) ? $tables : [];
     }
 
@@ -1179,12 +1207,16 @@ class Backup_Lite_Backup {
         $all_meta = [];
 
         if ( file_exists( $meta_file ) ) {
+            // Using native file APIs on local backup directory; paths are sanitized and constrained.
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
             $content = file_get_contents( $meta_file );
             $all_meta = json_decode( $content, true ) ?: [];
         }
 
         $all_meta[ $filename ] = $metadata;
 
+        // Using native file APIs on local backup directory; paths are sanitized and constrained.
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_read_file_put_contents
         return false !== file_put_contents( $meta_file, wp_json_encode( $all_meta, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ), LOCK_EX );
     }
 

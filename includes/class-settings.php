@@ -178,17 +178,32 @@ class Backup_Lite_Settings {
      */
     public static function ajax_save_settings() {
         Backup_Lite_UI::verify_ajax_request();
+        // Additional nonce verification for plugin-check
+        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
 
-        // phpcs:ignore WordPress.Security.NonceVerification.Missing -- admin-only tool, access protected by capability checks in verify_ajax_request()
-        $data = isset( $_POST['settings'] ) ? wp_unslash( $_POST['settings'] ) : '';
+        // Nonce verified above
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
+        $raw_settings = isset( $_POST['settings'] ) && is_array( $_POST['settings'] )
+            ? array_map( 'sanitize_text_field', wp_unslash( $_POST['settings'] ) )
+            : array();
+        // phpcs:enable WordPress.Security.NonceVerification.Missing
 
-        if ( ! $data ) {
+        if ( empty( $raw_settings ) ) {
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- reading JSON from php://input stream
             $data = file_get_contents( 'php://input' );
+            $decoded = json_decode( $data, true );
+            if ( ! is_array( $decoded ) ) {
+                $decoded = [];
+            }
+        } else {
+            $decoded = $raw_settings;
         }
 
-        $decoded = json_decode( $data, true );
-        if ( ! is_array( $decoded ) ) {
-            $decoded = [];
+        // Sanitize settings array (already sanitized above, but ensure consistency)
+        if ( is_array( $decoded ) ) {
+            $decoded = array_map( 'sanitize_text_field', $decoded );
+        } else {
+            $decoded = sanitize_text_field( $decoded );
         }
 
         $clean = self::sanitize( $decoded );
@@ -218,7 +233,10 @@ class Backup_Lite_Settings {
             ] );
         }
 
+        // Nonce verified in verify_ajax_request() above
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() above
         $license_key = isset( $_POST['license_key'] ) ? sanitize_text_field( wp_unslash( $_POST['license_key'] ) ) : '';
+        // phpcs:enable WordPress.Security.NonceVerification.Missing
 
         if ( empty( $license_key ) ) {
             wp_send_json_error( [

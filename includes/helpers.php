@@ -52,33 +52,9 @@ if ( ! function_exists( 'sanitize_file_name' ) ) {
     }
 }
 
-if ( ! function_exists( 'size_format' ) ) {
-    /**
-     * Provides a lightweight replacement for WordPress size_format() when unavailable (e.g. CLI tests).
-     *
-     * @param float $bytes    Size in bytes.
-     * @param int   $decimals Decimal precision.
-     * @return string
-     */
-    function size_format( $bytes, $decimals = 0 ) {
-        $bytes = (float) $bytes;
-        if ( $bytes < 0 ) {
-            $bytes = 0;
-        }
-
-        $units = [ 'B', 'KB', 'MB', 'GB', 'TB', 'PB' ];
-        $pow   = 0;
-
-        if ( $bytes > 0 ) {
-            $pow = floor( log( $bytes, 1024 ) );
-            $pow = min( $pow, count( $units ) - 1 );
-        }
-
-        $value = $bytes / pow( 1024, $pow );
-
-        return round( $value, $decimals ) . $units[ $pow ];
-    }
-}
+// WordPress 5.8+ includes size_format() in core.
+// We require WordPress 5.8+, so no polyfill is needed.
+// All calls to size_format() will use WordPress core function.
 
 /**
  * Return the base directory used by Backup Lite within uploads.
@@ -105,6 +81,137 @@ function backup_lite_get_backup_dir() {
     backup_lite_ensure_directory( $dir );
 
     return $dir;
+}
+
+/**
+ * Check if a path is an absolute path.
+ *
+ * @param string $path Path to check.
+ * @return bool True if absolute path, false otherwise.
+ */
+function backup_lite_is_absolute_path( $path ) {
+    return (bool) preg_match( '#^([a-zA-Z]:[\\\\/]|\\\\\\\\|/)#', $path );
+}
+
+/**
+ * Get absolute path to a backup archive within the backup directory.
+ *
+ * Handles both absolute paths and file names. If the input is already a valid absolute path
+ * that exists and is readable, returns it directly. Otherwise, treats the input as a file name
+ * or relative path and constructs the full path within the backup directory.
+ *
+ * @param string $file Backup file name, relative path, or absolute path.
+ * @return string|false Absolute path if file exists and is readable, false otherwise.
+ */
+function backup_lite_get_backup_path( $file ) {
+    if ( empty( $file ) ) {
+        return false;
+    }
+
+    // If already an absolute path, and exists and is readable, use it directly
+    if ( backup_lite_is_absolute_path( $file ) && file_exists( $file ) && is_readable( $file ) ) {
+        return $file;
+    }
+
+    $backups_dir = backup_lite_get_backup_dir();
+    if ( empty( $backups_dir ) ) {
+        return false;
+    }
+
+    $candidate = trailingslashit( $backups_dir ) . basename( $file );
+
+    // realpath protection to prevent directory traversal
+    $real_backups_dir = realpath( $backups_dir );
+    $real_candidate   = $candidate && file_exists( $candidate ) ? realpath( $candidate ) : false;
+
+    if ( ! $real_candidate || 0 !== strpos( $real_candidate, $real_backups_dir ) ) {
+        return false;
+    }
+
+    if ( ! is_readable( $real_candidate ) ) {
+        return false;
+    }
+
+    return $real_candidate;
+}
+
+/**
+ * Format a timestamp or datetime string into site-local time using WordPress timezone.
+ *
+ * @param int|string $time   Unix timestamp (UTC) or datetime string.
+ * @param string     $format Date format; default is site date + time format.
+ * @return string Formatted date/time in site's local timezone.
+ */
+function backup_lite_format_local_time( $time, $format = '' ) {
+    if ( empty( $format ) ) {
+        $format = get_option( 'date_format' ) . ' ' . get_option( 'time_format' );
+    }
+
+    // Normalize to Unix timestamp.
+    if ( is_numeric( $time ) ) {
+        $timestamp = (int) $time;
+    } else {
+        $timestamp = strtotime( (string) $time );
+    }
+
+    if ( ! $timestamp ) {
+        return '';
+    }
+
+    // Use wp_date() for WordPress 5.3+ (handles timezone conversion automatically)
+    if ( function_exists( 'wp_date' ) ) {
+        return wp_date( $format, $timestamp, wp_timezone() );
+    }
+
+    // Fallback for older WordPress versions
+    $gmt_offset = get_option( 'gmt_offset' ) * HOUR_IN_SECONDS;
+    $local_timestamp = $timestamp + $gmt_offset;
+    
+    return date_i18n( $format, $local_timestamp );
+}
+
+/**
+ * Parse legacy timestamp string to UTC Unix timestamp.
+ * 
+ * Handles old history entries that may have stored timestamps as local time strings.
+ * 
+ * @param string|int $timestamp_legacy Legacy timestamp (string or numeric).
+ * @return int UTC Unix timestamp, or 0 if parsing fails.
+ */
+function backup_lite_parse_legacy_timestamp( $timestamp_legacy ) {
+    if ( empty( $timestamp_legacy ) ) {
+        return 0;
+    }
+    
+    // If already numeric, treat as UTC Unix timestamp
+    if ( is_numeric( $timestamp_legacy ) ) {
+        return (int) $timestamp_legacy;
+    }
+    
+    // Try parsing as UTC first
+    $parsed = strtotime( $timestamp_legacy . ' UTC' );
+    if ( false !== $parsed && $parsed > 0 ) {
+        return $parsed;
+    }
+    
+    // Fallback: try parsing as-is (may be old local time entry)
+    $parsed = strtotime( $timestamp_legacy );
+    if ( false !== $parsed && $parsed > 0 ) {
+        // If WordPress timezone is available, try to convert local time to UTC
+        if ( function_exists( 'wp_timezone' ) ) {
+            try {
+                $timezone = wp_timezone();
+                $date = new DateTime( $timestamp_legacy, $timezone );
+                return $date->getTimestamp();
+            } catch ( Exception $e ) {
+                // If conversion fails, return parsed timestamp as-is
+                return $parsed;
+            }
+        }
+        return $parsed;
+    }
+    
+    return 0;
 }
 
 function backup_lite_get_log_dir() {
@@ -178,7 +285,10 @@ function backup_lite_get_restore_history_path() {
 
     if ( ! file_exists( $path ) ) {
         @file_put_contents( $path, wp_json_encode( [] ), LOCK_EX );
+        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_chmod
+        // chmod is required here to make backup archives readable by the web server user on some hosts.
         @chmod( $path, 0640 );
+        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_chmod
     }
 
     return $path;
@@ -280,12 +390,16 @@ function backup_lite_delete_directory( $directory ) {
         } else {
             // Try wp_delete_file() first, fallback to unlink() if not available
             $file_path = $fileinfo->getRealPath();
+            // @phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
             if ( function_exists( 'wp_delete_file' ) ) {
                 wp_delete_file( $file_path );
             } else {
-                // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
-                @unlink( $file_path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_unlink -- required for recursive directory deletion, path from plugin-controlled directory
+                // Fallback for non-standard environments.
+                if ( file_exists( $file_path ) ) {
+                    @unlink( $file_path );
+                }
             }
+            // @phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
         }
     }
 
@@ -322,7 +436,16 @@ function backup_lite_cleanup_temp( $max_age = DAY_IN_SECONDS ) {
         } elseif ( $age > $max_age ) {
             // @plugin-check: allowed - required for backup/restore file operations
             // Path is validated and sanitized before use
-            @unlink( $path );
+            if ( file_exists( $path ) ) {
+                // @phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
+                if ( function_exists( 'wp_delete_file' ) ) {
+                    wp_delete_file( $path );
+                } else {
+                    // Fallback for non-standard environments.
+                    @unlink( $path );
+                }
+                // @phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
+            }
         }
     }
 }

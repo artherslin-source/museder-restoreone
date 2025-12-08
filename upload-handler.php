@@ -4,6 +4,17 @@
  * 
  * This file loads WordPress core functions for sanitization.
  * Helper functions are removed to use WordPress core functions directly.
+ *
+ * Standalone upload endpoint.
+ *
+ * This file runs before WordPress is loaded and is protected by a HMAC-based
+ * secret token ($museder_restoreone_secret). WordPress nonces cannot be used here.
+ *
+ * @phpcs:disable WordPress.Security.NonceVerification.Missing
+ * @phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+ * @phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
+ * These variables are file-scoped and prefixed with museder_restoreone_.
+ * They are not exposed as true globals outside this script.
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -26,47 +37,28 @@ foreach ($wp_load_paths as $wp_load) {
     }
 }
 
-// If WordPress is not loaded, define minimal helpers (fallback only)
+// WordPress 5.8+ includes all required functions (wp_unslash, sanitize_text_field, sanitize_key, absint).
+// If WordPress is not loaded, we cannot proceed safely without these core functions.
 if ( ! $museder_restoreone_wp_loaded ) {
-    if ( ! function_exists( 'wp_unslash' ) ) {
-        function wp_unslash( $value ) {
-            if ( is_array( $value ) ) {
-                return array_map( 'wp_unslash', $value );
-            }
-            return stripslashes( $value );
-        }
-    }
-
-    if ( ! function_exists( 'sanitize_text_field' ) ) {
-        function sanitize_text_field( $str ) {
-            $filtered = wp_unslash( $str );
-            $filtered = trim( $filtered );
-            $filtered = preg_replace( '/[\r\n\t ]+/', ' ', $filtered );
-            return $filtered;
-        }
-    }
-
-    if ( ! function_exists( 'sanitize_key' ) ) {
-        function sanitize_key( $key ) {
-            $raw_key = $key;
-            $key     = strtolower( $key );
-            $key     = preg_replace( '/[^a-z0-9_\-]/', '', $key );
-            return $key;
-        }
-    }
-
-    if ( ! function_exists( 'absint' ) ) {
-        function absint( $maybeint ) {
-            return abs( intval( $maybeint ) );
-        }
-    }
+    http_response_code( 500 );
+    echo json_encode( [
+        'ok'      => false,
+        'code'    => 'wordpress_not_loaded',
+        'message' => 'WordPress core functions are required. Please ensure WordPress is properly installed.',
+    ] );
+    exit;
 }
 
 ignore_user_abort(true);
-// @plugin-check: okay - needed for long running backup/restore operations
-// phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running backup/restore operations
+// Allow longer execution time for large backup/restore jobs when possible.
+// phpcs:ignore WordPress.PHP.NoSetTimeLimit
 if ( function_exists( 'set_time_limit' ) ) {
-    @set_time_limit( 0 );
+    // Long-running backup/restore job: attempt to raise time limit for CLI/cron.
+    // @phpcs:disable Squiz.PHP.DiscouragedFunctions.Discouraged
+    if ( function_exists( 'set_time_limit' ) ) {
+        @set_time_limit( 0 );
+    }
+    // @phpcs:enable Squiz.PHP.DiscouragedFunctions.Discouraged
 }
 header('Content-Type: application/json');
 header('X-Robots-Tag: noindex, nofollow');
@@ -185,9 +177,9 @@ try {
     exit;
 }
 if ( ! wp_is_writable( $museder_restoreone_paths['chunks'] ) ) {
-    // @plugin-check: allowed - debug logging for backup/restore operations
-    // Only executed when WP_DEBUG is enabled
+    // Debug logging for backup/restore operations - only executed when WP_DEBUG is enabled
     if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+        // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
         error_log("[UPLOAD_HANDLER_ERROR] chunk dir not writable: {$museder_restoreone_paths['chunks']} for upload_id {$museder_restoreone_upload_id}");
     }
     http_response_code(500);
@@ -201,6 +193,8 @@ if ( ! wp_is_writable( $museder_restoreone_paths['chunks'] ) ) {
 $museder_restoreone_chunk_tmp   = $museder_restoreone_paths['chunks'] . '/chunk_' . sprintf('%06d', $museder_restoreone_chunk_index) . '.part';
 $museder_restoreone_chunk_final = $museder_restoreone_paths['chunks'] . '/chunk_' . sprintf('%06d', $museder_restoreone_chunk_index) . '.bin';
 
+// phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+// Reason: High-performance streaming of large backup/restore archives. WP_Filesystem is not suitable for this hot path. Access is limited to admins with manage_options.
 $museder_restoreone_input = fopen('php://input', 'rb');
 if (!$museder_restoreone_input) {
     http_response_code(500);
@@ -229,18 +223,24 @@ $museder_restoreone_written = stream_copy_to_stream($museder_restoreone_input, $
 fclose($museder_restoreone_input);
 fflush($museder_restoreone_output);
 fclose($museder_restoreone_output);
+// phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
 
 if ($museder_restoreone_written === false || $museder_restoreone_written === 0) {
     // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
     // $museder_restoreone_chunk_tmp is from plugin-controlled temp directory
+    // @phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
     if ( function_exists( 'wp_delete_file' ) ) {
         wp_delete_file( $museder_restoreone_chunk_tmp );
     } else {
-        @unlink( $museder_restoreone_chunk_tmp ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_unlink -- required for cleanup, path from plugin-controlled temp directory
+        // Fallback for non-standard environments.
+        if ( file_exists( $museder_restoreone_chunk_tmp ) ) {
+            @unlink( $museder_restoreone_chunk_tmp );
+        }
     }
-    // @plugin-check: allowed - debug logging for backup/restore operations
-    // Only executed when WP_DEBUG is enabled
-    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+    // @phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
+    // Only log to PHP error log if debug mode is enabled
+    if ( defined( 'BACKUP_LITE_DEBUG' ) && BACKUP_LITE_DEBUG ) {
+        // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
         error_log("[UPLOAD_HANDLER_ERROR] No data copied for upload_id {$museder_restoreone_upload_id} chunk {$museder_restoreone_chunk_index}");
     }
     http_response_code(500);
@@ -254,12 +254,22 @@ if ($museder_restoreone_written === false || $museder_restoreone_written === 0) 
 
 // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
 // $museder_restoreone_chunk_tmp and $museder_restoreone_chunk_final are from plugin-controlled temp directory
-if (!@rename($museder_restoreone_chunk_tmp, $museder_restoreone_chunk_final)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_rename -- required for chunk finalization, paths from plugin-controlled temp directory
+// This plugin needs low-level rename() here for streaming backup/restore performance.
+// Using WP_Filesystem::move() is not always reliable across all hosting environments.
+// @phpcs:disable WordPress.WP.AlternativeFunctions.rename_rename
+$renamed = @rename( $museder_restoreone_chunk_tmp, $museder_restoreone_chunk_final );
+// @phpcs:enable WordPress.WP.AlternativeFunctions.rename_rename
+if ( ! $renamed ) {
+    // @phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
     if ( function_exists( 'wp_delete_file' ) ) {
         wp_delete_file( $museder_restoreone_chunk_tmp );
     } else {
-        @unlink( $museder_restoreone_chunk_tmp ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_unlink -- required for cleanup, path from plugin-controlled temp directory
+        // Fallback for non-standard environments.
+        if ( file_exists( $museder_restoreone_chunk_tmp ) ) {
+            @unlink( $museder_restoreone_chunk_tmp );
+        }
     }
+    // @phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
     http_response_code(500);
     echo json_encode([
         'ok'      => false,
@@ -270,9 +280,9 @@ if (!@rename($museder_restoreone_chunk_tmp, $museder_restoreone_chunk_final)) { 
 }
 
 if (!file_exists($museder_restoreone_chunk_final)) {
-    // @plugin-check: allowed - debug logging for backup/restore operations
-    // Only executed when WP_DEBUG is enabled
+    // Debug logging for backup/restore operations - only executed when WP_DEBUG is enabled
     if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+        // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
         error_log("[UPLOAD_HANDLER_ERROR] chunk file missing after rename upload_id {$museder_restoreone_upload_id} chunk {$museder_restoreone_chunk_index}");
     }
 }

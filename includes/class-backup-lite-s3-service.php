@@ -267,7 +267,9 @@ class Backup_Lite_S3_Service {
         ] );
 
         // Read entire file content as string (for wp_remote_request)
-        $body = @file_get_contents( $file_path ); // @plugin-check: allowed - reading local backup file
+        // Using native file APIs on local backup directory; paths are sanitized and constrained.
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
+        $body = @file_get_contents( $file_path );
         if ( false === $body ) {
             $error = error_get_last();
             $error_msg = $error && isset( $error['message'] ) ? $error['message'] : __( 'Unknown error reading file.', 'museder-restoreone' );
@@ -418,7 +420,10 @@ class Backup_Lite_S3_Service {
 
             // Timeout for large backup file uploads (minimum 300 seconds, default 600 seconds)
             // This is necessary for large backup archives that may take several minutes to upload
+            // phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound
+            // Reason: Hook name is already prefixed with "museder_restoreone_".
             $timeout = apply_filters( 'museder_restoreone_s3_upload_timeout', 600 );
+            // phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound
             if ( $timeout < 300 ) {
                 $timeout = 300; // Minimum 300 seconds for large files
             }
@@ -607,9 +612,12 @@ class Backup_Lite_S3_Service {
             'key'  => $object_key,
         ] );
 
+        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+        // 說明：以下程式碼用於 S3 串流上傳/下載的必要底層操作。路徑與檔名皆非使用者輸入，來自白名單目錄或 sanitize_file_name() 處理後的值。
         // Open file for reading
-        $file_handle = @fopen( $file_path, 'rb' ); // @plugin-check: allowed - reading local backup file
+        $file_handle = @fopen( $file_path, 'rb' );
         if ( false === $file_handle ) {
+            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
             $error = error_get_last();
             $error_msg = $error && isset( $error['message'] ) ? $error['message'] : __( 'Unknown error opening file.', 'museder-restoreone' );
             backup_lite_log( 'error', 'S3 curl_stream upload failed: could not open file.', [
@@ -629,6 +637,7 @@ class Backup_Lite_S3_Service {
             $payload_hash = @hash_file( 'sha256', $file_path );
             if ( false === $payload_hash ) {
                 fclose( $file_handle );
+                // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
                 backup_lite_log( 'error', 'S3 curl_stream upload failed: hash_file() calculation failed.', [
                     'file' => $file_path,
                 ] );
@@ -640,6 +649,7 @@ class Backup_Lite_S3_Service {
         $url_parts = wp_parse_url( $target_url );
         if ( ! $url_parts || ! isset( $url_parts['host'] ) ) {
             fclose( $file_handle );
+            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
             backup_lite_log( 'error', 'S3 curl_stream upload failed: invalid URL format.', [
                 'url' => $target_url,
             ] );
@@ -682,6 +692,7 @@ class Backup_Lite_S3_Service {
             $canonical_request_hash = hash( 'sha256', $canonical_request );
             if ( false === $canonical_request_hash ) {
                 fclose( $file_handle );
+                // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
                 return new WP_Error( 's3_hash_error', __( 'Failed to calculate request hash.', 'museder-restoreone' ) );
             }
 
@@ -697,30 +708,35 @@ class Backup_Lite_S3_Service {
             $k_date = @hash_hmac( 'sha256', $date_stamp, 'AWS4' . $secret_key, true );
             if ( false === $k_date ) {
                 fclose( $file_handle );
+                // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
                 return new WP_Error( 's3_signature_error', __( 'Failed to calculate signature key (k_date).', 'museder-restoreone' ) );
             }
 
             $k_region = @hash_hmac( 'sha256', $region, $k_date, true );
             if ( false === $k_region ) {
                 fclose( $file_handle );
+                // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
                 return new WP_Error( 's3_signature_error', __( 'Failed to calculate signature key (k_region).', 'museder-restoreone' ) );
             }
 
             $k_service = @hash_hmac( 'sha256', 's3', $k_region, true );
             if ( false === $k_service ) {
                 fclose( $file_handle );
+                // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
                 return new WP_Error( 's3_signature_error', __( 'Failed to calculate signature key (k_service).', 'museder-restoreone' ) );
             }
 
             $k_signing = @hash_hmac( 'sha256', 'aws4_request', $k_service, true );
             if ( false === $k_signing ) {
                 fclose( $file_handle );
+                // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
                 return new WP_Error( 's3_signature_error', __( 'Failed to calculate signature key (k_signing).', 'museder-restoreone' ) );
             }
 
             $signature = @hash_hmac( 'sha256', $string_to_sign, $k_signing );
             if ( false === $signature ) {
                 fclose( $file_handle );
+                // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
                 return new WP_Error( 's3_signature_error', __( 'Failed to calculate final signature.', 'museder-restoreone' ) );
             }
 
@@ -734,10 +750,16 @@ class Backup_Lite_S3_Service {
                 $signature
             );
 
-            // Initialize cURL
+            // Initialize cURL for streaming large file uploads to S3
+            // Using cURL for streaming uploads is necessary for large files (>64MB) to avoid memory issues
+            // We intentionally use cURL here to stream large backup files efficiently to S3.
+            // WP_HTTP API (wp_remote_request) cannot handle file streaming with CURLOPT_READDATA,
+            // which is required for large file uploads without loading entire file into memory.
+            // phpcs:disable WordPress.WP.AlternativeFunctions.curl_curl_init,WordPress.WP.AlternativeFunctions.curl_curl_setopt_array,WordPress.WP.AlternativeFunctions.curl_curl_exec,WordPress.WP.AlternativeFunctions.curl_curl_getinfo,WordPress.WP.AlternativeFunctions.curl_curl_error,WordPress.WP.AlternativeFunctions.curl_curl_close
             $ch = curl_init();
             if ( false === $ch ) {
                 fclose( $file_handle );
+                // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
                 backup_lite_log( 'error', 'S3 curl_stream upload failed: curl_init() failed.', [
                     'file' => $file_path,
                 ] );
@@ -779,7 +801,9 @@ class Backup_Lite_S3_Service {
             $header_size = curl_getinfo( $ch, CURLINFO_HEADER_SIZE );
             $curl_error = curl_error( $ch );
             curl_close( $ch );
+            // phpcs:enable WordPress.WP.AlternativeFunctions.curl_curl_init,WordPress.WP.AlternativeFunctions.curl_curl_setopt_array,WordPress.WP.AlternativeFunctions.curl_curl_exec,WordPress.WP.AlternativeFunctions.curl_curl_getinfo,WordPress.WP.AlternativeFunctions.curl_curl_error,WordPress.WP.AlternativeFunctions.curl_curl_close
             fclose( $file_handle );
+            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
 
             // Check for cURL errors
             if ( false === $response && ! empty( $curl_error ) ) {
@@ -826,6 +850,7 @@ class Backup_Lite_S3_Service {
             if ( isset( $file_handle ) && is_resource( $file_handle ) ) {
                 @fclose( $file_handle );
             }
+            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
             backup_lite_log( 'error', 'S3 curl_stream upload failed: exception.', [
                 'file' => $file_path,
                 'message' => $e->getMessage(),
@@ -901,8 +926,15 @@ class Backup_Lite_S3_Service {
         // Step 2: Upload parts
         $parts = array();
         $part_number = 0;
-        $file_handle = @fopen( $file_path, 'rb' ); // @plugin-check: allowed - reading local backup file
+        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen
+        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fread
+        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+        // 備份/還原過程需要串流讀大檔案，WP_Filesystem 在這個情境不安全或效能不足，只能使用原生檔案函式。
+        $file_handle = @fopen( $file_path, 'rb' );
         if ( false === $file_handle ) {
+            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen
+            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fread
+            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fclose
             // Abort multipart upload if we can't open the file
             self::abort_multipart_upload(
                 $bucket,
@@ -925,6 +957,7 @@ class Backup_Lite_S3_Service {
                 $part_data = @fread( $file_handle, self::MULTIPART_CHUNK_SIZE );
                 if ( false === $part_data ) {
                     fclose( $file_handle );
+                    // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
                     // Abort multipart upload
                     self::abort_multipart_upload(
                         $bucket,
@@ -969,6 +1002,7 @@ class Backup_Lite_S3_Service {
 
                 if ( is_wp_error( $etag ) ) {
                     fclose( $file_handle );
+                    // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
                     // Abort multipart upload
                     self::abort_multipart_upload(
                         $bucket,
@@ -1008,6 +1042,7 @@ class Backup_Lite_S3_Service {
             }
 
             fclose( $file_handle );
+            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
 
             // Step 3: Complete multipart upload
             backup_lite_log( 'info', 'S3 multipart upload: completing multipart upload.', [
@@ -1060,7 +1095,10 @@ class Backup_Lite_S3_Service {
         } catch ( Throwable $e ) {
             // Ensure file handle is closed
             if ( isset( $file_handle ) && is_resource( $file_handle ) ) {
+                // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+                // Reason: Exception cleanup - ensure file handle is closed even on error.
                 @fclose( $file_handle );
+                // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fclose
             }
 
             // Abort multipart upload on exception
@@ -1361,7 +1399,11 @@ class Backup_Lite_S3_Service {
                     'file' => $request_error->getFile(),
                     'line' => $request_error->getLine(),
                 ] );
-                error_log( '[Backup Lite] S3 wp_remote_request exception: ' . $request_error->getMessage() . ' in ' . $request_error->getFile() . ':' . $request_error->getLine() );
+                // Only log to PHP error log if debug mode is enabled
+                if ( defined( 'BACKUP_LITE_DEBUG' ) && BACKUP_LITE_DEBUG ) {
+                    // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+                    error_log( '[Backup Lite] S3 wp_remote_request exception: ' . $request_error->getMessage() . ' in ' . $request_error->getFile() . ':' . $request_error->getLine() );
+                }
                 return new WP_Error( 's3_request_exception', __( 'S3 upload request failed with exception.', 'museder-restoreone' ) );
             }
             
@@ -1438,8 +1480,11 @@ class Backup_Lite_S3_Service {
                 'trace' => substr( $e->getTraceAsString(), 0, 1000 ), // Limit trace to first 1000 chars
             ] );
             
-            // Also log to PHP error log for easier debugging
-            error_log( '[Backup Lite] S3 upload preparation fatal error: ' . $error_message . ' in ' . $error_file . ':' . $error_line );
+            // Also log to PHP error log for easier debugging (only if debug mode is enabled)
+            if ( defined( 'BACKUP_LITE_DEBUG' ) && BACKUP_LITE_DEBUG ) {
+                // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+                error_log( '[Backup Lite] S3 upload preparation fatal error: ' . $error_message . ' in ' . $error_file . ':' . $error_line );
+            }
             
             return new WP_Error( 's3_exception', __( 'S3 upload failed due to an internal error.', 'museder-restoreone' ) );
         }
@@ -2758,15 +2803,19 @@ class Backup_Lite_S3_Service {
                 );
             }
             
+            // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+            // 說明：以下程式碼用於 S3 串流上傳/下載的必要底層操作。路徑與檔名皆非使用者輸入，來自白名單目錄或 sanitize_file_name() 處理後的值。
             // Write response body to file
             $body = wp_remote_retrieve_body( $response );
             $file_handle = fopen( $target_path, $offset > 0 ? 'ab' : 'wb' );
             if ( false === $file_handle ) {
+                // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
                 return new WP_Error( 's3_file_open_error', __( 'Failed to open target file for writing.', 'museder-restoreone' ) );
             }
             
             $written = fwrite( $file_handle, $body );
             fclose( $file_handle );
+            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
             
             if ( false === $written ) {
                 return new WP_Error( 's3_file_write_error', __( 'Failed to write downloaded data to file.', 'museder-restoreone' ) );

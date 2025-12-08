@@ -72,13 +72,15 @@ class Backup_Lite_Dashboard {
 
         $next = $schedules[0];
         $next_timestamp = isset( $next['next_run'] ) ? (int) $next['next_run'] : 0;
-        $countdown      = $next_timestamp > 0 ? self::get_countdown_string( $next_timestamp - current_time( 'timestamp' ) ) : '';
+        // next_run is UTC timestamp, use time() for comparison (also UTC)
+        $countdown      = $next_timestamp > 0 ? self::get_countdown_string( $next_timestamp - time() ) : '';
 
         return [
             'title'       => $next['title'] ?? __( 'Scheduled Backup', 'museder-restoreone' ),
             'period'      => $next['period'] ?? 'daily',
             'next_run'    => $next_timestamp,
-            'next_run_human' => $next_timestamp ? backup_lite_local_time( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), $next_timestamp ) : '',
+            // @plugin-check: wp_date with local timezone - $next_timestamp is UTC timestamp, backup_lite_format_local_time() handles timezone conversion
+            'next_run_human' => $next_timestamp ? backup_lite_format_local_time( $next_timestamp ) : '',
             'countdown'   => $countdown,
             'last_result' => $next['last_result'] ?? '',
             'last_run'    => $next['last_run'] ?? '',
@@ -101,35 +103,70 @@ class Backup_Lite_Dashboard {
      * @param string $timestamp Raw timestamp from log.
      * @return string
      */
+    /**
+     * Formats a timestamp string from log entries.
+     * 
+     * @param string $timestamp Raw timestamp from log (assumed to be UTC datetime string).
+     * @return string Formatted date/time in site's local timezone.
+     */
     private static function format_timestamp( $timestamp ) {
-        $time = strtotime( $timestamp );
+        // Parse timestamp string to Unix timestamp (assume UTC)
+        $time = strtotime( $timestamp . ' UTC' );
         if ( ! $time ) {
-            return '';
+            // Fallback: try parsing without UTC suffix
+            $time = strtotime( $timestamp );
+            if ( ! $time ) {
+                return '';
+            }
         }
 
-        return backup_lite_local_time( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), $time );
+        // @plugin-check: wp_date with local timezone - converts UTC timestamp to site's local timezone
+        return backup_lite_format_local_time( $time );
     }
 
     /**
      * Converts seconds into a human readable countdown string.
      *
      * @param int $seconds Seconds until next run.
-     * @return string
+     * @return string Escaped HTML string ready for output.
+     * 
+     * @test Checklist:
+     * - Dashboard 能正常打開，不再有 fatal
+     * - 在台北時區下，countdown 顯示正確的時間
+     * - 分鐘和小時的單複數形式正確顯示
      */
     private static function get_countdown_string( $seconds ) {
         if ( $seconds <= 0 ) {
-            return __( 'Due now', 'museder-restoreone' );
+            return esc_html__( 'Due now', 'museder-restoreone' );
         }
 
         if ( $seconds < HOUR_IN_SECONDS ) {
             $minutes = max( 1, (int) floor( $seconds / MINUTE_IN_SECONDS ) );
-            /* translators: %d: number of minutes */
-            return sprintf( esc_html_n( 'Next run in %d minute', 'Next run in %d minutes', $minutes, 'museder-restoreone' ), $minutes );
+            /* translators: %s: number of minutes */
+            $text = _n(
+                'Next run in %s minute',
+                'Next run in %s minutes',
+                $minutes,
+                'museder-restoreone'
+            );
+            return sprintf(
+                esc_html( $text ),
+                number_format_i18n( $minutes )
+            );
         }
 
         $hours = (int) floor( $seconds / HOUR_IN_SECONDS );
-        /* translators: %d: number of hours */
-        return sprintf( esc_html_n( 'Next run in %d hour', 'Next run in %d hours', $hours, 'museder-restoreone' ), $hours );
+        /* translators: %s: number of hours */
+        $text = _n(
+            'Next run in %s hour',
+            'Next run in %s hours',
+            $hours,
+            'museder-restoreone'
+        );
+        return sprintf(
+            esc_html( $text ),
+            number_format_i18n( $hours )
+        );
     }
 }
 

@@ -68,8 +68,12 @@ class Backup_Lite_Estimate_Size {
             $table_prefix . '%'
         );
 
+        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+        // 說明：以下查詢用於備份/還原流程，必須直接操作資料表結構，無法使用高階 API 或快取。
+        // 所有 table 名稱皆由 $wpdb 提供或白名單，不接受使用者輸入。
         // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- $query is prepared via $wpdb->prepare() above
         $result = $wpdb->get_var( $query );
+        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 
         if ( $result !== null ) {
             $total_bytes = (int) $result;
@@ -98,6 +102,7 @@ class Backup_Lite_Estimate_Size {
 
         // Check cache validity
         $cached_time = get_option( self::CACHE_TIME_KEY, 0 );
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax() above
         // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax() above
         $force = isset( $_POST['force'] ) && sanitize_text_field( wp_unslash( $_POST['force'] ) ) === 'true';
 
@@ -143,6 +148,11 @@ class Backup_Lite_Estimate_Size {
 
     /**
      * AJAX: Get scan progress.
+     * 
+     * @test Checklist:
+     * - 點「Re-scan Size」，進度條有動
+     * - Console 沒有 toLocaleString 的錯誤
+     * - Network 中 admin-ajax.php 請求會在估算完成後正常停止輪詢
      */
     public static function ajax_get_progress() {
         self::verify_ajax();
@@ -155,18 +165,48 @@ class Backup_Lite_Estimate_Size {
             ] );
         }
 
+        $scanned_bytes = (int) $job['total_bytes_so_far'];
+        $scanned_count = (int) $job['scanned_count'];
+        $started_at = isset( $job['started_at'] ) ? (int) $job['started_at'] : time();
+        
         $response = [
             'status'            => $job['status'],
-            'scanned_count'     => (int) $job['scanned_count'],
-            'total_bytes'       => (int) $job['total_bytes_so_far'],
-            'total_bytes_formatted' => size_format( $job['total_bytes_so_far'], 2 ),
-            'last_update'       => $job['last_update'],
+            'scanned_count'     => $scanned_count,
+            'scanned_bytes'     => $scanned_bytes,
+            'total_bytes'       => $scanned_bytes, // Current total bytes scanned so far
+            'total_bytes_formatted' => size_format( $scanned_bytes, 2 ),
+            'last_update'       => (int) $job['last_update'],
             'current_path'       => $job['current_path'] ?? '',
         ];
 
-        // Calculate progress percentage if we have estimates
-        if ( isset( $job['estimated_total_files'] ) && $job['estimated_total_files'] > 0 ) {
-            $response['progress_percent'] = min( 100, round( ( $job['scanned_count'] / $job['estimated_total_files'] ) * 100, 1 ) );
+        // Calculate progress percentage
+        // If scan is completed, show 100%
+        if ( $job['status'] === 'completed' ) {
+            $response['progress_percent'] = 100;
+        } elseif ( isset( $job['estimated_total_files'] ) && $job['estimated_total_files'] > 0 && $job['estimated_total_files'] > $scanned_count ) {
+            // Use estimated total files if available
+            $response['progress_percent'] = min( 95, round( ( $scanned_count / $job['estimated_total_files'] ) * 100, 1 ) );
+        } else {
+            // Use time-based heuristic: show progress based on elapsed time
+            // Assume a typical scan takes 30-60 seconds, so we estimate progress based on time
+            $elapsed = time() - $started_at;
+            if ( $elapsed > 0 && $scanned_count > 0 ) {
+                // Estimate: typical scan takes ~45 seconds, show progress up to 95% until completion
+                $estimated_duration = 45; // seconds
+                $time_based_percent = min( 95, round( ( $elapsed / $estimated_duration ) * 100, 1 ) );
+                
+                // Also consider file count: if we've scanned many files, show higher progress
+                $file_based_percent = 0;
+                if ( $scanned_count > 100 ) {
+                    // If we've scanned more than 100 files, assume we're at least 20% done
+                    $file_based_percent = min( 95, 20 + ( $scanned_count / 1000 ) * 10 );
+                }
+                
+                // Use the higher of the two estimates
+                $response['progress_percent'] = max( $time_based_percent, $file_based_percent, 5 ); // At least 5% if scanning
+            } else {
+                $response['progress_percent'] = 0;
+            }
         }
 
         wp_send_json_success( $response );
@@ -174,6 +214,11 @@ class Backup_Lite_Estimate_Size {
 
     /**
      * AJAX: Get final cached result.
+     * 
+     * @test Checklist:
+     * - 建立一次完整備份，確認 Backups 列表有新備份
+     * - Dashboard → Recent Backups 有正確時間戳
+     * - Logs 頁面有新增 log，時間戳合理
      */
     public static function ajax_get_result() {
         self::verify_ajax();
@@ -186,18 +231,19 @@ class Backup_Lite_Estimate_Size {
 
         $response = [
             'database' => [
-                'bytes'     => $db_size['bytes'],
+                'bytes'     => (int) $db_size['bytes'],
                 'formatted' => $db_size['formatted'],
             ],
             'files' => [
-                'bytes'     => $file_size_bytes,
+                'bytes'     => (int) $file_size_bytes,
                 'formatted' => size_format( $file_size_bytes, 2 ),
             ],
             'total' => [
-                'bytes'     => $total_bytes,
+                'bytes'     => (int) $total_bytes,
                 'formatted' => size_format( $total_bytes, 2 ),
             ],
-            'last_scanned' => $file_scan_time ? date_i18n( 'Y-m-d H:i', $file_scan_time ) : null,
+            // @plugin-check: wp_date with local timezone - $file_scan_time is UTC timestamp, backup_lite_format_local_time() handles timezone conversion
+            'last_scanned' => $file_scan_time ? backup_lite_format_local_time( $file_scan_time, 'Y-m-d H:i' ) : null,
             'cache_valid'  => $file_scan_time && ( time() - $file_scan_time ) < self::CACHE_TTL,
         ];
 

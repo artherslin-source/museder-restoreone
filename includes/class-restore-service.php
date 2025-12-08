@@ -34,10 +34,11 @@ class Backup_Lite_Restore_Service {
             throw new InvalidArgumentException( esc_html__( 'Unsupported backup extension.', 'museder-restoreone' ) );
         }
 
-        $backup_dir = backup_lite_get_backup_dir();
-        $file_path  = wp_normalize_path( trailingslashit( $backup_dir ) . $file_name );
+        // Use helper function to get absolute path from file name
+        $file_path = backup_lite_get_backup_path( $file_name );
 
-        if ( ! file_exists( $file_path ) || ! is_readable( $file_path ) ) {
+        if ( ! $file_path ) {
+            backup_lite_log( 'error', 'Restore archive not readable.', [ 'filename' => $file_name ] );
             throw new RuntimeException( esc_html__( 'Backup file not found or unreadable.', 'museder-restoreone' ) );
         }
 
@@ -215,15 +216,27 @@ class Backup_Lite_Restore_Service {
                         
                         $convert_result = Backup_Lite_AI1WM_Converter::convert( $file_to_extract );
                         
-                        if ( ! empty( $convert_result['success'] ) && ! empty( $convert_result['file'] ) && file_exists( $convert_result['file'] ) ) {
-                            // Use converted file for extraction
-                            $file_to_extract = $convert_result['file'];
-                            $meta['file'] = $file_to_extract;
-                            $meta['file_name'] = basename( $file_to_extract );
-                            backup_lite_log( 'info', 'Successfully converted All-in-One backup in restore service.', [
-                                'job_id' => $job_id,
-                                'converted_file' => basename( $file_to_extract ),
-                            ] );
+                        if ( ! empty( $convert_result['success'] ) && ! empty( $convert_result['file'] ) ) {
+                            // Use helper to get absolute path - handles both full paths and filenames
+                            $converted_file = backup_lite_get_backup_path( $convert_result['file'] );
+                            
+                            if ( $converted_file ) {
+                                // Use converted file for extraction
+                                $file_to_extract = $converted_file;
+                                $meta['file'] = $file_to_extract;
+                                $meta['file_name'] = basename( $file_to_extract );
+                                backup_lite_log( 'info', 'Successfully converted All-in-One backup in restore service.', [
+                                    'job_id' => $job_id,
+                                    'converted_file' => basename( $file_to_extract ),
+                                    'converted_path' => $file_to_extract,
+                                ] );
+                            } else {
+                                backup_lite_log( 'warning', 'Converted file not found or unreadable, using original file.', [
+                                    'job_id' => $job_id,
+                                    'converted_file' => $convert_result['file'],
+                                    'original_file' => basename( $file_to_extract ),
+                                ] );
+                            }
                         } else {
                             // Conversion failed or not needed (e.g., .wpress files don't need conversion)
                             $log_level = ( isset( $convert_result['error'] ) && 'wpress_no_conversion_needed' === $convert_result['error'] ) ? 'info' : 'warning';
@@ -947,8 +960,11 @@ class Backup_Lite_Restore_Service {
     protected static function run_search_replace( $pairs ) {
         global $wpdb;
 
-        // @plugin-check: allowed - schema introspection for restore, system query not user input
-        $tables = $wpdb->get_col( 'SHOW TABLES' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.NoCaching -- system query for restore, caching not applicable
+        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+        // 說明：以下查詢用於備份/還原流程，必須直接操作資料表結構，無法使用高階 API 或快取。
+        // 所有 table 名稱皆由 $wpdb 提供或白名單，不接受使用者輸入。
+        $tables = $wpdb->get_col( 'SHOW TABLES' );
+        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
         if ( empty( $tables ) ) {
             return;
         }
@@ -964,8 +980,12 @@ class Backup_Lite_Restore_Service {
                 continue;
             }
 
-            // @plugin-check: allowed - schema introspection for restore, table name from whitelist only
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.NoCaching
+            // 說明：以下查詢用於備份/還原過程，必須直接操作資料表結構，table 名稱皆來自 $wpdb 或白名單，不接受使用者輸入。
             $columns = $wpdb->get_results( $wpdb->prepare( "SHOW COLUMNS FROM `%s`", $safe_table ), ARRAY_A ); // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- safe: table name sanitized from SHOW TABLES result
+            // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery
+            // phpcs:enable WordPress.DB.DirectDatabaseQuery.NoCaching
             if ( empty( $columns ) ) {
                 continue;
             }
@@ -981,8 +1001,12 @@ class Backup_Lite_Restore_Service {
                 continue;
             }
 
-            // @plugin-check: safe table name from whitelist
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.NoCaching
+            // 說明：以下查詢用於備份/還原過程，必須直接操作資料表結構，table 名稱皆來自 $wpdb 或白名單，不接受使用者輸入。
             $rows = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM `%s`", $safe_table ), ARRAY_A );
+            // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery
+            // phpcs:enable WordPress.DB.DirectDatabaseQuery.NoCaching
             if ( empty( $rows ) ) {
                 continue;
             }
@@ -1065,9 +1089,14 @@ class Backup_Lite_Restore_Service {
         }
 
         // Clear transients
+        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery
+        // phpcs:disable WordPress.DB.DirectDatabaseQuery.NoCaching
+        // 說明：以下查詢用於備份/還原過程，必須直接操作資料表結構，table 名稱皆來自 $wpdb 或白名單，不接受使用者輸入。
         // @plugin-check: safe table name from whitelist ($wpdb->options is WordPress core table)
         // Cannot use prepare() for LIKE patterns with wildcards, but pattern is hardcoded
         $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name LIKE %s OR option_name LIKE %s", '_transient_%', '_site_transient_%' ) ); // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- safe: $wpdb->options is WordPress core table, patterns are hardcoded
+        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery
+        // phpcs:enable WordPress.DB.DirectDatabaseQuery.NoCaching
 
         // Refresh permalink structure
         if ( function_exists( 'flush_rewrite_rules' ) ) {

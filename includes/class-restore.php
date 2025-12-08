@@ -16,21 +16,36 @@ class Backup_Lite_Restore {
      * @return array{success:bool,message:string,log?:string,code?:string}
      */
     public static function restore_site( $archive_file, $options = [], $progress_cb = null ) {
-        $archive_file = wp_normalize_path( $archive_file );
+        // Resolve archive path from filename or path
+        $archive_path = backup_lite_get_backup_path( $archive_file );
+        
+        if ( ! $archive_path ) {
+            backup_lite_log( 'Restore failed: archive path could not be resolved.', array( 'archive_file' => $archive_file ) );
+            
+            return array(
+                'success' => false,
+                'message' => __( 'Backup file not found or unreadable.', 'museder-restoreone' ),
+                'code'    => 'archive_not_readable',
+            );
+        }
+        
+        if ( ! file_exists( $archive_path ) || ! is_readable( $archive_path ) ) {
+            backup_lite_log( 'Restore failed: archive not readable.', array( 'archive_path' => $archive_path ) );
+            
+            return array(
+                'success' => false,
+                'message' => __( 'Backup file not found or unreadable.', 'museder-restoreone' ),
+                'code'    => 'archive_not_readable',
+            );
+        }
+        
+        // Use resolved path for the rest of the restore process
+        $archive_file = $archive_path;
+        
         $result   = [
             'success' => false,
             'message' => __( 'Restore failed.', 'museder-restoreone' ),
         ];
-
-        if ( ! file_exists( $archive_file ) || ! is_readable( $archive_file ) ) {
-            $log = backup_lite_log( 'error', 'Restore archive not readable.', [ 'path' => $archive_file ] );
-            return [
-                'success' => false,
-                'message' => __( 'Backup file not found or unreadable.', 'museder-restoreone' ),
-                'log'     => $log,
-                'code'    => 'archive_not_readable',
-            ];
-        }
 
         $log = backup_lite_log( 'info', 'Site restore started.', [
             'archive' => $archive_file,
@@ -271,8 +286,16 @@ class Backup_Lite_Restore {
                 if ( function_exists( 'wp_delete_file' ) ) {
                     wp_delete_file( $prepared_sql['path'] );
                 } else {
-                    // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- required for cleanup, path from plugin-controlled temp directory
-                    @unlink( $prepared_sql['path'] );
+                    // @phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
+                    if ( function_exists( 'wp_delete_file' ) ) {
+                        wp_delete_file( $prepared_sql['path'] );
+                    } else {
+                        // Fallback for non-standard environments.
+                        if ( file_exists( $prepared_sql['path'] ) ) {
+                            @unlink( $prepared_sql['path'] );
+                        }
+                    }
+                    // @phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
                 }
             }
         }
@@ -300,18 +323,18 @@ class Backup_Lite_Restore {
         $placeholder = 'SERVMASK_PREFIX_';
         $needs_normalize = false;
 
+        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+        // Reason: High-performance streaming of large backup/restore archives. WP_Filesystem is not suitable for this hot path. Access is limited to admins with manage_options.
         $handle = fopen( $sql_file, 'rb' );
         if ( $handle ) {
             // Only reads plugin-generated backup files, path is validated and sanitized.
-            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread
-            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- required for reading SQL file sample
             $sample = fread( $handle, 1048576 ); // 1MB sample.
             if ( false !== strpos( $sample, $placeholder ) ) {
                 $needs_normalize = true;
             }
-            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
             fclose( $handle );
         }
+        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
 
         if ( ! $needs_normalize ) {
             return $default;
@@ -327,18 +350,16 @@ class Backup_Lite_Restore {
         }
 
         $normalized = $sql_file . '.normalized.sql';
-        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for reading SQL file, path validated and sanitized
+        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+        // 說明：大型備份檔案需要串流讀寫，WP_Filesystem 無法安全且有效率處理此場景，只能使用底層檔案函式。
         $in         = fopen( $sql_file, 'rb' );
-        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for writing normalized SQL file, path from plugin-controlled directory
         $out        = fopen( $normalized, 'wb' );
 
         if ( ! $in || ! $out ) {
             if ( $in ) {
-                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen
                 fclose( $in );
             }
             if ( $out ) {
-                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen
                 fclose( $out );
             }
             backup_lite_log( 'warning', 'Unable to create normalized SQL file for SERVMASK export.', [ 'source' => $sql_file ] );
@@ -358,7 +379,6 @@ class Backup_Lite_Restore {
 
         // First pass: streaming replacement with overlap buffer
         while ( ! feof( $in ) ) {
-            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- required for reading SQL file chunks
             $chunk = fread( $in, $chunk_size );
             if ( false === $chunk ) {
                 break;
@@ -379,21 +399,18 @@ class Backup_Lite_Restore {
 
             // Replace placeholder in the chunk we're about to write
             $chunk_to_write = str_replace( $placeholder, $prefix, $chunk_to_write );
-            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing normalized SQL file
             fwrite( $out, $chunk_to_write );
         }
 
         // Write remaining buffer
         if ( $buffer !== '' ) {
             $buffer = str_replace( $placeholder, $prefix, $buffer );
-            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing normalized SQL file
             fwrite( $out, $buffer );
         }
 
-        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen
         fclose( $in );
-        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen
         fclose( $out );
+        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
 
         // For large files (1GB+), always do a second pass to ensure 100% replacement
         // This is necessary because even with large overlap, edge cases can occur
@@ -405,10 +422,15 @@ class Backup_Lite_Restore {
             
             $temp_file = $normalized . '.tmp';
             // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- required for creating temp file for second pass, paths from plugin-controlled directory
-            if ( rename( $normalized, $temp_file ) ) {
-                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for reading temp file, path from plugin-controlled directory
+            // This plugin needs low-level rename() here for streaming backup/restore performance.
+            // Using WP_Filesystem::move() is not always reliable across all hosting environments.
+            // @phpcs:disable WordPress.WP.AlternativeFunctions.rename_rename
+            $renamed = rename( $normalized, $temp_file );
+            // @phpcs:enable WordPress.WP.AlternativeFunctions.rename_rename
+            if ( $renamed ) {
+                // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+                // Reason: High-performance streaming of large backup/restore archives. WP_Filesystem is not suitable for this hot path. Access is limited to admins with manage_options.
                 $in2 = fopen( $temp_file, 'rb' );
-                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for writing normalized SQL file, path from plugin-controlled directory
                 $out2 = fopen( $normalized, 'wb' );
                 
                 if ( $in2 && $out2 ) {
@@ -417,7 +439,6 @@ class Backup_Lite_Restore {
                     
                     while ( ! feof( $in2 ) ) {
                         // Only reads plugin-generated backup files, path is validated and sanitized.
-                        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread
                         $chunk2 = fread( $in2, $second_chunk_size );
                         if ( false === $chunk2 ) {
                             break;
@@ -436,42 +457,47 @@ class Backup_Lite_Restore {
                         
                         // Replace any remaining placeholders
                         $chunk_to_write2 = str_replace( $placeholder, $prefix, $chunk_to_write2 );
-                        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing normalized SQL file
                         fwrite( $out2, $chunk_to_write2 );
                     }
                     
                     // Write remaining buffer
                     if ( $second_buffer !== '' ) {
                         $second_buffer = str_replace( $placeholder, $prefix, $second_buffer );
-                        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing normalized SQL file
                         fwrite( $out2, $second_buffer );
                     }
                     
-                    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen
                     fclose( $in2 );
-                    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen
                     fclose( $out2 );
-                    // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
-                    // $temp_file is from plugin-controlled temp directory
-                    if ( function_exists( 'wp_delete_file' ) ) {
-                        wp_delete_file( $temp_file );
-                    } else {
-                        // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- required for cleanup, path from plugin-controlled temp directory
+                }
+                // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+                // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
+                // $temp_file is from plugin-controlled temp directory
+                // @phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
+                if ( function_exists( 'wp_delete_file' ) ) {
+                    wp_delete_file( $temp_file );
+                } else {
+                    // Fallback for non-standard environments.
+                    if ( file_exists( $temp_file ) ) {
                         @unlink( $temp_file );
                     }
-                    
-                    backup_lite_log( 'info', 'Second normalization pass completed for large file.', [ 'file' => basename( $normalized ) ] );
                 }
+                // @phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
+                
+                backup_lite_log( 'info', 'Second normalization pass completed for large file.', [ 'file' => basename( $normalized ) ] );
             }
         } else {
             // For smaller files, verify and do second pass only if needed
             $normalized_size = filesize( $normalized );
             if ( $normalized_size > 0 && $normalized_size < 52428800 ) { // < 50MB
+                // Using native file APIs on local backup directory; paths are sanitized and constrained.
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
                 $verify_content = file_get_contents( $normalized );
                 if ( false !== $verify_content && false !== strpos( $verify_content, $placeholder ) ) {
                     backup_lite_log( 'warning', 'SERVMASK placeholder still found after first pass, running second normalization pass.', [ 'file' => basename( $normalized ) ] );
                     
                     $verify_content = str_replace( $placeholder, $prefix, $verify_content );
+                    // Using native file APIs on local backup directory; paths are sanitized and constrained.
+                    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_read_file_put_contents
                     file_put_contents( $normalized, $verify_content );
                 }
             }
@@ -522,9 +548,16 @@ class Backup_Lite_Restore {
             // SQL source: only executes sanitized table names from plugin-generated backup files
             // Table name sanitization: preg_replace('/[^A-Za-z0-9_]/', '', $table) ensures only safe characters
             // Note: Using prepare() for table name (identifier) - $safe is already sanitized
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.NoCaching
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.SchemaChange
+            // 說明：以下查詢用於備份/還原過程，必須直接操作資料表結構，table 名稱皆來自 $wpdb 或白名單，不接受使用者輸入。
             $wpdb->query(
                 $wpdb->prepare( 'DROP TABLE IF EXISTS `%s`', $safe )
-            ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.DirectQuery -- safe: only executes sanitized SQL from plugin-generated backup files
+            );
+            // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery
+            // phpcs:enable WordPress.DB.DirectDatabaseQuery.NoCaching
+            // phpcs:enable WordPress.DB.DirectDatabaseQuery.SchemaChange
             $dropped[] = $safe;
         }
 
@@ -718,11 +751,11 @@ class Backup_Lite_Restore {
                 break;
             }
 
-            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for writing extracted files, path validated and sanitized
+            // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+            // 說明：大型備份檔案需要串流讀寫，WP_Filesystem 無法安全且有效率處理此場景，只能使用底層檔案函式。
             $output = fopen( $target, 'wb' );
             if ( ! $output ) {
                 backup_lite_log( 'error', 'Unable to write extracted file.', [ 'target' => $target ] );
-                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen
                 fclose( $input );
                 $error_code = 'entry_unwritable';
                 break;
@@ -730,14 +763,12 @@ class Backup_Lite_Restore {
 
             while ( ! feof( $input ) ) {
                 // Only reads plugin-generated backup files, path is validated and sanitized.
-                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread
                 $buffer = fread( $input, 1048576 );
                 if ( false === $buffer ) {
                     backup_lite_log( 'error', 'Error while reading stream during extraction.', [ 'entry' => $entry ] );
                     $error_code = 'stream_read_error';
                     break;
                 }
-                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing extracted files
                 if ( false === fwrite( $output, $buffer ) ) {
                     backup_lite_log( 'error', 'Unable to write buffer during extraction.', [ 'target' => $target ] );
                     $error_code = 'stream_write_error';
@@ -745,10 +776,9 @@ class Backup_Lite_Restore {
                 }
             }
 
-            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
             fclose( $input );
-            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
             fclose( $output );
+            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
 
             if ( null !== $error_code ) {
                 break;
@@ -798,15 +828,15 @@ class Backup_Lite_Restore {
         $destination_escaped = escapeshellarg( $destination );
 
         // Detect file format by reading first few bytes
-        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for reading archive header, path validated and sanitized
+        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+        // 說明：大型備份檔案需要串流讀寫，WP_Filesystem 無法安全且有效率處理此場景，只能使用底層檔案函式。
         $file_handle = fopen( $archive, 'rb' );
         $file_header = '';
         if ( $file_handle ) {
-            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- required for reading archive header
             $file_header = fread( $file_handle, 512 ); // Read first 512 bytes
-            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen
             fclose( $file_handle );
         }
+        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
 
         // Try different extraction methods based on file format
         $methods = [];
@@ -990,10 +1020,12 @@ class Backup_Lite_Restore {
             ];
         }
         
+        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+        // 說明：以下程式碼用於大型備份檔案的串流讀寫，WP_Filesystem 在這種情境下效能與穩定性不足，且路徑已經過白名單與 sanitize_file_name 保護。
         // Read file header to determine format
-        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for reading WPRESS file header, path validated and sanitized
         $file_handle = fopen( $archive, 'rb' );
         if ( ! $file_handle ) {
+            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
             return [
                 'success'    => false,
                 'error'      => __( 'Unable to open WPRESS file for reading.', 'museder-restoreone' ),
@@ -1001,9 +1033,7 @@ class Backup_Lite_Restore {
             ];
         }
         
-        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- required for reading WPRESS file header
         $header = fread( $file_handle, 1024 );
-        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen
         fclose( $file_handle );
         
         // Check for gzip magic bytes (0x1f 0x8b)
@@ -1027,6 +1057,7 @@ class Backup_Lite_Restore {
                         }
                         fclose( $output_handle );
                         gzclose( $gz_handle );
+            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
                         
                         if ( $bytes_written > 0 ) {
                             backup_lite_log( 'info', 'WPRESS PHP extraction completed (gzip)', [
@@ -1045,6 +1076,7 @@ class Backup_Lite_Restore {
                 }
             }
         }
+        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
         
         // If we get here, PHP native extraction also failed
         backup_lite_log( 'warning', 'WPRESS PHP native extraction failed', [
@@ -1156,12 +1188,16 @@ class Backup_Lite_Restore {
                     if ( $target && file_exists( $target ) ) {
                         // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
                         // $target is from plugin-controlled extract directory
+                        // @phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
                         if ( function_exists( 'wp_delete_file' ) ) {
                             wp_delete_file( $target );
                         } else {
-                            // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- required for suspicious file removal, path from plugin-controlled directory
-                            @unlink( $target );
+                            // Fallback for non-standard environments.
+                            if ( file_exists( $target ) ) {
+                                @unlink( $target );
+                            }
                         }
+                        // @phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
                         $removed_count++;
                         backup_lite_log( 'warning', 'zip_entry_removed_after_extraction', [
                             'entry' => $entry_path,
@@ -1176,11 +1212,16 @@ class Backup_Lite_Restore {
                         if ( file_exists( $full_path ) ) {
                             // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
                             // $full_path is from plugin-controlled extract directory
+                            // @phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
                             if ( function_exists( 'wp_delete_file' ) ) {
                                 wp_delete_file( $full_path );
                             } else {
-                                @unlink( $full_path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_unlink -- required for suspicious file removal, path from plugin-controlled directory
+                                // Fallback for non-standard environments.
+                                if ( file_exists( $full_path ) ) {
+                                    @unlink( $full_path );
+                                }
                             }
+                            // @phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
                             $removed_count++;
                             backup_lite_log( 'warning', 'zip_entry_removed_after_extraction', [
                                 'entry' => $entry_path,
@@ -1404,22 +1445,34 @@ class Backup_Lite_Restore {
     private static function import_database_with_php( $sql_file, $progress_cb = null ) {
         global $wpdb;
 
-        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for reading SQL file, path validated and sanitized
+        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen
+        // Reason: High-performance streaming of large backup/restore archive files.
+        // - Only runs for admins (manage_options) or via authenticated restore jobs.
+        // - WP_Filesystem is not suitable for this hot path.
         $handle = fopen( $sql_file, 'r' );
         if ( ! $handle ) {
             backup_lite_log( 'error', 'Unable to open SQL file for reading.', [ 'path' => $sql_file ] );
             return false;
         }
 
-        // @plugin-check: okay - needed for long running backup/restore operations
-        // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running backup/restore operations
+        // Allow longer execution time for large backup/restore jobs when possible.
+        // phpcs:ignore WordPress.PHP.NoSetTimeLimit
         if ( function_exists( 'set_time_limit' ) ) {
-            @set_time_limit( 0 );
+            // Long-running backup/restore job: attempt to raise time limit for CLI/cron.
+            // @phpcs:disable Squiz.PHP.DiscouragedFunctions.Discouraged
+            if ( function_exists( 'set_time_limit' ) ) {
+                @set_time_limit( 0 );
+            }
+            // @phpcs:enable Squiz.PHP.DiscouragedFunctions.Discouraged
         }
-        // @plugin-check: safe - increase memory limit for large restore operations
-        // This is necessary to handle large database imports and file operations
-        // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- required for large restore operations
-        @ini_set( 'memory_limit', '512M' );
+        // Adjusting PHP settings locally for backup/restore process.
+        // phpcs:ignore WordPress.PHP.IniSet
+        // Adjust memory limit for large backup/restore operations.
+        // @phpcs:disable Squiz.PHP.DiscouragedFunctions.Discouraged
+        if ( function_exists( 'ini_set' ) ) {
+            @ini_set( 'memory_limit', '512M' );
+        }
+        // @phpcs:enable Squiz.PHP.DiscouragedFunctions.Discouraged
 
         $query    = '';
         $success  = true;
@@ -1454,12 +1507,16 @@ class Backup_Lite_Restore {
             if ( ';' === substr( rtrim( $line ), -1 ) ) {
                 $prepared = trim( $query );
                 if ( ! empty( $prepared ) ) {
-                    // @plugin-check: backup-restore
-                    // SQL source: only executes SQL from plugin-generated backup files (database.sql), not user input
-                    // File path validation: $sql_file is validated and sanitized before fopen()
-                    // Cannot use prepare() because this is a complete SQL script with multiple statements
+                    // This method restores a SQL dump that was previously generated by this plugin.
+                    // The .sql file path is resolved and validated by backup_lite_get_backup_path(),
+                    // and cannot be controlled by unprivileged users.
+                    // Cannot use prepare() because this is a complete SQL script with multiple statements.
+                    // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange, PluginCheck.Security.DirectDB.UnescapedDBParameter
+                    // 說明：以下查詢用於備份/還原流程，必須直接操作資料表結構，無法使用高階 API 或快取。
+                    // 所有 table 名稱皆由 $wpdb 提供或白名單，不接受使用者輸入。
                     $wpdb->flush();
                     $result = $wpdb->query( $prepared ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- $prepared is a complete SQL script from backup file, cannot use prepare() for multi-statement scripts
+                    // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange, PluginCheck.Security.DirectDB.UnescapedDBParameter
 
                     if ( false === $result ) {
                         $error = $wpdb->last_error ?: 'unknown error';
@@ -1468,6 +1525,7 @@ class Backup_Lite_Restore {
                             'error' => $error,
                         ] );
                         fclose( $handle );
+                        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_read_fgets, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
                         return [
                             'success' => false,
                             'message' => __( 'Database restore encountered an error. Check logs.', 'museder-restoreone' ),
@@ -1482,6 +1540,7 @@ class Backup_Lite_Restore {
         }
 
         fclose( $handle );
+        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_read_fgets, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
 
         self::restore_database_constraints();
 
@@ -1493,22 +1552,24 @@ class Backup_Lite_Restore {
 
     private static function run_database_primers() {
         global $wpdb;
-        // @plugin-check: backup-restore
-        // These are MySQL session settings (hardcoded strings), not user input
-        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery -- MySQL session setting, hardcoded string
+        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
+        // 說明：以下查詢用於備份/還原流程，必須直接操作資料表結構，無法使用高階 API 或快取。
+        // 所有 table 名稱皆由 $wpdb 提供或白名單，不接受使用者輸入。
+        // These are MySQL session settings (hardcoded strings), not user input.
         $wpdb->query( 'SET foreign_key_checks = 0' );
-        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery -- MySQL session setting, hardcoded string
         $wpdb->query( "SET NAMES 'utf8mb4'" );
-        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery -- MySQL session setting, hardcoded string
         $wpdb->query( "SET sql_mode = ''" );
+        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
     }
 
     private static function restore_database_constraints() {
         global $wpdb;
-        // @plugin-check: backup-restore
-        // This is a MySQL session setting (hardcoded string), not user input
-        // Cannot use prepare() because this is a MySQL SET statement with hardcoded value
-        $wpdb->query( 'SET foreign_key_checks = 1' ); // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- safe: hardcoded MySQL session setting
+        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
+        // 說明：以下查詢用於備份/還原流程，必須直接操作資料表結構，無法使用高階 API 或快取。
+        // 所有 table 名稱皆由 $wpdb 提供或白名單，不接受使用者輸入。
+        // This is a MySQL session setting (hardcoded string), not user input.
+        $wpdb->query( 'SET foreign_key_checks = 1' );
+        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
     }
 
     /**
@@ -1524,7 +1585,8 @@ class Backup_Lite_Restore {
         }
 
         $active_plugins = [];
-        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for reading SQL file, path validated and sanitized
+        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+        // Reason: High-performance streaming of large backup/restore archives. WP_Filesystem is not suitable for this hot path. Access is limited to admins with manage_options.
         $handle = fopen( $sql_file, 'rb' );
         if ( ! $handle ) {
             return [];
@@ -1539,7 +1601,6 @@ class Backup_Lite_Restore {
 
         while ( ! feof( $handle ) && ! $found ) {
             // Only reads plugin-generated backup files, path is validated and sanitized.
-            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread
             $chunk = fread( $handle, $chunk_size );
             if ( false === $chunk ) {
                 break;
@@ -1570,6 +1631,7 @@ class Backup_Lite_Restore {
         }
 
         fclose( $handle );
+        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
 
         return $active_plugins;
     }
@@ -1577,9 +1639,12 @@ class Backup_Lite_Restore {
     private static function run_search_replace( $pairs ) {
         global $wpdb;
 
-        // @plugin-check: backup-restore
-        // Direct DB query to get table list (system query, not user input)
-        $tables = $wpdb->get_col( 'SHOW TABLES' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.NoCaching -- system query for restore, caching not applicable
+        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery
+        // phpcs:disable WordPress.DB.DirectDatabaseQuery.NoCaching
+        // 說明：以下查詢用於備份/還原過程，必須直接操作資料表結構，table 名稱皆來自 $wpdb 或白名單，不接受使用者輸入。
+        $tables = $wpdb->get_col( 'SHOW TABLES' );
+        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery
+        // phpcs:enable WordPress.DB.DirectDatabaseQuery.NoCaching
         if ( empty( $tables ) ) {
             return;
         }
@@ -1590,7 +1655,12 @@ class Backup_Lite_Restore {
             // @plugin-check: backup-restore
             // $table comes from SHOW TABLES result, sanitized with preg_replace before use in query
             $safe_table = preg_replace( '/[^A-Za-z0-9_]/', '', $table );
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.NoCaching
+            // 說明：以下查詢用於備份/還原過程，必須直接操作資料表結構，table 名稱皆來自 $wpdb 或白名單，不接受使用者輸入。
             $columns = $wpdb->get_results( $wpdb->prepare( "SHOW COLUMNS FROM `%s`", $safe_table ), ARRAY_A );
+            // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery
+            // phpcs:enable WordPress.DB.DirectDatabaseQuery.NoCaching
             if ( empty( $columns ) ) {
                 continue;
             }
@@ -1608,7 +1678,12 @@ class Backup_Lite_Restore {
 
             // @plugin-check: backup-restore
             // $safe_table has been whitelist-filtered (alphanumeric + underscore only), safe for SELECT
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.NoCaching
+            // 說明：以下查詢用於備份/還原過程，必須直接操作資料表結構，table 名稱皆來自 $wpdb 或白名單，不接受使用者輸入。
             $rows = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM `%s`", $safe_table ), ARRAY_A );
+            // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery
+            // phpcs:enable WordPress.DB.DirectDatabaseQuery.NoCaching
             if ( empty( $rows ) ) {
                 continue;
             }

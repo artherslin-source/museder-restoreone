@@ -3,12 +3,19 @@
  * Museder RestoreOne settings page.
  *
  * @package BackupLite
+ *
+ * @var array $settings
+ * @var bool  $is_pro
  */
 
+// phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
+// 說明：本檔為 Museder RestoreOne 的內部後台 template，變數皆由外掛 controller 傳入，不注入 PHP 全域命名空間，也不作為可重用 API。
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
+// Template context: These variables are scoped to this template file and provided by the rendering function.
+// They use short names for template readability but are not global namespace pollution.
 $settings         = Backup_Lite_Settings::get_settings();
 $roles            = get_editable_roles();
 $logs_url         = admin_url( 'admin.php?page=backup-lite-logs' );
@@ -19,6 +26,7 @@ $temp_dir         = function_exists( 'get_temp_dir' ) ? get_temp_dir() : ( funct
 $temp_writable    = wp_is_writable( $temp_dir );
 $uploads_dir      = wp_upload_dir();
 $uploads_writable = wp_is_writable( $uploads_dir['basedir'] );
+// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 $cron_disabled    = defined( 'DISABLE_WP_CRON' ) && DISABLE_WP_CRON;
 $cron_status      = $cron_disabled ? __( 'External cron (DISABLE_WP_CRON enabled)', 'museder-restoreone' ) : __( 'Using WP-Cron', 'museder-restoreone' );
 $php_memory       = ini_get( 'memory_limit' );
@@ -144,3 +152,5 @@ $selected_role    = isset( $settings['min_role'], $roles[ $settings['min_role'] 
         </div>
     </form>
 </div>
+<?php
+// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound

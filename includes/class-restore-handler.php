@@ -28,23 +28,32 @@ class Backup_Lite_Restore_Handler {
     public static function upload() {
         self::ensure_permission();
         Backup_Lite_UI::verify_ajax_request();
+        // Additional nonce verification for plugin-check
+        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
 
         // Optimize runtime environment for large file processing
         self::optimize_runtime_environment();
 
-        // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() above
-        // @plugin-check: sanitized + nonce - verified via verify_ajax_request() above
+        // Nonce verified above
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
         $file = null;
-        if ( isset( $_FILES['file'] ) && is_uploaded_file( $_FILES['file']['tmp_name'] ) ) {
-            // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotValidated,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- $_FILES array validated via isset() and is_uploaded_file(), using PHP upload file array provided by the system
+        if ( isset( $_FILES['file'], $_FILES['file']['tmp_name'] ) && is_uploaded_file( $_FILES['file']['tmp_name'] ) ) {
+            // $_FILES['file']['tmp_name'] is a server-side path managed by PHP upload handling and does not need sanitization.
+            // tmp_name 無法再進一步 sanitize，只用於 is_uploaded_file 和 move_uploaded_file。
+            // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
             $file = $_FILES['file'];
-        } elseif ( isset( $_FILES['restoreFile'] ) && is_uploaded_file( $_FILES['restoreFile']['tmp_name'] ) ) {
-            // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotValidated,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- $_FILES array validated via isset() and is_uploaded_file(), using PHP upload file array provided by the system
+        } elseif ( isset( $_FILES['restoreFile'], $_FILES['restoreFile']['tmp_name'] ) && is_uploaded_file( $_FILES['restoreFile']['tmp_name'] ) ) {
+            // $_FILES['restoreFile']['tmp_name'] is a server-side path managed by PHP upload handling and does not need sanitization.
+            // tmp_name 無法再進一步 sanitize，只用於 is_uploaded_file 和 move_uploaded_file。
+            // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
             $file = $_FILES['restoreFile'];
-        } elseif ( isset( $_FILES['restore_file'] ) && is_uploaded_file( $_FILES['restore_file']['tmp_name'] ) ) {
-            // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotValidated,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- $_FILES array validated via isset() and is_uploaded_file(), using PHP upload file array provided by the system
+        } elseif ( isset( $_FILES['restore_file'], $_FILES['restore_file']['tmp_name'] ) && is_uploaded_file( $_FILES['restore_file']['tmp_name'] ) ) {
+            // $_FILES['restore_file']['tmp_name'] is a server-side path managed by PHP upload handling and does not need sanitization.
+            // tmp_name 無法再進一步 sanitize，只用於 is_uploaded_file 和 move_uploaded_file。
+            // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
             $file = $_FILES['restore_file'];
         }
+        // phpcs:enable WordPress.Security.NonceVerification.Missing
         if ( empty( $file ) ) {
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'No restore file uploaded.', 'museder-restoreone' ) ], 400 );
@@ -70,8 +79,10 @@ class Backup_Lite_Restore_Handler {
             if ( function_exists( 'wp_delete_file' ) ) {
                 wp_delete_file( $file_path );
             } else {
-                // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- required for cleanup, path from wp_handle_upload()
+                // phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
+                // Unlinking temporary backup/restore artifact. WP_Filesystem is not practical here.
                 @unlink( $file_path );
+                // phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
             }
             wp_send_json_error( [ 'message' => esc_html__( 'Unsupported file type. Allowed: zip, wpress.', 'museder-restoreone' ) ], 415 );
         }
@@ -118,11 +129,15 @@ class Backup_Lite_Restore_Handler {
                         'size' => size_format( $file_size, 2 ),
                     ] );
                     
-                    // Set execution time limit for conversion process
-                    // @plugin-check: okay - needed for long running backup/restore operations
-                    // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running backup/restore operations
+                    // Allow longer execution time for large backup/restore jobs when possible.
+                    // phpcs:ignore WordPress.PHP.NoSetTimeLimit
                     if ( function_exists( 'set_time_limit' ) ) {
-                        @set_time_limit( 600 ); // 10 minutes for conversion
+                        // Long-running backup/restore job: attempt to raise time limit for CLI/cron.
+                        // @phpcs:disable Squiz.PHP.DiscouragedFunctions.Discouraged
+                        if ( function_exists( 'set_time_limit' ) ) {
+                            @set_time_limit( 600 ); // 10 minutes for conversion
+                        }
+                        // @phpcs:enable Squiz.PHP.DiscouragedFunctions.Discouraged
                     }
                     
                     $convert_result = Backup_Lite_AI1WM_Converter::convert( $destination );
@@ -132,7 +147,10 @@ class Backup_Lite_Restore_Handler {
                         if ( function_exists( 'wp_delete_file' ) ) {
                             wp_delete_file( $destination );
                         } else {
-                            @unlink( $destination ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_unlink -- required for cleanup, path from plugin-controlled directory
+                            // phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
+                            // Unlinking temporary backup/restore artifact. WP_Filesystem is not practical here.
+                            @unlink( $destination );
+                            // phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
                         }
                         
                         $destination = $convert_result['file'];
@@ -192,17 +210,23 @@ class Backup_Lite_Restore_Handler {
     public static function restore_from_backup() {
         self::ensure_permission();
         Backup_Lite_UI::verify_ajax_request();
+        // Additional nonce verification for plugin-check
+        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
 
+        // Nonce verified above
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
         $filename = isset( $_POST['filename'] ) ? sanitize_text_field( wp_unslash( $_POST['filename'] ) ) : '';
+        // phpcs:enable WordPress.Security.NonceVerification.Missing
         if ( empty( $filename ) ) {
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'Backup filename not provided.', 'museder-restoreone' ) ], 400 );
         }
 
-        $backup_dir = backup_lite_get_backup_dir();
-        $path       = wp_normalize_path( trailingslashit( $backup_dir ) . basename( $filename ) );
+        // Use helper function to get absolute path from file name
+        $path = backup_lite_get_backup_path( $filename );
 
-        if ( ! file_exists( $path ) || ! is_readable( $path ) ) {
+        if ( ! $path ) {
+            backup_lite_log( 'error', 'Restore archive not readable.', [ 'filename' => $filename ] );
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'Backup file not found or unreadable.', 'museder-restoreone' ) ], 404 );
         }
@@ -218,12 +242,23 @@ class Backup_Lite_Restore_Handler {
                 
                 $convert_result = Backup_Lite_AI1WM_Converter::convert( $path );
                 
-                if ( ! empty( $convert_result['success'] ) && ! empty( $convert_result['file'] ) && file_exists( $convert_result['file'] ) ) {
-                    // Use converted file instead of original
-                    $path = $convert_result['file'];
-                    backup_lite_log( 'info', 'Successfully converted All-in-One backup.', [
-                        'converted_file' => basename( $path ),
-                    ] );
+                if ( ! empty( $convert_result['success'] ) && ! empty( $convert_result['file'] ) ) {
+                    // Use helper to get absolute path - handles both full paths and filenames
+                    $converted_file = backup_lite_get_backup_path( $convert_result['file'] );
+                    
+                    if ( $converted_file ) {
+                        // Use converted file instead of original
+                        $path = $converted_file;
+                        backup_lite_log( 'info', 'Successfully converted All-in-One backup.', [
+                            'converted_file' => basename( $path ),
+                            'converted_path' => $path,
+                        ] );
+                    } else {
+                        backup_lite_log( 'warning', 'Converted file not found or unreadable, using original file.', [
+                            'converted_file' => $convert_result['file'],
+                            'original_file' => basename( $path ),
+                        ] );
+                    }
                 } else {
                     // Conversion failed, log warning but continue with original
                     backup_lite_log( 'warning', 'All-in-One conversion failed, attempting to restore original file.', [
@@ -269,8 +304,13 @@ class Backup_Lite_Restore_Handler {
     public static function restore_remote() {
         self::ensure_permission();
         Backup_Lite_UI::verify_ajax_request();
+        // Additional nonce verification for plugin-check
+        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
 
+        // Nonce verified above
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
         $url = isset( $_POST['url'] ) ? esc_url_raw( wp_unslash( $_POST['url'] ) ) : '';
+        // phpcs:enable WordPress.Security.NonceVerification.Missing
         if ( empty( $url ) || ! wp_http_validate_url( $url ) ) {
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'Please enter a valid URL.', 'museder-restoreone' ) ], 400 );
@@ -293,7 +333,10 @@ class Backup_Lite_Restore_Handler {
             if ( function_exists( 'wp_delete_file' ) ) {
                 wp_delete_file( $temp );
             } else {
-                @unlink( $temp ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_unlink -- required for cleanup, path from wp_handle_upload()
+                // phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
+                // Unlinking temporary backup/restore artifact. WP_Filesystem is not practical here.
+                @unlink( $temp );
+                // phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
             }
             wp_send_json_error( [ 'message' => esc_html__( 'Downloaded file is not a supported backup format.', 'museder-restoreone' ) ], 415 );
         }
@@ -319,18 +362,32 @@ class Backup_Lite_Restore_Handler {
                 
                 $convert_result = Backup_Lite_AI1WM_Converter::convert( $destination );
                 
-                if ( ! empty( $convert_result['success'] ) && ! empty( $convert_result['file'] ) && file_exists( $convert_result['file'] ) ) {
-                    // Delete original file and use converted file
-                    if ( function_exists( 'wp_delete_file' ) ) {
-                        wp_delete_file( $destination );
-                    } else {
-                        @unlink( $destination ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_unlink -- required for cleanup, path from plugin-controlled directory
-                    }
+                if ( ! empty( $convert_result['success'] ) && ! empty( $convert_result['file'] ) ) {
+                    // Use helper to get absolute path - handles both full paths and filenames
+                    $converted_file = backup_lite_get_backup_path( $convert_result['file'] );
                     
-                    $destination = $convert_result['file'];
-                    backup_lite_log( 'info', 'Successfully converted All-in-One backup.', [
-                        'converted_file' => basename( $destination ),
-                    ] );
+                    if ( $converted_file ) {
+                        // Delete original file and use converted file
+                        if ( function_exists( 'wp_delete_file' ) ) {
+                            wp_delete_file( $destination );
+                        } else {
+                            // phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
+                            // Unlinking temporary backup/restore artifact. WP_Filesystem is not practical here.
+                            @unlink( $destination );
+                            // phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
+                        }
+
+                        $destination = $converted_file;
+                        backup_lite_log( 'info', 'Successfully converted All-in-One backup.', [
+                            'converted_file' => basename( $destination ),
+                            'converted_path' => $destination,
+                        ] );
+                    } else {
+                        backup_lite_log( 'warning', 'Converted file not found or unreadable, using original file.', [
+                            'converted_file' => $convert_result['file'],
+                            'original_file' => basename( $destination ),
+                        ] );
+                    }
                 } else {
                     // Conversion failed, but continue with original file
                     backup_lite_log( 'warning', 'All-in-One conversion failed, attempting to restore original file.', [
@@ -533,8 +590,15 @@ class Backup_Lite_Restore_Handler {
                     'message' => esc_html__( 'Your session has expired. Refreshing security token…', 'museder-restoreone' ),
                 ], 403 );
             }
-            // @plugin-check: escaped
-            wp_send_json_error( [ 'message' => esc_html__( 'Restore job not found.', 'museder-restoreone' ) ], 404 );
+            // Job not found - return HTTP 200 with history so frontend can check completion status
+            // This prevents 404 errors that break frontend polling logic
+            wp_send_json_success( [
+                'job'     => null,
+                'history' => self::history_for_js( 10 ),
+                // @plugin-check: escaped
+                'message' => esc_html__( 'Restore job not found. Check history for recent restores.', 'museder-restoreone' ),
+            ] );
+            return;
         }
 
         // If nonce is invalid but we have a valid job, still return the job status
@@ -562,8 +626,13 @@ class Backup_Lite_Restore_Handler {
     public static function trigger_restore_job() {
         self::ensure_permission();
         Backup_Lite_UI::verify_ajax_request();
+        // Additional nonce verification for plugin-check
+        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
 
+        // Nonce verified above
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
         $job_id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
+        // phpcs:enable WordPress.Security.NonceVerification.Missing
         if ( empty( $job_id ) ) {
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'Job identifier is required.', 'museder-restoreone' ) ], 400 );
@@ -619,8 +688,13 @@ class Backup_Lite_Restore_Handler {
         
         self::ensure_permission();
         Backup_Lite_UI::verify_ajax_request();
+        // Additional nonce verification for plugin-check
+        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
 
+        // Nonce verified above
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
         $job_id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
+        // phpcs:enable WordPress.Security.NonceVerification.Missing
         if ( empty( $job_id ) ) {
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'Job identifier is required.', 'museder-restoreone' ) ], 400 );
@@ -670,9 +744,14 @@ class Backup_Lite_Restore_Handler {
         
         self::ensure_permission();
         Backup_Lite_UI::verify_ajax_request();
+        // Additional nonce verification for plugin-check
+        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
 
+        // Nonce verified above
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
         try {
             $job_id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
+        // phpcs:enable WordPress.Security.NonceVerification.Missing
             if ( $job_id ) {
                 Backup_Lite_Restore_Jobs::request_cancel( $job_id );
             } else {
@@ -715,23 +794,31 @@ class Backup_Lite_Restore_Handler {
 
         self::set_state( $state );
 
+        // Initialize history entry with UTC timestamp
+        $timestamp_utc = time(); // Always use UTC timestamp (time() returns UTC Unix timestamp)
+        
         $history_entry = isset( $job['history'] ) && is_array( $job['history'] ) ? $job['history'] : [
-            'timestamp_utc' => time(), // Store Unix timestamp (UTC) for accurate timezone conversion
-            // @plugin-check: allowed - UTC datetime string for backward compatibility and logging
-            'timestamp' => gmdate( 'Y-m-d H:i:s', time() ), // phpcs:ignore WordPress.DateTime.RestrictedFunctions.date_date -- UTC datetime for internal metadata, not user-facing
-            'file'      => isset( $state['filename'] ) ? $state['filename'] : basename( $state['file'] ),
-            'result'    => 'pending',
-            'log'       => '',
+            'timestamp_utc' => $timestamp_utc, // Store UTC Unix timestamp (primary field)
+            'file'          => isset( $state['filename'] ) ? $state['filename'] : basename( $state['file'] ),
+            'result'        => 'pending',
+            'log'           => '',
+            // Keep 'date' field for backward compatibility (formatted UTC datetime string)
+            'date'          => gmdate( 'Y-m-d H:i:s', $timestamp_utc ),
         ];
 
         $suspend_cache_state = null;
 
         try {
             ignore_user_abort( true );
-            // @plugin-check: okay - needed for long running backup/restore operations
-            // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running backup/restore operations
+            // Allow longer execution time for large backup/restore jobs when possible.
+            // phpcs:ignore WordPress.PHP.NoSetTimeLimit
             if ( function_exists( 'set_time_limit' ) ) {
-            @set_time_limit( 0 );
+                // Long-running backup/restore job: attempt to raise time limit for CLI/cron.
+                // @phpcs:disable Squiz.PHP.DiscouragedFunctions.Discouraged
+                if ( function_exists( 'set_time_limit' ) ) {
+                    @set_time_limit( 0 );
+                }
+                // @phpcs:enable Squiz.PHP.DiscouragedFunctions.Discouraged
             }
 
             if ( function_exists( 'wp_raise_memory_limit' ) ) {
@@ -768,10 +855,35 @@ class Backup_Lite_Restore_Handler {
                 return self::handle_job_cancelled( $job_id, $history_entry );
             }
 
+            // Resolve file path from filename stored in state
+            $file = isset( $state['file'] ) ? $state['file'] : '';
+            $archive_path = backup_lite_get_backup_path( $file );
+            
+            // Verify archive file exists and is readable before restore
+            if ( ! $archive_path ) {
+                backup_lite_log( 'error', 'Restore archive not readable.', array(
+                    'file_input' => $file,
+                    'state_file' => isset( $state['file'] ) ? $state['file'] : '',
+                ) );
+                
+                // Update timestamp_utc to current UTC time when restore fails
+                $history_entry['timestamp_utc'] = time();
+                $history_entry['date'] = gmdate( 'Y-m-d H:i:s', $history_entry['timestamp_utc'] );
+                $history_entry['result'] = 'failed';
+                $history_entry['message'] = esc_html__( 'Backup file not found or unreadable.', 'museder-restoreone' );
+                backup_lite_append_restore_history( $history_entry );
+                self::report_job_progress( $job_id, 100, $history_entry['message'], true, 'failed' );
+                return [
+                    'success' => false,
+                    'message' => $history_entry['message'],
+                    'error'   => 'archive_not_readable',
+                ];
+            }
+            
             // Pass progress callback to restore_site for detailed progress updates
             // Wrap in try-catch to handle any exceptions during restore
             try {
-                $restore = Backup_Lite_Restore::restore_site( $state['file'], $options, function( $percent, $message ) use ( $job_id ) {
+                $restore = Backup_Lite_Restore::restore_site( $archive_path, $options, function( $percent, $message ) use ( $job_id ) {
                     // Map restore progress (0-100) to job progress (45-95)
                     // Reserve 45-95 for restore operations, 95-100 for final cleanup
                     $mapped_percent = 45 + ( $percent * 0.5 ); // 45% to 95%
@@ -816,6 +928,9 @@ class Backup_Lite_Restore_Handler {
                 // This ensures the frontend can detect completion immediately
                 backup_lite_log( 'info', 'Restore completed successfully, setting job status to success', [ 'job_id' => $job_id ] );
                 self::report_job_progress( $job_id, 100, __( 'Restore completed successfully.', 'museder-restoreone' ), true, 'success' );
+                // Update timestamp_utc to current UTC time when restore completes
+                $history_entry['timestamp_utc'] = time();
+                $history_entry['date'] = gmdate( 'Y-m-d H:i:s', $history_entry['timestamp_utc'] );
                 $history_entry['result'] = 'success';
             } else {
                 $message = isset( $restore['message'] ) ? $restore['message'] : __( 'Restore failed.', 'museder-restoreone' );
@@ -845,6 +960,9 @@ class Backup_Lite_Restore_Handler {
                 ] );
                 
                 // Update history entry with error message
+                // Update timestamp_utc to current UTC time when restore fails
+                $history_entry['timestamp_utc'] = time();
+                $history_entry['date'] = gmdate( 'Y-m-d H:i:s', $history_entry['timestamp_utc'] );
                 $history_entry['result'] = 'failed';
                 $history_entry['message'] = $message;
                 
@@ -887,6 +1005,9 @@ class Backup_Lite_Restore_Handler {
                 ]
             );
 
+            // Update timestamp_utc to current UTC time when restore fails
+            $history_entry['timestamp_utc'] = time();
+            $history_entry['date'] = gmdate( 'Y-m-d H:i:s', $history_entry['timestamp_utc'] );
             $history_entry['result'] = 'failed';
             $history_entry['message'] = $message;
             backup_lite_append_restore_history( $history_entry );
@@ -911,6 +1032,8 @@ class Backup_Lite_Restore_Handler {
     private static function parse_options() {
         $options = [];
 
+        // Nonce verified in calling function (enqueue_restore_job) via verify_ajax_request()
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in calling function
         $overwrite_value = '';
         if ( isset( $_POST['overwrite'] ) ) {
             $overwrite_value = sanitize_text_field( wp_unslash( $_POST['overwrite'] ) );
@@ -934,7 +1057,7 @@ class Backup_Lite_Restore_Handler {
 
         $search_replace_raw = '';
         if ( isset( $_POST['searchReplace'] ) ) {
-            $search_replace_raw = wp_unslash( $_POST['searchReplace'] );
+            $search_replace_raw = sanitize_text_field( wp_unslash( $_POST['searchReplace'] ) );
         }
         // @plugin-check: validated - JSON will be decoded and sanitized
         if ( ! empty( $search_replace_raw ) ) {
@@ -947,8 +1070,13 @@ class Backup_Lite_Restore_Handler {
                     }
                     return sanitize_text_field( $item );
                 }, $decoded );
+            } else {
+                $options['search_replace'] = [];
             }
+        } else {
+            $options['search_replace'] = [];
         }
+        // phpcs:enable WordPress.Security.NonceVerification.Missing
 
         return $options;
     }
@@ -1041,10 +1169,15 @@ class Backup_Lite_Restore_Handler {
             wp_send_json_error( [ 'message' => esc_html__( 'Chunk session not found.', 'museder-restoreone' ) ], 404 );
         }
 
-        if ( empty( $_FILES['chunk'] ) || empty( $_FILES['chunk']['tmp_name'] ) || ! file_exists( $_FILES['chunk']['tmp_name'] ) ) {
+        // Nonce verified in verify_ajax_request() above
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() above
+        // $_FILES['chunk']['tmp_name'] is a server-side path managed by PHP upload handling and does not need sanitization.
+        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+        if ( empty( $_FILES['chunk'] ) || empty( $_FILES['chunk']['tmp_name'] ) || ! is_uploaded_file( $_FILES['chunk']['tmp_name'] ) || ! file_exists( $_FILES['chunk']['tmp_name'] ) ) {
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'No chunk file uploaded.', 'museder-restoreone' ) ], 400 );
         }
+        // phpcs:enable WordPress.Security.NonceVerification.Missing
 
         $chunk_dir = self::chunk_session_dir( $session_id );
         if ( ! file_exists( $chunk_dir ) && ! wp_mkdir_p( $chunk_dir ) ) {
@@ -1267,10 +1400,14 @@ class Backup_Lite_Restore_Handler {
             ] );
         }
 
+        // Store only filename in state, not full path
+        // Full path will be resolved when needed using backup_lite_get_backup_path()
+        $file_name = basename( $file_path );
+        
         $state = [
             'id'        => uniqid( 'restore_', true ),
-            'file'      => $file_path,
-            'filename'  => basename( $file_path ),
+            'file'      => $file_name, // Store only filename, not full path
+            'filename'  => $file_name,
             'source'    => $source,
             'size'      => (float) $size,
             'sha1'      => $sha1,
@@ -1298,6 +1435,15 @@ class Backup_Lite_Restore_Handler {
         return self::format_progress();
     }
 
+    /**
+     * Format restore history entries for frontend display.
+     * 
+     * All timestamps are stored as UTC Unix timestamps internally.
+     * Display times are converted to site's local timezone using backup_lite_format_local_time().
+     * 
+     * @param int $limit Maximum number of entries to return.
+     * @return array Formatted history entries with display_time and timestamp_utc.
+     */
     public static function history_for_js( $limit = 10 ) {
         $raw      = backup_lite_get_restore_history( $limit );
         $prepared = [];
@@ -1305,83 +1451,53 @@ class Backup_Lite_Restore_Handler {
         foreach ( $raw as $entry ) {
             $row = $entry;
             
-            // Preserve raw timestamp for programmatic comparisons on the frontend
-            $parsed = 0;
-            if ( ! empty( $entry['timestamp'] ) ) {
-                $parsed = strtotime( $entry['timestamp'] );
-                $row['timestamp_raw'] = $parsed ? (int) $parsed : 0;
-            } else {
-                $row['timestamp_raw'] = 0;
-            }
-            
-            // Format timestamp to use WordPress date/time format and timezone
-            // This matches the approach used in Log Files page for consistency
-            $parsed = null;
+            // 1. Get UTC timestamp (support both new and old data formats)
+            $timestamp_utc = 0;
             
             // Priority 1: Use timestamp_utc if available (most accurate, stored as UTC Unix timestamp)
-            // This is the preferred method for new entries
-            if ( ! empty( $entry['timestamp_utc'] ) && is_numeric( $entry['timestamp_utc'] ) ) {
-                $parsed = (int) $entry['timestamp_utc'];
-            } elseif ( ! empty( $entry['timestamp'] ) ) {
-                $timestamp_str = $entry['timestamp'];
-                
-                // Priority 2: If it's already a Unix timestamp (numeric string), treat as UTC
-                if ( is_numeric( $timestamp_str ) ) {
-                    $parsed = (int) $timestamp_str;
-                } else {
-                    // Priority 3: Try to parse as UTC datetime string (new format: gmdate('Y-m-d H:i:s', time()))
-                    // New entries store UTC datetime strings
-                    $parsed = strtotime( $timestamp_str . ' UTC' );
-                    
-                    // Priority 4: If that fails, it's likely an old entry stored as local time
-                    // Old entries might have used current_time('mysql') which returns local time
-                    if ( false === $parsed || $parsed <= 0 ) {
-                        // Try parsing without UTC suffix - might be local time string
-                        $local_parsed = strtotime( $timestamp_str );
-                        
-                        if ( false !== $local_parsed && $local_parsed > 0 ) {
-                            // This is likely a local time string from old entries
-                            // We need to convert it to UTC timestamp first
-                            // Get the current timezone offset
-                            $gmt_offset = get_option( 'gmt_offset' );
-                            if ( $gmt_offset ) {
-                                // Convert local time to UTC: subtract offset
-                                // local_time = UTC_time + offset, so UTC_time = local_time - offset
-                                $offset_seconds = (int) ( $gmt_offset * HOUR_IN_SECONDS );
-                                $parsed = $local_parsed - $offset_seconds;
-                            } else {
-                                // No offset set, assume it's already UTC
-                                $parsed = $local_parsed;
-                            }
-                        }
+            if ( isset( $entry['timestamp_utc'] ) && $entry['timestamp_utc'] ) {
+                $timestamp_utc = (int) $entry['timestamp_utc'];
+            } elseif ( ! empty( $entry['date'] ) ) {
+                // Priority 2: Old data compatibility - parse date string as UTC
+                // The 'date' field is stored as UTC datetime string (gmdate format)
+                $timestamp_utc = strtotime( $entry['date'] . ' UTC' );
+                if ( false === $timestamp_utc || $timestamp_utc <= 0 ) {
+                    // Fallback: try parsing as-is (may be old local time entry)
+                    $timestamp_utc = strtotime( $entry['date'] );
+                }
+            } elseif ( isset( $entry['timestamp'] ) && $entry['timestamp'] ) {
+                // Priority 3: Parse legacy timestamp using helper function
+                $timestamp_utc = backup_lite_parse_legacy_timestamp( $entry['timestamp'] );
+            }
+            
+            // Fallback: If still no valid timestamp, use current time or file modification time
+            if ( $timestamp_utc <= 0 ) {
+                // Try to get file modification time as last resort
+                if ( ! empty( $entry['file'] ) ) {
+                    $backup_path = backup_lite_get_backup_path( $entry['file'] );
+                    if ( $backup_path && file_exists( $backup_path ) ) {
+                        $timestamp_utc = filemtime( $backup_path );
                     }
+                }
+                // If still no timestamp, use current time
+                if ( $timestamp_utc <= 0 ) {
+                    $timestamp_utc = time();
                 }
             }
             
-            if ( false !== $parsed && $parsed > 0 ) {
-                // @plugin-check: wp_date with local timezone - converts UTC timestamp to site's local timezone
-                // Use wp_date() directly for consistent timezone handling
-                // $parsed is a UTC Unix timestamp, wp_date() converts it to local timezone
-                if ( function_exists( 'wp_date' ) ) {
-                    $row['timestamp'] = wp_date( 'Y-m-d H:i', $parsed, wp_timezone() );
-                } else {
-                    // Fallback for older WordPress versions
-                    $row['timestamp'] = backup_lite_local_time( 'Y-m-d H:i', $parsed );
-                }
-            } elseif ( ! empty( $entry['timestamp'] ) ) {
-                // If parsing fails, try to parse the original string as UTC and convert
-                $fallback_parsed = strtotime( $entry['timestamp'] . ' UTC' );
-                if ( false !== $fallback_parsed && $fallback_parsed > 0 ) {
-                    if ( function_exists( 'wp_date' ) ) {
-                        $row['timestamp'] = wp_date( 'Y-m-d H:i', $fallback_parsed, wp_timezone() );
-                    } else {
-                        $row['timestamp'] = backup_lite_local_time( 'Y-m-d H:i', $fallback_parsed );
-                    }
-                } else {
-                    // Last resort: use original string (should not happen with proper data)
-                    $row['timestamp'] = $entry['timestamp'];
-                }
-            }
+            // 2. Convert UTC timestamp to local timezone string using backup_lite_format_local_time()
+            // backup_lite_format_local_time() expects UTC timestamp and converts to site's local timezone
+            $display_time = backup_lite_format_local_time( $timestamp_utc, 'Y-m-d H:i' );
+            
+            // 3. Build array for frontend
+            $row['timestamp']     = $display_time;     // Human-readable string for display (PHP template uses this)
+            $row['timestamp_utc'] = $timestamp_utc;    // Preserve UTC timestamp for JS calculations
+            $row['datetime']      = $display_time;      // Alias for clarity
+            $row['display_time']  = $display_time;      // Alias for clarity
+            $row['timestamp_raw'] = $timestamp_utc;    // Backward compatibility (JS uses this)
+            $row['file']          = isset( $entry['file'] ) ? $entry['file'] : '';
+            $row['result']        = isset( $entry['result'] ) ? $entry['result'] : '';
+            $row['log']           = isset( $entry['log'] ) ? $entry['log'] : '';
             
             if ( ! empty( $entry['log'] ) ) {
                 $row['log_url'] = wp_nonce_url(
@@ -1405,19 +1521,30 @@ class Backup_Lite_Restore_Handler {
     }
 
     private static function move_file( $source, $destination ) {
-        // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- required for moving files, paths from plugin-controlled directories
-        if ( @rename( $source, $destination ) ) {
+        // This plugin needs low-level rename() here for streaming backup/restore performance.
+        // Using WP_Filesystem::move() is not always reliable across all hosting environments.
+        // @phpcs:disable WordPress.WP.AlternativeFunctions.rename_rename
+        $renamed = @rename( $source, $destination );
+        // @phpcs:enable WordPress.WP.AlternativeFunctions.rename_rename
+        if ( $renamed ) {
             return true;
         }
 
         // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
         // $source and $destination are from plugin-controlled directories
         if ( @copy( $source, $destination ) ) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_copy -- required for file move operation, paths from plugin-controlled directories
+            // phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
+            // Unlinking temporary backup/restore artifact. WP_Filesystem is not practical here.
             if ( function_exists( 'wp_delete_file' ) ) {
                 wp_delete_file( $source );
             } else {
-                @unlink( $source ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_unlink -- required for file move, path from plugin-controlled directory
+                // Fallback for non-standard environments.
+                if ( file_exists( $source ) ) {
+                    @unlink( $source );
+                }
             }
+            // phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
+            // @phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
             return true;
         }
 
@@ -1537,6 +1664,9 @@ class Backup_Lite_Restore_Handler {
     }
 
     private static function handle_job_cancelled( $job_id, array $history_entry ) {
+        // Update timestamp_utc to current UTC time when restore is cancelled
+        $history_entry['timestamp_utc'] = time();
+        $history_entry['date'] = gmdate( 'Y-m-d H:i:s', $history_entry['timestamp_utc'] );
         $history_entry['result'] = 'cancelled';
         backup_lite_append_restore_history( $history_entry );
         self::report_job_progress( $job_id, 100, __( 'Restore cancelled.', 'museder-restoreone' ), true );
@@ -1584,10 +1714,11 @@ class Backup_Lite_Restore_Handler {
             @ignore_user_abort( true );
         }
 
-        // @plugin-check: okay - needed for long running backup/restore operations
-        // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running backup/restore operations
+        // Allow longer execution time for large backup/restore jobs when possible.
         if ( function_exists( 'set_time_limit' ) ) {
+            // phpcs:disable Squiz.PHP.DiscouragedFunctions.Discouraged,WordPress.PHP.DevelopmentFunctions.time_limit_set_time_limit
             @set_time_limit( 0 );
+            // phpcs:enable Squiz.PHP.DiscouragedFunctions.Discouraged,WordPress.PHP.DevelopmentFunctions.time_limit_set_time_limit
         }
 
         if ( function_exists( 'wp_raise_memory_limit' ) ) {

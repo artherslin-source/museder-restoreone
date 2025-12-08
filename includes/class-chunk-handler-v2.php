@@ -6,8 +6,14 @@ if ( ! defined( 'ABSPATH' ) ) {
 // @plugin-check: safe - suppress error display during chunk upload processing to prevent output pollution
 // These settings are necessary to prevent PHP warnings/notices from breaking JSON responses during file uploads
 if ( ! defined( 'WP_DEBUG' ) || ! WP_DEBUG ) {
-    // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- suppress errors in production, only when WP_DEBUG is off
-    @ini_set( 'display_errors', 0 );
+    // Suppress error display during chunk upload processing to prevent output pollution.
+    // phpcs:ignore WordPress.PHP.IniSet -- suppress error display in production, only when WP_DEBUG is off
+    // Adjust display_errors for chunk upload handler.
+    // @phpcs:disable Squiz.PHP.DiscouragedFunctions.Discouraged
+    if ( function_exists( 'ini_set' ) ) {
+        @ini_set( 'display_errors', 0 );
+    }
+    // @phpcs:enable Squiz.PHP.DiscouragedFunctions.Discouraged
     // phpcs:ignore WordPress.PHP.DevelopmentFunctions.prevent_path_disclosure_error_reporting -- suppress error reporting in production, only when WP_DEBUG is off
     @error_reporting( E_ALL & ~E_NOTICE & ~E_WARNING );
 }
@@ -202,12 +208,16 @@ class Backup_Lite_Chunk_V2 {
                 fclose( $output );
                 // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
                 // $tmp_path is from plugin-controlled temp directory
+                // @phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
                 if ( function_exists( 'wp_delete_file' ) ) {
                     wp_delete_file( $tmp_path );
                 } else {
-                    // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- required for cleanup, path from plugin-controlled temp directory
-                    @unlink( $tmp_path );
+                    // Fallback for non-standard environments.
+                    if ( file_exists( $tmp_path ) ) {
+                        @unlink( $tmp_path );
+                    }
                 }
+                // @phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
                 return self::rest_error( 'stream_read_failed', esc_html__( 'Failed to read from input stream.', 'museder-restoreone' ), 500 );
             }
 
@@ -226,9 +236,16 @@ class Backup_Lite_Chunk_V2 {
                 // @plugin-check: safe - $tmp_path built from internal temp directory, not user input
                 // @plugin-check: allowed - required for backup/restore file operations
                 // Path is validated and sanitized before use
-                // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- required for cleanup, path from plugin-controlled temp directory
-                // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- required for cleanup, path from plugin-controlled temp directory
-                @unlink( $tmp_path );
+                // @phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
+                if ( function_exists( 'wp_delete_file' ) ) {
+                    wp_delete_file( $tmp_path );
+                } else {
+                    // Fallback for non-standard environments.
+                    if ( file_exists( $tmp_path ) ) {
+                        @unlink( $tmp_path );
+                    }
+                }
+                // @phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
                 return self::rest_error( 'stream_write_failed', esc_html__( 'Failed to write chunk to disk.', 'museder-restoreone' ), 500 );
             }
 
@@ -243,12 +260,16 @@ class Backup_Lite_Chunk_V2 {
         if ( $chunk_size && $written !== $chunk_size ) {
             // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
             // $tmp_path is from plugin-controlled temp directory
+            // @phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
             if ( function_exists( 'wp_delete_file' ) ) {
                 wp_delete_file( $tmp_path );
             } else {
-                // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- required for cleanup, path from plugin-controlled temp directory
-                @unlink( $tmp_path );
+                // Fallback for non-standard environments.
+                if ( file_exists( $tmp_path ) ) {
+                    @unlink( $tmp_path );
+                }
             }
+            // @phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
             return self::rest_error( 'size_mismatch', esc_html__( 'Chunk size mismatch.', 'museder-restoreone' ), 409, [
                 'expected' => $chunk_size,
                 'actual'   => $written,
@@ -259,28 +280,40 @@ class Backup_Lite_Chunk_V2 {
         if ( ! hash_equals( $chunk_sha1, $actual_sha1 ) ) {
             // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
             // $tmp_path is from plugin-controlled temp directory
+            // @phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
             if ( function_exists( 'wp_delete_file' ) ) {
                 wp_delete_file( $tmp_path );
             } else {
-                // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- required for cleanup, path from plugin-controlled temp directory
-                @unlink( $tmp_path );
+                // Fallback for non-standard environments.
+                if ( file_exists( $tmp_path ) ) {
+                    @unlink( $tmp_path );
+                }
             }
+            // @phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
             return self::rest_error( 'chunk_sha1_mismatch', esc_html__( 'Chunk SHA1 verification failed.', 'museder-restoreone' ), 409, [
                 'expected' => $chunk_sha1,
                 'actual'   => $actual_sha1,
             ] );
         }
 
-        // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- required for moving chunk to final location, paths from plugin-controlled directories
-        if ( ! @rename( $tmp_path, $final_path ) ) {
+        // This plugin needs low-level rename() here for streaming backup/restore performance.
+        // Using WP_Filesystem::move() is not always reliable across all hosting environments.
+        // @phpcs:disable WordPress.WP.AlternativeFunctions.rename_rename
+        $renamed = @rename( $tmp_path, $final_path );
+        // @phpcs:enable WordPress.WP.AlternativeFunctions.rename_rename
+        if ( ! $renamed ) {
             // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
             // $tmp_path is from plugin-controlled temp directory
+            // @phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
             if ( function_exists( 'wp_delete_file' ) ) {
                 wp_delete_file( $tmp_path );
             } else {
-                // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- required for cleanup, path from plugin-controlled temp directory
-                @unlink( $tmp_path );
+                // Fallback for non-standard environments.
+                if ( file_exists( $tmp_path ) ) {
+                    @unlink( $tmp_path );
+                }
             }
+            // @phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
             return self::rest_error( 'rename_failed', esc_html__( 'Unable to finalize chunk.', 'museder-restoreone' ), 500 );
         }
 
@@ -447,12 +480,16 @@ class Backup_Lite_Chunk_V2 {
         if ( $server_sha1 !== $client_sha1 ) {
             // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
             // $final_path is from plugin-controlled temp directory
+            // @phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
             if ( function_exists( 'wp_delete_file' ) ) {
                 wp_delete_file( $final_path );
             } else {
-                // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- required for cleanup, path from plugin-controlled temp directory
-                @unlink( $final_path );
+                // Fallback for non-standard environments.
+                if ( file_exists( $final_path ) ) {
+                    @unlink( $final_path );
+                }
             }
+            // @phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
             self::log_error( '[FINALIZE_V2_SHA1_MISMATCH]', [
                 'upload_id'   => $upload_id,
                 'client_sha1' => $client_sha1,
@@ -478,12 +515,16 @@ class Backup_Lite_Chunk_V2 {
             ] );
             // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
             // $final_path is from plugin-controlled temp directory
+            // @phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
             if ( function_exists( 'wp_delete_file' ) ) {
                 wp_delete_file( $final_path );
             } else {
-                // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- required for cleanup, path from plugin-controlled temp directory
-                @unlink( $final_path );
+                // Fallback for non-standard environments.
+                if ( file_exists( $final_path ) ) {
+                    @unlink( $final_path );
+                }
             }
+            // @phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
 
             return new WP_REST_Response( [
                 'ok'          => false,
@@ -509,14 +550,24 @@ class Backup_Lite_Chunk_V2 {
         // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
         // $final_path and $destination are from plugin-controlled directories
         // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename,WordPress.WP.AlternativeFunctions.file_system_operations_copy -- required for file move, paths from plugin-controlled directories
-        if ( ! @rename( $final_path, $destination ) && ! @copy( $final_path, $destination ) ) {
+        // This plugin needs low-level rename() here for streaming backup/restore performance.
+        // Using WP_Filesystem::move() is not always reliable across all hosting environments.
+        // @phpcs:disable WordPress.WP.AlternativeFunctions.rename_rename
+        $renamed = @rename( $final_path, $destination );
+        // @phpcs:enable WordPress.WP.AlternativeFunctions.rename_rename
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_copy -- fallback when rename fails, paths from plugin-controlled directories
+        if ( ! $renamed && ! @copy( $final_path, $destination ) ) {
             // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
+            // @phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
             if ( function_exists( 'wp_delete_file' ) ) {
                 wp_delete_file( $final_path );
             } else {
-                // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- required for cleanup, path from plugin-controlled temp directory
-                @unlink( $final_path );
+                // Fallback for non-standard environments.
+                if ( file_exists( $final_path ) ) {
+                    @unlink( $final_path );
+                }
             }
+            // @phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
             return new WP_REST_Response( [
                 'ok'      => false,
                 'code'    => 'move_failed',

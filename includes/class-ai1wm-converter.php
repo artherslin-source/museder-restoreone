@@ -569,7 +569,12 @@ class Backup_Lite_AI1WM_Converter {
                 // @plugin-check: okay - needed for long running backup/restore operations
                 // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running backup/restore operations
                 if ( function_exists( 'set_time_limit' ) ) {
-                    @set_time_limit( 600 ); // Reset to 10 minutes
+                    // Long-running backup/restore job: attempt to raise time limit for CLI/cron.
+                    // @phpcs:disable Squiz.PHP.DiscouragedFunctions.Discouraged
+                    if ( function_exists( 'set_time_limit' ) ) {
+                        @set_time_limit( 600 ); // Reset to 10 minutes
+                    }
+                    // @phpcs:enable Squiz.PHP.DiscouragedFunctions.Discouraged
                 }
             }
         }
@@ -625,7 +630,12 @@ class Backup_Lite_AI1WM_Converter {
         // @plugin-check: okay - needed for long running backup/restore operations
         // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running backup/restore operations
         if ( function_exists( 'set_time_limit' ) ) {
-            @set_time_limit( 600 ); // 10 minutes for conversion
+            // Long-running backup/restore job: attempt to raise time limit for CLI/cron.
+            // @phpcs:disable Squiz.PHP.DiscouragedFunctions.Discouraged
+            if ( function_exists( 'set_time_limit' ) ) {
+                @set_time_limit( 600 ); // 10 minutes for conversion
+            }
+            // @phpcs:enable Squiz.PHP.DiscouragedFunctions.Discouraged
         }
 
         if ( function_exists( 'wp_raise_memory_limit' ) ) {

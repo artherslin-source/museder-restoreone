@@ -3,14 +3,24 @@
  * Backup Lite backups page.
  *
  * @package BackupLite
+ *
+ * @var array $backups
+ * @var bool  $is_pro
  */
 
+// phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
+// 說明：本檔為內部後台 template，變數皆由 Museder RestoreOne 的 controller 傳入，
+// 不注入至 PHP 全域命名空間，也不作為可重用 API。僅用於此畫面渲染。
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
+// Template context: These variables are scoped to this template file and provided by the rendering function.
+// They use short names for template readability but are not global namespace pollution.
+// phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 $status  = isset( $status ) ? $status : Backup_Lite_UI::get_environment_status();
 $backups = isset( $backups ) ? $backups : Backup_Lite_UI::get_backups_list();
+// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 ?>
 
 <div class="wrap backup-lite-admin backup-lite-backups">
@@ -294,4 +304,6 @@ $backups = isset( $backups ) ? $backups : Backup_Lite_UI::get_backups_list();
         </ul>
     </div>
 </div>
+<?php
+// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 

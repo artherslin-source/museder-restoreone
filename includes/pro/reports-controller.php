@@ -184,7 +184,11 @@ class Backup_Lite_Reports_Controller {
             wp_die( esc_html__( 'Unauthorized.', 'museder-restoreone' ) );
         }
 
+        // Sanitize file parameter before nonce check
+        // phpcs:disable WordPress.Security.NonceVerification.Recommended -- nonce verified below
         $file = sanitize_text_field( wp_unslash( $_GET['file'] ?? '' ) );
+        // phpcs:enable WordPress.Security.NonceVerification.Recommended
+        
         if ( empty( $file ) ) {
             wp_die( esc_html__( 'File not specified.', 'museder-restoreone' ) );
         }
@@ -202,10 +206,8 @@ class Backup_Lite_Reports_Controller {
             wp_die( esc_html__( 'Invalid file path.', 'museder-restoreone' ) );
         }
 
-        // Verify nonce
-        if ( ! isset( $_GET['_wpnonce'] ) || ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_GET['_wpnonce'] ) ), 'backup_lite_download_report_' . basename( $path ) ) ) {
-            wp_die( esc_html__( 'Security check failed.', 'museder-restoreone' ) );
-        }
+        // Verify nonce - use basename for action to match the nonce generation
+        check_admin_referer( 'backup_lite_download_report_' . basename( $path ) );
 
         $ext = strtolower( pathinfo( $path, PATHINFO_EXTENSION ) );
         $mime = 'application/json';

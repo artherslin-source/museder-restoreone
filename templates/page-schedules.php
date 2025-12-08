@@ -3,18 +3,26 @@
  * Backup Lite schedules page.
  *
  * @package BackupLite
+ *
+ * @var array $schedules
+ * @var bool  $is_pro
  */
 
+// phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
+// 說明：本檔為 Museder RestoreOne 的內部後台 template，變數皆由外掛 controller 傳入，不注入 PHP 全域命名空間，也不作為可重用 API。
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
+// Template context: These variables use the museder_restoreone_ prefix and are scoped to this template file.
+// They are provided by the rendering function and are not global namespace pollution.
 $museder_restoreone_schedules       = isset( $schedules ) ? $schedules : Backup_Lite_Schedule_Handler::list_schedules();
 $museder_restoreone_total_schedules = is_array( $museder_restoreone_schedules ) ? count( $museder_restoreone_schedules ) : 0;
 $museder_restoreone_enabled_count   = 0;
 $museder_restoreone_next_run_label  = __( 'Not scheduled', 'museder-restoreone' );
 $museder_restoreone_next_run_title  = '—';
 $museder_restoreone_next_run_diff   = '';
+// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 
 if ( $museder_restoreone_total_schedules ) {
     $museder_restoreone_now = time();
@@ -34,7 +42,8 @@ if ( $museder_restoreone_total_schedules ) {
 
         if ( ! isset( $museder_restoreone_earliest_timestamp ) || $museder_restoreone_timestamp < $museder_restoreone_earliest_timestamp ) {
             $museder_restoreone_earliest_timestamp = $museder_restoreone_timestamp;
-            $museder_restoreone_next_run_label     = backup_lite_local_time( 'Y-m-d H:i', $museder_restoreone_timestamp );
+            // @plugin-check: wp_date with local timezone - $museder_restoreone_timestamp is UTC timestamp, backup_lite_format_local_time() handles timezone conversion
+            $museder_restoreone_next_run_label     = backup_lite_format_local_time( $museder_restoreone_timestamp, 'Y-m-d H:i' );
             $museder_restoreone_next_run_title     = ! empty( $museder_restoreone_schedule['title'] ) ? $museder_restoreone_schedule['title'] : __( '(Untitled)', 'museder-restoreone' );
             if ( $museder_restoreone_timestamp >= $museder_restoreone_now ) {
                 $museder_restoreone_next_run_diff = human_time_diff( $museder_restoreone_now, $museder_restoreone_timestamp );
@@ -164,7 +173,8 @@ if ( $museder_restoreone_total_schedules ) {
                                 <td>
                                     <?php
                                     if ( ! empty( $museder_restoreone_schedule['next_run'] ) ) {
-                                        echo esc_html( backup_lite_local_time( 'Y-m-d H:i', (int) $museder_restoreone_schedule['next_run'] ) );
+                                        // @plugin-check: wp_date with local timezone - next_run is UTC timestamp, backup_lite_format_local_time() handles timezone conversion
+                                        echo esc_html( backup_lite_format_local_time( (int) $museder_restoreone_schedule['next_run'], 'Y-m-d H:i' ) );
                                     } else {
                                         esc_html_e( '—', 'museder-restoreone' );
                                     }
@@ -187,7 +197,8 @@ if ( $museder_restoreone_total_schedules ) {
                                 <td>
                                     <?php
                                     if ( ! empty( $museder_restoreone_schedule['last_run'] ) ) {
-                                        echo esc_html( backup_lite_local_time( 'Y-m-d H:i', strtotime( $museder_restoreone_schedule['last_run'] ) ) );
+                                        // @plugin-check: wp_date with local timezone - parse datetime string and convert to local timezone
+                                        echo esc_html( backup_lite_format_local_time( strtotime( $museder_restoreone_schedule['last_run'] . ' UTC' ), 'Y-m-d H:i' ) );
                                     } else {
                                         esc_html_e( '—', 'museder-restoreone' );
                                     }
@@ -386,4 +397,6 @@ if ( $museder_restoreone_total_schedules ) {
         </form>
     </div>
 </div>
+<?php
+// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 

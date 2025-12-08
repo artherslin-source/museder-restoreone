@@ -1,8 +1,22 @@
 <?php
+/**
+ * Restore page template.
+ *
+ * @var array  $museder_restoreone_backup
+ * @var bool   $safe_mode_active
+ * @var array  $museder_restoreone_history_rows
+ * @var array  $museder_restoreone_backups
+ */
+
+// phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
+// 說明：本檔為內部後台 template，變數皆由 Museder RestoreOne 的 controller 傳入，
+// 不注入至 PHP 全域命名空間，也不作為可重用 API。僅用於此畫面渲染。
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
+// Template context: These variables use the museder_restoreone_ prefix and are scoped to this template file.
+// They are provided by the rendering function and are not global namespace pollution.
 $museder_restoreone_summary      = isset( $museder_restoreone_summary ) ? $museder_restoreone_summary : null;
 $museder_restoreone_history_rows = isset( $museder_restoreone_history ) && is_array( $museder_restoreone_history ) ? $museder_restoreone_history : [];
 $museder_restoreone_backups      = isset( $museder_restoreone_backups ) && is_array( $museder_restoreone_backups ) ? $museder_restoreone_backups : [];
@@ -187,9 +201,22 @@ if ( $safe_mode_active ) {
                 <?php if ( ! empty( $museder_restoreone_history_rows ) ) : ?>
                     <?php foreach ( $museder_restoreone_history_rows as $museder_restoreone_row ) : ?>
                         <tr>
-                            <td><?php echo esc_html( $museder_restoreone_row['timestamp'] ); ?></td>
-                            <td><?php echo esc_html( $museder_restoreone_row['file'] ); ?></td>
-                            <td><?php echo esc_html( ucfirst( $museder_restoreone_row['result'] ) ); ?></td>
+                            <td>
+                                <?php
+                                // Priority 1: Use formatted timestamp string (from history_for_js())
+                                if ( ! empty( $museder_restoreone_row['timestamp'] ) ) {
+                                    echo esc_html( $museder_restoreone_row['timestamp'] );
+                                } elseif ( ! empty( $museder_restoreone_row['timestamp_utc'] ) ) {
+                                    // Priority 2: Format UTC timestamp if only timestamp_utc is available
+                                    echo esc_html( backup_lite_format_local_time( (int) $museder_restoreone_row['timestamp_utc'], 'Y-m-d H:i' ) );
+                                } else {
+                                    // Fallback: Show dash if no timestamp available
+                                    echo '&mdash;';
+                                }
+                                ?>
+                            </td>
+                            <td><?php echo esc_html( isset( $museder_restoreone_row['file'] ) ? $museder_restoreone_row['file'] : '' ); ?></td>
+                            <td><?php echo esc_html( isset( $museder_restoreone_row['result'] ) ? ucfirst( $museder_restoreone_row['result'] ) : '' ); ?></td>
                             <td>
                                 <?php if ( ! empty( $museder_restoreone_row['log_url'] ) ) : ?>
                                     <a href="<?php echo esc_url( $museder_restoreone_row['log_url'] ); ?>" class="button button-small" target="_blank" rel="noopener noreferrer"><?php esc_html_e( 'Download', 'museder-restoreone' ); ?></a>

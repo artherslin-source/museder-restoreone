@@ -596,7 +596,18 @@ class Backup_Lite_Schedule_Handler {
             foreach ( $excess as $file ) {
                 // @plugin-check: allowed - required for backup/restore file operations
                 // Path is validated and sanitized before use
-                @unlink( $file );
+                if ( file_exists( $file ) ) {
+                    // @phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
+                    if ( function_exists( 'wp_delete_file' ) ) {
+                        wp_delete_file( $file );
+                    } else {
+                        // Fallback for non-standard environments.
+                        if ( file_exists( $file ) ) {
+                            @unlink( $file );
+                        }
+                    }
+                    // @phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
+                }
             }
         }
 
@@ -605,8 +616,17 @@ class Backup_Lite_Schedule_Handler {
             foreach ( $files as $file ) {
                 if ( filemtime( $file ) < $threshold ) {
                     // @plugin-check: allowed - required for backup/restore file operations
-                // Path is validated and sanitized before use
-                @unlink( $file );
+                    // Path is validated and sanitized before use
+                    // @phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
+                    if ( function_exists( 'wp_delete_file' ) ) {
+                        wp_delete_file( $file );
+                    } else {
+                        // Fallback for non-standard environments.
+                        if ( file_exists( $file ) ) {
+                            @unlink( $file );
+                        }
+                    }
+                    // @phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
                 }
             }
         }
@@ -753,19 +773,21 @@ class Backup_Lite_Schedule_Handler {
      * @return array
      */
     private static function read_schedule_data() {
-        // @plugin-check: sanitized + nonce - verified via verify_ajax() in calling method
+        // Nonce verified via verify_ajax() in calling method
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified via verify_ajax() in calling method
         $raw = isset( $_POST['schedule'] ) ? wp_unslash( $_POST['schedule'] ) : '';
+        // phpcs:enable WordPress.Security.NonceVerification.Missing
 
         if ( empty( $raw ) ) {
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- reading JSON from php://input stream
             $raw = file_get_contents( 'php://input' ); // Fallback for JSON payload.
         }
 
         $decoded = json_decode( $raw, true );
 
         if ( ! is_array( $decoded ) ) {
-            // @plugin-check: sanitized + nonce - verified via verify_ajax() in calling method
             // Sanitize all POST values before using
-            // phpcs:ignore WordPress.Security.NonceVerification.Missing -- admin-only tool, access protected by capability checks in verify_ajax()
+            // phpcs:disable WordPress.Security.NonceVerification.Missing -- admin-only tool, access protected by capability checks in verify_ajax()
             $decoded = array();
             foreach ( $_POST as $key => $value ) {
                 if ( 'schedule' !== $key && 'nonce' !== $key ) {
@@ -776,6 +798,14 @@ class Backup_Lite_Schedule_Handler {
                     }
                 }
             }
+            // phpcs:enable WordPress.Security.NonceVerification.Missing
+        }
+
+        // Sanitize schedule array
+        if ( is_array( $decoded ) ) {
+            $decoded = array_map( 'sanitize_text_field', $decoded );
+        } else {
+            $decoded = [];
         }
 
         $settings = Backup_Lite_Settings::get_settings();

@@ -464,8 +464,12 @@ class Backup_Lite_UI {
         $backup_dir = backup_lite_get_backup_dir();
         $unique     = wp_unique_filename( $backup_dir, basename( $file_path ) );
         $destination = trailingslashit( $backup_dir ) . $unique;
-        // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- required for moving uploaded restore file, paths validated and sanitized
-        if ( @rename( $file_path, $destination ) ) {
+        // This plugin needs low-level rename() here for streaming backup/restore performance.
+        // Using WP_Filesystem::move() is not always reliable across all hosting environments.
+        // @phpcs:disable WordPress.WP.AlternativeFunctions.rename_rename
+        $renamed = @rename( $file_path, $destination );
+        // @phpcs:enable WordPress.WP.AlternativeFunctions.rename_rename
+        if ( $renamed ) {
             $file_path = $destination;
         }
 
@@ -496,19 +500,18 @@ class Backup_Lite_UI {
             wp_send_json_error( [ 'message' => esc_html__( 'Backup filename not provided.', 'museder-restoreone' ) ], 400 );
         }
 
-        $backup_dir = backup_lite_get_backup_dir();
-        $file_path  = trailingslashit( $backup_dir ) . basename( $filename );
-        $file_path  = wp_normalize_path( $file_path );
+        // Use helper function to get absolute path from file name
+        // backup_lite_get_backup_path() ensures the file is within the backup directory and is readable
+        $file_path = backup_lite_get_backup_path( $filename );
 
-        if ( ! file_exists( $file_path ) || ! is_readable( $file_path ) ) {
+        if ( ! $file_path ) {
+            backup_lite_log( 'error', 'Restore archive not readable.', [ 'filename' => $filename ] );
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'Backup file not found or unreadable.', 'museder-restoreone' ) ], 404 );
         }
 
-        if ( strpos( wp_normalize_path( $file_path ), wp_normalize_path( $backup_dir ) ) !== 0 ) {
-            // @plugin-check: escaped
-            wp_send_json_error( [ 'message' => esc_html__( 'Invalid backup file path.', 'museder-restoreone' ) ], 403 );
-        }
+        // No need to check $backup_dir here - backup_lite_get_backup_path() already ensures
+        // the file is within the backup directory and is readable
 
         $options = [];
         $search_replace_raw = '';
@@ -589,8 +592,19 @@ class Backup_Lite_UI {
 
         // @plugin-check: allowed - required for backup/restore file operations
         // Path is validated and sanitized before use
-        // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- required for deleting backup files, path validated and sanitized
-        if ( @unlink( $file_path ) ) {
+        // @phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
+        if ( function_exists( 'wp_delete_file' ) ) {
+            $deleted = wp_delete_file( $file_path );
+        } else {
+            // Fallback for non-standard environments.
+            if ( file_exists( $file_path ) ) {
+                $deleted = @unlink( $file_path );
+            } else {
+                $deleted = false;
+            }
+        }
+        // @phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
+        if ( $deleted ) {
             backup_lite_log( 'info', 'Backup file deleted.', [ 'file' => $file_path ] );
             wp_send_json_success( [ 'message' => esc_html__( 'Backup deleted successfully.', 'museder-restoreone' ) ] );
         } else {
@@ -649,8 +663,19 @@ class Backup_Lite_UI {
 
             // @plugin-check: allowed - required for backup/restore file operations
             // Path is validated and sanitized before use
-            // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- required for deleting backup files, path validated and sanitized
-        if ( @unlink( $file_path ) ) {
+            // @phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
+            if ( function_exists( 'wp_delete_file' ) ) {
+                $deleted_file = wp_delete_file( $file_path );
+            } else {
+                // Fallback for non-standard environments.
+                if ( file_exists( $file_path ) ) {
+                    $deleted_file = @unlink( $file_path );
+                } else {
+                    $deleted_file = false;
+                }
+            }
+            // @phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
+            if ( $deleted_file ) {
                 $deleted[] = $filename;
                 backup_lite_log( 'info', 'Backup file deleted (bulk).', [ 'file' => $file_path ] );
             } else {
@@ -674,7 +699,11 @@ class Backup_Lite_UI {
             wp_die( esc_html__( 'Unauthorized.', 'museder-restoreone' ) );
         }
 
+        // Sanitize log parameter before nonce check
+        // phpcs:disable WordPress.Security.NonceVerification.Recommended -- nonce verified via check_admin_referer() below
         $log  = sanitize_text_field( wp_unslash( $_GET['log'] ?? '' ) );
+        // phpcs:enable WordPress.Security.NonceVerification.Recommended
+        
         $path = backup_lite_get_log_dir() . '/' . basename( $log );
         $path = wp_normalize_path( $path );
 
@@ -700,16 +729,25 @@ class Backup_Lite_UI {
             wp_die( esc_html__( 'Unauthorized.', 'museder-restoreone' ) );
         }
 
-        // @plugin-check: sanitized + nonce - verified via check_admin_referer() below
+        // Sanitize file parameter before nonce check
+        // phpcs:disable WordPress.Security.NonceVerification.Recommended -- nonce verified via check_admin_referer() below
         $file = isset( $_GET['file'] ) ? sanitize_file_name( wp_unslash( $_GET['file'] ) ) : '';
-        $path = backup_lite_get_backup_dir() . '/' . basename( $file );
-        $path = wp_normalize_path( $path );
-
-        if ( ! file_exists( $path ) ) {
-            wp_die( esc_html__( 'Backup file not found.', 'museder-restoreone' ), esc_html__( 'Download error', 'museder-restoreone' ), 404 );
+        // phpcs:enable WordPress.Security.NonceVerification.Recommended
+        
+        if ( empty( $file ) ) {
+            wp_die( esc_html__( 'Invalid backup file.', 'museder-restoreone' ), esc_html__( 'Download error', 'museder-restoreone' ), 400 );
         }
 
-        check_admin_referer( 'backup_lite_download_' . basename( $path ) );
+        // Verify nonce
+        check_admin_referer( 'backup_lite_download_backup', '_backup_lite_download_nonce' );
+
+        // Use helper function to get absolute path from file name
+        $path = backup_lite_get_backup_path( $file );
+
+        if ( ! $path ) {
+            backup_lite_log( 'error', 'Download archive not readable.', [ 'filename' => $file ] );
+            wp_die( esc_html__( 'Backup file not found or unreadable.', 'museder-restoreone' ), esc_html__( 'Download error', 'museder-restoreone' ), 404 );
+        }
 
         $ext  = strtolower( pathinfo( $path, PATHINFO_EXTENSION ) );
         $mime = 'application/zip';
@@ -721,7 +759,14 @@ class Backup_Lite_UI {
         // @plugin-check: okay - needed for long running backup/restore operations
         // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running backup/restore operations
         if ( function_exists( 'set_time_limit' ) ) {
-            @set_time_limit( 0 );
+            // Allow longer execution time for large backup/restore jobs when possible.
+            // phpcs:ignore WordPress.PHP.NoSetTimeLimit
+            // Long-running backup/restore job: attempt to raise time limit for CLI/cron.
+            // @phpcs:disable Squiz.PHP.DiscouragedFunctions.Discouraged
+            if ( function_exists( 'set_time_limit' ) ) {
+                @set_time_limit( 0 );
+            }
+            // @phpcs:enable Squiz.PHP.DiscouragedFunctions.Discouraged
         }
 
         if ( function_exists( 'ob_get_length' ) && ob_get_length() ) {
@@ -734,8 +779,9 @@ class Backup_Lite_UI {
         header( 'Content-Type: ' . $mime );
         $download_filename = sanitize_file_name( basename( $path ) ); // @plugin-check: sanitized
         header( 'Content-Disposition: attachment; filename="' . $download_filename . '"' );
-        header( 'Content-Length: ' . filesize( $path ) );
+        header( 'Content-Length: ' . (string) filesize( $path ) );
         header( 'Content-Transfer-Encoding: binary' );
+        header( 'X-Content-Type-Options: nosniff' );
 
         $chunk_size = 1024 * 1024; // 1MB
         // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for streaming large backup files, path validated and sanitized
@@ -866,7 +912,8 @@ class Backup_Lite_UI {
                 'path'    => wp_normalize_path( $file ),
                 'size'    => filesize( $file ),
                 'type'    => 'site',
-                'created' => backup_lite_local_time( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), filemtime( $file ) ),
+                // @plugin-check: wp_date with local timezone - filemtime() returns Unix timestamp (UTC), backup_lite_format_local_time() handles timezone conversion
+                'created' => backup_lite_format_local_time( filemtime( $file ) ),
                 'download_url' => self::build_backup_download_link( $file ),
                 'label'   => $metadata['label'] ?? '',
                 'encrypted' => ! empty( $metadata['encrypted'] ),

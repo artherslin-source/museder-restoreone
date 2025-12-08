@@ -222,7 +222,14 @@ class Backup_Lite_Backup_Jobs {
         if ( ! empty( $job['manifest_file'] ) && file_exists( $job['manifest_file'] ) ) {
             // @plugin-check: allowed - required for backup/restore file operations
             // Path is validated and sanitized before use
-            @unlink( $job['manifest_file'] );
+            if ( function_exists( 'wp_delete_file' ) ) {
+                wp_delete_file( $job['manifest_file'] );
+            } else {
+                // phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
+                // Unlinking temporary backup/restore artifact. WP_Filesystem is not practical here.
+                @unlink( $job['manifest_file'] );
+                // phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
+            }
         }
     }
 

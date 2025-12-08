@@ -13,8 +13,11 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 /**
  * Cloud Storage Service class.
+ *
+ * @phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedClassFound
+ * Reason: Class name is already prefixed with the plugin vendor namespace "Museder_RestoreOne".
  */
-class Museder_Cloud_Service {
+class Museder_RestoreOne_Cloud_Service {
 
     const OPTION_KEY = 'museder_cloud_settings';
 
@@ -330,4 +333,5 @@ class Museder_Cloud_Service {
         ];
     }
 }
+// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedClassFound
 

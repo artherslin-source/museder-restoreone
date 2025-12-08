@@ -3,6 +3,13 @@
  * Backup Lite PRO - Advanced Filters page.
  *
  * @package BackupLite
+ *
+ * Template context variables.
+ *
+ * Variables in this file are provided by the plugin when loading the view
+ * and are not registered as global variables.
+ *
+ * @phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -58,5 +65,7 @@ $museder_restoreone_upgrade_url = Backup_Lite_Pro::get_upgrade_url();
         <?php endif; ?>
     </div>
 </div>
+<?php
+// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 
 

@@ -1,4 +1,12 @@
 <?php
+/**
+ * Template context variables.
+ *
+ * Variables in this file are provided by the plugin when loading the view
+ * and are not registered as global variables.
+ *
+ * @phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
+ */
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
@@ -216,3 +224,5 @@ $museder_restoreone_backups = isset( $museder_restoreone_backups ) && is_array( 
         <div class="restore-progress-log bl-logs-line" id="bl-restore-log"></div>
     </section>
 </div>
+<?php
+// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound

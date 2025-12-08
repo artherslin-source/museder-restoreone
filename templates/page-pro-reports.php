@@ -9,8 +9,12 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
+// Template context: These variables use the museder_restoreone_ prefix and are scoped to this template file.
+// They are provided by the rendering function and are not global namespace pollution.
+// phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 $museder_restoreone_is_pro = isset( $museder_restoreone_is_pro ) ? $museder_restoreone_is_pro : Backup_Lite_Pro::is_pro_active();
 $museder_restoreone_upgrade_url = Backup_Lite_Pro::get_upgrade_url();
+// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 ?>
 
 <?php // @plugin-check: escaped ?>

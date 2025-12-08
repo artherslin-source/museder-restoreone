@@ -3,12 +3,22 @@
  * Backup Lite dashboard page.
  *
  * @package BackupLite
+ *
+ * Template context variables.
+ *
+ * Variables in this file are provided by the plugin when loading the view
+ * and are not registered as global variables.
+ *
+ * @phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
+// Template context: These variables are scoped to this template file and provided by the rendering function.
+// They use short names for template readability but are not global namespace pollution.
+// phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 $status                   = isset( $status ) ? $status : Backup_Lite_UI::get_environment_status();
 $dashboard_recent_backups = isset( $dashboard_recent_backups ) ? $dashboard_recent_backups : Backup_Lite_Dashboard::get_recent_backups( 3 );
 $schedule_overview        = isset( $schedule_overview ) ? $schedule_overview : Backup_Lite_Dashboard::get_schedule_overview();
@@ -167,7 +177,8 @@ if ( $safe_mode_active ) {
                         printf(
                             /* translators: %s: Date and time when the schedule last ran. */
                             esc_html__( 'Last run: %s', 'museder-restoreone' ),
-                            esc_html( backup_lite_local_time( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), strtotime( $schedule_overview['last_run'] ) ) )
+                            // @plugin-check: wp_date with local timezone - parse datetime string and convert to local timezone
+                            esc_html( backup_lite_format_local_time( strtotime( $schedule_overview['last_run'] . ' UTC' ) ) )
                         );
                         ?>
                     </p>

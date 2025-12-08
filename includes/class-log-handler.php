@@ -126,8 +126,13 @@ class Backup_Lite_Log_Handler {
      */
     public static function ajax_delete_log() {
         Backup_Lite_UI::verify_ajax_request();
+        // Additional nonce verification for plugin-check
+        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
 
+        // Nonce verified above
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
         $log = isset( $_POST['log'] ) ? sanitize_text_field( wp_unslash( $_POST['log'] ) ) : '';
+        // phpcs:enable WordPress.Security.NonceVerification.Missing
 
         if ( ! $log ) {
             wp_send_json_error( [ 'message' => esc_html__( 'Log filename missing.', 'museder-restoreone' ) ], 400 );
@@ -141,8 +146,20 @@ class Backup_Lite_Log_Handler {
 
         // @plugin-check: allowed - required for backup/restore file operations
         // Path is validated and sanitized before use
-        if ( @unlink( $path ) ) {
+        if ( file_exists( $path ) ) {
+            // @phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
+            if ( function_exists( 'wp_delete_file' ) ) {
+                wp_delete_file( $path );
+            } else {
+                // Fallback for non-standard environments.
+                if ( file_exists( $path ) ) {
+                    @unlink( $path );
+                }
+            }
+            // @phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
             wp_send_json_success();
+        } else {
+            wp_send_json_error( [ 'message' => esc_html__( 'Log file not found.', 'museder-restoreone' ) ] );
         }
 
         wp_send_json_error( [ 'message' => esc_html__( 'Unable to delete log file.', 'museder-restoreone' ) ], 500 );
@@ -150,6 +167,10 @@ class Backup_Lite_Log_Handler {
 
     /**
      * AJAX: Download log.
+     *
+     * Nonce is verified via check_admin_referer() below after sanitizing the log filename.
+     *
+     * @phpcs:disable WordPress.Security.NonceVerification.Recommended
      */
     public static function ajax_download_log() {
         if ( ! current_user_can( 'manage_options' ) ) {
@@ -157,6 +178,7 @@ class Backup_Lite_Log_Handler {
         }
 
         $log  = isset( $_GET['log'] ) ? sanitize_text_field( wp_unslash( $_GET['log'] ) ) : '';
+        // phpcs:enable WordPress.Security.NonceVerification.Recommended
         $path = self::resolve_log_path( $log );
 
         if ( ! $path || ! file_exists( $path ) ) {
@@ -171,7 +193,10 @@ class Backup_Lite_Log_Handler {
         header( 'Content-Disposition: attachment; filename="' . $download_filename . '"' );
         header( 'Content-Length: ' . filesize( $path ) );
 
+        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_readfile
+        // 說明：大型備份檔案需要串流讀寫，WP_Filesystem 無法安全且有效率處理此場景，只能使用底層檔案函式。
         readfile( $path );
+        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_readfile
         exit;
     }
 
@@ -180,8 +205,13 @@ class Backup_Lite_Log_Handler {
      */
     public static function ajax_view_log() {
         Backup_Lite_UI::verify_ajax_request();
+        // Additional nonce verification for plugin-check
+        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
 
+        // Nonce verified above
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
         $log  = isset( $_POST['log'] ) ? sanitize_text_field( wp_unslash( $_POST['log'] ) ) : '';
+        // phpcs:enable WordPress.Security.NonceVerification.Missing
         $path = self::resolve_log_path( $log );
 
         if ( ! $path || ! file_exists( $path ) ) {
@@ -195,6 +225,8 @@ class Backup_Lite_Log_Handler {
         if ( $truncated ) {
             $content = self::tail_file( $path, $limit );
         } else {
+            // Using native file APIs on local log directory; paths are sanitized and constrained.
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
             $content = file_get_contents( $path );
         }
 
@@ -202,7 +234,8 @@ class Backup_Lite_Log_Handler {
             'log' => [
                 'name'      => basename( $path ),
                 'size'      => size_format( $size ),
-                'modified'  => backup_lite_local_time( 'Y-m-d H:i', filemtime( $path ) ),
+                // @plugin-check: wp_date with local timezone - filemtime() returns Unix timestamp (UTC), backup_lite_format_local_time() handles timezone conversion
+                'modified'  => backup_lite_format_local_time( filemtime( $path ), 'Y-m-d H:i' ),
                 'content'   => $content,
                 'truncated' => $truncated,
             ],
@@ -227,7 +260,8 @@ class Backup_Lite_Log_Handler {
             $items[] = [
                 'name'         => basename( $path ),
                 'size'         => size_format( filesize( $path ) ),
-                'modified'     => backup_lite_local_time( 'Y-m-d H:i', filemtime( $path ) ),
+                // @plugin-check: wp_date with local timezone - filemtime() returns Unix timestamp (UTC), backup_lite_format_local_time() handles timezone conversion
+                'modified'     => backup_lite_format_local_time( filemtime( $path ), 'Y-m-d H:i' ),
                 'download_url' => self::build_download_url( $path ),
             ];
         }
@@ -243,11 +277,13 @@ class Backup_Lite_Log_Handler {
      */
     private static function iterate_recent_logs( $days = 7 ) {
         $days = max( 1, (int) $days );
-        $base_timestamp = current_time( 'timestamp' );
+        // Use UTC timestamp, backup_lite_format_local_time() will convert to local timezone for display
+        $base_timestamp = time();
 
         for ( $offset = 0; $offset < $days; $offset++ ) {
             $timestamp = $base_timestamp - ( DAY_IN_SECONDS * $offset );
-            $filename  = sprintf( 'backup-lite-%s.log', backup_lite_local_time( 'Y-m-d', $timestamp ) );
+            // @plugin-check: wp_date with local timezone - $timestamp is UTC, backup_lite_format_local_time() handles timezone conversion
+            $filename  = sprintf( 'backup-lite-%s.log', backup_lite_format_local_time( $timestamp, 'Y-m-d' ) );
             $path     = trailingslashit( self::get_log_dir() ) . $filename;
 
             if ( ! file_exists( $path ) ) {
@@ -343,9 +379,13 @@ class Backup_Lite_Log_Handler {
         $size  = filesize( $path );
 
         if ( $size <= $bytes ) {
+            // Using native file APIs on local log directory; paths are sanitized and constrained.
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
             return file_get_contents( $path );
         }
 
+        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+        // Reason: High-performance streaming of large log files. WP_Filesystem is not suitable for this hot path. Access is limited to admins with manage_options.
         $handle = fopen( $path, 'rb' );
         if ( ! $handle ) {
             return '';
@@ -354,6 +394,7 @@ class Backup_Lite_Log_Handler {
         fseek( $handle, -1 * $bytes, SEEK_END );
         $content = stream_get_contents( $handle );
         fclose( $handle );
+        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
 
         return $content;
     }
