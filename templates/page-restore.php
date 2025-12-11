@@ -195,39 +195,84 @@ if ( $safe_mode_active ) {
 
     <section class="backup-lite-card restore-history">
         <h2>🧾 <?php esc_html_e( 'Restore History', 'museder-restoreone' ); ?></h2>
-        <table class="wp-list-table widefat striped">
-            <thead><tr><th><?php esc_html_e( 'Date/Time', 'museder-restoreone' ); ?></th><th><?php esc_html_e( 'File', 'museder-restoreone' ); ?></th><th><?php esc_html_e( 'Result', 'museder-restoreone' ); ?></th><th><?php esc_html_e( 'Log', 'museder-restoreone' ); ?></th></tr></thead>
+        <?php if ( ! empty( $museder_restoreone_history_rows ) ) : ?>
+            <div style="margin-bottom: 12px;">
+                <button type="button" class="button button-secondary" id="bl-delete-selected-restore-history" style="display: none;">
+                    <?php esc_html_e( 'Delete Selected', 'museder-restoreone' ); ?>
+                </button>
+            </div>
+        <?php endif; ?>
+        <table class="widefat fixed striped">
+            <thead>
+                <tr>
+                    <td class="manage-column column-cb check-column">
+                        <input type="checkbox" id="bl-restore-history-master-checkbox" />
+                    </td>
+                    <th scope="col"><?php esc_html_e( 'Date/Time', 'museder-restoreone' ); ?></th>
+                    <th scope="col"><?php esc_html_e( 'File', 'museder-restoreone' ); ?></th>
+                    <th scope="col"><?php esc_html_e( 'Result', 'museder-restoreone' ); ?></th>
+                    <th scope="col"><?php esc_html_e( 'Duration', 'museder-restoreone' ); ?></th>
+                    <th scope="col"><?php esc_html_e( 'Log', 'museder-restoreone' ); ?></th>
+                </tr>
+            </thead>
             <tbody id="restoreHistory">
                 <?php if ( ! empty( $museder_restoreone_history_rows ) ) : ?>
-                    <?php foreach ( $museder_restoreone_history_rows as $museder_restoreone_row ) : ?>
+                    <?php foreach ( $museder_restoreone_history_rows as $entry ) : ?>
                         <tr>
+                            <th scope="row" class="check-column">
+                                <label class="screen-reader-text" for="restore-history-<?php echo esc_attr( $entry['id'] ); ?>">
+                                    <?php esc_html_e( 'Select restore record', 'museder-restoreone' ); ?>
+                                </label>
+                                <input
+                                    id="restore-history-<?php echo esc_attr( $entry['id'] ); ?>"
+                                    type="checkbox"
+                                    name="restore_history_ids[]"
+                                    value="<?php echo esc_attr( $entry['id'] ); ?>"
+                                />
+                            </th>
                             <td>
+                                <span class="screen-reader-text">
+                                    <?php esc_html_e( 'Date/Time', 'museder-restoreone' ); ?>
+                                </span>
                                 <?php
-                                // Priority 1: Use formatted timestamp string (from history_for_js())
-                                if ( ! empty( $museder_restoreone_row['timestamp'] ) ) {
-                                    echo esc_html( $museder_restoreone_row['timestamp'] );
-                                } elseif ( ! empty( $museder_restoreone_row['timestamp_utc'] ) ) {
-                                    // Priority 2: Format UTC timestamp if only timestamp_utc is available
-                                    echo esc_html( backup_lite_format_local_time( (int) $museder_restoreone_row['timestamp_utc'], 'Y-m-d H:i' ) );
-                                } else {
-                                    // Fallback: Show dash if no timestamp available
-                                    echo '&mdash;';
-                                }
+                                echo esc_html(
+                                    isset( $entry['date_human'] ) && '' !== $entry['date_human']
+                                        ? $entry['date_human']
+                                        : '—'
+                                );
                                 ?>
                             </td>
-                            <td><?php echo esc_html( isset( $museder_restoreone_row['file'] ) ? $museder_restoreone_row['file'] : '' ); ?></td>
-                            <td><?php echo esc_html( isset( $museder_restoreone_row['result'] ) ? ucfirst( $museder_restoreone_row['result'] ) : '' ); ?></td>
+                            <td class="column-primary">
+                                <strong><?php echo esc_html( $entry['file'] ); ?></strong>
+                            </td>
                             <td>
-                                <?php if ( ! empty( $museder_restoreone_row['log_url'] ) ) : ?>
-                                    <a href="<?php echo esc_url( $museder_restoreone_row['log_url'] ); ?>" class="button button-small" target="_blank" rel="noopener noreferrer"><?php esc_html_e( 'Download', 'museder-restoreone' ); ?></a>
+                                <span class="backup-lite-restore-status backup-lite-restore-status--<?php echo esc_attr( strtolower( $entry['result'] ) ); ?>">
+                                    <?php echo esc_html( $entry['result'] ); ?>
+                                </span>
+                            </td>
+                            <td>
+                                <?php
+                                $duration = isset( $entry['duration'] ) ? (int) $entry['duration'] : -1;
+                                echo esc_html( backup_lite_format_duration( $duration ) );
+                                ?>
+                            </td>
+                            <td>
+                                <?php if ( ! empty( $entry['log_download_url'] ) ) : ?>
+                                    <a href="<?php echo esc_url( $entry['log_download_url'] ); ?>" class="button button-secondary">
+                                        <?php esc_html_e( 'Download', 'museder-restoreone' ); ?>
+                                    </a>
                                 <?php else : ?>
-                                    <em><?php esc_html_e( 'N/A', 'museder-restoreone' ); ?></em>
+                                    &mdash;
                                 <?php endif; ?>
                             </td>
                         </tr>
                     <?php endforeach; ?>
                 <?php else : ?>
-                    <tr><td colspan="4"><?php esc_html_e( 'No restore history recorded yet.', 'museder-restoreone' ); ?></td></tr>
+                    <tr class="no-items">
+                        <td class="colspanchange" colspan="6">
+                            <?php esc_html_e( 'No restore history found.', 'museder-restoreone' ); ?>
+                        </td>
+                    </tr>
                 <?php endif; ?>
             </tbody>
         </table>

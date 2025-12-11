@@ -38,20 +38,20 @@ class Backup_Lite_Restore_Handler {
         // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
         $file = null;
         if ( isset( $_FILES['file'], $_FILES['file']['tmp_name'] ) && is_uploaded_file( $_FILES['file']['tmp_name'] ) ) {
-            // $_FILES['file']['tmp_name'] is a server-side path managed by PHP upload handling and does not need sanitization.
-            // tmp_name 無法再進一步 sanitize，只用於 is_uploaded_file 和 move_uploaded_file。
-            // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+            // 已用 isset() + is_uploaded_file() 驗證。這裡只會把 tmp_name 當作伺服器端暫存檔路徑使用，不會輸出到前端。
+            // phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
             $file = $_FILES['file'];
+            // phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
         } elseif ( isset( $_FILES['restoreFile'], $_FILES['restoreFile']['tmp_name'] ) && is_uploaded_file( $_FILES['restoreFile']['tmp_name'] ) ) {
-            // $_FILES['restoreFile']['tmp_name'] is a server-side path managed by PHP upload handling and does not need sanitization.
-            // tmp_name 無法再進一步 sanitize，只用於 is_uploaded_file 和 move_uploaded_file。
-            // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+            // 已用 isset() + is_uploaded_file() 驗證。這裡只會把 tmp_name 當作伺服器端暫存檔路徑使用，不會輸出到前端。
+            // phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
             $file = $_FILES['restoreFile'];
+            // phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
         } elseif ( isset( $_FILES['restore_file'], $_FILES['restore_file']['tmp_name'] ) && is_uploaded_file( $_FILES['restore_file']['tmp_name'] ) ) {
-            // $_FILES['restore_file']['tmp_name'] is a server-side path managed by PHP upload handling and does not need sanitization.
-            // tmp_name 無法再進一步 sanitize，只用於 is_uploaded_file 和 move_uploaded_file。
-            // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+            // 已用 isset() + is_uploaded_file() 驗證。這裡只會把 tmp_name 當作伺服器端暫存檔路徑使用，不會輸出到前端。
+            // phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
             $file = $_FILES['restore_file'];
+            // phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
         }
         // phpcs:enable WordPress.Security.NonceVerification.Missing
         if ( empty( $file ) ) {
@@ -796,6 +796,7 @@ class Backup_Lite_Restore_Handler {
 
         // Initialize history entry with UTC timestamp
         $timestamp_utc = time(); // Always use UTC timestamp (time() returns UTC Unix timestamp)
+        $restore_started_at = $timestamp_utc; // Record restore start time (UTC timestamp)
         
         $history_entry = isset( $job['history'] ) && is_array( $job['history'] ) ? $job['history'] : [
             'timestamp_utc' => $timestamp_utc, // Store UTC Unix timestamp (primary field)
@@ -804,6 +805,7 @@ class Backup_Lite_Restore_Handler {
             'log'           => '',
             // Keep 'date' field for backward compatibility (formatted UTC datetime string)
             'date'          => gmdate( 'Y-m-d H:i:s', $timestamp_utc ),
+            'restore_started_at' => $restore_started_at,
         ];
 
         $suspend_cache_state = null;
@@ -867,10 +869,17 @@ class Backup_Lite_Restore_Handler {
                 ) );
                 
                 // Update timestamp_utc to current UTC time when restore fails
-                $history_entry['timestamp_utc'] = time();
+                $restore_completed_at = time();
+                $restore_duration_seconds = 0;
+                if ( isset( $history_entry['restore_started_at'] ) && is_numeric( $history_entry['restore_started_at'] ) ) {
+                    $restore_duration_seconds = $restore_completed_at - (int) $history_entry['restore_started_at'];
+                }
+                $history_entry['timestamp_utc'] = $restore_completed_at;
                 $history_entry['date'] = gmdate( 'Y-m-d H:i:s', $history_entry['timestamp_utc'] );
                 $history_entry['result'] = 'failed';
                 $history_entry['message'] = esc_html__( 'Backup file not found or unreadable.', 'museder-restoreone' );
+                $history_entry['restore_completed_at'] = $restore_completed_at;
+                $history_entry['restore_duration_seconds'] = $restore_duration_seconds;
                 backup_lite_append_restore_history( $history_entry );
                 self::report_job_progress( $job_id, 100, $history_entry['message'], true, 'failed' );
                 return [
@@ -918,6 +927,15 @@ class Backup_Lite_Restore_Handler {
                 ];
             }
 
+            // Calculate restore duration
+            $restore_completed_at = time();
+            $restore_duration_seconds = 0;
+            if ( isset( $history_entry['restore_started_at'] ) && is_numeric( $history_entry['restore_started_at'] ) ) {
+                $restore_duration_seconds = $restore_completed_at - (int) $history_entry['restore_started_at'];
+            }
+            $history_entry['restore_completed_at'] = $restore_completed_at;
+            $history_entry['restore_duration_seconds'] = $restore_duration_seconds;
+
             if ( ! empty( $restore['success'] ) ) {
                 self::report_job_progress( $job_id, 95, __( 'Finalizing restore…', 'museder-restoreone' ) );
                 
@@ -926,10 +944,13 @@ class Backup_Lite_Restore_Handler {
                 
                 // Explicitly set status to success when reporting 100% completion
                 // This ensures the frontend can detect completion immediately
-                backup_lite_log( 'info', 'Restore completed successfully, setting job status to success', [ 'job_id' => $job_id ] );
+                backup_lite_log( 'info', 'Restore completed successfully, setting job status to success', [ 
+                    'job_id' => $job_id,
+                    'duration_seconds' => $restore_duration_seconds,
+                ] );
                 self::report_job_progress( $job_id, 100, __( 'Restore completed successfully.', 'museder-restoreone' ), true, 'success' );
                 // Update timestamp_utc to current UTC time when restore completes
-                $history_entry['timestamp_utc'] = time();
+                $history_entry['timestamp_utc'] = $restore_completed_at;
                 $history_entry['date'] = gmdate( 'Y-m-d H:i:s', $history_entry['timestamp_utc'] );
                 $history_entry['result'] = 'success';
             } else {
@@ -957,11 +978,12 @@ class Backup_Lite_Restore_Handler {
                     'message' => $message,
                     'error_code' => $error_code,
                     'restore_result' => $restore,
+                    'duration_seconds' => $restore_duration_seconds,
                 ] );
                 
                 // Update history entry with error message
                 // Update timestamp_utc to current UTC time when restore fails
-                $history_entry['timestamp_utc'] = time();
+                $history_entry['timestamp_utc'] = $restore_completed_at;
                 $history_entry['date'] = gmdate( 'Y-m-d H:i:s', $history_entry['timestamp_utc'] );
                 $history_entry['result'] = 'failed';
                 $history_entry['message'] = $message;
@@ -1005,11 +1027,19 @@ class Backup_Lite_Restore_Handler {
                 ]
             );
 
+            // Calculate restore duration for exception case
+            $restore_completed_at = time();
+            $restore_duration_seconds = 0;
+            if ( isset( $history_entry['restore_started_at'] ) && is_numeric( $history_entry['restore_started_at'] ) ) {
+                $restore_duration_seconds = $restore_completed_at - (int) $history_entry['restore_started_at'];
+            }
             // Update timestamp_utc to current UTC time when restore fails
-            $history_entry['timestamp_utc'] = time();
+            $history_entry['timestamp_utc'] = $restore_completed_at;
             $history_entry['date'] = gmdate( 'Y-m-d H:i:s', $history_entry['timestamp_utc'] );
             $history_entry['result'] = 'failed';
             $history_entry['message'] = $message;
+            $history_entry['restore_completed_at'] = $restore_completed_at;
+            $history_entry['restore_duration_seconds'] = $restore_duration_seconds;
             backup_lite_append_restore_history( $history_entry );
 
             // Explicitly set job status to failed when reporting progress
@@ -1169,13 +1199,12 @@ class Backup_Lite_Restore_Handler {
             wp_send_json_error( [ 'message' => esc_html__( 'Chunk session not found.', 'museder-restoreone' ) ], 404 );
         }
 
-        // Nonce verified in verify_ajax_request() above
-        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() above
-        // $_FILES['chunk']['tmp_name'] is a server-side path managed by PHP upload handling and does not need sanitization.
-        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
-        if ( empty( $_FILES['chunk'] ) || empty( $_FILES['chunk']['tmp_name'] ) || ! is_uploaded_file( $_FILES['chunk']['tmp_name'] ) || ! file_exists( $_FILES['chunk']['tmp_name'] ) ) {
+        // 此方法是透過 verify_ajax_request() 間接呼叫，該函式已完成 nonce 驗證與權限檢查。
+        // 因此此處存取 $_FILES 僅使用已驗證過的請求資料。
+        // phpcs:disable WordPress.Security.NonceVerification.Missing
+        if ( ! isset( $_FILES['chunk']['tmp_name'] ) || ! is_uploaded_file( $_FILES['chunk']['tmp_name'] ) ) {
             // @plugin-check: escaped
-            wp_send_json_error( [ 'message' => esc_html__( 'No chunk file uploaded.', 'museder-restoreone' ) ], 400 );
+            wp_send_json_error( [ 'message' => esc_html__( 'Invalid chunk file upload.', 'museder-restoreone' ) ], 400 );
         }
         // phpcs:enable WordPress.Security.NonceVerification.Missing
 
@@ -1187,11 +1216,12 @@ class Backup_Lite_Restore_Handler {
 
         // @plugin-check: allowed - required for chunked backup upload, path and filename sanitized
         // $chunk_dir is from plugin-controlled temp directory, $index is validated integer
-        // $tmp_name is verified via is_uploaded_file() check above
         $chunk_path = trailingslashit( $chunk_dir ) . sprintf( 'chunk-%06d.part', $index );
-        // @plugin-check: sanitized + nonce - verified via is_uploaded_file and file_exists checks above
-        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- using PHP upload tmp_name provided by the system
-        $tmp_name = isset( $_FILES['chunk']['tmp_name'] ) && is_uploaded_file( $_FILES['chunk']['tmp_name'] ) ? $_FILES['chunk']['tmp_name'] : '';
+        
+        // 已用 isset() + is_uploaded_file() 驗證。這裡只會把 tmp_name 當作伺服器端暫存檔路徑使用，不會輸出到前端。
+        // phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+        $tmp_name = $_FILES['chunk']['tmp_name'];
+        // phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
 
         // Use stream_copy_to_stream instead of move_uploaded_file to avoid WordPress Plugin Check warning
         // $chunk_path is from plugin-controlled temp directory, $tmp_name is verified via is_uploaded_file() check
@@ -1448,66 +1478,95 @@ class Backup_Lite_Restore_Handler {
         $raw      = backup_lite_get_restore_history( $limit );
         $prepared = [];
 
-        foreach ( $raw as $entry ) {
-            $row = $entry;
-            
+        foreach ( $raw as $row ) {
             // 1. Get UTC timestamp (support both new and old data formats)
             $timestamp_utc = 0;
             
             // Priority 1: Use timestamp_utc if available (most accurate, stored as UTC Unix timestamp)
-            if ( isset( $entry['timestamp_utc'] ) && $entry['timestamp_utc'] ) {
-                $timestamp_utc = (int) $entry['timestamp_utc'];
-            } elseif ( ! empty( $entry['date'] ) ) {
+            if ( isset( $row['timestamp_utc'] ) && (int) $row['timestamp_utc'] > 0 ) {
+                $timestamp_utc = (int) $row['timestamp_utc'];
+            } elseif ( ! empty( $row['date'] ) ) {
                 // Priority 2: Old data compatibility - parse date string as UTC
                 // The 'date' field is stored as UTC datetime string (gmdate format)
-                $timestamp_utc = strtotime( $entry['date'] . ' UTC' );
+                // MySQL datetime string (no timezone), treat as UTC base
+                $timestamp_utc = strtotime( $row['date'] . ' UTC' );
                 if ( false === $timestamp_utc || $timestamp_utc <= 0 ) {
                     // Fallback: try parsing as-is (may be old local time entry)
-                    $timestamp_utc = strtotime( $entry['date'] );
+                    $timestamp_utc = strtotime( $row['date'] );
                 }
-            } elseif ( isset( $entry['timestamp'] ) && $entry['timestamp'] ) {
+            } elseif ( isset( $row['timestamp'] ) && $row['timestamp'] ) {
                 // Priority 3: Parse legacy timestamp using helper function
-                $timestamp_utc = backup_lite_parse_legacy_timestamp( $entry['timestamp'] );
+                $timestamp_utc = backup_lite_parse_legacy_timestamp( $row['timestamp'] );
             }
             
             // Fallback: If still no valid timestamp, use current time or file modification time
             if ( $timestamp_utc <= 0 ) {
                 // Try to get file modification time as last resort
-                if ( ! empty( $entry['file'] ) ) {
-                    $backup_path = backup_lite_get_backup_path( $entry['file'] );
+                if ( ! empty( $row['file'] ) ) {
+                    $backup_path = backup_lite_get_backup_path( $row['file'] );
                     if ( $backup_path && file_exists( $backup_path ) ) {
                         $timestamp_utc = filemtime( $backup_path );
                     }
                 }
-                // If still no timestamp, use current time
+                // If still no timestamp, use current_time with GMT flag (UTC)
                 if ( $timestamp_utc <= 0 ) {
-                    $timestamp_utc = time();
+                    $timestamp_utc = current_time( 'timestamp', true );
                 }
             }
             
-            // 2. Convert UTC timestamp to local timezone string using backup_lite_format_local_time()
-            // backup_lite_format_local_time() expects UTC timestamp and converts to site's local timezone
-            $display_time = backup_lite_format_local_time( $timestamp_utc, 'Y-m-d H:i' );
+            // 2. Get file name (pure filename, no path)
+            $file_name = isset( $row['file'] ) ? basename( $row['file'] ) : '';
             
-            // 3. Build array for frontend
-            $row['timestamp']     = $display_time;     // Human-readable string for display (PHP template uses this)
-            $row['timestamp_utc'] = $timestamp_utc;    // Preserve UTC timestamp for JS calculations
-            $row['datetime']      = $display_time;      // Alias for clarity
-            $row['display_time']  = $display_time;      // Alias for clarity
-            $row['timestamp_raw'] = $timestamp_utc;    // Backward compatibility (JS uses this)
-            $row['file']          = isset( $entry['file'] ) ? $entry['file'] : '';
-            $row['result']        = isset( $entry['result'] ) ? $entry['result'] : '';
-            $row['log']           = isset( $entry['log'] ) ? $entry['log'] : '';
+            // 3. Get result
+            $result = isset( $row['result'] ) ? (string) $row['result'] : '';
             
-            if ( ! empty( $entry['log'] ) ) {
-                $row['log_url'] = wp_nonce_url(
-                    admin_url( 'admin-post.php?action=backup_lite_download_log&log=' . rawurlencode( $entry['log'] ) ),
-                    'backup_lite_download_log_' . $entry['log']
-                );
-            } else {
-                $row['log_url'] = '';
+            // 4. Get duration (use -1 if no data)
+            $duration = -1;
+            if ( isset( $row['duration_seconds'] ) && (int) $row['duration_seconds'] > 0 ) {
+                $duration = (int) $row['duration_seconds'];
+            } elseif ( isset( $row['restore_duration_seconds'] ) && (int) $row['restore_duration_seconds'] > 0 ) {
+                $duration = (int) $row['restore_duration_seconds'];
             }
-            $prepared[] = $row;
+            
+            // 5. Human-readable time (local timezone)
+            $date_human = $timestamp_utc > 0
+                ? backup_lite_format_local_time( $timestamp_utc, 'Y-m-d H:i' )
+                : '';
+            
+            // 6. Human-readable duration (will handle -1 in template)
+            $duration_human = $duration > 0
+                ? backup_lite_format_duration( $duration )
+                : '';
+            
+            // 7. Log download URL (if available)
+            $log_download_url = '';
+            if ( ! empty( $row['log'] ) ) {
+                $log_download_url = wp_nonce_url(
+                    admin_url( 'admin-post.php?action=backup_lite_download_log&log=' . rawurlencode( $row['log'] ) ),
+                    'backup_lite_download_log_' . $row['log']
+                );
+            } elseif ( ! empty( $row['log_file'] ) ) {
+                // Fallback: try log_file field
+                $log_download_url = wp_nonce_url(
+                    admin_url( 'admin-post.php?action=backup_lite_download_log&log=' . rawurlencode( $row['log_file'] ) ),
+                    'backup_lite_download_log_' . $row['log_file']
+                );
+            }
+            
+            // 8. Get ID (prefer actual id, fallback to timestamp_utc)
+            $id = isset( $row['id'] ) && (int) $row['id'] > 0 ? (int) $row['id'] : $timestamp_utc;
+            
+            // 9. Build clean array for template (no nested arrays, no foreach on strings, no 'undefined' strings)
+            $prepared[] = [
+                'id'               => $id,
+                'file'             => $file_name,
+                'result'           => $result,
+                'timestamp_utc'   => $timestamp_utc,
+                'duration'        => $duration, // Use -1 if no data
+                'date_human'      => $date_human,
+                'duration_human'   => $duration_human,
+                'log_download_url'=> $log_download_url,
+            ];
         }
 
         return $prepared;
@@ -1608,20 +1667,30 @@ class Backup_Lite_Restore_Handler {
     }
 
     private static function compose_summary( $state ) {
-        $path = isset( $state['file'] ) ? $state['file'] : '';
-        $size = ( ! empty( $state['size'] ) ) ? (float) $state['size'] : ( ( file_exists( $path ) ) ? filesize( $path ) : 0 );
+        // $state['file'] now stores only filename, not full path
+        // Use backup_lite_get_backup_path() to resolve full path when needed
+        $file_name = isset( $state['file'] ) ? $state['file'] : '';
+        $path = backup_lite_get_backup_path( $file_name );
+        
+        // Use size from state if available (already calculated in prepare_session)
+        $size = ( ! empty( $state['size'] ) ) ? (float) $state['size'] : 0;
+        
+        // Fallback: if size not in state and file exists, get it from file
+        if ( $size <= 0 && $path && file_exists( $path ) ) {
+            $size = filesize( $path );
+        }
         
         // Use SHA1 from state if available, otherwise skip for large files
         $sha1 = '';
         if ( ! empty( $state['sha1'] ) ) {
             $sha1 = $state['sha1'];
-        } elseif ( file_exists( $path ) && $size > 0 && $size <= ( 500 * 1024 * 1024 ) ) {
+        } elseif ( $path && file_exists( $path ) && $size > 0 && $size <= ( 500 * 1024 * 1024 ) ) {
             // Only calculate SHA1 for files under 500MB
             $sha1 = sha1_file( $path );
         }
 
         return [
-            'name'    => isset( $state['filename'] ) ? $state['filename'] : basename( $path ),
+            'name'    => isset( $state['filename'] ) ? $state['filename'] : ( $file_name ? basename( $file_name ) : '' ),
             'size'    => size_format( $size, 2 ),
             'bytes'   => (float) $size,
             'sha1'    => $sha1,
@@ -1685,15 +1754,25 @@ class Backup_Lite_Restore_Handler {
         $state = self::get_state();
 
         if ( ! empty( $state['file'] ) && isset( $state['source'] ) && in_array( $state['source'], [ 'upload', 'remote' ], true ) ) {
+            // $state['file'] now stores only filename, not full path
+            // Use backup_lite_get_backup_path() to resolve full path
+            $file_name = $state['file'];
+            $path = backup_lite_get_backup_path( $file_name );
+            
             // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
-            // $path is from plugin state, validated and sanitized
-            $path = wp_normalize_path( $state['file'] );
+            // $path is from plugin state, validated and sanitized via backup_lite_get_backup_path()
             if ( $path && file_exists( $path ) && is_file( $path ) ) {
+                // 備份／還原流程中必須確保能刪除暫存檔案，以釋放磁碟空間並避免堆積 temp 檔案。
+                // 優先使用 wp_delete_file()，若不可用則使用 PHP unlink() 作為後備。
+                // phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
                 if ( function_exists( 'wp_delete_file' ) ) {
                     wp_delete_file( $path );
                 } else {
-                    @unlink( $path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_unlink -- required for cleanup, path from plugin-controlled directory
+                    // 備份／還原流程中必須確保能刪除暫存檔案，使用 PHP unlink() 作為後備。
+                    // @phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink
+                    @unlink( $path );
                 }
+                // phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
             }
         }
 

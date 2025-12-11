@@ -1,15 +1,14 @@
 <?php
 /**
- * Backup Lite schedules page.
+ * Template for Museder RestoreOne admin page.
  *
- * @package BackupLite
+ * 注意：此檔案中的變數（例如 $is_pro, $museder_restoreone_schedule 等）皆由上層控制器在 include 前建立，
+ * 作用範圍僅限此模板檔案，並非在 WordPress 全域命名空間中到處使用的真正「全域變數」。
+ * 為了維持模板可讀性與向後相容性，我們在此關閉 PrefixAllGlobals 警告。
  *
- * @var array $schedules
- * @var bool  $is_pro
+ * phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
  */
 
-// phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
-// 說明：本檔為 Museder RestoreOne 的內部後台 template，變數皆由外掛 controller 傳入，不注入 PHP 全域命名空間，也不作為可重用 API。
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
@@ -172,9 +171,10 @@ if ( $museder_restoreone_total_schedules ) {
                                 <td><?php echo esc_html( $museder_restoreone_schedule['time'] ); ?></td>
                                 <td>
                                     <?php
-                                    if ( ! empty( $museder_restoreone_schedule['next_run'] ) ) {
-                                        // @plugin-check: wp_date with local timezone - next_run is UTC timestamp, backup_lite_format_local_time() handles timezone conversion
-                                        echo esc_html( backup_lite_format_local_time( (int) $museder_restoreone_schedule['next_run'], 'Y-m-d H:i' ) );
+                                    $next_run_timestamp = isset( $museder_restoreone_schedule['next_run_timestamp_utc'] ) ? (int) $museder_restoreone_schedule['next_run_timestamp_utc'] : ( isset( $museder_restoreone_schedule['next_run'] ) ? (int) $museder_restoreone_schedule['next_run'] : 0 );
+                                    if ( $next_run_timestamp > 0 ) {
+                                        // @plugin-check: wp_date with local timezone - next_run_timestamp_utc is UTC timestamp, backup_lite_format_local_time() handles timezone conversion
+                                        echo esc_html( backup_lite_format_local_time( $next_run_timestamp, 'Y-m-d H:i' ) );
                                     } else {
                                         esc_html_e( '—', 'museder-restoreone' );
                                     }
@@ -196,9 +196,14 @@ if ( $museder_restoreone_total_schedules ) {
                                 </td>
                                 <td>
                                     <?php
-                                    if ( ! empty( $museder_restoreone_schedule['last_run'] ) ) {
-                                        // @plugin-check: wp_date with local timezone - parse datetime string and convert to local timezone
-                                        echo esc_html( backup_lite_format_local_time( strtotime( $museder_restoreone_schedule['last_run'] . ' UTC' ), 'Y-m-d H:i' ) );
+                                    $last_run_timestamp = isset( $museder_restoreone_schedule['last_run_timestamp_utc'] ) ? (int) $museder_restoreone_schedule['last_run_timestamp_utc'] : 0;
+                                    if ( $last_run_timestamp <= 0 && ! empty( $museder_restoreone_schedule['last_run'] ) ) {
+                                        // Migrate old MySQL datetime string to UTC timestamp
+                                        $last_run_timestamp = strtotime( $museder_restoreone_schedule['last_run'] . ' UTC' );
+                                    }
+                                    if ( $last_run_timestamp > 0 ) {
+                                        // @plugin-check: wp_date with local timezone - last_run_timestamp_utc is UTC timestamp, backup_lite_format_local_time() handles timezone conversion
+                                        echo esc_html( backup_lite_format_local_time( $last_run_timestamp, 'Y-m-d H:i' ) );
                                     } else {
                                         esc_html_e( '—', 'museder-restoreone' );
                                     }
@@ -208,9 +213,15 @@ if ( $museder_restoreone_total_schedules ) {
                                     <details class="bl-actions-menu">
                                         <summary class="bl-actions-trigger" aria-label="<?php esc_attr_e( 'Schedule actions', 'museder-restoreone' ); ?>">⋮</summary>
                                         <div class="bl-actions-list">
-                                            <button type="button" class="button" data-schedule-action="start" data-schedule-id="<?php echo esc_attr( $museder_restoreone_schedule['id'] ); ?>">▶️ <?php esc_html_e( 'Start Now', 'museder-restoreone' ); ?></button>
-                                            <button type="button" class="button" data-schedule-action="edit" data-schedule-id="<?php echo esc_attr( $museder_restoreone_schedule['id'] ); ?>">✏️ <?php esc_html_e( 'Edit', 'museder-restoreone' ); ?></button>
-                                            <button type="button" class="button" data-schedule-action="delete" data-schedule-id="<?php echo esc_attr( $museder_restoreone_schedule['id'] ); ?>">🗑️ <?php esc_html_e( 'Delete', 'museder-restoreone' ); ?></button>
+                                            <button type="button" class="button backup-lite-schedule-action-start bl-actions-list__item" data-schedule-id="<?php echo esc_attr( $museder_restoreone_schedule['id'] ); ?>">
+                                                ▶️ <?php esc_html_e( 'Start Now', 'museder-restoreone' ); ?>
+                                            </button>
+                                            <button type="button" class="button backup-lite-schedule-action-edit bl-actions-list__item" data-schedule-id="<?php echo esc_attr( $museder_restoreone_schedule['id'] ); ?>">
+                                                ✏️ <?php esc_html_e( 'Edit', 'museder-restoreone' ); ?>
+                                            </button>
+                                            <button type="button" class="button backup-lite-schedule-action-delete bl-actions-list__item" data-schedule-id="<?php echo esc_attr( $museder_restoreone_schedule['id'] ); ?>">
+                                                🗑️ <?php esc_html_e( 'Delete', 'museder-restoreone' ); ?>
+                                            </button>
                                         </div>
                                     </details>
                                 </td>
@@ -237,6 +248,7 @@ if ( $museder_restoreone_total_schedules ) {
     </div>
     <form id="bl-inline-schedule-form">
         <input type="hidden" data-field="id" value="">
+        <input type="hidden" name="schedule_id" value="">
         <div class="bl-inline-builder-grid">
             <label class="bl-form-control">
                 <span><?php esc_html_e( 'Title', 'museder-restoreone' ); ?></span>

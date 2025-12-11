@@ -30,6 +30,7 @@ class Backup_Lite_Dashboard {
 
         foreach ( $events as $event ) {
             $context = $event['context'];
+            $duration_seconds = isset( $context['duration_seconds'] ) && is_numeric( $context['duration_seconds'] ) ? (int) $context['duration_seconds'] : null;
             $items[] = [
                 'file'       => $context['file'] ?? '',
                 'name'       => basename( $context['file'] ?? '' ),
@@ -37,6 +38,7 @@ class Backup_Lite_Dashboard {
                 'size_human' => $context['size_human'] ?? ( isset( $context['size_bytes'] ) ? size_format( (int) $context['size_bytes'], 2 ) : '' ),
                 'created'    => self::format_timestamp( $event['timestamp'] ),
                 'status'   => $context['status'] ?? 'pending',
+                'duration_seconds' => $duration_seconds,
             ];
         }
 
@@ -61,29 +63,77 @@ class Backup_Lite_Dashboard {
             ];
         }
 
+        // Sort by next_run_timestamp_utc (prefer new field, fallback to next_run)
         usort(
             $schedules,
             static function ( $a, $b ) {
-                $a_next = isset( $a['next_run'] ) ? (int) $a['next_run'] : PHP_INT_MAX;
-                $b_next = isset( $b['next_run'] ) ? (int) $b['next_run'] : PHP_INT_MAX;
+                $a_next = isset( $a['next_run_timestamp_utc'] ) ? (int) $a['next_run_timestamp_utc'] : 0;
+                if ( $a_next <= 0 && isset( $a['next_run'] ) ) {
+                    $a_next = is_numeric( $a['next_run'] ) ? (int) $a['next_run'] : 0;
+                }
+                $b_next = isset( $b['next_run_timestamp_utc'] ) ? (int) $b['next_run_timestamp_utc'] : 0;
+                if ( $b_next <= 0 && isset( $b['next_run'] ) ) {
+                    $b_next = is_numeric( $b['next_run'] ) ? (int) $b['next_run'] : 0;
+                }
+                if ( $a_next <= 0 ) {
+                    $a_next = PHP_INT_MAX;
+                }
+                if ( $b_next <= 0 ) {
+                    $b_next = PHP_INT_MAX;
+                }
                 return $a_next <=> $b_next;
             }
         );
 
         $next = $schedules[0];
-        $next_timestamp = isset( $next['next_run'] ) ? (int) $next['next_run'] : 0;
-        // next_run is UTC timestamp, use time() for comparison (also UTC)
-        $countdown      = $next_timestamp > 0 ? self::get_countdown_string( $next_timestamp - time() ) : '';
+        
+        // Next run - prefer next_run_timestamp_utc, fallback to next_run
+        $next_timestamp = isset( $next['next_run_timestamp_utc'] )
+            ? (int) $next['next_run_timestamp_utc']
+            : 0;
 
+        if ( $next_timestamp <= 0 && ! empty( $next['next_run'] ) ) {
+            if ( is_numeric( $next['next_run'] ) ) {
+                $next_timestamp = (int) $next['next_run'];
+            } else {
+                // MySQL datetime string (no timezone), treat as UTC base
+                $next_timestamp = strtotime( $next['next_run'] . ' UTC' );
+            }
+        }
+
+        // next_run_timestamp_utc is UTC timestamp, use current_time('timestamp', true) for comparison (UTC)
+        $countdown = $next_timestamp > 0
+            ? self::get_countdown_string( $next_timestamp - current_time( 'timestamp', true ) )
+            : '';
+
+        // Last run - prefer last_run_timestamp_utc, fallback to last_run
+        $last_run_timestamp = isset( $next['last_run_timestamp_utc'] )
+            ? (int) $next['last_run_timestamp_utc']
+            : 0;
+
+        if ( $last_run_timestamp <= 0 && ! empty( $next['last_run'] ) ) {
+            if ( is_numeric( $next['last_run'] ) ) {
+                $last_run_timestamp = (int) $next['last_run'];
+            } else {
+                // MySQL datetime string (no timezone), treat as UTC base
+                $last_run_timestamp = strtotime( $next['last_run'] . ' UTC' );
+            }
+        }
+        
         return [
             'title'       => $next['title'] ?? __( 'Scheduled Backup', 'museder-restoreone' ),
             'period'      => $next['period'] ?? 'daily',
             'next_run'    => $next_timestamp,
-            // @plugin-check: wp_date with local timezone - $next_timestamp is UTC timestamp, backup_lite_format_local_time() handles timezone conversion
-            'next_run_human' => $next_timestamp ? backup_lite_format_local_time( $next_timestamp ) : '',
+            // Use same format as Schedules list: Y-m-d H:i
+            'next_run_human' => $next_timestamp > 0
+                ? backup_lite_format_local_time( $next_timestamp, 'Y-m-d H:i' )
+                : __( 'Not scheduled', 'museder-restoreone' ),
             'countdown'   => $countdown,
             'last_result' => $next['last_result'] ?? '',
-            'last_run'    => $next['last_run'] ?? '',
+            'last_run'    => $last_run_timestamp > 0
+                ? backup_lite_format_local_time( $last_run_timestamp, 'Y-m-d H:i' )
+                : __( 'Never', 'museder-restoreone' ),
+            'last_run_timestamp' => $last_run_timestamp,
         ];
     }
 

@@ -64,6 +64,9 @@ class Backup_Lite_Backup {
         $sql_path = trailingslashit( $temp_dir ) . 'database.sql';
         $meta_path = trailingslashit( $temp_dir ) . 'meta.json';
 
+        // Record backup start time (UTC timestamp)
+        $backup_started_at = time();
+
         $log = backup_lite_log( 'info', 'Site backup started.', [
             'archive' => $archive_path,
             'method'  => backup_lite_can_use_ziparchive() ? 'ZipArchive' : 'PclZip',
@@ -134,19 +137,29 @@ class Backup_Lite_Backup {
         }
 
         $size = filesize( $archive_path );
+        
+        // Record backup completion time and calculate duration
+        $backup_completed_at = time();
+        $backup_duration_seconds = isset( $backup_started_at ) ? ( $backup_completed_at - $backup_started_at ) : 0;
+
         backup_lite_log( 'info', 'Site backup completed.', [
             'archive' => $archive_path,
             'size'    => $size,
+            'duration_seconds' => $backup_duration_seconds,
         ] );
 
         // Store backup metadata (for labels, etc.)
+        $backup_metadata = [
+            'duration_seconds' => $backup_duration_seconds,
+            'started_at' => isset( $backup_started_at ) ? $backup_started_at : null,
+            'completed_at' => $backup_completed_at,
+        ];
         if ( Backup_Lite_Pro::is_pro_active() && ! empty( $options['label'] ) ) {
-            self::store_backup_metadata( basename( $archive_path ), [
-                'label' => sanitize_text_field( $options['label'] ),
-                'encrypted' => ! empty( $options['encrypt'] ),
-                'cloud_destinations' => $options['cloud_destinations'] ?? [],
-            ] );
+            $backup_metadata['label'] = sanitize_text_field( $options['label'] );
+            $backup_metadata['encrypted'] = ! empty( $options['encrypt'] );
+            $backup_metadata['cloud_destinations'] = $options['cloud_destinations'] ?? [];
         }
+        self::store_backup_metadata( basename( $archive_path ), $backup_metadata );
 
         $response = [
             'success' => true,
@@ -161,6 +174,9 @@ class Backup_Lite_Backup {
             'size_bytes' => $size,
             'size_human' => size_format( $size, 2 ),
             'label'     => $options['label'] ?? '',
+            'started_at' => isset( $backup_started_at ) ? $backup_started_at : null,
+            'completed_at' => $backup_completed_at,
+            'duration_seconds' => $backup_duration_seconds,
         ] );
 
         // PRO: Upload to cloud storage if specified
@@ -727,9 +743,19 @@ class Backup_Lite_Backup {
             $job['download_url'] = backup_lite_get_download_url( $job['archive_path'] );
         }
 
+        // Calculate duration if started_at exists
+        $backup_completed_at = time();
+        $backup_duration_seconds = 0;
+        if ( isset( $job['started_at'] ) && is_numeric( $job['started_at'] ) ) {
+            $backup_duration_seconds = $backup_completed_at - (int) $job['started_at'];
+        }
+        $job['completed_at'] = $backup_completed_at;
+        $job['duration_seconds'] = $backup_duration_seconds;
+
         backup_lite_log( 'info', 'Backup job completed.', [
             'archive' => $job['archive_path'],
             'size'    => $size,
+            'duration_seconds' => $backup_duration_seconds,
         ] );
 
         self::record_backup_event( 'success', [
@@ -737,15 +763,23 @@ class Backup_Lite_Backup {
             'size_bytes' => $size,
             'size_human' => size_format( $size, 2 ),
             'label'      => $job['options']['label'] ?? '',
+            'started_at' => isset( $job['started_at'] ) ? (int) $job['started_at'] : null,
+            'completed_at' => $backup_completed_at,
+            'duration_seconds' => $backup_duration_seconds,
         ] );
 
+        // Store backup metadata (including duration)
+        $backup_metadata = [
+            'duration_seconds' => $backup_duration_seconds,
+            'started_at' => isset( $job['started_at'] ) ? (int) $job['started_at'] : null,
+            'completed_at' => $backup_completed_at,
+        ];
         if ( Backup_Lite_Pro::is_pro_active() && ! empty( $job['options']['label'] ) ) {
-            self::store_backup_metadata( basename( $job['archive_path'] ), [
-                'label'               => sanitize_text_field( $job['options']['label'] ),
-                'encrypted'           => ! empty( $job['options']['encrypt'] ),
-                'cloud_destinations'  => $job['options']['cloud_destinations'] ?? [],
-            ] );
+            $backup_metadata['label'] = sanitize_text_field( $job['options']['label'] );
+            $backup_metadata['encrypted'] = ! empty( $job['options']['encrypt'] );
+            $backup_metadata['cloud_destinations'] = $job['options']['cloud_destinations'] ?? [];
         }
+        self::store_backup_metadata( basename( $job['archive_path'] ), $backup_metadata );
 
         if ( class_exists( 'Backup_Lite_Backup_Jobs' ) ) {
             Backup_Lite_Backup_Jobs::cleanup_job( $job );
@@ -820,9 +854,12 @@ class Backup_Lite_Backup {
             // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing SQL dump file
             fwrite( $handle, sprintf( "-- Table structure for table `%s`\n\n", $safe_table ) );
 
-            // @plugin-check: allowed - schema introspection for backup, table name from whitelist only
-            // Cannot use prepare() because SHOW CREATE TABLE doesn't support placeholders
+            // 這段查詢用於備份／還原流程中的資料庫狀態檢查或結構調整，
+            // 輸入值來自系統內部狀態，不包含直接的使用者輸入。
+            // 為了確保相容性與效能，此處使用直接查詢而非 WP_Query。
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
             $create = $wpdb->get_row( $wpdb->prepare( "SHOW CREATE TABLE `%s`", $safe_table ), ARRAY_N ); // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- safe: table name sanitized from SHOW TABLES result
+            // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
             if ( isset( $create[1] ) ) {
                 // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing SQL dump file
                 fwrite( $handle, "DROP TABLE IF EXISTS `{$safe_table}`;\n" );
@@ -830,8 +867,12 @@ class Backup_Lite_Backup {
                 fwrite( $handle, $create[1] . ";\n\n" );
             }
 
-            // @plugin-check: safe table name from whitelist
+            // 這段查詢用於備份／還原流程中的資料庫狀態檢查或結構調整，
+            // 輸入值來自系統內部狀態，不包含直接的使用者輸入。
+            // 為了確保相容性與效能，此處使用直接查詢而非 WP_Query。
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
             $row_count = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM `%s`", $safe_table ) );
+            // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
             if ( $row_count === 0 ) {
                 // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing SQL dump file
                 fwrite( $handle, "\n" );
@@ -843,13 +884,17 @@ class Backup_Lite_Backup {
 
             $offset = 0;
             while ( $offset < $row_count ) {
-                // @plugin-check: safe table name from whitelist
+                // 這段查詢用於備份／還原流程中的資料庫狀態檢查或結構調整，
+                // 輸入值來自系統內部狀態，不包含直接的使用者輸入。
+                // 為了確保相容性與效能，此處使用直接查詢而非 WP_Query。
+                // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
                 $rows = $wpdb->get_results( $wpdb->prepare(
                     "SELECT * FROM `%s` LIMIT %d OFFSET %d",
                     $safe_table,
                     self::CHUNK_SIZE,
                     $offset
                 ), ARRAY_A );
+                // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 
                 if ( empty( $rows ) ) {
                     break;
@@ -934,8 +979,10 @@ class Backup_Lite_Backup {
             return self::$internal_exclusions;
         }
 
-        $paths = [];
-
+        // Use shared helper function for consistency
+        $paths = backup_lite_get_excluded_paths();
+        
+        // Add additional exclusions specific to backup process
         $normalize = static function( $path, $must_exist = false ) {
             if ( empty( $path ) ) {
                 return '';
@@ -952,48 +999,34 @@ class Backup_Lite_Backup {
 
             return trailingslashit( $normalized );
         };
-
-        $storage = backup_lite_get_storage_root();
-
-        if ( ! empty( $storage['path'] ) ) {
-            $root = trailingslashit( $storage['path'] );
-            $paths[] = $normalize( $root );
-            $paths[] = $normalize( $root . 'backups' );
-            $paths[] = $normalize( $root . 'logs' );
-            $paths[] = $normalize( $root . 'jobs' );
-            $paths[] = $normalize( $root . 'temp' );
-            $paths[] = $normalize( $root . 'reports' );
-            $paths[] = $normalize( $root . 'pro' );
-            $paths[] = $normalize( $root . 'pro/jobs' );
-            $paths[] = $normalize( $root . 'pro/reports' );
-        }
-
-        // Always exclude the active backup directory (even if customized) and its parent root.
-        $active_backup_dir = backup_lite_get_backup_dir();
-        $paths[] = $normalize( $active_backup_dir );
-        $paths[] = $normalize( trailingslashit( dirname( $active_backup_dir ) ) );
-        $paths[] = $normalize( backup_lite_get_temp_dir() );
-        $paths[] = $normalize( backup_lite_get_jobs_dir() );
-        $paths[] = $normalize( backup_lite_get_reports_dir() );
-
-        // Legacy directories (only exclude when they exist to avoid false positives).
-        $legacy = [
-            WP_CONTENT_DIR . '/uploads/backup-lite',
-            WP_CONTENT_DIR . '/uploads/backup-lite/backups',
-            WP_CONTENT_DIR . '/uploads/backup-lite/temp',
-            WP_CONTENT_DIR . '/uploads/backup-lite/jobs',
-            WP_CONTENT_DIR . '/uploads/backup-lite/pro',
-            WP_CONTENT_DIR . '/uploads/backup-lite/pro/jobs',
-            WP_CONTENT_DIR . '/uploads/backup-lite/pro/reports',
-            WP_CONTENT_DIR . '/uploads/backup-lite-logs',
-        ];
-
-        foreach ( $legacy as $legacy_path ) {
-            $normalized = $normalize( $legacy_path, true );
-            if ( $normalized ) {
-                $paths[] = $normalized;
+        
+        // Exclude all museder-restoreone-* directories in uploads (handles versioned plugin directories)
+        $uploads_dir = WP_CONTENT_DIR . '/uploads';
+        if ( is_dir( $uploads_dir ) && is_readable( $uploads_dir ) ) {
+            try {
+                $iterator = new DirectoryIterator( $uploads_dir );
+                foreach ( $iterator as $file ) {
+                    if ( $file->isDir() && ! $file->isDot() ) {
+                        $dir_name = $file->getFilename();
+                        // Match museder-restoreone, museder-restoreone-1, museder-restoreone-2, etc.
+                        if ( preg_match( '/^museder-restoreone(-\d+)?$/', $dir_name ) ) {
+                            $normalized_path = $normalize( $file->getPathname() );
+                            if ( $normalized_path ) {
+                                $paths[] = $normalized_path;
+                            }
+                        }
+                    }
+                }
+            } catch ( Exception $e ) {
+                // Silently continue if directory iteration fails
+                backup_lite_log( 'warning', 'Failed to scan uploads directory for exclusions.', [ 'error' => $e->getMessage() ] );
             }
         }
+
+        // Deduplicate while preserving order.
+        $paths = array_values( array_unique( array_filter( $paths ) ) );
+        
+        self::$internal_exclusions = $paths;
 
         // Exclude all museder-restoreone-* directories in uploads (handles versioned plugin directories)
         $uploads_dir = WP_CONTENT_DIR . '/uploads';
@@ -1199,10 +1232,8 @@ class Backup_Lite_Backup {
      * @return bool
      */
     private static function store_backup_metadata( $filename, $metadata ) {
-        if ( ! Backup_Lite_Pro::is_pro_active() ) {
-            return false;
-        }
-
+        // Always store metadata (duration, timestamps) even without PRO
+        // PRO features (label, encrypted, cloud_destinations) are only stored if PRO is active
         $meta_file = backup_lite_get_backup_dir() . '/.backup-meta.json';
         $all_meta = [];
 
@@ -1213,7 +1244,10 @@ class Backup_Lite_Backup {
             $all_meta = json_decode( $content, true ) ?: [];
         }
 
-        $all_meta[ $filename ] = $metadata;
+        // Merge with existing metadata to preserve PRO features
+        $existing = $all_meta[ $filename ] ?? [];
+        $merged = array_merge( $existing, $metadata );
+        $all_meta[ $filename ] = $merged;
 
         // Using native file APIs on local backup directory; paths are sanitized and constrained.
         // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_read_file_put_contents
@@ -1227,15 +1261,14 @@ class Backup_Lite_Backup {
      * @return array
      */
     public static function get_backup_metadata( $filename ) {
-        if ( ! Backup_Lite_Pro::is_pro_active() ) {
-            return [];
-        }
-
+        // Always return metadata (duration, timestamps) even without PRO
         $meta_file = backup_lite_get_backup_dir() . '/.backup-meta.json';
         if ( ! file_exists( $meta_file ) ) {
             return [];
         }
 
+        // Using native file APIs on local backup directory; paths are sanitized and constrained.
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
         $content = file_get_contents( $meta_file );
         $all_meta = json_decode( $content, true ) ?: [];
 

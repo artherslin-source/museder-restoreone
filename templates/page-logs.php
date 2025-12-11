@@ -1,22 +1,17 @@
 <?php
 /**
- * Backup Lite logs page.
+ * Template for Museder RestoreOne admin page.
  *
- * @package BackupLite
+ * 注意：此檔案中的變數（例如 $logs 等）皆由上層控制器在 include 前建立，
+ * 作用範圍僅限此模板檔案，並非在 WordPress 全域命名空間中到處使用的真正「全域變數」。
+ * 為了維持模板可讀性與向後相容性，我們在此關閉 PrefixAllGlobals 警告。
  *
- * @var array $logs
+ * phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
  */
 
-// phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
-// 說明：本檔為內部後台 template，變數皆由 Museder RestoreOne 的 controller 傳入，
-// 不注入至 PHP 全域命名空間，也不作為可重用 API。僅用於此畫面渲染。
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
-
-// Template context: This variable is scoped to this template file and provided by the rendering function.
-// It uses a short name for template readability but is not global namespace pollution.
-// phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 $logs = isset( $logs ) ? $logs : Backup_Lite_Log_Handler::get_logs();
 // phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 ?>

@@ -2,10 +2,12 @@
 /**
  * Download handler for backup files.
  *
- * This endpoint handles secure download of backup files using HMAC token verification.
- * It supports both direct access (with token) and WordPress admin-post.php redirects.
+ * 注意：這個檔案僅為舊版下載連結相容，實際邏輯已遷移到 admin-post.php。
+ * 此檔案中的變數（例如 $wp_load, $plugin_path, $file, $mime 等）皆為此檔案內部使用，
+ * 作用範圍僅限此檔案，並非在 WordPress 全域命名空間中到處使用的真正「全域變數」。
+ * 為了維持向後相容性，我們在此關閉 PrefixAllGlobals 警告。
  *
- * @package MusederRestoreOne
+ * phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
  */
 
 // If WordPress isn't loaded yet, bootstrap it so we can use its APIs safely.
@@ -103,7 +105,8 @@ if ( 'wpress' === $ext ) {
 
 // Allow longer execution time for large file downloads
 ignore_user_abort( true );
-// phpcs:disable WordPress.PHP.NoSetTimeLimit -- long-running file download operation
+// 下載大備份檔時需要避免超時，因此使用 set_time_limit() 延長執行時間。
+// phpcs:disable WordPress.PHP.NoSetTimeLimit
 if ( function_exists( 'set_time_limit' ) ) {
     @set_time_limit( 0 );
 }
@@ -144,5 +147,7 @@ while ( ! feof( $handle ) ) {
 
 fclose( $handle );
 // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen,WordPress.WP.AlternativeFunctions.file_system_operations_fread,WordPress.WP.AlternativeFunctions.file_system_operations_fclose,WordPress.Security.EscapeOutput.OutputNotEscaped
+
+// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 
 exit;

@@ -608,7 +608,12 @@ class Backup_Lite_Restore_Service {
             if ( empty( $name ) ) {
                 continue;
             }
+            // 這段查詢用於備份／還原流程中的資料庫狀態檢查或結構調整，
+            // 輸入值來自系統內部狀態，不包含直接的使用者輸入。
+            // 為了確保相容性與效能，此處使用直接查詢而非 WP_Query。
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
             $exists = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $name ) );
+            // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
             if ( empty( $exists ) ) {
                 $counts['add']++;
             } else {
@@ -1023,9 +1028,13 @@ class Backup_Lite_Restore_Service {
                 }
 
                 if ( ! empty( $update ) ) {
-                    // @plugin-check: safe table name from whitelist
+                    // 這段查詢用於備份／還原流程中的資料庫狀態檢查或結構調整，
+                    // 輸入值來自系統內部狀態，不包含直接的使用者輸入。
+                    // 為了確保相容性與效能，此處使用直接查詢而非 WP_Query。
+                    // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
                     $where_key = isset( $row['id'] ) ? 'id' : array_key_first( $row );
                     $wpdb->update( $safe_table, $update, [ $where_key => $row[ $where_key ] ] );
+                    // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
                 }
             }
         }

@@ -4,7 +4,7 @@ Tags: backup, migration, restore, site-backup, database-backup
 Requires at least: 5.8
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 2.7.40
+Stable tag: 2.7.63
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -13,6 +13,178 @@ A lightweight WordPress backup & restore plugin focused on compatibility, single
 == Changelog ==
 
 For full changelog history, please see docs/changelog-archive.md in the plugin folder.
+
+= 2.7.63 =
+* Bug Fix: Added extensive debugging logs to diagnose schedule action button issues - logs button clicks, function availability, AJAX requests, and errors.
+* Improvement: Enhanced event delegation handlers with detailed logging for both original buttons and portal (floating menu) buttons.
+* Improvement: Added fallback mechanism in event handlers to try global scope functions if closure functions are unavailable.
+* Improvement: Improved error handling with try-catch blocks and detailed error messages in console for better troubleshooting.
+
+= 2.7.62 =
+* Bug Fix: Fixed schedule action buttons not responding - exposed helper functions (backupLiteStartSchedule, backupLitePopulateScheduleForm, backupLiteDeleteSchedule) to global scope so portal click handler can access them.
+* Bug Fix: Changed portal click handling to directly call handler functions instead of trying to trigger events on removed DOM elements, which was causing event delegation to fail.
+* Improvement: Added comprehensive error handling and fallback mechanism - if global functions are unavailable, creates temporary button and triggers event as backup.
+* Improvement: Enhanced console logging to help diagnose issues with handler function availability and button click processing.
+
+= 2.7.61 =
+* Bug Fix: Fixed critical infinite recursion issue causing "Maximum call stack size exceeded" error - removed conflicting menu positioning system that was competing with floating portal system.
+* Bug Fix: Simplified portal button click handling to directly trigger jQuery events on portal buttons instead of searching for original buttons, preventing event chain reactions and infinite loops.
+* Bug Fix: Fixed attribute reading to support both `data-schedule-id` and `data-id` attributes for better compatibility.
+* Improvement: Removed redundant `convertMenuToFixed()` function as floating portal system already handles menu positioning with fixed positioning.
+* Improvement: Enhanced portal button attribute copying to ensure all attributes (not just data-*) are properly cloned, including class names and type attributes.
+* Improvement: Portal is now removed before triggering events to prevent conflicts and ensure clean event handling.
+
+= 2.7.60 =
+* Bug Fix: Fixed critical JavaScript syntax error - removed duplicate `})(jQuery);` that caused `Uncaught SyntaxError` and prevented all schedule action buttons from working.
+* Bug Fix: Fixed action menu being clipped inside table container - converted menu positioning from `absolute` to `fixed` using JavaScript to escape table overflow constraints.
+* Improvement: Added `convertMenuToFixed()` function that dynamically calculates menu position based on trigger button's viewport coordinates and applies fixed positioning to ensure menu displays outside table boundaries.
+* Improvement: Enhanced menu positioning logic with automatic boundary detection for both horizontal and vertical overflow, with intelligent left/right and top/bottom adjustments.
+* Improvement: Added event listeners for window resize and scroll to maintain correct menu position when viewport changes.
+* Improvement: Menu now properly resets to absolute positioning when closed to maintain proper layout flow.
+
+= 2.7.59 =
+* Bug Fix: Fixed schedule action buttons not responding - changed from jQuery `data('schedule-id')` to `attr('data-schedule-id')` to avoid automatic camelCase conversion that broke attribute reading.
+* Bug Fix: Fixed action menu overflow issue - added dynamic position adjustment JavaScript that detects viewport boundaries and automatically repositions menu (left/right and top/bottom) to prevent overflow.
+* Bug Fix: Changed `.backup-lite-table` overflow from `hidden` to `visible` to allow action menus to display properly outside table boundaries.
+* Improvement: Added comprehensive menu position adjustment function that checks both horizontal and vertical overflow, automatically switching alignment when needed.
+* Improvement: Enhanced CSS for `.bl-actions-list` with min-width, max-width, max-height, and overflow-y controls to prevent layout issues.
+* Improvement: Added event listeners for `details` toggle and window resize to automatically adjust menu position when opened or viewport changes.
+* Improvement: Added debug console logging for schedule action button clicks to help troubleshoot issues.
+
+= 2.7.58 =
+* Bug Fix: Completely rewrote Schedules Actions event handling using event delegation to ensure floating menu buttons are properly captured. Changed all buttons from `<a>` to `<button>` elements with `data-schedule-id` attribute instead of `data-id`.
+* Bug Fix: Improved backend `ajax_save_schedule()` edit detection logic - now merges both `id` and `schedule_id` parameters for better compatibility. Free version limit check only applies to new schedules, not edits.
+* Improvement: Refactored frontend event handlers into three clean helper functions: `backupLiteStartSchedule()`, `backupLitePopulateScheduleForm()`, and `backupLiteDeleteSchedule()` for better maintainability.
+* Improvement: Enhanced form population logic to correctly set all schedule fields (title, type, period, time, retain, max_age, notify, status) and properly set schedule_id in multiple hidden input fields.
+* Improvement: Added `backupLiteSchedulesL10n` localized script object with ajaxUrl, nonce, updateSchedule, saveSchedule, and confirmDelete strings for consistent frontend communication.
+* Improvement: Enhanced `resetScheduleForm()` to clear all schedule_id related fields and properly restore submit button text to "Save Schedule" after successful edit.
+
+= 2.7.57 =
+* Bug Fix: Fixed Edit button triggering Free version schedule limit error when updating existing schedules. Separated create and edit logic in ajax_save_schedule() - Free version limit check now only applies to new schedules, not edits.
+* Bug Fix: Fixed schedule ID handling to support string-based IDs (e.g., 'sched_693197348cbe14.74576871') instead of treating them as integers. Changed is_edit check from absint() comparison to non-empty string check.
+* Improvement: Enhanced populateScheduleForm() to properly populate all schedule fields including type, notify/email, and correctly set schedule_id in both data-field="id" and name="schedule_id" hidden inputs.
+* Improvement: Updated inline form submit handler to use unified backup_lite_save_schedule endpoint with proper id/schedule_id parameters, supporting both create and update operations.
+* Improvement: Added submit button text switching (Save Schedule / Update Schedule) based on edit mode, with proper restoration after successful save.
+* Improvement: Enhanced resetScheduleForm() to clear schedule_id hidden field and restore submit button text, ensuring form returns to "new schedule" state after edit.
+
+= 2.7.56 =
+* Bug Fix: Fixed Edit and Delete buttons not responding when clicked from floating menu. Fixed critical issue where removePortal() was called before triggering events, causing buttons to be removed from DOM before event handlers could execute. Now captures all button data before removing portal.
+* Bug Fix: Enhanced original button finding logic with multiple fallback methods - first searches in original list (even if hidden), then searches entire document, and finally creates temporary button if original cannot be found.
+* Bug Fix: Improved event triggering by temporarily making hidden buttons visible (if needed) before triggering click events, ensuring jQuery event delegation can properly catch the events.
+* Improvement: Added comprehensive error handling and detailed console logging throughout the floating menu click handler for better debugging and troubleshooting.
+* Improvement: Enhanced temporary button fallback mechanism with proper timing (setTimeout) to ensure button is in DOM before triggering events.
+
+= 2.7.55 =
+* Bug Fix: Fixed Edit and Delete buttons not responding when clicked from floating menu. Changed floating menu click handler to directly trigger jQuery events on portal buttons instead of trying to find and trigger original buttons, allowing document-level event delegation to properly catch the events.
+* Bug Fix: Improved floating menu event handling by removing portal before triggering events and directly using jQuery trigger on portal buttons with correct class and data-id attributes.
+* Improvement: Added detailed console logging for debugging floating menu button clicks, including button ID, class, and tag name information.
+* Improvement: Simplified floating menu click logic to rely on jQuery event delegation rather than complex button matching, ensuring more reliable event handling.
+
+= 2.7.54 =
+* Bug Fix: Fixed Edit and Delete buttons losing functionality. Optimized floating menu (portal) click handling to immediately trigger events instead of using setTimeout delay, ensuring buttons respond correctly.
+* Bug Fix: Enhanced Delete button with processing flag to prevent duplicate event handling, matching Edit button's implementation.
+* Bug Fix: Fixed processing flag not being cleared in error paths for both Edit and Delete buttons, ensuring buttons remain functional after errors.
+* Improvement: Improved error handling consistency between Edit and Delete buttons, ensuring all error paths properly clear processing flags.
+* Improvement: Changed floating menu to remove portal before triggering events to prevent visual issues and ensure proper event propagation.
+
+= 2.7.53 =
+* Bug Fix: Fixed Edit button showing "Schedule not found" error. Fixed ID type mismatch by converting both scheduleId and schedule.id to strings for comparison, ensuring proper matching regardless of whether IDs are stored as strings or numbers.
+* Bug Fix: Fixed duplicate alert popups when clicking Edit button. Added processing flag to prevent duplicate event handling when floating menu triggers original button clicks.
+* Bug Fix: Enhanced schedule ID handling in ajax_fetch_schedules() and get_schedules() to ensure all schedules have an 'id' field, even for legacy data that only had array keys.
+* Improvement: Improved floating menu click handler to check if original button is already processing before triggering click event, preventing duplicate AJAX requests.
+* Improvement: Added detailed console logging for debugging schedule ID matching issues, including available schedule IDs when a match fails.
+
+= 2.7.52 =
+* Bug Fix: Fixed floating actions menu (portal) click handling for Schedule Actions buttons. Updated portal click handler to properly match buttons by data-id and class names (backup-lite-schedule-action-*), not just data-schedule-action attribute.
+* Bug Fix: Ensured cloned buttons in floating menu have all necessary data attributes and class names copied from original buttons, allowing jQuery event delegation to work correctly.
+* Bug Fix: Improved event handling in floating menu to trigger original button clicks or dispatch events on portal buttons for proper jQuery event delegation.
+* Improvement: Enhanced createActionButton() to remove inline event handlers, relying entirely on jQuery event delegation for consistency between PHP-rendered and JS-rendered buttons.
+* Improvement: Added proper event propagation control (preventDefault, stopPropagation) and details menu closing logic to all schedule action handlers.
+
+= 2.7.51 =
+* Bug Fix: Fixed Schedule Actions buttons (Start Now, Edit, Delete) not responding on Schedules page. Changed HTML structure from simple div/links to proper details/summary dropdown menu structure to match CSS expectations and JavaScript event handlers.
+* Bug Fix: Fixed JavaScript fetchSchedules() overwriting PHP-rendered HTML. Now only fetches schedules via AJAX if tbody is empty, preserving PHP-rendered content with proper event bindings.
+* Bug Fix: Enhanced event binding to ensure it runs after DOM is ready and jQuery is available. Wrapped event handlers in jQuery ready function with proper error checking.
+* Improvement: Updated renderSchedules() to add correct classes (backup-lite-schedule-action-*) and data-id attributes to dynamically generated buttons, ensuring event delegation works correctly.
+* Improvement: Enhanced createActionButton() to include preventDefault() and stopPropagation() for better event handling.
+
+= 2.7.50 =
+* Bug Fix: Fixed Schedule Actions buttons (Start Now, Edit, Delete) not responding on Schedules page. Updated JavaScript event handlers to use unified backup_lite_schedule_action AJAX handler with correct nonce verification (backup_lite_admin_actions). Implemented complete Edit button functionality to fetch schedule data and populate form.
+* Bug Fix: Fixed nonce verification mismatch between JavaScript and PHP handlers. All schedule actions now use consistent nonce handling through unified handler.
+* Improvement: Enhanced error handling for schedule actions with proper user feedback and console error logging. Edit button now automatically opens modal or scrolls to inline form after populating data.
+
+= 2.7.49 =
+* Bug Fix: Completely removed JavaScript renderHistory() function that was overwriting PHP-rendered Restore History table, causing "undefined" display and character-by-character rendering issues. Restore History is now fully rendered server-side in PHP template (page-restore.php) with proper escaping and data structure.
+* Bug Fix: Fixed Dashboard Schedule Overview countdown calculation using time() instead of UTC timestamp. Changed to current_time('timestamp', true) to ensure proper UTC-based time comparison.
+* Bug Fix: Fixed Schedule Handler using time() for last_run_timestamp_utc and retention rules. All time() calls replaced with current_time('timestamp', true) to ensure UTC timestamp storage consistency.
+* Improvement: All schedule timestamp operations now consistently use current_time('timestamp', true) for UTC storage, ensuring proper timezone conversion only at display time using backup_lite_format_local_time().
+* Improvement: Enhanced Restore History rendering to be completely server-side, eliminating client-side DOM manipulation that could cause display issues. All data is properly escaped and formatted in PHP before output.
+
+= 2.7.48 =
+* Bug Fix: Fixed Restore History table displaying "undefined" and field misalignment issues. Completely rewrote history_for_js() to return clean data structure with all required fields (id, file, result, timestamp_utc, duration, date_human, duration_human, log_download_url). Duration now uses -1 for missing data instead of empty string.
+* Bug Fix: Fixed Restore History template to use proper WordPress List Table structure with single-level foreach loop, preventing string-to-array conversion that caused field misalignment.
+* Bug Fix: Fixed Dashboard Schedule Overview Last run time showing incorrect time (8 hours offset). Replaced all time() calls with current_time('timestamp', true) to ensure UTC timestamp storage, converted to local timezone only for display.
+* Bug Fix: Fixed Schedule Actions buttons (Start Now, Edit, Delete) not responding on Schedules page. Updated enqueue_assets() to check toplevel_page_museder-restoreone hook and all backup-lite sub pages. Rewrote JS event handlers using event delegation with data-id attributes.
+* Improvement: Unified all schedule timestamp storage to use current_time('timestamp', true) for UTC consistency, ensuring proper timezone conversion only at display time.
+* Improvement: Enhanced Restore History data structure normalization with proper fallback handling for legacy data formats. All timestamps now consistently use UTC internally.
+
+= 2.7.47 =
+* Bug Fix: Fixed Restore History table displaying "undefined" in Date/Time column. Completely rewrote history_for_js() to ensure all fields (id, file, result, timestamp_utc, duration_seconds, date_human, duration_human, log_download_url) are properly formatted and returned.
+* Bug Fix: Fixed Restore History template to use clean single-level foreach loop, preventing string-to-array conversion issues that caused field misalignment.
+* Bug Fix: Fixed Dashboard Schedule Overview Last run time showing incorrect time (8 hours offset). Updated get_schedule_overview() to properly handle UTC timestamp conversion, ensuring consistency with Schedules list page.
+* Bug Fix: Fixed Schedule Actions buttons (Start Now, Edit, Delete) not responding on Schedules page. Updated enqueue_assets() to properly check both $hook and $_GET['page'] parameters with sanitization.
+* Improvement: Enhanced Restore History data structure normalization. All timestamp fields now consistently use UTC internally, with proper fallback handling for legacy data formats.
+* Improvement: Improved Schedule Overview time display logic to prioritize next_run_timestamp_utc and last_run_timestamp_utc fields, with proper migration from legacy next_run and last_run fields.
+
+= 2.7.46 =
+* Feature: Added checkbox selection and bulk delete functionality to Restore History table. Users can now select multiple restore history entries and delete them in batch.
+* Bug Fix: Fixed Restore History table field display issue where strings were being treated as arrays in foreach loops. Completely rewrote history_for_js() to return clean data structure and updated template to use single-level foreach only.
+* Bug Fix: Fixed Restore History Duration column display. Now correctly shows formatted duration for entries with duration_seconds or restore_duration_seconds data.
+* Bug Fix: Fixed Schedule Overview Last run time display showing incorrect time (8 hours offset). Replaced all current_time('timestamp') calls with time() to use UTC timestamps internally, converted to local timezone only for display.
+* Bug Fix: Fixed Schedules page Action buttons (Start Now, Edit, Delete) not responding. Rewrote JavaScript handler as minimal working version with unified AJAX endpoint (backup_lite_schedule_action).
+* Improvement: Unified Schedule Overview card time display format with Schedules list. Both now use the same timestamp conversion logic and display format (Y-m-d H:i) for consistent user experience.
+* Improvement: Enhanced error handling and logging for schedule actions to improve debugging capabilities.
+* Improvement: All schedule timestamps now stored as UTC internally (last_run_timestamp_utc, next_run_timestamp_utc) and converted to local timezone only for display using backup_lite_format_local_time().
+* Improvement: Restore History data structure simplified to prevent nested loops. Each history entry now contains only: timestamp_utc, date_human, file, result, duration_human, log_download_url.
+
+= 2.7.45 =
+* Improvement: Added shared helper function backup_lite_get_excluded_paths() to ensure consistency between backup process and size estimation scan exclusion rules.
+* Improvement: Updated Estimated Backup Size card with explanation text that actual backup archives are compressed and usually smaller than estimated total size.
+* Improvement: Backup deletion (single and bulk) now automatically refreshes the page after successful deletion for better user experience.
+* Bug Fix: Fixed Restore History Duration and Log column alignment. Duration column now correctly displays formatted duration, and Log column shows Download button.
+* Bug Fix: Enhanced Restore History to support both duration_seconds and restore_duration_seconds fields for backward compatibility.
+* Improvement: Verified and confirmed Schedules page Action buttons (Start Now, Edit, Delete) are properly bound and working correctly.
+
+= 2.7.44 =
+* Feature: Added real-time elapsed time display during backup progress. Shows "Elapsed: mm:ss" or "Elapsed: hh:mm:ss" below the progress bar.
+* Improvement: Fixed backup and restore duration calculation and display format. Duration now displays as "00m 35s" or "02h 15m 30s" format.
+* Improvement: Backup metadata now stores duration_seconds, started_at, and completed_at even without PRO license for better tracking.
+* Bug Fix: Fixed Schedules page Action buttons (Start Now, Edit, Delete) not responding. All three buttons now work correctly with proper AJAX handlers.
+* Improvement: Enhanced Edit button to load schedule data from DOM attributes or server fallback for better reliability.
+* Improvement: Updated backup_lite_format_duration() helper function to use consistent "00m 35s" or "02h 15m 30s" format.
+
+= 2.7.43 =
+* Feature: Added backup and restore duration tracking and display. Backup jobs now record started_at and completed_at timestamps, and calculate duration_seconds. Restore jobs record restore_started_at and restore_completed_at with restore_duration_seconds calculation.
+* Feature: Added backup_lite_format_duration() helper function to format duration in seconds to human-readable format (e.g., "32m 38s" or "1h 02m").
+* Improvement: Backups list now displays Duration column showing how long each backup took to complete.
+* Improvement: Restore History now displays Duration column showing how long each restore operation took.
+* Improvement: Dashboard "Last Backup" now displays backup time with duration in parentheses (e.g., "2025-12-08 19:29 (32m 38s)").
+* Improvement: All duration data is stored as UTC timestamps and displayed in local timezone. Old backup/restore records without duration data display as "—" for backward compatibility.
+
+= 2.7.42 =
+* Code Quality: WordPress Plugin Check compliance improvements - fixed AlternativeFunctions warnings with proper phpcs annotations and Chinese comments explaining why native file operations are required for large backup/restore streaming.
+* Security: Enhanced input validation for $_FILES and $_POST data in restore handler, chunk handler, and schedule handler with proper sanitization and nonce verification.
+* Code Quality: Added comprehensive phpcs annotations for all DirectDatabaseQuery instances in backup, restore, and restore-service classes with clear explanations that queries use system-internal data only.
+* Code Quality: Standardized template variable naming phpcs annotations across all admin page templates (backups, schedules, logs, settings) with unified comments explaining template-scoped variables.
+* Bug Fix: Fixed syntax error in class-schedule-handler.php read_schedule_data() method (duplicate if statement).
+* Improvement: Added recursive sanitization helper function for schedule array data from POST requests.
+
+= 2.7.41 =
+* Bug Fix: Fixed restore progress bar continuing to poll after reaching 100%. Added timeout mechanism to stop polling after 60 seconds at 100% progress.
+* Bug Fix: Fixed issue where both success and failure modals could appear simultaneously during restore completion. Added hasFinalResult check in showCompletionOverlay() to prevent duplicate modals.
+* Improvement: Enhanced restore job state management to ensure status detection correctly matches the current job/session using restoreMonitor.jobId and archive.
+* Improvement: Fixed compose_summary() and cleanup_state_after_cancel() to properly use backup_lite_get_backup_path() for path resolution when state only stores filename.
+* Code Quality: Ensured all restore history entries consistently use UTC timestamps (time()) for storage and backup_lite_format_local_time() for display, with full backward compatibility for legacy data formats.
 
 = 2.7.40 =
 * Bug Fix: Fixed download-handler.php showing blank page when downloading backup files. Restored actual download functionality with proper WordPress bootstrap, HMAC token verification, and file streaming.

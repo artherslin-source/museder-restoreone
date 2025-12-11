@@ -323,8 +323,9 @@ class Backup_Lite_Restore {
         $placeholder = 'SERVMASK_PREFIX_';
         $needs_normalize = false;
 
+        // 在備份檔案串流過程中，必須使用底層 fopen/fread/fclose 以確保大檔案（>1GB）在各種主機環境下具有最佳效能與穩定性。
+        // WP_Filesystem 在部分共用主機環境中會受到限制，因此此處保留原生檔案操作。
         // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-        // Reason: High-performance streaming of large backup/restore archives. WP_Filesystem is not suitable for this hot path. Access is limited to admins with manage_options.
         $handle = fopen( $sql_file, 'rb' );
         if ( $handle ) {
             // Only reads plugin-generated backup files, path is validated and sanitized.
@@ -350,8 +351,9 @@ class Backup_Lite_Restore {
         }
 
         $normalized = $sql_file . '.normalized.sql';
+        // 在備份檔案串流過程中，必須使用底層 fopen/fread/fwrite/fclose 以確保大檔案（>1GB）在各種主機環境下具有最佳效能與穩定性。
+        // WP_Filesystem 在部分共用主機環境中會受到限制，因此此處保留原生檔案操作。
         // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-        // 說明：大型備份檔案需要串流讀寫，WP_Filesystem 無法安全且有效率處理此場景，只能使用底層檔案函式。
         $in         = fopen( $sql_file, 'rb' );
         $out        = fopen( $normalized, 'wb' );
 
@@ -428,8 +430,9 @@ class Backup_Lite_Restore {
             $renamed = rename( $normalized, $temp_file );
             // @phpcs:enable WordPress.WP.AlternativeFunctions.rename_rename
             if ( $renamed ) {
+                // 在備份檔案串流過程中，必須使用底層 fopen/fread/fwrite/fclose 以確保大檔案（>1GB）在各種主機環境下具有最佳效能與穩定性。
+                // WP_Filesystem 在部分共用主機環境中會受到限制，因此此處保留原生檔案操作。
                 // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-                // Reason: High-performance streaming of large backup/restore archives. WP_Filesystem is not suitable for this hot path. Access is limited to admins with manage_options.
                 $in2 = fopen( $temp_file, 'rb' );
                 $out2 = fopen( $normalized, 'wb' );
                 
@@ -525,10 +528,12 @@ class Backup_Lite_Restore {
     private static function cleanup_servmask_tables() {
         global $wpdb;
 
-        // @plugin-check: backup-restore
-        // Direct DB query to find SERVMASK_PREFIX_ tables from backup files (not user input)
-        // Cannot use prepare() because LIKE pattern with wildcards requires escaping
+        // 這段查詢用於備份／還原流程中的資料庫狀態檢查或結構調整，
+        // 輸入值來自系統內部狀態，不包含直接的使用者輸入。
+        // 為了確保相容性與效能，此處使用直接查詢而非 WP_Query。
+        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
         $tables = $wpdb->get_col( $wpdb->prepare( "SHOW TABLES LIKE %s", 'SERVMASK\_PREFIX\_%' ) ); // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- safe: hardcoded pattern for cleanup, not user input
+        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
         if ( empty( $tables ) ) {
             return;
         }
@@ -751,8 +756,9 @@ class Backup_Lite_Restore {
                 break;
             }
 
+            // 在備份檔案串流過程中，必須使用底層 fopen/fread/fwrite/fclose 以確保大檔案（>1GB）在各種主機環境下具有最佳效能與穩定性。
+            // WP_Filesystem 在部分共用主機環境中會受到限制，因此此處保留原生檔案操作。
             // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-            // 說明：大型備份檔案需要串流讀寫，WP_Filesystem 無法安全且有效率處理此場景，只能使用底層檔案函式。
             $output = fopen( $target, 'wb' );
             if ( ! $output ) {
                 backup_lite_log( 'error', 'Unable to write extracted file.', [ 'target' => $target ] );
@@ -828,8 +834,9 @@ class Backup_Lite_Restore {
         $destination_escaped = escapeshellarg( $destination );
 
         // Detect file format by reading first few bytes
+        // 在備份檔案串流過程中，必須使用底層 fopen/fread/fclose 以確保大檔案（>1GB）在各種主機環境下具有最佳效能與穩定性。
+        // WP_Filesystem 在部分共用主機環境中會受到限制，因此此處保留原生檔案操作。
         // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-        // 說明：大型備份檔案需要串流讀寫，WP_Filesystem 無法安全且有效率處理此場景，只能使用底層檔案函式。
         $file_handle = fopen( $archive, 'rb' );
         $file_header = '';
         if ( $file_handle ) {
@@ -1020,8 +1027,9 @@ class Backup_Lite_Restore {
             ];
         }
         
+        // 在備份檔案串流過程中，必須使用底層 fopen/fread/fwrite/fclose 以確保大檔案（>1GB）在各種主機環境下具有最佳效能與穩定性。
+        // WP_Filesystem 在部分共用主機環境中會受到限制，因此此處保留原生檔案操作。
         // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-        // 說明：以下程式碼用於大型備份檔案的串流讀寫，WP_Filesystem 在這種情境下效能與穩定性不足，且路徑已經過白名單與 sanitize_file_name 保護。
         // Read file header to determine format
         $file_handle = fopen( $archive, 'rb' );
         if ( ! $file_handle ) {
@@ -1445,10 +1453,9 @@ class Backup_Lite_Restore {
     private static function import_database_with_php( $sql_file, $progress_cb = null ) {
         global $wpdb;
 
+        // 在備份檔案串流過程中，必須使用底層 fopen/fread/fclose 以確保大檔案（>1GB）在各種主機環境下具有最佳效能與穩定性。
+        // WP_Filesystem 在部分共用主機環境中會受到限制，因此此處保留原生檔案操作。
         // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen
-        // Reason: High-performance streaming of large backup/restore archive files.
-        // - Only runs for admins (manage_options) or via authenticated restore jobs.
-        // - WP_Filesystem is not suitable for this hot path.
         $handle = fopen( $sql_file, 'r' );
         if ( ! $handle ) {
             backup_lite_log( 'error', 'Unable to open SQL file for reading.', [ 'path' => $sql_file ] );
@@ -1585,8 +1592,9 @@ class Backup_Lite_Restore {
         }
 
         $active_plugins = [];
+        // 在備份檔案串流過程中，必須使用底層 fopen/fread/fclose 以確保大檔案（>1GB）在各種主機環境下具有最佳效能與穩定性。
+        // WP_Filesystem 在部分共用主機環境中會受到限制，因此此處保留原生檔案操作。
         // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-        // Reason: High-performance streaming of large backup/restore archives. WP_Filesystem is not suitable for this hot path. Access is limited to admins with manage_options.
         $handle = fopen( $sql_file, 'rb' );
         if ( ! $handle ) {
             return [];
@@ -1700,8 +1708,12 @@ class Backup_Lite_Restore {
                 }
 
                 if ( ! empty( $update ) ) {
-                    // @plugin-check: safe table name from whitelist
+                    // 這段查詢用於備份／還原流程中的資料庫狀態檢查或結構調整，
+                    // 輸入值來自系統內部狀態，不包含直接的使用者輸入。
+                    // 為了確保相容性與效能，此處使用直接查詢而非 WP_Query。
+                    // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
                     $wpdb->update( $safe_table, $update, [ 'id' => isset( $row['id'] ) ? $row['id'] : $row[ array_key_first( $row ) ] ] );
+                    // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
                 }
             }
         }

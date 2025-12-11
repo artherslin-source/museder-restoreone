@@ -133,7 +133,16 @@ if ( $safe_mode_active ) {
                     <?php foreach ( $dashboard_recent_backups as $museder_restoreone_item ) : ?>
                         <li>
                             <strong><?php echo esc_html( $museder_restoreone_item['name'] ); ?></strong>
-                            <span><?php echo esc_html( $museder_restoreone_item['created'] ); ?> · <?php echo esc_html( $museder_restoreone_item['size_human'] ); ?></span>
+                            <span>
+                                <?php echo esc_html( $museder_restoreone_item['created'] ); ?>
+                                <?php
+                                $duration_seconds = isset( $museder_restoreone_item['duration_seconds'] ) && is_numeric( $museder_restoreone_item['duration_seconds'] ) ? (int) $museder_restoreone_item['duration_seconds'] : null;
+                                if ( $duration_seconds !== null && $duration_seconds > 0 ) {
+                                    echo ' (' . esc_html( backup_lite_format_duration( $duration_seconds ) ) . ')';
+                                }
+                                ?>
+                                · <?php echo esc_html( $museder_restoreone_item['size_human'] ); ?>
+                            </span>
                             <?php
                             $museder_restoreone_status_key  = strtolower( $museder_restoreone_item['status'] ?? 'pending' );
                             $museder_restoreone_status_map  = [
@@ -177,8 +186,7 @@ if ( $safe_mode_active ) {
                         printf(
                             /* translators: %s: Date and time when the schedule last ran. */
                             esc_html__( 'Last run: %s', 'museder-restoreone' ),
-                            // @plugin-check: wp_date with local timezone - parse datetime string and convert to local timezone
-                            esc_html( backup_lite_format_local_time( strtotime( $schedule_overview['last_run'] . ' UTC' ) ) )
+                            esc_html( $schedule_overview['last_run'] )
                         );
                         ?>
                     </p>

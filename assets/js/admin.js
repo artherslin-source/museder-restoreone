@@ -4,6 +4,71 @@ var backupJobContext = {
     lastNudge: 0
 };
 
+// Backup timer for elapsed time display
+var backupLiteTimer = {
+    startTime: null,
+    intervalId: null,
+    displayEl: null,
+    
+    start: function() {
+        this.stop(); // Clear any existing timer
+        this.startTime = Date.now();
+        this.displayEl = document.getElementById('backup-elapsed-time');
+        if (!this.displayEl) {
+            return;
+        }
+        this.displayEl.style.display = '';
+        this.update();
+        this.intervalId = window.setInterval(function() {
+            backupLiteTimer.update();
+        }, 1000);
+    },
+    
+    stop: function() {
+        if (this.intervalId) {
+            window.clearInterval(this.intervalId);
+            this.intervalId = null;
+        }
+        if (this.displayEl) {
+            this.update(); // Final update
+        }
+    },
+    
+    update: function() {
+        if (!this.displayEl || !this.startTime) {
+            return;
+        }
+        var elapsed = Math.floor((Date.now() - this.startTime) / 1000);
+        var formatted = this.formatDuration(elapsed);
+        this.displayEl.textContent = 'Elapsed: ' + formatted;
+    },
+    
+    formatDuration: function(seconds) {
+        if (seconds < 0) {
+            return '00:00';
+        }
+        var hours = Math.floor(seconds / 3600);
+        var minutes = Math.floor((seconds % 3600) / 60);
+        var secs = seconds % 60;
+        
+        if (hours > 0) {
+            return String(hours).padStart(2, '0') + ':' + 
+                   String(minutes).padStart(2, '0') + ':' + 
+                   String(secs).padStart(2, '0');
+        }
+        return String(minutes).padStart(2, '0') + ':' + String(secs).padStart(2, '0');
+    },
+    
+    reset: function() {
+        this.stop();
+        this.startTime = null;
+        if (this.displayEl) {
+            this.displayEl.style.display = 'none';
+            this.displayEl.textContent = '';
+        }
+    }
+};
+
 (function ($) {
     'use strict';
 
@@ -77,6 +142,21 @@ var backupJobContext = {
         var confirmText = config.confirmText || '';
         var autoClose = typeof config.autoClose === 'number' ? config.autoClose : 0;
         var type = config.type || 'success'; // 'success' or 'error'
+
+        // Check if we already have a final result (prevent duplicate modals)
+        // This check is especially important for restore operations
+        if (typeof restoreMonitor !== 'undefined' && restoreMonitor.hasFinalResult) {
+            // If this is a success modal but we already have a failure result, don't show it
+            if (type === 'success' && restoreMonitor.lastStatus === 'failed') {
+                console.log('[Backup Lite] Skipping success modal - already have failure result');
+                return;
+            }
+            // If this is a failure modal but we already have a success result, don't show it
+            if (type === 'error' && restoreMonitor.lastStatus === 'success') {
+                console.log('[Backup Lite] Skipping failure modal - already have success result');
+                return;
+            }
+        }
 
         var existing = document.querySelector('.bl-completion-overlay');
         if (existing && existing.parentNode) {
@@ -443,6 +523,7 @@ var backupJobContext = {
         if (backupProgressText) {
             backupProgressText.textContent = '0%';
         }
+        backupLiteTimer.reset(); // Reset elapsed time timer
     }
 
     function updateBackupProgress(percent) {
@@ -511,6 +592,7 @@ var backupJobContext = {
             setBackupBusy(false);
             backupJobContext.current = null;
             setBackupCancelable(false);
+            backupLiteTimer.stop(); // Stop elapsed time timer
             resetBackupProgress();
             showToast(strings.jobCancelSuccess || 'Backup cancelled.', 'warning');
         }).catch(function (error) {
@@ -575,6 +657,7 @@ var backupJobContext = {
 
         if ('failed' === job.status) {
             stopBackupJobPolling();
+            backupLiteTimer.stop(); // Stop elapsed time timer
             setBackupBusy(false);
             handleError({ message: job.message || strings.jobFailed || strings.errorGeneric });
             backupJobContext.current = null;
@@ -584,6 +667,7 @@ var backupJobContext = {
 
         if ('cancelled' === job.status) {
             stopBackupJobPolling();
+            backupLiteTimer.stop(); // Stop elapsed time timer
             setBackupBusy(false);
             showMessage('', '', strings.jobCancelled || '');
             backupJobContext.current = null;
@@ -712,6 +796,7 @@ var backupJobContext = {
                 throw json && json.data ? json.data : json;
             }
             backupJobContext.current = json.data.job;
+            backupLiteTimer.start(); // Start elapsed time timer
             scheduleBackupJobPolling(true);
         }).catch(function (error) {
             setBackupBusy(false);
@@ -726,6 +811,7 @@ var backupJobContext = {
 
     function finishBackupJob(job) {
         stopBackupJobPolling();
+        backupLiteTimer.stop(); // Stop elapsed time timer
         setBackupBusy(false);
         backupJobContext.current = null;
         setBackupCancelable(false);
@@ -862,9 +948,8 @@ $(document).on('click', '.backup-lite-delete-backup', function (event) {
             const message = data.message || 'Backup deleted successfully.';
             showMessage('success', strings.successTitle || '', message);
             
-            button.closest('tr').fadeOut(300, function () {
-                $(this).remove();
-            });
+            // Reload page after successful deletion
+            window.location.reload();
         }).catch(function () {
             button.prop('disabled', false);
             handleError();
@@ -951,6 +1036,7 @@ function initBackupLiteDomReady() {
         updateBackupProgress(localizedSettings.activeJob.percentage || 0);
         setBackupStatusMessage(strings.jobResuming || strings.runningMessage || '', 'loading');
         setBackupCancelable(true);
+        backupLiteTimer.start(); // Start elapsed time timer for resumed job
         scheduleBackupJobPolling(true);
     }
 
@@ -1849,7 +1935,8 @@ function initRestoreCenter() {
                 setProgress(displayProgress, job.message || (strings.runningMessage || ''), isComplete || isFailed);
                 
                 if (payload.history) {
-                    renderHistory(payload.history);
+                    // DISABLED: Restore History is now rendered server-side in PHP template
+                    // renderHistory(payload.history);
                     
                     var latestHistory = payload.history.length ? payload.history[0] : null;
                     if (latestHistory) {
@@ -2062,6 +2149,27 @@ function initRestoreCenter() {
                         
                         if (restoreJobReached100Time) {
                             var timeAt100 = Date.now() - restoreJobReached100Time;
+                            // If we've been at 100% for more than RESTORE_JOB_100_POLL_LIMIT (60 seconds), stop polling
+                            if (timeAt100 > RESTORE_JOB_100_POLL_LIMIT) {
+                                // Stop polling after timeout
+                                console.warn('[Backup Lite] Progress at 100% for more than ' + (RESTORE_JOB_100_POLL_LIMIT / 1000) + ' seconds, stopping polling', { 
+                                    timeAt100, 
+                                    status, 
+                                    progress,
+                                    jobId
+                                });
+                                stopRestoreJobMonitor();
+                                restoreInProgress = false;
+                                restoreCompleted = false;
+                                if (startButton) {
+                                    startButton.disabled = false;
+                                }
+                                syncWizard();
+                                updateRestoreCancelState();
+                                // Show warning toast instead of failure modal
+                                showToast('⚠️ ' + (strings.errorGeneric || 'Could not confirm restore status. Please check logs manually.'), 'warning');
+                                return;
+                            }
                             // If we've been at 100% for more than 3 seconds, check history and assume completion/failure
                             // Reduced from 5 seconds for faster feedback
                             if (timeAt100 > 3000) {
@@ -2078,8 +2186,12 @@ function initRestoreCenter() {
                                     if (restoreMonitor.hasFinalResult) {
                                         return;
                                     }
+                                    // Check if this is still the active job
+                                    if (activeRestoreJobId !== jobId) {
+                                        return;
+                                    }
                                     var failureOverlay = document.querySelector('.bl-completion-overlay.is-visible[data-type="error"]');
-                                    if (!failureOverlay && activeRestoreJobId === jobId) {
+                                    if (!failureOverlay) {
                                         // Mark as final result BEFORE showing modal
                                         restoreMonitor.hasFinalResult = true;
                                         restoreMonitor.lastStatus = 'success';
@@ -2096,8 +2208,14 @@ function initRestoreCenter() {
                             checkRestoreCompletionFromHistory(jobId);
                         }
                     }
-                    // Continue polling to catch status update
-                    return;
+                    // Continue polling to catch status update, but only if we haven't reached timeout
+                    if (restoreJobReached100Time && (Date.now() - restoreJobReached100Time) <= RESTORE_JOB_100_POLL_LIMIT) {
+                        return;
+                    } else {
+                        // Timeout reached, stop polling
+                        stopRestoreJobMonitor();
+                        return;
+                    }
                 } else if (status === 'failed') {
                     // Stop simulated progress if still running
                     if (restoreJobProgressTimer) {
@@ -3069,6 +3187,10 @@ function initRestoreCenter() {
             summaryContainer.innerHTML = html;
         }
 
+        // DISABLED: Restore History is now rendered server-side in PHP template (page-restore.php)
+        // This function was causing "undefined" display issues by overwriting PHP-rendered content.
+        // The table is now fully rendered in PHP with proper escaping and data structure.
+        /*
         function renderHistory(history) {
             if (!historyTable) {
                 return;
@@ -3084,6 +3206,7 @@ function initRestoreCenter() {
                 return '<tr><td>' + item.timestamp + '</td><td>' + item.file + '</td><td>' + result + '</td><td>' + logCell + '</td></tr>';
             }).join('');
         }
+        */
 
         function getJsonPayload(response) {
             if (!response) {
@@ -3157,7 +3280,8 @@ function initRestoreCenter() {
             renderSummary(restoreData.summary);
         }
         if (restoreData.history) {
-            renderHistory(restoreData.history);
+            // DISABLED: Restore History is now rendered server-side in PHP template
+            // renderHistory(restoreData.history);
         }
         
         // Check for active or completed restore job
@@ -3460,7 +3584,8 @@ function initRestoreCenter() {
                     var fileSize = payload.file_size || 0;
 
                     if (payload.history) {
-                        renderHistory(payload.history);
+                        // DISABLED: Restore History is now rendered server-side in PHP template
+                        // renderHistory(payload.history);
                     }
 
                     if (job && job.id) {
@@ -3702,8 +3827,13 @@ function initRestoreCenter() {
                     showToast('⚠️ ' + failedMessage, 'warning');
                 }
 
-                refreshRowCheckboxes();
-                updateMasterCheckbox();
+                // Reload page after successful deletion
+                if (deleted.length > 0) {
+                    window.location.reload();
+                } else {
+                    refreshRowCheckboxes();
+                    updateMasterCheckbox();
+                }
             }).catch(function (error) {
                 var message = 'Unable to delete selected backups.';
                 if (error && error.message) {
@@ -3719,6 +3849,15 @@ function initRestoreCenter() {
     var newScheduleButtons = Array.prototype.slice.call(document.querySelectorAll('#bl-new-schedule, [data-bl-action="new-schedule"]'));
     var scheduleModal = document.getElementById('bl-schedule-modal');
     var scheduleModalTitle = document.getElementById('bl-modal-title');
+    var localizedSettings = window.BackupLite || {};
+    var strings = localizedSettings.strings || {};
+    
+    function getString(key, fallback) {
+        if (strings && Object.prototype.hasOwnProperty.call(strings, key) && strings[key]) {
+            return strings[key];
+        }
+        return fallback || '';
+    }
 
     function buildScheduleFormContext(formElement) {
         if (!formElement) {
@@ -3862,15 +4001,28 @@ function initRestoreCenter() {
             var startLabel = getString('scheduleActionStart', 'Start Now');
             var editLabel = getString('scheduleActionEdit', 'Edit');
             var deleteLabel = getString('scheduleActionDelete', 'Delete');
-            list.appendChild(createActionButton('▶️ ' + startLabel, function () {
+            
+            // Create action buttons with proper classes for event delegation
+            var startBtn = createActionButton('▶️ ' + startLabel, function () {
                 handleStartSchedule(schedule.id);
-            }));
-            list.appendChild(createActionButton('✏️ ' + editLabel, function () {
+            });
+            startBtn.className = 'button backup-lite-schedule-action-start bl-actions-list__item';
+            startBtn.setAttribute('data-schedule-id', schedule.id);
+            list.appendChild(startBtn);
+            
+            var editBtn = createActionButton('✏️ ' + editLabel, function () {
                 openScheduleModal(schedule);
-            }));
-            list.appendChild(createActionButton('🗑️ ' + deleteLabel, function () {
+            });
+            editBtn.className = 'button backup-lite-schedule-action-edit bl-actions-list__item';
+            editBtn.setAttribute('data-schedule-id', schedule.id);
+            list.appendChild(editBtn);
+            
+            var deleteBtn = createActionButton('🗑️ ' + deleteLabel, function () {
                 handleDeleteSchedule(schedule.id);
-            }));
+            });
+            deleteBtn.className = 'button backup-lite-schedule-action-delete bl-actions-list__item';
+            deleteBtn.setAttribute('data-schedule-id', schedule.id);
+            list.appendChild(deleteBtn);
 
             menu.appendChild(list);
             actionCell.appendChild(menu);
@@ -3885,15 +4037,10 @@ function initRestoreCenter() {
         button.type = 'button';
         button.className = 'button';
         button.textContent = label;
-        button.addEventListener('click', function (event) {
-            if (typeof onClick === 'function') {
-                onClick(event);
-            }
-            var menu = button.closest('details');
-            if (menu) {
-                menu.removeAttribute('open');
-            }
-        });
+        // Remove inline event handler - rely on jQuery event delegation instead
+        // This ensures consistency between PHP-rendered and JS-rendered buttons
+        // The onClick callback is kept for backward compatibility but won't be called
+        // jQuery event delegation will handle all clicks
         return button;
     }
 
@@ -3941,6 +4088,21 @@ function initRestoreCenter() {
         if (context.id) {
             context.id.value = preset.id || '';
         }
+        // Also clear schedule_id hidden field - check both form context and direct form selector
+        if (context.form) {
+            var $form = jQuery(context.form);
+            $form.find('input[name="schedule_id"]').val('');
+            $form.find('[data-field="id"]').val('');
+            $form.find('#bl-schedule-id').val('');
+        } else {
+            // Fallback: try to find form by common selectors
+            var $form = jQuery('#bl-inline-schedule-form, #bl-schedule-form');
+            if ($form.length) {
+                $form.find('input[name="schedule_id"]').val('');
+                $form.find('[data-field="id"]').val('');
+                $form.find('#bl-schedule-id').val('');
+            }
+        }
         if (context.title) {
             context.title.value = preset.title || '';
         }
@@ -3965,6 +4127,26 @@ function initRestoreCenter() {
         if (context.status) {
             var statusValue = typeof preset.status !== 'undefined' ? preset.status : 'enabled';
             context.status.checked = statusValue !== 'disabled';
+        }
+        
+        // Restore submit button text
+        var $submitBtn = null;
+        if (context.form) {
+            $submitBtn = jQuery(context.form).find('button[type="submit"]');
+        } else {
+            $submitBtn = jQuery('#bl-inline-schedule-form, #bl-schedule-form').find('button[type="submit"]');
+        }
+        
+        if ($submitBtn.length) {
+            if ($submitBtn.data('original-label')) {
+                $submitBtn.text($submitBtn.data('original-label'));
+                $submitBtn.removeData('original-label');
+            } else {
+                var saveLabel = (window.backupLiteSchedulesL10n && backupLiteSchedulesL10n.saveSchedule) ||
+                               (strings && strings.saveSchedule) ||
+                               'Save Schedule';
+                $submitBtn.text(saveLabel);
+            }
         }
     }
 
@@ -4068,27 +4250,54 @@ function initRestoreCenter() {
     }
 
     function handleDeleteSchedule(id) {
+        if (!id) {
+            console.error('[Backup Lite] Schedule ID missing for Delete action');
+            if (typeof showToast === 'function') {
+                showToast('⚠️ ' + getString('scheduleNotFound', 'Schedule ID missing.'), 'warning');
+            }
+            return;
+        }
+        
         if (!window.confirm(getString('confirmDeleteSchedule', 'Delete this schedule?'))) {
             return;
         }
+        
         ajaxRequest('backup_lite_delete_schedule', { id: id }).then(function () {
             removeScheduleLocally(id);
-            showToast('🗑️ ' + getString('scheduleDeleted', 'Schedule deleted.'), 'error');
+            if (typeof showToast === 'function') {
+                showToast('🗑️ ' + getString('scheduleDeleted', 'Schedule deleted.'), 'error');
+            }
         }).catch(function (error) {
             var message = (error && error.message) ? error.message : getString('unableDeleteSchedule', 'Unable to delete schedule.');
-            showToast('⚠️ ' + message, 'warning');
+            console.error('[Backup Lite] Failed to delete schedule:', error);
+            if (typeof showToast === 'function') {
+                showToast('⚠️ ' + message, 'warning');
+            }
         });
     }
 
     function handleStartSchedule(id) {
-        ajaxRequest('backup_lite_start_schedule', { id: id }).then(function (data) {
+        if (!id) {
+            console.error('[Backup Lite] Schedule ID missing for Start Now action');
+            if (typeof showToast === 'function') {
+                showToast('⚠️ ' + getString('scheduleNotFound', 'Schedule ID missing.'), 'warning');
+            }
+            return;
+        }
+        
+        ajaxRequest('backup_lite_run_schedule_now', { id: id }).then(function (data) {
             if (data.schedule) {
                 upsertSchedule(data.schedule);
             }
-            showToast('✅ ' + getString('manualJobStarted', 'Backup job started manually.'), 'success');
+            if (typeof showToast === 'function') {
+                showToast('✅ ' + getString('manualJobStarted', 'Schedule started. Backup job has been triggered.'), 'success');
+            }
         }).catch(function (error) {
             var message = (error && error.message) ? error.message : 'Unable to start schedule.';
-            showToast('⚠️ ' + message, 'warning');
+            console.error('[Backup Lite] Failed to start schedule:', error);
+            if (typeof showToast === 'function') {
+                showToast('⚠️ ' + message, 'warning');
+            }
         });
     }
 
@@ -4151,14 +4360,58 @@ function initRestoreCenter() {
                 showToast('⚠️ ' + getString('provideScheduleTitle', 'Please provide a schedule title.'), 'warning');
                 return;
             }
-            ajaxRequest('backup_lite_add_schedule', { schedule: JSON.stringify(payload) }).then(function (data) {
+            
+            // Check if editing (has schedule ID) - check multiple sources
+            var scheduleId = '';
+            if (inlineFormContext && inlineFormContext.id) {
+                scheduleId = inlineFormContext.id.value || '';
+            }
+            if (!scheduleId && inlineForm) {
+                var $scheduleIdInput = jQuery(inlineForm).find('input[name="schedule_id"]');
+                if ($scheduleIdInput.length) {
+                    scheduleId = $scheduleIdInput.val() || '';
+                }
+            }
+            if (!scheduleId && inlineForm) {
+                var $dataFieldId = jQuery(inlineForm).find('[data-field="id"]');
+                if ($dataFieldId.length) {
+                    scheduleId = $dataFieldId.val() || '';
+                }
+            }
+            
+            var isEdit = scheduleId && scheduleId.trim() !== '';
+            
+            // Use backup_lite_save_schedule which handles both create and update
+            var requestPayload = {
+                schedule: JSON.stringify(payload)
+            };
+            if (isEdit) {
+                requestPayload.id = scheduleId;
+                requestPayload.schedule_id = scheduleId; // Also send as schedule_id for compatibility
+            }
+            
+            ajaxRequest('backup_lite_save_schedule', requestPayload).then(function (data) {
                 if (data.schedule) {
                     upsertSchedule(data.schedule);
                 } else {
                     fetchSchedules();
                 }
+                
+                // Reset form and clear schedule ID
                 resetScheduleForm(inlineFormContext, { type: 'backup', period: 'weekly', time: '02:00', retain: 5, max_age: 30, status: 'enabled' });
-                showToast('✅ ' + (strings.scheduleSaved || 'Schedule saved successfully.'), 'success');
+                
+                // Ensure all schedule ID fields are cleared
+                if (inlineFormContext && inlineFormContext.id) {
+                    inlineFormContext.id.value = '';
+                }
+                if (inlineForm) {
+                    var $form = jQuery(inlineForm);
+                    $form.find('input[name="schedule_id"]').val('');
+                    $form.find('[data-field="id"]').val('');
+                    $form.find('#bl-schedule-id').val('');
+                }
+                
+                showToast('✅ ' + (data.message || strings.scheduleSaved || 'Schedule saved successfully.'), 'success');
             }).catch(function (error) {
                 var message = (error && error.message) ? error.message : 'Unable to save schedule.';
                 showToast('⚠️ ' + message, 'warning');
@@ -4199,6 +4452,388 @@ function initRestoreCenter() {
         });
     }
 
+    // Unified Schedule Actions Handler - Event delegation for all schedule actions
+    (function ($) {
+        'use strict';
+        
+        // Ensure jQuery is available
+        if (typeof $ === 'undefined' || typeof jQuery === 'undefined') {
+            console.error('[Backup Lite] jQuery is not available for schedule actions');
+            return;
+        }
+
+        // Note: Menu positioning is handled by initFloatingActionsMenu() which creates a portal
+        // We don't need to convert to fixed here as the portal already uses fixed positioning
+
+        // Event delegation - works immediately, no need to wait for DOM ready
+        // Start Now
+        $(document).on('click', '.backup-lite-schedule-action-start', function (e) {
+            console.log('[Backup Lite] Start Now button clicked (event delegation)', this);
+            e.preventDefault();
+            e.stopPropagation();
+
+            // Use attr() instead of data() to avoid jQuery's automatic camelCase conversion
+            var scheduleId = $(this).attr('data-schedule-id') || $(this).data('schedule-id');
+            console.log('[Backup Lite] Start Now - scheduleId:', scheduleId, 'all attributes:', Array.prototype.slice.call(this.attributes).map(function(a) { return a.name + '=' + a.value; }).join(', '));
+            
+            if (!scheduleId) {
+                console.warn('[Backup Lite] missing schedule-id for Start Now', this);
+                console.warn('[Backup Lite] All data attributes:', $(this).data());
+                return;
+            }
+
+            console.log('[Backup Lite] Start Now clicked, scheduleId:', scheduleId);
+
+            // Close the details menu
+            var $menu = $(this).closest('details');
+            if ($menu.length) {
+                $menu[0].removeAttribute('open');
+            }
+
+            console.log('[Backup Lite] Calling backupLiteStartSchedule, function available:', typeof backupLiteStartSchedule === 'function');
+            if (typeof backupLiteStartSchedule === 'function') {
+                backupLiteStartSchedule(scheduleId);
+            } else {
+                console.error('[Backup Lite] backupLiteStartSchedule not available in closure scope, trying global');
+                if (typeof window.backupLiteStartSchedule === 'function') {
+                    window.backupLiteStartSchedule(scheduleId);
+                } else {
+                    console.error('[Backup Lite] backupLiteStartSchedule not available anywhere!');
+                }
+            }
+        });
+
+        // Edit
+        $(document).on('click', '.backup-lite-schedule-action-edit', function (e) {
+            console.log('[Backup Lite] Edit button clicked (event delegation)', this);
+            e.preventDefault();
+            e.stopPropagation();
+
+            // Use attr() instead of data() to avoid jQuery's automatic camelCase conversion
+            var scheduleId = $(this).attr('data-schedule-id') || $(this).data('schedule-id');
+            console.log('[Backup Lite] Edit - scheduleId:', scheduleId, 'all attributes:', Array.prototype.slice.call(this.attributes).map(function(a) { return a.name + '=' + a.value; }).join(', '));
+            
+            if (!scheduleId) {
+                console.warn('[Backup Lite] missing schedule-id for Edit', this);
+                console.warn('[Backup Lite] All data attributes:', $(this).data());
+                return;
+            }
+
+            console.log('[Backup Lite] Edit clicked, scheduleId:', scheduleId);
+
+            // Close the details menu
+            var $menu = $(this).closest('details');
+            if ($menu.length) {
+                $menu[0].removeAttribute('open');
+            }
+
+            console.log('[Backup Lite] Calling backupLitePopulateScheduleForm, function available:', typeof backupLitePopulateScheduleForm === 'function');
+            if (typeof backupLitePopulateScheduleForm === 'function') {
+                backupLitePopulateScheduleForm(scheduleId, $(this));
+            } else {
+                console.error('[Backup Lite] backupLitePopulateScheduleForm not available in closure scope, trying global');
+                if (typeof window.backupLitePopulateScheduleForm === 'function') {
+                    var $dummyTrigger = jQuery('<div>');
+                    $dummyTrigger.data('processing', false);
+                    window.backupLitePopulateScheduleForm(scheduleId, $dummyTrigger);
+                } else {
+                    console.error('[Backup Lite] backupLitePopulateScheduleForm not available anywhere!');
+                }
+            }
+        });
+
+        // Delete
+        $(document).on('click', '.backup-lite-schedule-action-delete', function (e) {
+            console.log('[Backup Lite] Delete button clicked (event delegation)', this);
+            e.preventDefault();
+            e.stopPropagation();
+
+            // Use attr() instead of data() to avoid jQuery's automatic camelCase conversion
+            var scheduleId = $(this).attr('data-schedule-id') || $(this).data('schedule-id');
+            console.log('[Backup Lite] Delete - scheduleId:', scheduleId, 'all attributes:', Array.prototype.slice.call(this.attributes).map(function(a) { return a.name + '=' + a.value; }).join(', '));
+            
+            if (!scheduleId) {
+                console.warn('[Backup Lite] missing schedule-id for Delete', this);
+                console.warn('[Backup Lite] All data attributes:', $(this).data());
+                return;
+            }
+
+            console.log('[Backup Lite] Delete clicked, scheduleId:', scheduleId);
+
+            var confirmMessage = (window.backupLiteSchedulesL10n && backupLiteSchedulesL10n.confirmDelete) || 
+                                 (window.MusederRestoreOne && MusederRestoreOne.i18n_confirm_delete_schedule) || 
+                                 'Are you sure you want to delete this schedule?';
+            
+            if (!window.confirm(confirmMessage)) {
+                console.log('[Backup Lite] Delete cancelled by user');
+                return;
+            }
+
+            // Close the details menu
+            var $menu = $(this).closest('details');
+            if ($menu.length) {
+                $menu[0].removeAttribute('open');
+            }
+
+            console.log('[Backup Lite] Calling backupLiteDeleteSchedule, function available:', typeof backupLiteDeleteSchedule === 'function');
+            if (typeof backupLiteDeleteSchedule === 'function') {
+                backupLiteDeleteSchedule(scheduleId);
+            } else {
+                console.error('[Backup Lite] backupLiteDeleteSchedule not available in closure scope, trying global');
+                if (typeof window.backupLiteDeleteSchedule === 'function') {
+                    window.backupLiteDeleteSchedule(scheduleId);
+                } else {
+                    console.error('[Backup Lite] backupLiteDeleteSchedule not available anywhere!');
+                }
+            }
+        });
+
+        // Helper function: Start schedule immediately
+        function backupLiteStartSchedule(scheduleId) {
+            console.log('[Backup Lite] backupLiteStartSchedule called with scheduleId:', scheduleId);
+            
+            var ajaxUrl = (window.backupLiteSchedulesL10n && backupLiteSchedulesL10n.ajaxUrl) ||
+                         (window.backupLiteAdmin && backupLiteAdmin.ajax_url) ||
+                         (window.MusederRestoreOne && MusederRestoreOne.ajax_url) ||
+                         window.ajaxurl || '';
+            
+            var nonce = (window.backupLiteSchedulesL10n && backupLiteSchedulesL10n.nonce) ||
+                       (window.backupLiteAdmin && backupLiteAdmin.nonce) ||
+                       (window.MusederRestoreOne && MusederRestoreOne.nonce) || '';
+
+            console.log('[Backup Lite] AJAX config:', { ajaxUrl: ajaxUrl, hasNonce: !!nonce });
+
+            if (!ajaxUrl) {
+                console.error('[Backup Lite] AJAX URL not available');
+                alert('AJAX URL not available. Please refresh the page.');
+                return;
+            }
+
+            if (!nonce) {
+                console.error('[Backup Lite] Nonce not available');
+                alert('Security token not available. Please refresh the page.');
+                return;
+            }
+
+            console.log('[Backup Lite] Sending AJAX request to start schedule');
+            $.post(ajaxUrl, {
+                action: 'backup_lite_schedule_action',
+                schedule_action: 'start_now',
+                schedule_id: scheduleId,
+                nonce: nonce
+            }).done(function (response) {
+                console.log('[Backup Lite] Start schedule response:', response);
+                if (response && response.success) {
+                    window.location.reload();
+                } else {
+                    console.error('[Backup Lite] Start schedule failed:', response);
+                    alert(response && response.data && response.data.message ? response.data.message : 'Failed to start schedule');
+                }
+            }).fail(function (xhr, status, error) {
+                console.error('[Backup Lite] AJAX error:', { status: status, error: error, xhr: xhr });
+                alert('Failed to start schedule. Please try again.');
+            });
+        }
+
+        // Helper function: Populate schedule form for editing
+        function backupLitePopulateScheduleForm(scheduleId, $trigger) {
+            console.log('[Backup Lite] backupLitePopulateScheduleForm called with scheduleId:', scheduleId);
+            
+            var ajaxUrl = (window.backupLiteSchedulesL10n && backupLiteSchedulesL10n.ajaxUrl) ||
+                         (window.backupLiteAdmin && backupLiteAdmin.ajax_url) ||
+                         (window.MusederRestoreOne && MusederRestoreOne.ajax_url) ||
+                         window.ajaxurl || '';
+            
+            var fetchNonce = (window.BackupLite && BackupLite.nonce) ||
+                            (window.backupLiteSchedulesL10n && backupLiteSchedulesL10n.nonce) ||
+                            (window.backupLiteAdmin && backupLiteAdmin.nonce) ||
+                            (window.MusederRestoreOne && MusederRestoreOne.nonce) || '';
+
+            console.log('[Backup Lite] AJAX config for edit:', { ajaxUrl: ajaxUrl, hasNonce: !!fetchNonce });
+
+            if (!ajaxUrl) {
+                console.error('[Backup Lite] AJAX URL not available');
+                alert('AJAX URL not available. Please refresh the page.');
+                return;
+            }
+
+            if (!fetchNonce) {
+                console.error('[Backup Lite] Nonce not available for fetch_schedules');
+                alert('Security token not available. Please refresh the page.');
+                return;
+            }
+
+            // Prevent duplicate requests
+            if ($trigger && $trigger.data('processing')) {
+                console.log('[Backup Lite] Edit action already processing, ignoring duplicate click');
+                return;
+            }
+            if ($trigger) {
+                $trigger.data('processing', true);
+            }
+
+            console.log('[Backup Lite] Sending AJAX request to fetch schedules');
+            $.post(ajaxUrl, {
+                action: 'backup_lite_fetch_schedules',
+                nonce: fetchNonce
+            }).done(function (response) {
+                console.log('[Backup Lite] Fetch schedules response:', response);
+                if (response && response.success && response.data && response.data.schedules) {
+                    var schedules = response.data.schedules;
+                    var scheduleIdStr = String(scheduleId);
+                    console.log('[Backup Lite] Looking for schedule with ID:', scheduleIdStr, 'in', schedules.length, 'schedules');
+                    var schedule = schedules.find(function (s) {
+                        return String(s.id) === scheduleIdStr;
+                    });
+
+                    if (schedule) {
+                        console.log('[Backup Lite] Found schedule:', schedule);
+                        // 1. Populate form fields
+                        var $form = jQuery('#bl-inline-schedule-form, #bl-schedule-form');
+                        if ($form.length === 0) {
+                            console.error('[Backup Lite] Schedule form not found');
+                            return;
+                        }
+
+                        // Set schedule ID
+                        $form.find('[data-field="id"]').val(scheduleId);
+                        $form.find('#bl-schedule-id').val(scheduleId);
+                        $form.find('input[name="schedule_id"]').val(scheduleId);
+
+                        // Set all form fields
+                        var $title = $form.find('[data-field="title"]');
+                        if ($title.length) {
+                            $title.val(schedule.title || '');
+                        }
+
+                        var $type = $form.find('[data-field="type"]');
+                        if ($type.length) {
+                            $type.val(schedule.type || schedule.event_type || 'backup');
+                        }
+
+                        var $period = $form.find('[data-field="period"]');
+                        if ($period.length) {
+                            $period.val(schedule.period || 'daily');
+                        }
+
+                        var $time = $form.find('[data-field="time"]');
+                        if ($time.length) {
+                            $time.val(schedule.time || '00:00');
+                        }
+
+                        var $retain = $form.find('[data-field="retain"]');
+                        if ($retain.length) {
+                            $retain.val(schedule.retain || schedule.keep_count || 5);
+                        }
+
+                        var $maxAge = $form.find('[data-field="max_age"]');
+                        if ($maxAge.length) {
+                            $maxAge.val(schedule.max_age || 30);
+                        }
+
+                        var $notify = $form.find('[data-field="notify"]');
+                        if ($notify.length) {
+                            $notify.val(schedule.notify || schedule.notification_email || '');
+                        }
+
+                        var $status = $form.find('[data-field="status"]');
+                        if ($status.length) {
+                            $status.prop('checked', schedule.status !== 'disabled');
+                        }
+
+                        // 2. Update submit button text
+                        var $submitBtn = $form.find('button[type="submit"]');
+                        if ($submitBtn.length) {
+                            var updateLabel = (window.backupLiteSchedulesL10n && backupLiteSchedulesL10n.updateSchedule) || 'Update Schedule';
+                            $submitBtn.data('original-label', $submitBtn.text());
+                            $submitBtn.text(updateLabel);
+                        }
+
+                        // 3. Scroll to form or open modal
+                        var $modal = jQuery('#bl-schedule-modal');
+                        if ($modal.length) {
+                            $modal.attr('aria-hidden', 'false').addClass('is-open');
+                            jQuery('body').addClass('bl-modal-open');
+                        } else {
+                            var $inlineForm = jQuery('#bl-inline-schedule-form');
+                            if ($inlineForm.length) {
+                                jQuery('html, body').animate({
+                                    scrollTop: $inlineForm.offset().top - 40
+                                }, 300);
+                            }
+                        }
+                    } else {
+                        console.error('[Backup Lite] Schedule not found:', scheduleId);
+                        alert('Schedule not found');
+                    }
+                } else {
+                    console.error('[Backup Lite] Failed to fetch schedules:', response);
+                    alert('Failed to load schedule data');
+                }
+            }).fail(function (xhr, status, error) {
+                console.error('[Backup Lite] AJAX error:', error);
+                alert('Failed to load schedule data. Please try again.');
+            }).always(function() {
+                if ($trigger) {
+                    $trigger.removeData('processing');
+                }
+            });
+        }
+
+        // Helper function: Delete schedule
+        function backupLiteDeleteSchedule(scheduleId) {
+            console.log('[Backup Lite] backupLiteDeleteSchedule called with scheduleId:', scheduleId);
+            
+            var ajaxUrl = (window.backupLiteSchedulesL10n && backupLiteSchedulesL10n.ajaxUrl) ||
+                         (window.backupLiteAdmin && backupLiteAdmin.ajax_url) ||
+                         (window.MusederRestoreOne && MusederRestoreOne.ajax_url) ||
+                         window.ajaxurl || '';
+            
+            var nonce = (window.backupLiteSchedulesL10n && backupLiteSchedulesL10n.nonce) ||
+                       (window.backupLiteAdmin && backupLiteAdmin.nonce) ||
+                       (window.MusederRestoreOne && MusederRestoreOne.nonce) || '';
+
+            console.log('[Backup Lite] AJAX config for delete:', { ajaxUrl: ajaxUrl, hasNonce: !!nonce });
+
+            if (!ajaxUrl) {
+                console.error('[Backup Lite] AJAX URL not available');
+                alert('AJAX URL not available. Please refresh the page.');
+                return;
+            }
+
+            if (!nonce) {
+                console.error('[Backup Lite] Nonce not available');
+                alert('Security token not available. Please refresh the page.');
+                return;
+            }
+
+            console.log('[Backup Lite] Sending AJAX request to delete schedule');
+            $.post(ajaxUrl, {
+                action: 'backup_lite_schedule_action',
+                schedule_action: 'delete',
+                schedule_id: scheduleId,
+                nonce: nonce
+            }).done(function (response) {
+                console.log('[Backup Lite] Delete schedule response:', response);
+                if (response && response.success) {
+                    window.location.reload();
+                } else {
+                    console.error('[Backup Lite] Delete schedule failed:', response);
+                    alert(response && response.data && response.data.message ? response.data.message : 'Failed to delete schedule');
+                }
+            }).fail(function (xhr, status, error) {
+                console.error('[Backup Lite] AJAX error:', { status: status, error: error, xhr: xhr });
+                alert('Failed to delete schedule. Please try again.');
+            });
+        }
+        
+        // Expose helper functions to global scope for portal access
+        window.backupLiteStartSchedule = backupLiteStartSchedule;
+        window.backupLitePopulateScheduleForm = backupLitePopulateScheduleForm;
+        window.backupLiteDeleteSchedule = backupLiteDeleteSchedule;
+    })(jQuery);
+
+    // Legacy event handler for backward compatibility
     document.addEventListener('click', function (event) {
         var scheduleAction = event.target && event.target.dataset ? event.target.dataset.scheduleAction : null;
         if (scheduleAction) {
@@ -4219,9 +4854,38 @@ function initRestoreCenter() {
             }
 
             if ('edit' === scheduleAction) {
-                var existing = scheduleId ? findScheduleById(scheduleId) : null;
-                if (existing) {
-                    openScheduleModal(existing);
+                // Try to get schedule data from data attribute first
+                var scheduleDataAttr = event.target.getAttribute('data-schedule-data');
+                var scheduleData = null;
+                if (scheduleDataAttr) {
+                    try {
+                        scheduleData = JSON.parse(scheduleDataAttr);
+                    } catch (e) {
+                        console.warn('[Backup Lite] Failed to parse schedule data from attribute', e);
+                    }
+                }
+                
+                // Fallback to JS array
+                if (!scheduleData) {
+                    scheduleData = scheduleId ? findScheduleById(scheduleId) : null;
+                }
+                
+                // If still not found, fetch from server
+                if (!scheduleData && scheduleId) {
+                    ajaxRequest('backup_lite_fetch_schedules').then(function (data) {
+                        schedules = data.schedules || [];
+                        var found = findScheduleById(scheduleId);
+                        if (found) {
+                            openScheduleModal(found);
+                        } else {
+                            showToast('⚠️ ' + getString('scheduleNotFound', 'Schedule not found.'), 'warning');
+                        }
+                    }).catch(function (error) {
+                        var message = (error && error.message) ? error.message : 'Unable to load schedule.';
+                        showToast('⚠️ ' + message, 'warning');
+                    });
+                } else if (scheduleData) {
+                    openScheduleModal(scheduleData);
                 }
                 return;
             }
@@ -4467,8 +5131,14 @@ function initRestoreCenter() {
         });
     }
 
+    // Only fetch schedules via AJAX if tbody is empty (PHP hasn't rendered schedules)
+    // This prevents overwriting PHP-rendered HTML that already has proper structure and event bindings
     if (scheduleBody) {
-        fetchSchedules();
+        var hasExistingRows = scheduleBody.querySelectorAll('tr').length > 0;
+        if (!hasExistingRows) {
+            // Only fetch if no rows exist (PHP didn't render any schedules)
+            fetchSchedules();
+        }
     }
 
     if (currentPage === 'backup-lite-logs' && window.BackupLiteUI && typeof window.BackupLiteUI.refreshLogs === 'function') {
@@ -4551,17 +5221,165 @@ function initRestoreCenter() {
             var measured = list.offsetWidth || 180;
             portal.style.minWidth = Math.max(160, Math.min(340, measured)) + 'px';
             document.body.appendChild(portal);
+            
+            // Ensure cloned buttons have all necessary attributes for jQuery event delegation
+            var portalButtons = portal.querySelectorAll('a, button');
+            var originalButtons = list.querySelectorAll('a, button');
+            for (var i = 0; i < portalButtons.length && i < originalButtons.length; i++) {
+                var portalBtn = portalButtons[i];
+                var originalBtn = originalButtons[i];
+                // Copy ALL attributes (not just data-*) to ensure complete match
+                Array.prototype.forEach.call(originalBtn.attributes, function(attr) {
+                    portalBtn.setAttribute(attr.name, attr.value);
+                });
+                // Ensure class names match exactly
+                portalBtn.className = originalBtn.className;
+                // Ensure type attribute for buttons
+                if (originalBtn.tagName === 'BUTTON' && originalBtn.type) {
+                    portalBtn.type = originalBtn.type;
+                }
+            }
 
-            // Delegate click to original buttons via shared data attributes
+            // Delegate click to handler functions directly
             portal.addEventListener('click', function (evt) {
-                var btn = evt.target.closest('button');
-                if (!btn) return;
-                var action = btn.getAttribute('data-schedule-action') || btn.getAttribute('data-log-action') || '';
-                if (!action) return;
-                var original = list.querySelector('button[data-schedule-action=\"' + action + '\"]') ||
-                               list.querySelector('button[data-log-action=\"' + action + '\"]');
-                if (original) original.click();
+                var btn = evt.target.closest('a, button');
+                if (!btn) {
+                    console.log('[Backup Lite] Portal click: No button found');
+                    return;
+                }
+                
+                // Prevent event from bubbling to avoid duplicate handling
+                evt.stopPropagation();
+                evt.preventDefault();
+                
+                console.log('[Backup Lite] Portal click event triggered on:', btn);
+                
+                // Get button attributes - support both data-id and data-schedule-id
+                var btnId = btn.getAttribute('data-schedule-id') || btn.getAttribute('data-id');
+                var btnClass = btn.className || '';
+                var actionType = '';
+                
+                console.log('[Backup Lite] Button attributes:', {
+                    btnId: btnId,
+                    btnClass: btnClass,
+                    allAttributes: Array.prototype.slice.call(btn.attributes).map(function(attr) {
+                        return attr.name + '=' + attr.value;
+                    }).join(', ')
+                });
+                
+                // Determine action type from class
+                if (btnClass.indexOf('backup-lite-schedule-action-start') !== -1) {
+                    actionType = 'start';
+                } else if (btnClass.indexOf('backup-lite-schedule-action-edit') !== -1) {
+                    actionType = 'edit';
+                } else if (btnClass.indexOf('backup-lite-schedule-action-delete') !== -1) {
+                    actionType = 'delete';
+                }
+                
+                if (!btnId) {
+                    console.error('[Backup Lite] Portal button missing schedule ID. All attributes:', btn.attributes);
+                    removePortal();
+                    return;
+                }
+                
+                if (!actionType) {
+                    console.error('[Backup Lite] Portal button missing action type. Class:', btnClass);
+                    removePortal();
+                    return;
+                }
+                
+                console.log('[Backup Lite] Portal button clicked:', {
+                    id: btnId,
+                    class: btnClass,
+                    actionType: actionType,
+                    tagName: btn.tagName
+                });
+                
+                // Check if handler functions are available
+                var handlersAvailable = {
+                    startAvailable: typeof window.backupLiteStartSchedule === 'function',
+                    editAvailable: typeof window.backupLitePopulateScheduleForm === 'function',
+                    deleteAvailable: typeof window.backupLiteDeleteSchedule === 'function'
+                };
+                console.log('[Backup Lite] Handler functions available:', handlersAvailable);
+                
+                // Remove portal first
                 removePortal();
+                
+                // Directly call the handler functions from global scope
+                // These functions are exposed by the jQuery closure above
+                try {
+                    if (actionType === 'start') {
+                        if (typeof window.backupLiteStartSchedule === 'function') {
+                            console.log('[Backup Lite] Calling backupLiteStartSchedule with ID:', btnId);
+                            window.backupLiteStartSchedule(btnId);
+                        } else {
+                            console.error('[Backup Lite] backupLiteStartSchedule not available or not a function');
+                            throw new Error('backupLiteStartSchedule function not available');
+                        }
+                    } else if (actionType === 'edit') {
+                        if (typeof window.backupLitePopulateScheduleForm === 'function') {
+                            console.log('[Backup Lite] Calling backupLitePopulateScheduleForm with ID:', btnId);
+                            // For edit, create a dummy jQuery object for the trigger parameter
+                            var $dummyTrigger = jQuery('<div>');
+                            $dummyTrigger.data('processing', false);
+                            window.backupLitePopulateScheduleForm(btnId, $dummyTrigger);
+                        } else {
+                            console.error('[Backup Lite] backupLitePopulateScheduleForm not available or not a function');
+                            throw new Error('backupLitePopulateScheduleForm function not available');
+                        }
+                    } else if (actionType === 'delete') {
+                        if (typeof window.backupLiteDeleteSchedule === 'function') {
+                            var confirmMessage = (window.backupLiteSchedulesL10n && backupLiteSchedulesL10n.confirmDelete) || 
+                                                 (window.MusederRestoreOne && MusederRestoreOne.i18n_confirm_delete_schedule) || 
+                                                 'Are you sure you want to delete this schedule?';
+                            
+                            if (window.confirm(confirmMessage)) {
+                                console.log('[Backup Lite] Calling backupLiteDeleteSchedule with ID:', btnId);
+                                window.backupLiteDeleteSchedule(btnId);
+                            } else {
+                                console.log('[Backup Lite] Delete cancelled by user');
+                            }
+                        } else {
+                            console.error('[Backup Lite] backupLiteDeleteSchedule not available or not a function');
+                            throw new Error('backupLiteDeleteSchedule function not available');
+                        }
+                    } else {
+                        throw new Error('Unknown action type: ' + actionType);
+                    }
+                } catch (error) {
+                    console.error('[Backup Lite] Error calling handler function:', error);
+                    console.error('[Backup Lite] Error message:', error.message);
+                    console.error('[Backup Lite] Stack trace:', error.stack);
+                    
+                    // Fallback: create temporary button and trigger event via jQuery event delegation
+                    console.log('[Backup Lite] Using fallback: creating temporary button');
+                    var tempBtn = document.createElement('button');
+                    tempBtn.type = 'button';
+                    tempBtn.className = btnClass;
+                    tempBtn.setAttribute('data-schedule-id', btnId);
+                    tempBtn.style.position = 'absolute';
+                    tempBtn.style.left = '-9999px';
+                    tempBtn.style.visibility = 'hidden';
+                    tempBtn.style.opacity = '0';
+                    tempBtn.style.pointerEvents = 'none';
+                    document.body.appendChild(tempBtn);
+                    
+                    setTimeout(function() {
+                        var $tempBtn = jQuery(tempBtn);
+                        if ($tempBtn.length) {
+                            console.log('[Backup Lite] Triggering click on temporary button via jQuery');
+                            $tempBtn.trigger('click');
+                        } else {
+                            console.error('[Backup Lite] jQuery not available for temporary button');
+                        }
+                        setTimeout(function() {
+                            if (tempBtn.parentNode) {
+                                tempBtn.parentNode.removeChild(tempBtn);
+                            }
+                        }, 200);
+                    }, 100);
+                }
             });
 
             activePortal = portal;
@@ -4868,4 +5686,173 @@ if (document.readyState === 'loading') {
 } else {
     initBackupLiteDomReady();
 }
+
+// Restore History checkbox and delete functionality
+(function() {
+    'use strict';
+    
+    var masterCheckbox = document.getElementById('bl-restore-history-master-checkbox');
+    var deleteButton = document.getElementById('bl-delete-selected-restore-history');
+    var rowCheckboxes = [];
+    
+    function initRestoreHistoryCheckboxes() {
+        if (!masterCheckbox && !deleteButton) {
+            return; // Not on restore page
+        }
+        
+        rowCheckboxes = Array.prototype.slice.call(document.querySelectorAll('.bl-restore-history-row-checkbox'));
+        
+        if (masterCheckbox) {
+            masterCheckbox.addEventListener('change', function() {
+                var checked = this.checked;
+                rowCheckboxes.forEach(function(checkbox) {
+                    checkbox.checked = checked;
+                });
+                updateDeleteButton();
+            });
+        }
+        
+        rowCheckboxes.forEach(function(checkbox) {
+            checkbox.addEventListener('change', function() {
+                updateMasterCheckbox();
+                updateDeleteButton();
+            });
+        });
+        
+        if (deleteButton) {
+            deleteButton.addEventListener('click', function() {
+                var selected = rowCheckboxes.filter(function(cb) { return cb.checked; });
+                if (selected.length === 0) {
+                    var localizedSettings = window.BackupLite || {};
+                    var strings = localizedSettings.strings || {};
+                    var showToast = function(message, type) {
+                        if (window.Toastify) {
+                            window.Toastify({
+                                text: message,
+                                gravity: 'top',
+                                position: 'right',
+                                backgroundColor: type === 'warning' ? '#f59e0b' : '#3b82f6',
+                                duration: 3000
+                            }).showToast();
+                        }
+                    };
+                    showToast('⚠️ ' + (strings.selectAtLeastOne || 'Please select at least one entry.'), 'warning');
+                    return;
+                }
+                
+                var localizedSettings = window.BackupLite || {};
+                var strings = localizedSettings.strings || {};
+                var confirmMessage = strings.confirmDeleteSelectedRestoreHistory || 'Are you sure you want to delete the selected restore history entries? This action cannot be undone.';
+                if (!window.confirm(confirmMessage)) {
+                    return;
+                }
+                
+                var timestamps = selected.map(function(cb) {
+                    return cb.getAttribute('data-timestamp');
+                }).filter(function(ts) { return ts; });
+                
+                if (timestamps.length === 0) {
+                    var showToast = function(message, type) {
+                        if (window.Toastify) {
+                            window.Toastify({
+                                text: message,
+                                gravity: 'top',
+                                position: 'right',
+                                backgroundColor: type === 'warning' ? '#f59e0b' : '#3b82f6',
+                                duration: 3000
+                            }).showToast();
+                        }
+                    };
+                    showToast('⚠️ ' + (strings.noEntriesSelected || 'No valid entries selected.'), 'warning');
+                    return;
+                }
+                
+                deleteButton.disabled = true;
+                
+                var payload = new FormData();
+                payload.append('action', 'backup_lite_delete_restore_history');
+                payload.append('nonce', localizedSettings.nonce || '');
+                payload.append('timestamps', JSON.stringify(timestamps));
+                
+                fetch(localizedSettings.ajaxUrl, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    body: payload
+                }).then(function(response) {
+                    return response.json();
+                }).then(function(json) {
+                    deleteButton.disabled = false;
+                    if (!json || json.success !== true) {
+                        throw json && json.data ? json.data : json;
+                    }
+                    var data = json.data || {};
+                    var deleted = data.deleted || [];
+                    var errors = data.errors || [];
+                    
+                    var showToast = function(message, type) {
+                        if (window.Toastify) {
+                            window.Toastify({
+                                text: message,
+                                gravity: 'top',
+                                position: 'right',
+                                backgroundColor: type === 'success' ? '#10b981' : type === 'warning' ? '#f59e0b' : '#3b82f6',
+                                duration: 3000
+                            }).showToast();
+                        }
+                    };
+                    
+                    if (deleted.length) {
+                        showToast('🗑️ ' + (strings.restoreHistoryDeleted || 'Restore history entries deleted.'), 'success');
+                        window.location.reload();
+                    }
+                    
+                    if (errors.length) {
+                        var message = errors[0].message || 'Some entries could not be deleted.';
+                        showToast('⚠️ ' + message, 'warning');
+                    }
+                }).catch(function(error) {
+                    deleteButton.disabled = false;
+                    var message = (error && error.message) ? error.message : 'Unable to delete restore history entries.';
+                    var showToast = function(msg, type) {
+                        if (window.Toastify) {
+                            window.Toastify({
+                                text: msg,
+                                gravity: 'top',
+                                position: 'right',
+                                backgroundColor: type === 'warning' ? '#f59e0b' : '#3b82f6',
+                                duration: 3000
+                            }).showToast();
+                        }
+                    };
+                    showToast('⚠️ ' + message, 'warning');
+                });
+            });
+        }
+    }
+    
+    function updateMasterCheckbox() {
+        if (!masterCheckbox) {
+            return;
+        }
+        var allChecked = rowCheckboxes.length > 0 && rowCheckboxes.every(function(cb) { return cb.checked; });
+        var someChecked = rowCheckboxes.some(function(cb) { return cb.checked; });
+        masterCheckbox.checked = allChecked;
+        masterCheckbox.indeterminate = someChecked && !allChecked;
+    }
+    
+    function updateDeleteButton() {
+        if (!deleteButton) {
+            return;
+        }
+        var hasSelection = rowCheckboxes.some(function(cb) { return cb.checked; });
+        deleteButton.style.display = hasSelection ? '' : 'none';
+    }
+    
+    // Initialize when DOM is ready
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initRestoreHistoryCheckboxes);
+    } else {
+        initRestoreHistoryCheckboxes();
+    }
+})();
 })(jQuery);

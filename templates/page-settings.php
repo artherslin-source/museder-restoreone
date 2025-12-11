@@ -1,15 +1,14 @@
 <?php
 /**
- * Museder RestoreOne settings page.
+ * Template for Museder RestoreOne admin page.
  *
- * @package BackupLite
+ * 注意：此檔案中的變數（例如 $is_pro, $settings 等）皆由上層控制器在 include 前建立，
+ * 作用範圍僅限此模板檔案，並非在 WordPress 全域命名空間中到處使用的真正「全域變數」。
+ * 為了維持模板可讀性與向後相容性，我們在此關閉 PrefixAllGlobals 警告。
  *
- * @var array $settings
- * @var bool  $is_pro
+ * phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
  */
 
-// phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
-// 說明：本檔為 Museder RestoreOne 的內部後台 template，變數皆由外掛 controller 傳入，不注入 PHP 全域命名空間，也不作為可重用 API。
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }

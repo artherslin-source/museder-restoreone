@@ -357,7 +357,7 @@ body.wp-admin #wpcontent {
     border-collapse: collapse;
     background: rgba(255, 255, 255, 0.92);
     border-radius: 14px;
-    overflow: hidden;
+    overflow: visible;
 }
 
 .backup-lite-table thead {
@@ -567,12 +567,27 @@ body.bl-restore-v2-off .restore-stepper {
     box-shadow: var(--glass-shadow);
     padding: 12px;
     z-index: 50;
+    min-width: 160px;
+    max-width: 200px;
+    white-space: nowrap;
+    /* Ensure menu doesn't overflow viewport */
+    max-height: calc(100vh - 200px);
+    overflow-y: auto;
+}
+
+/* When menu is open, JavaScript will convert to fixed positioning */
+.bl-actions-menu[open] .bl-actions-list {
+    /* Fixed positioning will be applied via JavaScript to escape table overflow */
 }
 
 .bl-actions-list .button {
     border-radius: 8px;
-    width: 160px;
+    width: 100%;
+    min-width: 140px;
     text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .bl-modal {
@@ -1105,12 +1120,27 @@ body.bl-restore-v2-off .restore-stepper {
     border-radius: 12px;
     padding: 12px;
     box-shadow: 0 8px 24px rgba(15, 23, 42, 0.15);
-    z-index: 10;
+    z-index: 1000;
+    min-width: 160px;
+    max-width: 200px;
+    white-space: nowrap;
+    /* Ensure menu doesn't overflow viewport */
+    max-height: calc(100vh - 200px);
+    overflow-y: auto;
+}
+
+/* When menu is open, JavaScript will convert to fixed positioning */
+.backup-lite-admin .bl-actions-menu[open] .bl-actions-list {
+    /* Fixed positioning will be applied via JavaScript to escape table overflow */
 }
 
 .backup-lite-admin .bl-actions-list .button {
-    width: 160px;
+    width: 100%;
+    min-width: 140px;
     text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .backup-lite-admin .bl-actions-menu::marker,

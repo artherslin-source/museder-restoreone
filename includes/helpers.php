@@ -142,6 +142,34 @@ function backup_lite_get_backup_path( $file ) {
  * @param string     $format Date format; default is site date + time format.
  * @return string Formatted date/time in site's local timezone.
  */
+/**
+ * Format duration in seconds to human-readable string (e.g., "32m 38s" or "1h 02m").
+ *
+ * @param int|null $seconds Duration in seconds.
+ * @return string Formatted duration string, or empty string if invalid.
+ */
+function backup_lite_format_duration( $seconds ) {
+    if ( ! is_numeric( $seconds ) || $seconds < 0 ) {
+        return '';
+    }
+
+    $seconds = (int) $seconds;
+
+    if ( $seconds === 0 ) {
+        return '';
+    }
+
+    $hours   = floor( $seconds / 3600 );
+    $minutes = floor( ( $seconds % 3600 ) / 60 );
+    $secs    = $seconds % 60;
+
+    if ( $hours > 0 ) {
+        return sprintf( '%02dh %02dm %02ds', $hours, $minutes, $secs );
+    }
+
+    return sprintf( '%02dm %02ds', $minutes, $secs );
+}
+
 function backup_lite_format_local_time( $time, $format = '' ) {
     if ( empty( $format ) ) {
         $format = get_option( 'date_format' ) . ' ' . get_option( 'time_format' );
@@ -704,4 +732,82 @@ function backup_lite_get_recent_logs( $limit = 5 ) {
 
 function backup_lite_normalize_bool( $value ) {
     return filter_var( $value, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE );
+}
+
+/**
+ * Get list of paths that should be excluded from backup and size estimation.
+ * 
+ * This function provides a unified list of excluded paths used by both
+ * the actual backup process and the size estimation scan to ensure consistency.
+ *
+ * @return array<string> Array of normalized directory paths (with trailing slashes) to exclude.
+ */
+if ( ! function_exists( 'backup_lite_get_excluded_paths' ) ) {
+    function backup_lite_get_excluded_paths() {
+        $paths = [];
+        
+        $normalize = static function( $path, $must_exist = false ) {
+            if ( empty( $path ) ) {
+                return '';
+            }
+            
+            $normalized = wp_normalize_path( rtrim( $path, '/\\' ) );
+            if ( '' === $normalized ) {
+                return '';
+            }
+            
+            if ( $must_exist && ! file_exists( $normalized ) ) {
+                return '';
+            }
+            
+            return trailingslashit( $normalized );
+        };
+        
+        $storage = backup_lite_get_storage_root();
+        
+        if ( ! empty( $storage['path'] ) ) {
+            $root = trailingslashit( $storage['path'] );
+            $paths[] = $normalize( $root );
+            $paths[] = $normalize( $root . 'backups' );
+            $paths[] = $normalize( $root . 'logs' );
+            $paths[] = $normalize( $root . 'jobs' );
+            $paths[] = $normalize( $root . 'temp' );
+            $paths[] = $normalize( $root . 'reports' );
+            $paths[] = $normalize( $root . 'pro' );
+            $paths[] = $normalize( $root . 'pro/jobs' );
+            $paths[] = $normalize( $root . 'pro/reports' );
+        }
+        
+        // Always exclude the active backup directory (even if customized) and its parent root.
+        $active_backup_dir = backup_lite_get_backup_dir();
+        $paths[] = $normalize( $active_backup_dir );
+        $paths[] = $normalize( trailingslashit( dirname( $active_backup_dir ) ) );
+        $paths[] = $normalize( backup_lite_get_temp_dir() );
+        $paths[] = $normalize( backup_lite_get_jobs_dir() );
+        $paths[] = $normalize( backup_lite_get_reports_dir() );
+        
+        // Legacy directories (only exclude when they exist to avoid false positives).
+        $legacy = [
+            WP_CONTENT_DIR . '/uploads/backup-lite',
+            WP_CONTENT_DIR . '/uploads/backup-lite/backups',
+            WP_CONTENT_DIR . '/uploads/backup-lite/temp',
+            WP_CONTENT_DIR . '/uploads/backup-lite/jobs',
+            WP_CONTENT_DIR . '/uploads/backup-lite/pro',
+            WP_CONTENT_DIR . '/uploads/backup-lite/pro/jobs',
+            WP_CONTENT_DIR . '/uploads/backup-lite/pro/reports',
+            WP_CONTENT_DIR . '/uploads/backup-lite-logs',
+        ];
+        
+        foreach ( $legacy as $legacy_path ) {
+            $normalized = $normalize( $legacy_path, true );
+            if ( $normalized ) {
+                $paths[] = $normalized;
+            }
+        }
+        
+        // Filter out empty paths
+        $paths = array_filter( $paths );
+        
+        return array_values( array_unique( $paths ) );
+    }
 }

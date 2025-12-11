@@ -51,6 +51,7 @@ class Backup_Lite_Backup_Jobs {
             'manifest_file'   => $context['manifest_file'],
             'options'         => $context['options'],
             'last_activity'   => time(),
+            'started_at'      => time(), // Record backup start time (UTC timestamp)
         ];
 
         self::save_job( $job );

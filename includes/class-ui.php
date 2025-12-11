@@ -22,6 +22,7 @@ class Backup_Lite_UI {
         add_action( 'wp_ajax_backup_lite_get_backups_list', [ __CLASS__, 'handle_get_backups_list' ] );
         add_action( 'wp_ajax_backup_lite_delete_backup', [ __CLASS__, 'handle_delete_backup' ] );
         add_action( 'wp_ajax_backup_lite_delete_backups', [ __CLASS__, 'handle_delete_backups' ] );
+        add_action( 'wp_ajax_backup_lite_delete_restore_history', [ __CLASS__, 'handle_delete_restore_history' ] );
         add_action( 'wp_ajax_backup_lite_start_backup_job', [ __CLASS__, 'ajax_start_backup_job' ] );
         add_action( 'wp_ajax_backup_lite_get_job_status', [ __CLASS__, 'ajax_get_backup_job_status' ] );
         add_action( 'wp_ajax_backup_lite_continue_backup_job', [ __CLASS__, 'ajax_continue_backup_job' ] );
@@ -34,7 +35,15 @@ class Backup_Lite_UI {
     }
 
     public static function enqueue_assets( $hook ) {
-        if ( strpos( $hook, self::PAGE_SLUG ) === false ) {
+        // Allow toplevel main menu + all backup-lite sub pages
+        // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- page parameter is for UI display only, not for security-sensitive operations
+        $page = isset( $_GET['page'] ) ? sanitize_key( wp_unslash( $_GET['page'] ) ) : '';
+        
+        if (
+            'toplevel_page_museder-restoreone' !== $hook
+            && false === strpos( $hook, 'backup-lite' )
+            && 0 !== strpos( $page, 'backup-lite' )
+        ) {
             return;
         }
 
@@ -161,6 +170,40 @@ class Backup_Lite_UI {
 
         $active_job = Backup_Lite_Backup_Jobs::get_active_job_summary();
 
+        // Localize script for schedule actions
+        wp_localize_script(
+            'backup-lite-admin',
+            'backupLiteAdmin',
+            [
+                'ajax_url' => admin_url( 'admin-ajax.php' ),
+                'nonce'    => wp_create_nonce( 'backup_lite_admin_actions' ),
+            ]
+        );
+
+        // Also localize as MusederRestoreOne for compatibility
+        wp_localize_script(
+            'backup-lite-admin',
+            'MusederRestoreOne',
+            [
+                'ajax_url' => admin_url( 'admin-ajax.php' ),
+                'nonce'    => wp_create_nonce( 'backup_lite_admin_actions' ),
+                'i18n_confirm_delete_schedule' => __( 'Delete this schedule?', 'museder-restoreone' ),
+            ]
+        );
+
+        // Localize schedule-specific strings
+        wp_localize_script(
+            'backup-lite-admin',
+            'backupLiteSchedulesL10n',
+            [
+                'ajaxUrl'        => admin_url( 'admin-ajax.php' ),
+                'nonce'          => wp_create_nonce( 'backup_lite_admin_actions' ),
+                'updateSchedule' => __( 'Update Schedule', 'museder-restoreone' ),
+                'saveSchedule'   => __( 'Save Schedule', 'museder-restoreone' ),
+                'confirmDelete'  => __( 'Are you sure you want to delete this schedule?', 'museder-restoreone' ),
+            ]
+        );
+
         wp_localize_script( 'backup-lite-admin', 'BackupLite', [
             'ajaxUrl'        => admin_url( 'admin-ajax.php' ),
             'nonce'          => wp_create_nonce( self::NONCE ),
@@ -259,6 +302,9 @@ class Backup_Lite_UI {
                 'provideScheduleTitle'   => __( 'Please provide a schedule title.', 'museder-restoreone' ),
                 'scheduleDeleted'        => __( 'Schedule deleted.', 'museder-restoreone' ),
                 'unableDeleteSchedule'   => __( 'Unable to delete schedule.', 'museder-restoreone' ),
+                'scheduleSaved'          => __( 'Schedule saved successfully.', 'museder-restoreone' ),
+                'updateSchedule'         => __( 'Update Schedule', 'museder-restoreone' ),
+                'saveSchedule'           => __( 'Save Schedule', 'museder-restoreone' ),
                 'licenseError'           => __( 'An error occurred while verifying the license.', 'museder-restoreone' ),
                 'scheduleActionStart'    => __( 'Start Now', 'museder-restoreone' ),
                 'scheduleActionEdit'     => __( 'Edit', 'museder-restoreone' ),
@@ -266,6 +312,10 @@ class Backup_Lite_UI {
                 'scheduleActionsAria'    => __( 'Schedule actions', 'museder-restoreone' ),
                 'confirmDeleteSelected'  => __( 'Are you sure you want to delete the selected backups? This action cannot be undone.', 'museder-restoreone' ),
                 'confirmDeleteSchedule'  => __( 'Delete this schedule?', 'museder-restoreone' ),
+                'confirmDeleteSelectedRestoreHistory' => __( 'Are you sure you want to delete the selected restore history entries? This action cannot be undone.', 'museder-restoreone' ),
+                'restoreHistoryDeleted' => __( 'Restore history entries deleted.', 'museder-restoreone' ),
+                'selectAtLeastOne' => __( 'Please select at least one entry.', 'museder-restoreone' ),
+                'noEntriesSelected' => __( 'No valid entries selected.', 'museder-restoreone' ),
                 'messageReady'           => __( 'Backup ready for restore.', 'museder-restoreone' ),
                 'confirmOverwriteData'   => __( 'This will overwrite your site data. Continue?', 'museder-restoreone' ),
                 'jobPreparing'    => __( 'Preparing backup…', 'museder-restoreone' ),
@@ -553,11 +603,14 @@ class Backup_Lite_UI {
         $formatted = array_map(
             function ( $item ) {
                 $size = isset( $item['size'] ) ? (int) $item['size'] : 0;
+                $duration_seconds = isset( $item['duration_seconds'] ) && is_numeric( $item['duration_seconds'] ) ? (int) $item['duration_seconds'] : null;
                 return [
                     'name'       => $item['name'],
                     'size'       => $size,
                     'size_human' => size_format( $size, 2 ),
                     'created'    => $item['created'],
+                    'duration_seconds' => $duration_seconds,
+                    'duration'   => $duration_seconds !== null ? backup_lite_format_duration( $duration_seconds ) : '',
                 ];
             },
             $backups
@@ -694,6 +747,87 @@ class Backup_Lite_UI {
         ] );
     }
 
+    /**
+     * AJAX handler: Delete restore history entries.
+     */
+    public static function handle_delete_restore_history() {
+        self::verify_ajax_request();
+
+        // phpcs:disable WordPress.Security.NonceVerification.Missing,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified in verify_ajax_request() above, will be sanitized in array_map below
+        $raw = array();
+        if ( isset( $_POST['timestamps'] ) ) {
+            $raw = wp_unslash( $_POST['timestamps'] );
+        }
+        // phpcs:enable WordPress.Security.NonceVerification.Missing,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+
+        if ( is_string( $raw ) ) {
+            $decoded = json_decode( wp_unslash( $raw ), true );
+            $timestamps = is_array( $decoded ) ? $decoded : [];
+        } elseif ( is_array( $raw ) ) {
+            $timestamps = $raw;
+        } else {
+            $timestamps = [];
+        }
+
+        $timestamps = array_unique( array_filter( array_map( static function ( $timestamp ) {
+            return absint( $timestamp );
+        }, $timestamps ) ) );
+
+        if ( empty( $timestamps ) ) {
+            wp_send_json_error( [ 'message' => esc_html__( 'No restore history entries selected.', 'museder-restoreone' ) ], 400 );
+        }
+
+        $history = backup_lite_get_restore_history();
+        $deleted = [];
+        $errors = [];
+
+        foreach ( $timestamps as $timestamp ) {
+            $found = false;
+            foreach ( $history as $index => $entry ) {
+                $entry_timestamp = isset( $entry['timestamp_utc'] ) ? (int) $entry['timestamp_utc'] : 0;
+                if ( ! $entry_timestamp && isset( $entry['timestamp'] ) ) {
+                    // Fallback: try to parse timestamp string
+                    $entry_timestamp = backup_lite_parse_legacy_timestamp( $entry['timestamp'] );
+                }
+                
+                if ( $entry_timestamp === $timestamp ) {
+                    unset( $history[ $index ] );
+                    $deleted[] = $timestamp;
+                    $found = true;
+                    break;
+                }
+            }
+            
+            if ( ! $found ) {
+                $errors[] = [ 'timestamp' => $timestamp, 'message' => esc_html__( 'Restore history entry not found.', 'museder-restoreone' ) ];
+            }
+        }
+
+        // Save updated history
+        if ( ! empty( $deleted ) ) {
+            $history = array_values( $history ); // Re-index array
+            $path = backup_lite_get_restore_history_path();
+            $json = wp_json_encode( $history, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES );
+            
+            // Using native file APIs on local backup directory; paths are sanitized and constrained.
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+            if ( false !== file_put_contents( $path, $json, LOCK_EX ) ) {
+                backup_lite_log( 'info', 'Restore history entries deleted.', [ 'count' => count( $deleted ) ] );
+            } else {
+                $errors[] = [ 'message' => esc_html__( 'Failed to save updated restore history.', 'museder-restoreone' ) ];
+            }
+        }
+
+        if ( empty( $deleted ) && ! empty( $errors ) ) {
+            wp_send_json_error( [ 'errors' => $errors ], 500 );
+        }
+
+        wp_send_json_success( [
+            'deleted' => $deleted,
+            'errors'  => $errors,
+        ] );
+    }
+
     public static function handle_log_download() {
         if ( ! current_user_can( 'manage_options' ) ) {
             wp_die( esc_html__( 'Unauthorized.', 'museder-restoreone' ) );
@@ -764,13 +898,16 @@ class Backup_Lite_UI {
             // Long-running backup/restore job: attempt to raise time limit for CLI/cron.
             // @phpcs:disable Squiz.PHP.DiscouragedFunctions.Discouraged
             if ( function_exists( 'set_time_limit' ) ) {
-                @set_time_limit( 0 );
+        @set_time_limit( 0 );
             }
             // @phpcs:enable Squiz.PHP.DiscouragedFunctions.Discouraged
         }
 
-        if ( function_exists( 'ob_get_length' ) && ob_get_length() ) {
-            @ob_end_clean();
+        // Clear any output buffers
+        if ( function_exists( 'ob_get_level' ) ) {
+            while ( ob_get_level() > 0 ) {
+                ob_end_clean();
+            }
         }
 
         nocache_headers();
@@ -907,6 +1044,24 @@ class Backup_Lite_UI {
             $filename = basename( $file );
             $metadata = Backup_Lite_Backup::get_backup_metadata( $filename );
 
+            // Get duration from metadata first, then fallback to logs
+            $duration_seconds = null;
+            if ( isset( $metadata['duration_seconds'] ) && is_numeric( $metadata['duration_seconds'] ) ) {
+                $duration_seconds = (int) $metadata['duration_seconds'];
+            } else {
+                // Fallback to logs
+                $events = Backup_Lite_Log_Handler::get_recent_events( 'backup_result', 10 );
+                foreach ( $events as $event ) {
+                    $context = $event['context'];
+                    if ( isset( $context['file'] ) && basename( $context['file'] ) === $filename ) {
+                        if ( isset( $context['duration_seconds'] ) && is_numeric( $context['duration_seconds'] ) ) {
+                            $duration_seconds = (int) $context['duration_seconds'];
+                            break;
+                        }
+                    }
+                }
+            }
+
             $items[] = [
                 'name'    => $filename,
                 'path'    => wp_normalize_path( $file ),
@@ -917,6 +1072,7 @@ class Backup_Lite_UI {
                 'download_url' => self::build_backup_download_link( $file ),
                 'label'   => $metadata['label'] ?? '',
                 'encrypted' => ! empty( $metadata['encrypted'] ),
+                'duration_seconds' => $duration_seconds,
             ];
         }
 

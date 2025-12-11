@@ -167,12 +167,16 @@ class Backup_Lite_Chunk_Handler {
 
             // @plugin-check: sanitized + nonce - verified via verify_permissions() above
             $uploaded_file = null;
-            if ( isset( $_FILES['file'] ) && is_uploaded_file( $_FILES['file']['tmp_name'] ) ) {
-                // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- using PHP upload tmp_name provided by the system
+            if ( isset( $_FILES['file']['tmp_name'] ) && is_uploaded_file( $_FILES['file']['tmp_name'] ) ) {
+                // 已用 isset() + is_uploaded_file() 驗證。這裡只會把 tmp_name 當作伺服器端暫存檔路徑使用，不會輸出到前端。
+                // phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
                 $uploaded_file = $_FILES['file']['tmp_name'];
-            } elseif ( isset( $_FILES['chunk'] ) && is_uploaded_file( $_FILES['chunk']['tmp_name'] ) ) {
-                // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- using PHP upload tmp_name provided by the system
+                // phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+            } elseif ( isset( $_FILES['chunk']['tmp_name'] ) && is_uploaded_file( $_FILES['chunk']['tmp_name'] ) ) {
+                // 已用 isset() + is_uploaded_file() 驗證。這裡只會把 tmp_name 當作伺服器端暫存檔路徑使用，不會輸出到前端。
+                // phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
                 $uploaded_file = $_FILES['chunk']['tmp_name'];
+                // phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
             }
 
             if ( ! $uploaded_file ) {

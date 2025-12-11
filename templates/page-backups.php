@@ -1,23 +1,17 @@
 <?php
 /**
- * Backup Lite backups page.
+ * Template for Museder RestoreOne admin page.
  *
- * @package BackupLite
+ * 注意：此檔案中的變數（例如 $is_pro, $backups 等）皆由上層控制器在 include 前建立，
+ * 作用範圍僅限此模板檔案，並非在 WordPress 全域命名空間中到處使用的真正「全域變數」。
+ * 為了維持模板可讀性與向後相容性，我們在此關閉 PrefixAllGlobals 警告。
  *
- * @var array $backups
- * @var bool  $is_pro
+ * phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
  */
 
-// phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
-// 說明：本檔為內部後台 template，變數皆由 Museder RestoreOne 的 controller 傳入，
-// 不注入至 PHP 全域命名空間，也不作為可重用 API。僅用於此畫面渲染。
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
-
-// Template context: These variables are scoped to this template file and provided by the rendering function.
-// They use short names for template readability but are not global namespace pollution.
-// phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 $status  = isset( $status ) ? $status : Backup_Lite_UI::get_environment_status();
 $backups = isset( $backups ) ? $backups : Backup_Lite_UI::get_backups_list();
 // phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
@@ -56,6 +50,9 @@ $backups = isset( $backups ) ? $backups : Backup_Lite_UI::get_backups_list();
                     <strong><?php esc_html_e( 'Estimated Total:', 'museder-restoreone' ); ?></strong>
                     <span id="backup-lite-estimate-total-size" style="color: var(--bl-primary, #3b82f6);">-</span>
                 </div>
+                <p class="description" style="margin-top: 8px; margin-bottom: 0;">
+                    <?php esc_html_e( 'Actual backup archives are compressed and usually smaller than the estimated total size.', 'museder-restoreone' ); ?>
+                </p>
                 <div class="backup-lite-estimate-meta" style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e2e8f0; font-size: 12px; color: #64748b;">
                     <p style="margin: 4px 0;">
                         <?php esc_html_e( 'Last scanned:', 'museder-restoreone' ); ?>
@@ -181,6 +178,7 @@ $backups = isset( $backups ) ? $backups : Backup_Lite_UI::get_backups_list();
             <div class="progress-bar-fill" id="backup-progress-fill" style="height: 100%; border-radius: 5pt; width: 0; background: var(--primary); transition: width 0.3s ease;"></div>
             <span id="backup-progress-text" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 11px; font-weight: 600; color: #fff; z-index: 10; pointer-events: none;">0%</span>
         </div>
+        <p id="backup-elapsed-time" style="margin: 8px 0 0 0; font-size: 12px; color: #64748b; display: none;"></p>
         <button type="button" id="bl-backup-cancel-btn" class="button button-secondary" style="display:none; margin-top: 12px;">
             <?php esc_html_e( 'Cancel Backup', 'museder-restoreone' ); ?>
         </button>
@@ -214,6 +212,7 @@ $backups = isset( $backups ) ? $backups : Backup_Lite_UI::get_backups_list();
                         <th><?php esc_html_e( 'Type', 'museder-restoreone' ); ?></th>
                         <th><?php esc_html_e( 'Created', 'museder-restoreone' ); ?></th>
                         <th><?php esc_html_e( 'Size', 'museder-restoreone' ); ?></th>
+                        <th><?php esc_html_e( 'Duration', 'museder-restoreone' ); ?></th>
                         <th><?php esc_html_e( 'Actions', 'museder-restoreone' ); ?></th>
                     </tr>
                 </thead>
@@ -237,6 +236,16 @@ $backups = isset( $backups ) ? $backups : Backup_Lite_UI::get_backups_list();
                             <td><?php esc_html_e( 'Full Site', 'museder-restoreone' ); ?></td>
                             <td><?php echo esc_html( $item['created'] ); ?></td>
                             <td><?php echo esc_html( size_format( $item['size'], 2 ) ); ?></td>
+                            <td>
+                                <?php
+                                $duration_seconds = isset( $item['duration_seconds'] ) && is_numeric( $item['duration_seconds'] ) ? (int) $item['duration_seconds'] : null;
+                                if ( $duration_seconds !== null && $duration_seconds > 0 ) {
+                                    echo esc_html( backup_lite_format_duration( $duration_seconds ) );
+                                } else {
+                                    echo '—';
+                                }
+                                ?>
+                            </td>
                             <td>
                                 <details class="bl-actions-menu">
                                     <summary class="bl-actions-trigger" aria-label="<?php esc_attr_e( 'Backup actions', 'museder-restoreone' ); ?>">⋮</summary>

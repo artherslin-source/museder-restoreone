@@ -367,26 +367,21 @@ class Backup_Lite_Estimate_Size {
         $normalized_path = wp_normalize_path( $dir_path );
         $normalized_lower = strtolower( $normalized_path );
 
-        // Exclude backup and log directories
-        $backup_dir = backup_lite_get_backup_dir();
-        $log_dir = backup_lite_get_log_dir();
-        $storage_root = backup_lite_get_storage_root();
-        
-        if ( strpos( $normalized_path, $backup_dir ) === 0 ) {
-            return true;
+        // Use shared exclusion paths from backup process
+        $excluded_paths = backup_lite_get_excluded_paths();
+        foreach ( $excluded_paths as $excluded ) {
+            if ( '' !== $excluded && 0 === strpos( $normalized_path, $excluded ) ) {
+                return true;
+            }
         }
-        if ( strpos( $normalized_path, $log_dir ) === 0 ) {
-            return true;
-        }
-        if ( strpos( $normalized_path, $storage_root['path'] ) === 0 ) {
+
+        // Also exclude any museder-restoreone-* directories in uploads (handles versioned directories)
+        if ( strpos( $normalized_path, '/uploads/museder-restoreone' ) !== false ) {
             return true;
         }
 
-        // Exclude common patterns
+        // Exclude common patterns that are not in the shared list
         $exclude_patterns = [
-            'backup-lite-logs',
-            'backup-lite-backups',
-            'museder-restoreone', // Our plugin storage
             'cache',
             'mu-plugins',
             '.git',

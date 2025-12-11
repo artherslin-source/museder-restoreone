@@ -28,6 +28,9 @@ class Backup_Lite_Schedule_Handler {
         add_action( 'wp_ajax_backup_lite_save_schedule', [ __CLASS__, 'ajax_save_schedule' ] );
         add_action( 'wp_ajax_backup_lite_delete_schedule', [ __CLASS__, 'ajax_delete_schedule' ] );
         add_action( 'wp_ajax_backup_lite_run_schedule_now', [ __CLASS__, 'ajax_run_schedule_now' ] );
+        
+        // Unified schedule action handler
+        add_action( 'wp_ajax_backup_lite_schedule_action', [ __CLASS__, 'handle_schedule_action' ] );
 
         // Backwards compatibility with previous AJAX endpoints.
         add_action( 'wp_ajax_backup_lite_add_schedule', [ __CLASS__, 'ajax_add_schedule' ] );
@@ -91,8 +94,19 @@ class Backup_Lite_Schedule_Handler {
     public static function ajax_fetch_schedules() {
         self::verify_ajax();
 
+        $schedules = self::get_schedules();
+        $normalised = [];
+        foreach ( $schedules as $schedule_id => $schedule ) {
+            $normalised_schedule = self::normalise_schedule( $schedule );
+            // Ensure id field exists (use array key if id is missing)
+            if ( ! isset( $normalised_schedule['id'] ) ) {
+                $normalised_schedule['id'] = $schedule_id;
+            }
+            $normalised[] = $normalised_schedule;
+        }
+
         wp_send_json_success( [
-            'schedules' => array_values( self::get_schedules() ),
+            'schedules' => $normalised,
         ] );
     }
 
@@ -114,18 +128,106 @@ class Backup_Lite_Schedule_Handler {
      * AJAX: Delete schedule.
      */
     public static function ajax_delete_schedule() {
-        self::verify_ajax();
-
-        $id = isset( $_POST['id'] ) ? sanitize_text_field( wp_unslash( $_POST['id'] ) ) : '';
-
-        if ( ! $id ) {
-            wp_send_json_error( [ 'message' => __( 'Schedule ID missing.', 'museder-restoreone' ) ], 400 );
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error(
+                [ 'message' => __( 'Permission denied.', 'museder-restoreone' ) ],
+                403
+            );
         }
 
-        $deleted = self::delete_schedule( $id );
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified via check_ajax_referer below
+        $schedule_id = isset( $_POST['schedule_id'] ) ? sanitize_text_field( wp_unslash( $_POST['schedule_id'] ) ) : '';
+
+        if ( '' === $schedule_id ) {
+            // Fallback: try 'id' for backward compatibility
+            // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified via check_ajax_referer below
+            $schedule_id = isset( $_POST['id'] ) ? sanitize_text_field( wp_unslash( $_POST['id'] ) ) : '';
+        }
+
+        if ( '' === $schedule_id ) {
+            wp_send_json_error( [ 'message' => __( 'Missing schedule ID.', 'museder-restoreone' ) ], 400 );
+        }
+
+        // Verify nonce with schedule-specific nonce
+        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce is verified, not used as data
+        $nonce = isset( $_POST['_ajax_nonce'] ) ? wp_unslash( $_POST['_ajax_nonce'] ) : '';
+        check_ajax_referer( 'backup_lite_schedule_action_' . $schedule_id, '_ajax_nonce' );
+
+        $deleted = self::delete_schedule( $schedule_id );
 
         if ( ! $deleted ) {
             wp_send_json_error( [ 'message' => __( 'Schedule not found.', 'museder-restoreone' ) ], 404 );
+        }
+
+        wp_send_json_success();
+    }
+
+    /**
+     * Unified AJAX handler for schedule actions (start_now, delete, edit).
+     */
+    public static function handle_schedule_action() {
+        check_ajax_referer( 'backup_lite_admin_actions', 'nonce' );
+
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error(
+                [
+                    'message' => __( 'You do not have permission to manage schedules.', 'museder-restoreone' ),
+                ]
+            );
+        }
+
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified via check_ajax_referer above
+        $action      = isset( $_POST['schedule_action'] ) ? sanitize_key( wp_unslash( $_POST['schedule_action'] ) ) : '';
+        $schedule_id = isset( $_POST['schedule_id'] ) ? sanitize_text_field( wp_unslash( $_POST['schedule_id'] ) ) : '';
+        // phpcs:enable WordPress.Security.NonceVerification.Missing
+
+        if ( '' === $action || '' === $schedule_id ) {
+            wp_send_json_error(
+                [
+                    'message' => __( 'Missing schedule parameters.', 'museder-restoreone' ),
+                ]
+            );
+        }
+
+        // Execute action based on $action
+        $result = false;
+        switch ( $action ) {
+            case 'start_now':
+                $result = self::run_schedule_now( $schedule_id );
+                if ( ! is_wp_error( $result ) ) {
+                    $result = true;
+                } else {
+                    wp_send_json_error(
+                        [
+                            'message' => $result->get_error_message(),
+                        ]
+                    );
+                }
+                break;
+
+            case 'delete':
+                $result = self::delete_schedule( $schedule_id );
+                break;
+
+            case 'edit':
+                // Edit action - return success (frontend will handle form population)
+                $result = true;
+                break;
+
+            default:
+                wp_send_json_error(
+                    [
+                        'message' => __( 'Invalid schedule action.', 'museder-restoreone' ),
+                    ]
+                );
+        }
+
+        if ( ! $result ) {
+            wp_send_json_error(
+                [
+                    'message' => __( 'Schedule action failed.', 'museder-restoreone' ),
+                ]
+            );
         }
 
         wp_send_json_success();
@@ -167,53 +269,92 @@ class Backup_Lite_Schedule_Handler {
         self::verify_ajax();
 
         $data = self::read_schedule_data();
-        $id   = isset( $_POST['id'] ) ? sanitize_text_field( wp_unslash( $_POST['id'] ) ) : '';
+        
+        // Support both 'id' and 'schedule_id' parameters for backward compatibility
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified via verify_ajax()
+        $raw_id         = isset( $_POST['id'] ) ? wp_unslash( $_POST['id'] ) : '';
+        $raw_schedule_id = isset( $_POST['schedule_id'] ) ? wp_unslash( $_POST['schedule_id'] ) : '';
+        // phpcs:enable WordPress.Security.NonceVerification.Missing
+        
+        $id_from_id         = sanitize_text_field( $raw_id );
+        $id_from_schedule   = sanitize_text_field( $raw_schedule_id );
+        
+        // 只要有一個有值就算在編輯
+        $effective_id = $id_from_schedule !== '' ? $id_from_schedule : $id_from_id;
+        $is_edit = ( '' !== $effective_id );
 
-        // Check PRO limit for Free users
-        if ( ! $id ) {
+        // Check PRO limit for Free users - ONLY on create (not edit)
+        if ( ! $is_edit ) {
             $is_pro = Backup_Lite_Pro::is_pro_active();
             $existing = self::get_schedules();
             
             if ( ! $is_pro && count( $existing ) >= 1 ) {
                 wp_send_json_error( [
-                    'message' => __( 'Free version supports only 1 schedule. Upgrade to Museder RestoreOne PRO for multiple schedules.', 'museder-restoreone' ),
+                    'message' => __( 'Free version supports only 1 schedule. Delete the existing schedule or upgrade to PRO to add more.', 'museder-restoreone' ),
                     'code'    => 'schedule_limit_reached',
                 ], 403 );
             }
         }
 
-        if ( $id ) {
-            $schedule = self::update_schedule( $id, $data );
+        if ( $is_edit ) {
+            // Edit mode: Update existing schedule
+            $schedule = self::update_schedule( $effective_id, $data );
             if ( ! $schedule ) {
                 wp_send_json_error( [ 'message' => __( 'Schedule not found.', 'museder-restoreone' ) ], 404 );
             }
+            $message = __( 'Schedule updated.', 'museder-restoreone' );
         } else {
+            // Create mode: Create new schedule
             $schedule = self::create_schedule( $data );
             self::save_schedule( $schedule );
+            $message = __( 'Schedule created.', 'museder-restoreone' );
         }
 
-        wp_send_json_success( [ 'schedule' => $schedule ] );
+        wp_send_json_success( [
+            'schedule' => $schedule,
+            'message'  => $message,
+        ] );
     }
 
     /**
      * AJAX: Run schedule immediately.
      */
     public static function ajax_run_schedule_now() {
-        self::verify_ajax();
-
-        $id = isset( $_POST['id'] ) ? sanitize_text_field( wp_unslash( $_POST['id'] ) ) : '';
-
-        if ( ! $id ) {
-            wp_send_json_error( [ 'message' => __( 'Schedule ID missing.', 'museder-restoreone' ) ], 400 );
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error(
+                [ 'message' => __( 'Permission denied.', 'museder-restoreone' ) ],
+                403
+            );
         }
 
-        $result = self::run_schedule_now( $id );
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified via check_ajax_referer below
+        $schedule_id = isset( $_POST['schedule_id'] ) ? sanitize_text_field( wp_unslash( $_POST['schedule_id'] ) ) : '';
+
+        if ( '' === $schedule_id ) {
+            // Fallback: try 'id' for backward compatibility
+            // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified via check_ajax_referer below
+            $schedule_id = isset( $_POST['id'] ) ? sanitize_text_field( wp_unslash( $_POST['id'] ) ) : '';
+        }
+
+        if ( '' === $schedule_id ) {
+            wp_send_json_error( [ 'message' => __( 'Missing schedule ID.', 'museder-restoreone' ) ], 400 );
+        }
+
+        // Verify nonce with schedule-specific nonce
+        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce is verified, not used as data
+        $nonce = isset( $_POST['_ajax_nonce'] ) ? wp_unslash( $_POST['_ajax_nonce'] ) : '';
+        check_ajax_referer( 'backup_lite_schedule_action_' . $schedule_id, '_ajax_nonce' );
+
+        $result = self::run_schedule_now( $schedule_id );
 
         if ( is_wp_error( $result ) ) {
             wp_send_json_error( [ 'message' => $result->get_error_message() ], 500 );
         }
 
-        wp_send_json_success( [ 'schedule' => $result ] );
+        // Return updated schedule data
+        $schedules = self::get_schedules();
+        $updated_schedule = isset( $schedules[ $schedule_id ] ) ? self::normalise_schedule( $schedules[ $schedule_id ] ) : null;
+        wp_send_json_success( [ 'schedule' => $updated_schedule ] );
     }
 
     /**
@@ -236,7 +377,8 @@ class Backup_Lite_Schedule_Handler {
             return;
         }
 
-        $schedule['last_run'] = current_time( 'mysql' );
+        // Store last_run as UTC timestamp (use current_time with GMT flag)
+        $schedule['last_run_timestamp_utc'] = current_time( 'timestamp', true );
 
         $result = Backup_Lite_Backup::backup_site();
 
@@ -244,6 +386,8 @@ class Backup_Lite_Schedule_Handler {
             $schedule['last_result'] = 'success';
             $schedule['last_error']  = '';
             $schedule['retry_count'] = 0;
+            // Update last_run timestamp on success (use current_time with GMT flag)
+            $schedule['last_run_timestamp_utc'] = current_time( 'timestamp', true );
 
             Backup_Lite_Log_Handler::record_event(
                 'schedule_result',
@@ -280,7 +424,10 @@ class Backup_Lite_Schedule_Handler {
             }
         }
 
-        $schedule['next_run'] = self::compute_next_timestamp( $schedule, current_time( 'timestamp' ) );
+        // Use UTC timestamp for computing next run time (use current_time with GMT flag)
+        $next_timestamp = self::compute_next_timestamp( $schedule, current_time( 'timestamp', true ) );
+        $schedule['next_run_timestamp_utc'] = $next_timestamp;
+        $schedule['next_run'] = $next_timestamp;
         $schedules[ $schedule_id ] = $schedule;
         update_option( self::OPTION_KEY, $schedules );
 
@@ -296,6 +443,8 @@ class Backup_Lite_Schedule_Handler {
     private static function create_schedule( array $data ) {
         $schedule_id = uniqid( 'sched_', true );
 
+        $next_timestamp = self::compute_next_timestamp( $data );
+        
         $schedule = [
             'id'       => $schedule_id,
             'title'    => $data['title'],
@@ -306,10 +455,12 @@ class Backup_Lite_Schedule_Handler {
             'retain'   => (int) $data['retain'],
             'max_age'  => (int) $data['max_age'],
             'notify'   => $data['notify'],
-            'last_run' => '',
+            'last_run_timestamp_utc' => 0,
             'last_result' => 'pending',
             'last_error'  => '',
             'retry_count' => 0,
+            'next_run_timestamp_utc' => $next_timestamp,
+            'next_run' => $next_timestamp,
         ];
 
         // PRO features
@@ -330,7 +481,9 @@ class Backup_Lite_Schedule_Handler {
             }
         }
 
-        $schedule['next_run'] = self::compute_next_timestamp( $schedule );
+        $next_timestamp = self::compute_next_timestamp( $schedule );
+        $schedule['next_run_timestamp_utc'] = $next_timestamp;
+        $schedule['next_run'] = $next_timestamp;
 
         return $schedule;
     }
@@ -396,7 +549,10 @@ class Backup_Lite_Schedule_Handler {
             }
         }
 
-        $schedule['next_run'] = self::compute_next_timestamp( $schedule );
+        // Compute next run using UTC timestamp
+        $next_timestamp = self::compute_next_timestamp( $schedule );
+        $schedule['next_run_timestamp_utc'] = $next_timestamp;
+        $schedule['next_run'] = $next_timestamp;
 
         $schedules[ $schedule_id ] = $schedule;
         update_option( self::OPTION_KEY, $schedules );
@@ -456,7 +612,7 @@ class Backup_Lite_Schedule_Handler {
      * @param string $schedule_id Schedule ID.
      * @return bool
      */
-    private static function delete_schedule( $schedule_id ) {
+    public static function delete_schedule( $schedule_id ) {
         $schedules = self::get_schedules();
 
         if ( empty( $schedules[ $schedule_id ] ) ) {
@@ -488,7 +644,9 @@ class Backup_Lite_Schedule_Handler {
         $schedule = $schedules[ $schedule_id ];
         $schedule['status'] = ( 'enabled' === $status ) ? 'enabled' : 'disabled';
 
-        $schedule['next_run'] = self::compute_next_timestamp( $schedule );
+        $next_timestamp = self::compute_next_timestamp( $schedule );
+        $schedule['next_run_timestamp_utc'] = $next_timestamp;
+        $schedule['next_run'] = $next_timestamp;
 
         $schedules[ $schedule_id ] = $schedule;
         update_option( self::OPTION_KEY, $schedules );
@@ -508,7 +666,7 @@ class Backup_Lite_Schedule_Handler {
      * @param string $schedule_id Schedule ID.
      * @return array|WP_Error
      */
-    private static function run_schedule_now( $schedule_id ) {
+    public static function run_schedule_now( $schedule_id ) {
         $schedules = self::get_schedules();
 
         if ( empty( $schedules[ $schedule_id ] ) ) {
@@ -517,7 +675,8 @@ class Backup_Lite_Schedule_Handler {
 
         $schedule = $schedules[ $schedule_id ];
 
-        $schedule['last_run']    = current_time( 'mysql' );
+        // Store last_run as UTC timestamp (use current_time with GMT flag)
+        $schedule['last_run_timestamp_utc'] = current_time( 'timestamp', true );
         $schedule['retry_count'] = 0;
 
         $result = Backup_Lite_Backup::backup_site();
@@ -547,8 +706,11 @@ class Backup_Lite_Schedule_Handler {
         $schedule['last_result'] = 'success';
         $schedule['last_error']  = '';
 
-        $schedule['last_run'] = current_time( 'mysql' );
-        $schedule['next_run'] = self::compute_next_timestamp( $schedule );
+        // Update last_run timestamp on success (use UTC timestamp)
+        $schedule['last_run_timestamp_utc'] = current_time( 'timestamp', true );
+        // Store next_run as UTC timestamp (pass current UTC time as base)
+        $schedule['next_run_timestamp_utc'] = self::compute_next_timestamp( $schedule, current_time( 'timestamp', true ) );
+        $schedule['next_run'] = $schedule['next_run_timestamp_utc'];
 
         $schedules[ $schedule_id ] = $schedule;
         update_option( self::OPTION_KEY, $schedules );
@@ -589,7 +751,7 @@ class Backup_Lite_Schedule_Handler {
 
         $retain  = isset( $schedule['retain'] ) ? (int) $schedule['retain'] : 0;
         $max_age = isset( $schedule['max_age'] ) ? (int) $schedule['max_age'] : 0;
-        $now     = current_time( 'timestamp' );
+        $now     = current_time( 'timestamp', true ); // Use UTC timestamp
 
         if ( $retain > 0 && count( $files ) > $retain ) {
             $excess = array_slice( $files, $retain );
@@ -648,7 +810,12 @@ class Backup_Lite_Schedule_Handler {
                 continue;
             }
             try {
-                $stored[ $id ] = self::normalise_schedule( $schedule );
+                $normalised = self::normalise_schedule( $schedule );
+                // Ensure id field exists (use array key if id is missing)
+                if ( ! isset( $normalised['id'] ) ) {
+                    $normalised['id'] = $id;
+                }
+                $stored[ $id ] = $normalised;
             } catch ( Exception $e ) {
                 // Skip invalid schedule entries
                 unset( $stored[ $id ] );
@@ -688,8 +855,8 @@ class Backup_Lite_Schedule_Handler {
         if ( ! $timestamp ) {
             $next = isset( $schedule['next_run'] ) ? (int) $schedule['next_run'] : self::compute_next_timestamp( $schedule );
 
-            if ( $next <= time() ) {
-                $next = self::compute_next_timestamp( $schedule, time() );
+            if ( $next <= current_time( 'timestamp', true ) ) {
+                $next = self::compute_next_timestamp( $schedule, current_time( 'timestamp', true ) );
             }
 
             $recurrence = self::map_period_to_recurrence( $schedule['period'] );
@@ -768,6 +935,23 @@ class Backup_Lite_Schedule_Handler {
     }
 
     /**
+     * Sanitize schedule array from POST.
+     *
+     * @param array|string $value Schedule data.
+     * @return array|string
+     */
+    private static function sanitize_schedule_value( $value ) {
+        if ( is_array( $value ) ) {
+            foreach ( $value as $key => $sub_value ) {
+                $value[ $key ] = self::sanitize_schedule_value( $sub_value );
+            }
+            return $value;
+        }
+
+        return sanitize_text_field( (string) $value );
+    }
+
+    /**
      * Reads schedule data from request.
      *
      * @return array
@@ -775,37 +959,30 @@ class Backup_Lite_Schedule_Handler {
     private static function read_schedule_data() {
         // Nonce verified via verify_ajax() in calling method
         // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified via verify_ajax() in calling method
-        $raw = isset( $_POST['schedule'] ) ? wp_unslash( $_POST['schedule'] ) : '';
+        // phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+        $raw_schedule = isset( $_POST['schedule'] ) ? wp_unslash( $_POST['schedule'] ) : array();
+        // phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
         // phpcs:enable WordPress.Security.NonceVerification.Missing
 
-        if ( empty( $raw ) ) {
+        if ( empty( $raw_schedule ) ) {
             // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- reading JSON from php://input stream
             $raw = file_get_contents( 'php://input' ); // Fallback for JSON payload.
-        }
-
-        $decoded = json_decode( $raw, true );
-
-        if ( ! is_array( $decoded ) ) {
-            // Sanitize all POST values before using
-            // phpcs:disable WordPress.Security.NonceVerification.Missing -- admin-only tool, access protected by capability checks in verify_ajax()
-            $decoded = array();
-            foreach ( $_POST as $key => $value ) {
-                if ( 'schedule' !== $key && 'nonce' !== $key ) {
-                    if ( is_array( $value ) ) {
-                        $decoded[ sanitize_key( $key ) ] = array_map( 'sanitize_text_field', array_map( 'wp_unslash', $value ) );
-                    } else {
-                        $decoded[ sanitize_key( $key ) ] = sanitize_text_field( wp_unslash( $value ) );
-                    }
+            $decoded = json_decode( $raw, true );
+        } else {
+            // If schedule is already an array, sanitize it directly
+            if ( is_array( $raw_schedule ) ) {
+                $decoded = self::sanitize_schedule_value( $raw_schedule );
+            } else {
+                // If it's a JSON string, decode first then sanitize
+                $decoded = json_decode( $raw_schedule, true );
+                if ( is_array( $decoded ) ) {
+                    $decoded = self::sanitize_schedule_value( $decoded );
                 }
             }
-            // phpcs:enable WordPress.Security.NonceVerification.Missing
         }
 
-        // Sanitize schedule array
-        if ( is_array( $decoded ) ) {
-            $decoded = array_map( 'sanitize_text_field', $decoded );
-        } else {
-            $decoded = [];
+        if ( ! is_array( $decoded ) ) {
+            $decoded = array();
         }
 
         $settings = Backup_Lite_Settings::get_settings();
@@ -875,8 +1052,18 @@ class Backup_Lite_Schedule_Handler {
         if ( ! is_array( $schedule ) ) {
             $schedule = [];
         }
-        if ( ! isset( $schedule['last_run'] ) ) {
-            $schedule['last_run'] = '';
+        // Ensure id field exists (should be set during creation, but ensure it for legacy data)
+        // Note: id should already be in the schedule array, but we don't set it here
+        // as it comes from the array key in get_schedules()
+        
+        // Ensure last_run_timestamp_utc exists (migrate from old last_run if needed)
+        if ( ! isset( $schedule['last_run_timestamp_utc'] ) ) {
+            if ( ! empty( $schedule['last_run'] ) ) {
+                // Migrate old MySQL datetime string to UTC timestamp
+                $schedule['last_run_timestamp_utc'] = strtotime( $schedule['last_run'] . ' UTC' );
+            } else {
+                $schedule['last_run_timestamp_utc'] = 0;
+            }
         }
 
         if ( ! isset( $schedule['last_result'] ) ) {
@@ -891,8 +1078,18 @@ class Backup_Lite_Schedule_Handler {
             $schedule['retry_count'] = 0;
         }
 
+        // Ensure next_run_timestamp_utc exists
+        if ( ! isset( $schedule['next_run_timestamp_utc'] ) ) {
+            if ( isset( $schedule['next_run'] ) && is_numeric( $schedule['next_run'] ) ) {
+                $schedule['next_run_timestamp_utc'] = (int) $schedule['next_run'];
+            } else {
+                $schedule['next_run_timestamp_utc'] = self::compute_next_timestamp( $schedule );
+            }
+        }
+        
+        // Keep next_run for backward compatibility
         if ( ! isset( $schedule['next_run'] ) ) {
-            $schedule['next_run'] = self::compute_next_timestamp( $schedule );
+            $schedule['next_run'] = $schedule['next_run_timestamp_utc'];
         }
 
         // PRO features defaults
