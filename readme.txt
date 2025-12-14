@@ -4,7 +4,7 @@ Tags: backup, migration, restore, site-backup, database-backup
 Requires at least: 5.8
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 2.7.40.7
+Stable tag: 2.7.40.11
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -13,6 +13,23 @@ A lightweight WordPress backup & restore plugin focused on compatibility, single
 == Changelog ==
 
 For full changelog history, please see docs/changelog-archive.md in the plugin folder.
+
+= 2.7.40.11 =
+* Security: Addressed remaining Plugin Check DirectDB warnings by documenting allowlist-validated identifiers (identifiers cannot be prepared) with minimal-scope PHPCS ignores.
+* Performance: Added caching for schema introspection (`SHOW COLUMNS`) during restore search/replace.
+
+= 2.7.40.10 =
+* Code Quality: Fixed Plugin Check PreparedSQL error by inlining `$wpdb->prepare()` in chunked DB export queries.
+* Security: Restricted free/default DB operations to `$wpdb->prefix` tables using a live table whitelist; identifiers are validated by strict whitelist membership (SERVMASK cleanup uses its own live whitelist).
+
+= 2.7.40.9 =
+* Security: Made nonce verification explicit inside each chunk upload AJAX callback (capability → nonce → input) for better Plugin Check visibility.
+* Code Quality: Hardened database export/restore queries by avoiding placeholder use for identifiers and adding minimal-scope PHPCS suppressions with English rationale.
+
+= 2.7.40.8 =
+* Security: Enforced strict nonce verification order (capability → nonce → input) across restore AJAX handlers; invalid nonce now returns 403.
+* Security: Hardened chunk upload validation for $_FILES['chunk'] (UPLOAD_ERR_OK/size/is_uploaded_file/file_exists).
+* UX: Frontend now treats 403 as session expired, stops polling, and prompts reload.
 
 = 2.7.40.7 =
 * Code Quality: Centralized restore/S3 streaming I/O into helper methods to reduce Plugin Check file operation errors.

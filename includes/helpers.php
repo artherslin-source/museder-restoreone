@@ -696,3 +696,120 @@ function backup_lite_get_recent_logs( $limit = 5 ) {
 function backup_lite_normalize_bool( $value ) {
     return filter_var( $value, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE );
 }
+
+/**
+ * Get a cached whitelist of WordPress tables for the current site prefix.
+ *
+ * Important:
+ * - SQL identifiers (table names) cannot be safely passed as prepared values.
+ * - We therefore validate identifiers by strict membership in a live whitelist
+ *   sourced from the database engine.
+ *
+ * @return array<int,string> List of table names starting with $wpdb->prefix.
+ */
+function backup_lite_get_wp_table_whitelist() {
+	static $cached = null;
+
+	if ( null !== $cached ) {
+		return $cached;
+	}
+
+	global $wpdb;
+	if ( ! isset( $wpdb->prefix ) || '' === (string) $wpdb->prefix ) {
+		$cached = [];
+		return $cached;
+	}
+
+	$pattern = $wpdb->esc_like( (string) $wpdb->prefix ) . '%';
+
+	// Introspection query used to list core/site tables for backup/restore operations.
+	// The LIKE pattern is prepared; result table names come from the DB engine (not user input).
+	// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+	$tables = $wpdb->get_col( $wpdb->prepare( 'SHOW TABLES LIKE %s', $pattern ) );
+	// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+	$cached = is_array( $tables ) ? array_values( array_filter( $tables, 'is_string' ) ) : [];
+
+	return $cached;
+}
+
+/**
+ * Validate a WordPress table name by strict membership in the prefix whitelist.
+ *
+ * @param string $table Table name.
+ * @return string|false Validated table name or false.
+ */
+function backup_lite_validate_wp_table_name( $table ) {
+	static $set = null;
+
+	if ( null === $set ) {
+		$set = [];
+		foreach ( backup_lite_get_wp_table_whitelist() as $name ) {
+			$set[ $name ] = true;
+		}
+	}
+
+	$table = (string) $table;
+	if ( '' === $table ) {
+		return false;
+	}
+
+	return isset( $set[ $table ] ) ? $table : false;
+}
+
+/**
+ * Get a cached whitelist of SERVMASK placeholder tables for cleanup.
+ *
+ * This is a special-case to remove leftover tables created by All-in-One WP Migration imports.
+ *
+ * @return array<int,string> List of SERVMASK_PREFIX_* tables.
+ */
+function backup_lite_get_servmask_table_whitelist() {
+	static $cached = null;
+
+	if ( null !== $cached ) {
+		return $cached;
+	}
+
+	global $wpdb;
+	$pattern = 'SERVMASK\_PREFIX\_%';
+
+	// Introspection query used to locate placeholder tables for cleanup during restore.
+	// Pattern is hardcoded and prepared; results come from the DB engine (not user input).
+	// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+	$tables = $wpdb->get_col( $wpdb->prepare( 'SHOW TABLES LIKE %s', $pattern ) );
+	// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+	$cached = is_array( $tables ) ? array_values( array_filter( $tables, 'is_string' ) ) : [];
+
+	return $cached;
+}
+
+/**
+ * Validate a SERVMASK placeholder table name for cleanup.
+ *
+ * @param string $table Table name.
+ * @return string|false Validated table name or false.
+ */
+function backup_lite_validate_servmask_table_name( $table ) {
+	static $set = null;
+
+	if ( null === $set ) {
+		$set = [];
+		foreach ( backup_lite_get_servmask_table_whitelist() as $name ) {
+			$set[ $name ] = true;
+		}
+	}
+
+	$table = (string) $table;
+	if ( '' === $table ) {
+		return false;
+	}
+
+	// Conservative identifier charset/length guard.
+	if ( ! preg_match( '/^[A-Za-z0-9_]{1,64}$/', $table ) ) {
+		return false;
+	}
+
+	return isset( $set[ $table ] ) ? $table : false;
+}

@@ -567,10 +567,9 @@ class Backup_Lite_Restore {
     private static function cleanup_servmask_tables() {
         global $wpdb;
 
-        // @plugin-check: backup-restore
-        // Direct DB query to find SERVMASK_PREFIX_ tables from backup files (not user input)
-        // Cannot use prepare() because LIKE pattern with wildcards requires escaping
-        $tables = $wpdb->get_col( $wpdb->prepare( "SHOW TABLES LIKE %s", 'SERVMASK\_PREFIX\_%' ) ); // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- safe: hardcoded pattern for cleanup, not user input
+        // Introspection query used during restore to detect SERVMASK placeholder tables.
+        // Pattern is hardcoded; identifiers are validated via a live whitelist helper.
+        $tables = backup_lite_get_servmask_table_whitelist();
         if ( empty( $tables ) ) {
             return;
         }
@@ -578,28 +577,21 @@ class Backup_Lite_Restore {
         $dropped = [];
 
         foreach ( $tables as $table ) {
-            // @plugin-check: backup-restore
-            // $table is from SHOW TABLES result, sanitized with preg_replace before use
-            $safe = preg_replace( '/[^A-Za-z0-9_]/', '', $table );
-            if ( empty( $safe ) ) {
+            $safe = backup_lite_validate_servmask_table_name( $table );
+            if ( ! $safe ) {
                 continue;
             }
 
-            // @plugin-check: backup-restore
-            // $safe has been whitelist-filtered (alphanumeric + underscore only), safe for DROP TABLE
-            // SQL source: only executes sanitized table names from plugin-generated backup files
-            // Table name sanitization: preg_replace('/[^A-Za-z0-9_]/', '', $table) ensures only safe characters
-            // Note: Using prepare() for table name (identifier) - $safe is already sanitized
-            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery
-            // phpcs:disable WordPress.DB.DirectDatabaseQuery.NoCaching
-            // phpcs:disable WordPress.DB.DirectDatabaseQuery.SchemaChange
-            // 說明：以下查詢用於備份/還原過程，必須直接操作資料表結構，table 名稱皆來自 $wpdb 或白名單，不接受使用者輸入。
+            // Runtime schema change is required for restore correctness (cleanup of placeholder tables).
+            // Table identifier cannot be prepared; validated via backup_lite_validate_servmask_table_name()
+            // against a live whitelist sourced from the DB engine. No user input reaches SQL here.
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
             $wpdb->query(
-                $wpdb->prepare( 'DROP TABLE IF EXISTS `%s`', $safe )
+                // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- Identifier cannot be passed as a prepared value; validated via backup_lite_validate_servmask_table_name() (live SERVMASK whitelist).
+                // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Identifier cannot be prepared; validated via backup_lite_validate_servmask_table_name() (live SERVMASK whitelist).
+                "DROP TABLE IF EXISTS `{$safe}`"
             );
-            // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery
-            // phpcs:enable WordPress.DB.DirectDatabaseQuery.NoCaching
-            // phpcs:enable WordPress.DB.DirectDatabaseQuery.SchemaChange
+            // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
             $dropped[] = $safe;
         }
 
@@ -1541,9 +1533,8 @@ class Backup_Lite_Restore {
                     // The .sql file path is resolved and validated by backup_lite_get_backup_path(),
                     // and cannot be controlled by unprivileged users.
                     // Cannot use prepare() because this is a complete SQL script with multiple statements.
+                    // Restore is admin-initiated; schema/data changes are expected and required for correctness.
                     // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange, PluginCheck.Security.DirectDB.UnescapedDBParameter
-                    // 說明：以下查詢用於備份/還原流程，必須直接操作資料表結構，無法使用高階 API 或快取。
-                    // 所有 table 名稱皆由 $wpdb 提供或白名單，不接受使用者輸入。
                     $wpdb->flush();
                     $result = $wpdb->query( $prepared ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- $prepared is a complete SQL script from backup file, cannot use prepare() for multi-statement scripts
                     // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange, PluginCheck.Security.DirectDB.UnescapedDBParameter
@@ -1581,8 +1572,8 @@ class Backup_Lite_Restore {
     private static function run_database_primers() {
         global $wpdb;
         // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
-        // 說明：以下查詢用於備份/還原流程，必須直接操作資料表結構，無法使用高階 API 或快取。
-        // 所有 table 名稱皆由 $wpdb 提供或白名單，不接受使用者輸入。
+        // Restore path: required MySQL session settings (hardcoded strings), not user input.
+        // Caching/higher-level APIs are not applicable here.
         // These are MySQL session settings (hardcoded strings), not user input.
         $wpdb->query( 'SET foreign_key_checks = 0' );
         $wpdb->query( "SET NAMES 'utf8mb4'" );
@@ -1593,8 +1584,8 @@ class Backup_Lite_Restore {
     private static function restore_database_constraints() {
         global $wpdb;
         // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
-        // 說明：以下查詢用於備份/還原流程，必須直接操作資料表結構，無法使用高階 API 或快取。
-        // 所有 table 名稱皆由 $wpdb 提供或白名單，不接受使用者輸入。
+        // Restore path: required MySQL session setting (hardcoded string), not user input.
+        // Caching/higher-level APIs are not applicable here.
         // This is a MySQL session setting (hardcoded string), not user input.
         $wpdb->query( 'SET foreign_key_checks = 1' );
         // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
@@ -1664,12 +1655,9 @@ class Backup_Lite_Restore {
     private static function run_search_replace( $pairs ) {
         global $wpdb;
 
-        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery
-        // phpcs:disable WordPress.DB.DirectDatabaseQuery.NoCaching
-        // 說明：以下查詢用於備份/還原過程，必須直接操作資料表結構，table 名稱皆來自 $wpdb 或白名單，不接受使用者輸入。
-        $tables = $wpdb->get_col( 'SHOW TABLES' );
-        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery
-        // phpcs:enable WordPress.DB.DirectDatabaseQuery.NoCaching
+        // Restore search/replace is intentionally limited to this site's $wpdb->prefix tables.
+        // Table identifiers cannot be prepared; we validate identifiers via live whitelist.
+        $tables = backup_lite_get_wp_table_whitelist();
         if ( empty( $tables ) ) {
             return;
         }
@@ -1677,15 +1665,32 @@ class Backup_Lite_Restore {
         $text_types = [ 'tinytext', 'text', 'mediumtext', 'longtext', 'varchar', 'char' ];
 
         foreach ( $tables as $table ) {
-            // @plugin-check: backup-restore
-            // $table comes from SHOW TABLES result, sanitized with preg_replace before use in query
-            $safe_table = preg_replace( '/[^A-Za-z0-9_]/', '', $table );
-            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery
-            // phpcs:disable WordPress.DB.DirectDatabaseQuery.NoCaching
-            // 說明：以下查詢用於備份/還原過程，必須直接操作資料表結構，table 名稱皆來自 $wpdb 或白名單，不接受使用者輸入。
-            $columns = $wpdb->get_results( $wpdb->prepare( "SHOW COLUMNS FROM `%s`", $safe_table ), ARRAY_A );
-            // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery
-            // phpcs:enable WordPress.DB.DirectDatabaseQuery.NoCaching
+            $safe_table = backup_lite_validate_wp_table_name( $table );
+            if ( ! $safe_table ) {
+                continue;
+            }
+            // Introspection required to find text-like columns.
+            // Table identifier cannot be prepared; validated via backup_lite_validate_wp_table_name().
+            $cache_key = 'backup_lite_sr_columns_' . md5( $safe_table );
+            $columns   = wp_cache_get( $cache_key, 'backup_lite' );
+
+            if ( false === $columns ) {
+                // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery
+                $columns = $wpdb->get_results(
+                    // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- Identifier cannot be passed as a prepared value; validated via backup_lite_validate_wp_table_name() (live prefix whitelist).
+                    // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Identifier cannot be prepared; validated via backup_lite_validate_wp_table_name() (live prefix whitelist).
+                    "SHOW COLUMNS FROM `{$safe_table}`",
+                    ARRAY_A
+                );
+                // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery
+
+                // Cache schema introspection; safe to reuse across requests.
+                wp_cache_set( $cache_key, $columns, 'backup_lite', HOUR_IN_SECONDS );
+            }
+
+            if ( empty( $columns ) || ! is_array( $columns ) ) {
+                continue;
+            }
             if ( empty( $columns ) ) {
                 continue;
             }
@@ -1701,14 +1706,17 @@ class Backup_Lite_Restore {
                 continue;
             }
 
-            // @plugin-check: backup-restore
-            // $safe_table has been whitelist-filtered (alphanumeric + underscore only), safe for SELECT
-            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery
-            // phpcs:disable WordPress.DB.DirectDatabaseQuery.NoCaching
-            // 說明：以下查詢用於備份/還原過程，必須直接操作資料表結構，table 名稱皆來自 $wpdb 或白名單，不接受使用者輸入。
-            $rows = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM `%s`", $safe_table ), ARRAY_A );
-            // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery
-            // phpcs:enable WordPress.DB.DirectDatabaseQuery.NoCaching
+            // Full table scan is required to update serialized/text fields reliably.
+            // Table identifier cannot be prepared; validated via backup_lite_validate_wp_table_name().
+            // No object caching: restore/migration data must reflect current DB state and may be large.
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+            $rows = $wpdb->get_results(
+                // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- Identifier cannot be passed as a prepared value; validated via backup_lite_validate_wp_table_name() (live prefix whitelist).
+                // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Identifier cannot be prepared; validated via backup_lite_validate_wp_table_name() (live prefix whitelist).
+                "SELECT * FROM `{$safe_table}`",
+                ARRAY_A
+            );
+            // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
             if ( empty( $rows ) ) {
                 continue;
             }
@@ -1725,8 +1733,11 @@ class Backup_Lite_Restore {
                 }
 
                 if ( ! empty( $update ) ) {
-                    // @plugin-check: safe table name from whitelist
+                    // $safe_table is validated via backup_lite_validate_wp_table_name().
+                    // This is a required restore/migration write; caching does not apply to writes.
+                    // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
                     $wpdb->update( $safe_table, $update, [ 'id' => isset( $row['id'] ) ? $row['id'] : $row[ array_key_first( $row ) ] ] );
+                    // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
                 }
             }
         }

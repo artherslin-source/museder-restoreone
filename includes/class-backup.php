@@ -839,20 +839,26 @@ class Backup_Lite_Backup {
         }
 
         foreach ( $tables as $table ) {
-            // @plugin-check: safe table name from whitelist
-            // $table comes from SHOW TABLES result (system query, not user input)
-            // Sanitize table name to ensure only safe characters
-            $safe_table = preg_replace( '/[^A-Za-z0-9_]/', '', $table );
-            if ( empty( $safe_table ) ) {
+            // Table identifiers cannot be prepared. Validate against a live whitelist (prefix-only).
+            $safe_table = backup_lite_validate_wp_table_name( $table );
+            if ( ! $safe_table ) {
                 continue;
             }
 
             // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing SQL dump file
             fwrite( $handle, sprintf( "-- Table structure for table `%s`\n\n", $safe_table ) );
 
-            // @plugin-check: allowed - schema introspection for backup, table name from whitelist only
-            // Cannot use prepare() because SHOW CREATE TABLE doesn't support placeholders
-            $create = $wpdb->get_row( $wpdb->prepare( "SHOW CREATE TABLE `%s`", $safe_table ), ARRAY_N ); // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- safe: table name sanitized from SHOW TABLES result
+            // Schema introspection required to export a consistent backup.
+            // The table identifier cannot be prepared; validated via backup_lite_validate_wp_table_name().
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+            $create = $wpdb->get_row(
+                // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- Identifier cannot be passed as a prepared value; validated via backup_lite_validate_wp_table_name() (live prefix whitelist).
+                // phpcs:ignore WordPress.DB.DirectDatabaseQuery.SchemaChange -- "SHOW CREATE TABLE" is schema introspection, not a schema change.
+                // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Identifier cannot be prepared; validated via backup_lite_validate_wp_table_name() (live prefix whitelist).
+                "SHOW CREATE TABLE `{$safe_table}`",
+                ARRAY_N
+            );
+            // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
             if ( isset( $create[1] ) ) {
                 // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing SQL dump file
                 fwrite( $handle, "DROP TABLE IF EXISTS `{$safe_table}`;\n" );
@@ -860,8 +866,15 @@ class Backup_Lite_Backup {
                 fwrite( $handle, $create[1] . ";\n\n" );
             }
 
-            // @plugin-check: safe table name from whitelist
-            $row_count = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM `%s`", $safe_table ) );
+            // COUNT(*) is required to batch export large tables.
+            // The table identifier cannot be prepared; validated via backup_lite_validate_wp_table_name().
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+            $row_count = (int) $wpdb->get_var(
+                // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- Identifier cannot be passed as a prepared value; validated via backup_lite_validate_wp_table_name() (live prefix whitelist).
+                // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Identifier cannot be prepared; validated via backup_lite_validate_wp_table_name() (live prefix whitelist).
+                "SELECT COUNT(*) FROM `{$safe_table}`"
+            );
+            // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
             if ( $row_count === 0 ) {
                 // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing SQL dump file
                 fwrite( $handle, "\n" );
@@ -873,13 +886,19 @@ class Backup_Lite_Backup {
 
             $offset = 0;
             while ( $offset < $row_count ) {
-                // @plugin-check: safe table name from whitelist
-                $rows = $wpdb->get_results( $wpdb->prepare(
-                    "SELECT * FROM `%s` LIMIT %d OFFSET %d",
-                    $safe_table,
-                    self::CHUNK_SIZE,
-                    $offset
-                ), ARRAY_A );
+                // Chunked export: direct query is required here; table name is whitelist-sanitized.
+                // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+                $rows = $wpdb->get_results(
+                    // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- Identifier cannot be passed as a prepared value; validated via backup_lite_validate_wp_table_name() (live prefix whitelist).
+                    $wpdb->prepare(
+                        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table identifier cannot be prepared; validated via backup_lite_validate_wp_table_name() (live prefix whitelist).
+                        "SELECT * FROM `{$safe_table}` LIMIT %d OFFSET %d",
+                        self::CHUNK_SIZE,
+                        $offset
+                    ),
+                    ARRAY_A
+                );
+                // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 
                 if ( empty( $rows ) ) {
                     break;
@@ -1184,14 +1203,9 @@ class Backup_Lite_Backup {
     }
 
     private static function get_tables() {
-        global $wpdb;
-        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery
-        // phpcs:disable WordPress.DB.DirectDatabaseQuery.NoCaching
-        // 說明：以下查詢用於備份/還原過程，必須直接操作資料表結構，table 名稱皆來自 $wpdb 或白名單，不接受使用者輸入。
-        $tables = $wpdb->get_col( 'SHOW TABLES' );
-        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery
-        // phpcs:enable WordPress.DB.DirectDatabaseQuery.NoCaching
-        return is_array( $tables ) ? $tables : [];
+        // Backup Lite export is intentionally limited to this site's $wpdb->prefix tables.
+        // Table identifiers cannot be prepared; we use a live whitelist from the DB engine.
+        return backup_lite_get_wp_table_whitelist();
     }
 
     private static function escape_value( $value ) {

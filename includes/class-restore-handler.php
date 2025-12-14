@@ -27,15 +27,21 @@ class Backup_Lite_Restore_Handler {
 
     public static function upload() {
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
-        // Additional nonce verification for plugin-check
-        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
+        // Capability verified above. Verify nonce next (before reading any other request input).
+        if ( false === check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce', false ) ) {
+            wp_send_json_error(
+                [
+                    'code'    => 'invalid_nonce',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Your session has expired. Please reload the page.', 'museder-restoreone' ),
+                ],
+                403
+            );
+        }
 
         // Optimize runtime environment for large file processing
         self::optimize_runtime_environment();
 
-        // Nonce verified above
-        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
         $file = null;
         // $_FILES[*]['tmp_name'] is a server-side path managed by PHP upload handling and does not need sanitization.
         // phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotValidated, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
@@ -53,7 +59,6 @@ class Backup_Lite_Restore_Handler {
             $file = $_FILES['restore_file'];
         }
         // phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotValidated, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
-        // phpcs:enable WordPress.Security.NonceVerification.Missing
         if ( empty( $file ) ) {
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'No restore file uploaded.', 'museder-restoreone' ) ], 400 );
@@ -195,14 +200,19 @@ class Backup_Lite_Restore_Handler {
 
     public static function restore_from_backup() {
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
-        // Additional nonce verification for plugin-check
-        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
+        // Capability verified above. Verify nonce next (before reading any other request input).
+        if ( false === check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce', false ) ) {
+            wp_send_json_error(
+                [
+                    'code'    => 'invalid_nonce',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Your session has expired. Please reload the page.', 'museder-restoreone' ),
+                ],
+                403
+            );
+        }
 
-        // Nonce verified above
-        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
         $filename = isset( $_POST['filename'] ) ? sanitize_text_field( wp_unslash( $_POST['filename'] ) ) : '';
-        // phpcs:enable WordPress.Security.NonceVerification.Missing
         if ( empty( $filename ) ) {
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'Backup filename not provided.', 'museder-restoreone' ) ], 400 );
@@ -289,14 +299,19 @@ class Backup_Lite_Restore_Handler {
 
     public static function restore_remote() {
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
-        // Additional nonce verification for plugin-check
-        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
+        // Capability verified above. Verify nonce next (before reading any other request input).
+        if ( false === check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce', false ) ) {
+            wp_send_json_error(
+                [
+                    'code'    => 'invalid_nonce',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Your session has expired. Please reload the page.', 'museder-restoreone' ),
+                ],
+                403
+            );
+        }
 
-        // Nonce verified above
-        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
         $url = isset( $_POST['url'] ) ? esc_url_raw( wp_unslash( $_POST['url'] ) ) : '';
-        // phpcs:enable WordPress.Security.NonceVerification.Missing
         if ( empty( $url ) || ! wp_http_validate_url( $url ) ) {
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'Please enter a valid URL.', 'museder-restoreone' ) ], 400 );
@@ -406,6 +421,17 @@ class Backup_Lite_Restore_Handler {
 
     public static function progress() {
         self::ensure_permission();
+        // Capability verified above. Verify nonce next (even though this handler reads no other inputs).
+        if ( false === check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce', false ) ) {
+            wp_send_json_error(
+                [
+                    'code'    => 'invalid_nonce',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Your session has expired. Please reload the page.', 'museder-restoreone' ),
+                ],
+                403
+            );
+        }
 
         $state = self::get_state();
 
@@ -420,7 +446,17 @@ class Backup_Lite_Restore_Handler {
 
     public static function enqueue_restore_job() {
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
+        // Capability verified above. Verify nonce next (before reading any other request input).
+        if ( false === check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce', false ) ) {
+            wp_send_json_error(
+                [
+                    'code'    => 'invalid_nonce',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Your session has expired. Please reload the page.', 'museder-restoreone' ),
+                ],
+                403
+            );
+        }
 
         // Check for active jobs, but also clean up any stale jobs that should be considered finished
         $active_job = Backup_Lite_Restore_Jobs::has_active_job();
@@ -508,32 +544,20 @@ class Backup_Lite_Restore_Handler {
         }
         
         self::ensure_permission();
-        
-        // Try to verify AJAX request, but don't fail completely if nonce is invalid
-        // This allows status checks to continue even if nonce expires during long restore
-        $nonce_valid = false;
-        $nonce = isset( $_REQUEST['nonce'] ) ? sanitize_text_field( wp_unslash( $_REQUEST['nonce'] ) ) : '';
-        if ( ! empty( $nonce ) && wp_verify_nonce( $nonce, Backup_Lite_UI::NONCE ) ) {
-            $nonce_valid = true;
-        } else {
-            // Nonce validation failed, but we'll still try to return job status
-            // This is important for long-running restores where nonce may expire
-            backup_lite_log( 'warning', 'job_status_nonce_failed', [
-                'nonce_provided' => ! empty( $nonce ),
-                'nonce_length' => strlen( $nonce ),
-            ] );
+        // Capability verified above. Verify nonce next (before reading any other request input).
+        if ( false === check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce', false ) ) {
+            wp_send_json_error(
+                [
+                    'code'    => 'invalid_nonce',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Your session has expired. Please reload the page.', 'museder-restoreone' ),
+                ],
+                403
+            );
         }
 
         $job_id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
         if ( empty( $job_id ) ) {
-            // If nonce is invalid, return 403 instead of 400 to trigger nonce refresh
-            if ( ! $nonce_valid ) {
-                wp_send_json_error( [
-                    'code'    => 'invalid_nonce',
-                    // @plugin-check: escaped
-                    'message' => esc_html__( 'Your session has expired. Refreshing security token…', 'museder-restoreone' ),
-                ], 403 );
-            }
             // If job_id is empty, try to get the latest active job or return history only
             // This helps when frontend loses track of job_id but restore might have completed
             $active_job = Backup_Lite_Restore_Jobs::has_active_job();
@@ -554,14 +578,6 @@ class Backup_Lite_Restore_Handler {
 
         $job = Backup_Lite_Restore_Jobs::get_job( $job_id );
         if ( ! $job ) {
-            // If job not found but nonce is invalid, return nonce error first
-            if ( ! $nonce_valid ) {
-                wp_send_json_error( [
-                    'code'    => 'invalid_nonce',
-                    // @plugin-check: escaped
-                    'message' => esc_html__( 'Your session has expired. Refreshing security token…', 'museder-restoreone' ),
-                ], 403 );
-            }
             // Job not found - return HTTP 200 with history so frontend can check completion status
             // This prevents 404 errors that break frontend polling logic
             wp_send_json_success( [
@@ -570,20 +586,6 @@ class Backup_Lite_Restore_Handler {
                 // @plugin-check: escaped
                 'message' => esc_html__( 'Restore job not found. Check history for recent restores.', 'museder-restoreone' ),
             ] );
-            return;
-        }
-
-        // If nonce is invalid but we have a valid job, still return the job status
-        // This allows the frontend to continue monitoring even if nonce expires
-        if ( ! $nonce_valid ) {
-            // Return success but include a flag to indicate nonce should be refreshed
-            wp_send_json_success(
-                [
-                    'job'     => Backup_Lite_Restore_Jobs::prepare_job_response( $job ),
-                    'history' => self::history_for_js( 10 ),
-                    'nonce_expired' => true, // Flag to trigger nonce refresh on frontend
-                ]
-            );
             return;
         }
 
@@ -597,14 +599,19 @@ class Backup_Lite_Restore_Handler {
 
     public static function trigger_restore_job() {
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
-        // Additional nonce verification for plugin-check
-        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
+        // Capability verified above. Verify nonce next (before reading any other request input).
+        if ( false === check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce', false ) ) {
+            wp_send_json_error(
+                [
+                    'code'    => 'invalid_nonce',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Your session has expired. Please reload the page.', 'museder-restoreone' ),
+                ],
+                403
+            );
+        }
 
-        // Nonce verified above
-        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
         $job_id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
-        // phpcs:enable WordPress.Security.NonceVerification.Missing
         if ( empty( $job_id ) ) {
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'Job identifier is required.', 'museder-restoreone' ) ], 400 );
@@ -659,14 +666,19 @@ class Backup_Lite_Restore_Handler {
         }
         
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
-        // Additional nonce verification for plugin-check
-        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
+        // Capability verified above. Verify nonce next (before reading any other request input).
+        if ( false === check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce', false ) ) {
+            wp_send_json_error(
+                [
+                    'code'    => 'invalid_nonce',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Your session has expired. Please reload the page.', 'museder-restoreone' ),
+                ],
+                403
+            );
+        }
 
-        // Nonce verified above
-        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
         $job_id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
-        // phpcs:enable WordPress.Security.NonceVerification.Missing
         if ( empty( $job_id ) ) {
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'Job identifier is required.', 'museder-restoreone' ) ], 400 );
@@ -715,15 +727,20 @@ class Backup_Lite_Restore_Handler {
         }
         
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
-        // Additional nonce verification for plugin-check
-        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
+        // Capability verified above. Verify nonce next (before reading any other request input).
+        if ( false === check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce', false ) ) {
+            wp_send_json_error(
+                [
+                    'code'    => 'invalid_nonce',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Your session has expired. Please reload the page.', 'museder-restoreone' ),
+                ],
+                403
+            );
+        }
 
-        // Nonce verified above
-        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
         try {
             $job_id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
-        // phpcs:enable WordPress.Security.NonceVerification.Missing
             if ( $job_id ) {
                 Backup_Lite_Restore_Jobs::request_cancel( $job_id );
             } else {
@@ -1055,7 +1072,17 @@ class Backup_Lite_Restore_Handler {
 
     public static function chunk_prepare() {
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
+        // Capability verified above. Verify nonce next (before reading any other request input).
+        if ( false === check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce', false ) ) {
+            wp_send_json_error(
+                [
+                    'code'    => 'invalid_nonce',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Your session has expired. Please reload the page.', 'museder-restoreone' ),
+                ],
+                403
+            );
+        }
 
         $filename = '';
         if ( isset( $_POST['filename'] ) ) {
@@ -1116,7 +1143,17 @@ class Backup_Lite_Restore_Handler {
 
     public static function chunk_upload() {
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
+        // Capability verified above. Verify nonce next (before reading any other request input).
+        if ( false === check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce', false ) ) {
+            wp_send_json_error(
+                [
+                    'code'    => 'invalid_nonce',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Your session has expired. Please reload the page.', 'museder-restoreone' ),
+                ],
+                403
+            );
+        }
 
         $session_id = '';
         if ( isset( $_POST['session_id'] ) ) {
@@ -1141,15 +1178,20 @@ class Backup_Lite_Restore_Handler {
             wp_send_json_error( [ 'message' => esc_html__( 'Chunk session not found.', 'museder-restoreone' ) ], 404 );
         }
 
-        // Nonce verified in verify_ajax_request() above
-        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() above
-        // $_FILES['chunk']['tmp_name'] is a server-side path managed by PHP upload handling and does not need sanitization.
-        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
-        if ( empty( $_FILES['chunk'] ) || empty( $_FILES['chunk']['tmp_name'] ) || ! is_uploaded_file( $_FILES['chunk']['tmp_name'] ) || ! file_exists( $_FILES['chunk']['tmp_name'] ) ) {
+        // Validate uploaded chunk file.
+        // Note: $_FILES['chunk']['tmp_name'] is a server-side temp path managed by PHP. We do NOT sanitize it;
+        // instead we validate it strictly (UPLOAD_ERR_OK + size + is_uploaded_file + file_exists) before using it.
+        // phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotValidated, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+        $chunk_file = isset( $_FILES['chunk'] ) && is_array( $_FILES['chunk'] ) ? $_FILES['chunk'] : null;
+        $chunk_tmp  = ( is_array( $chunk_file ) && isset( $chunk_file['tmp_name'] ) ) ? $chunk_file['tmp_name'] : '';
+        $chunk_err  = ( is_array( $chunk_file ) && isset( $chunk_file['error'] ) ) ? (int) $chunk_file['error'] : UPLOAD_ERR_NO_FILE;
+        $chunk_size = ( is_array( $chunk_file ) && isset( $chunk_file['size'] ) ) ? (int) $chunk_file['size'] : 0;
+        // phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotValidated, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+
+        if ( ! is_array( $chunk_file ) || UPLOAD_ERR_OK !== $chunk_err || $chunk_size <= 0 || empty( $chunk_tmp ) || ! is_uploaded_file( $chunk_tmp ) || ! file_exists( $chunk_tmp ) ) {
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'No chunk file uploaded.', 'museder-restoreone' ) ], 400 );
         }
-        // phpcs:enable WordPress.Security.NonceVerification.Missing
 
         $chunk_dir = self::chunk_session_dir( $session_id );
         if ( ! file_exists( $chunk_dir ) && ! wp_mkdir_p( $chunk_dir ) ) {
@@ -1159,21 +1201,14 @@ class Backup_Lite_Restore_Handler {
 
         // @plugin-check: allowed - required for chunked backup upload, path and filename sanitized
         // $chunk_dir is from plugin-controlled temp directory, $index is validated integer
-        // $tmp_name is verified via is_uploaded_file() check above
+        // $chunk_tmp is verified via is_uploaded_file() check above
         $chunk_path = trailingslashit( $chunk_dir ) . sprintf( 'chunk-%06d.part', $index );
-        // @plugin-check: sanitized + nonce - verified via is_uploaded_file and file_exists checks above
-        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- using PHP upload tmp_name provided by the system
-        $tmp_name = isset( $_FILES['chunk']['tmp_name'] ) && is_uploaded_file( $_FILES['chunk']['tmp_name'] ) ? $_FILES['chunk']['tmp_name'] : '';
 
         // Use stream_copy_to_stream instead of move_uploaded_file to avoid WordPress Plugin Check warning
-        // $chunk_path is from plugin-controlled temp directory, $tmp_name is verified via is_uploaded_file() check
-        if ( empty( $tmp_name ) ) {
-            // @plugin-check: escaped
-            wp_send_json_error( [ 'message' => esc_html__( 'Unable to store uploaded chunk.', 'museder-restoreone' ) ], 500 );
-        }
+        // $chunk_path is from plugin-controlled temp directory, $chunk_tmp is verified via is_uploaded_file() check
 
         // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- direct fopen is required for large backup streaming, paths are validated by our helper.
-        $input  = fopen( $tmp_name, 'rb' );
+        $input  = fopen( $chunk_tmp, 'rb' );
         // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- direct fopen is required for large backup streaming, paths are validated by our helper.
         $output = fopen( $chunk_path, 'wb' );
         if ( ! $input || ! $output ) {
@@ -1207,7 +1242,17 @@ class Backup_Lite_Restore_Handler {
 
     public static function chunk_finalize() {
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
+        // Capability verified above. Verify nonce next (before reading any other request input).
+        if ( false === check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce', false ) ) {
+            wp_send_json_error(
+                [
+                    'code'    => 'invalid_nonce',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Your session has expired. Please reload the page.', 'museder-restoreone' ),
+                ],
+                403
+            );
+        }
 
         $session_id = isset( $_POST['session_id'] ) ? sanitize_text_field( wp_unslash( $_POST['session_id'] ) ) : '';
 
@@ -1303,7 +1348,17 @@ class Backup_Lite_Restore_Handler {
 
     public static function chunk_abort() {
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
+        // Capability verified above. Verify nonce next (before reading any other request input).
+        if ( false === check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce', false ) ) {
+            wp_send_json_error(
+                [
+                    'code'    => 'invalid_nonce',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Your session has expired. Please reload the page.', 'museder-restoreone' ),
+                ],
+                403
+            );
+        }
 
         $session_id = isset( $_POST['session_id'] ) ? sanitize_text_field( wp_unslash( $_POST['session_id'] ) ) : '';
         if ( $session_id ) {
@@ -1691,7 +1746,17 @@ class Backup_Lite_Restore_Handler {
      */
     public static function exit_safe_mode() {
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
+        // Capability verified above. Verify nonce next (before reading any other request input).
+        if ( false === check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce', false ) ) {
+            wp_send_json_error(
+                [
+                    'code'    => 'invalid_nonce',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Your session has expired. Please reload the page.', 'museder-restoreone' ),
+                ],
+                403
+            );
+        }
 
         try {
             $result = Backup_Lite_Restore::exit_safe_mode();

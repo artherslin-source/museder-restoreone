@@ -186,6 +186,7 @@
             }
         },
         buildRequest: function (path, options) {
+            var self = this;
             var opts = options || {};
             opts.headers = opts.headers || {};
             opts.headers['Content-Type'] = opts.headers['Content-Type'] || 'application/json';
@@ -194,13 +195,68 @@
             }
             opts.credentials = 'same-origin';
             return fetch(restURL.replace(/\/?$/, '/') + path.replace(/^\//, ''), opts).then(function (res) {
-                if (!res.ok) {
-                    return res.json().catch(function () {
-                        return { ok: false, message: res.statusText };
-                    });
-                }
-                return res.json();
+                return res.text().then(function (text) {
+                    var json = null;
+                    if (text) {
+                        try {
+                            json = JSON.parse(text);
+                        } catch (e) {
+                            json = null;
+                        }
+                    }
+
+                    if (!res.ok) {
+                        // Treat 403 as nonce/session expired: stop polling and show reload UI.
+                        if (res.status === 403) {
+                            self.handleForbidden(json);
+                        }
+                        var message =
+                            (json && json.message) ||
+                            (json && json.data && json.data.message) ||
+                            res.statusText ||
+                            'Request failed.';
+                        var code = (json && json.code) || (json && json.data && json.data.code) || (res.status === 403 ? 'invalid_nonce' : 'request_failed');
+                        return { ok: false, code: code, status: res.status, message: message };
+                    }
+
+                    return json || { ok: true };
+                });
             });
+        },
+        handleForbidden: function (payload) {
+            this.stopPolling();
+            this.setJobStatus('Session expired');
+            this.log('Session expired. Please reload the page to continue.', 'error', 'activity');
+            this.showSessionExpiredNotice((payload && payload.message) ? payload.message : '');
+        },
+        showSessionExpiredNotice: function (message) {
+            if (document.getElementById('bl-restore-session-expired')) {
+                return;
+            }
+            var notice = document.createElement('div');
+            notice.id = 'bl-restore-session-expired';
+            notice.className = 'notice notice-error';
+            var safeMessage = message ? this.escape(message) : 'Your session has expired. Please reload the page to continue.';
+            notice.innerHTML =
+                '<p><strong>Session expired.</strong> ' +
+                safeMessage +
+                ' <button type="button" class="button button-primary" id="bl-restore-session-expired-reload">Reload</button></p>';
+
+            var anchor = this.refs.stepIndicator || this.refs.progressLog || document.body;
+            if (anchor && anchor.parentNode && anchor !== document.body) {
+                anchor.parentNode.insertBefore(notice, anchor);
+            } else if (document.body && document.body.firstChild) {
+                document.body.insertBefore(notice, document.body.firstChild);
+            } else if (document.body) {
+                document.body.appendChild(notice);
+            }
+
+            var btn = document.getElementById('bl-restore-session-expired-reload');
+            if (btn) {
+                btn.addEventListener('click', function () {
+                    window.location.reload();
+                });
+            }
         },
         startPrepareAndValidate: function () {
             var _this = this;
@@ -411,6 +467,9 @@
                 _this5.buildRequest('restore/status/' + _this5.state.jobId, { method: 'GET' }).then(function (data) {
                     if (!data || data.ok === false) {
                         _this5.stopPolling();
+                        if (data && data.status === 403) {
+                            _this5.handleForbidden(data);
+                        }
                         if (data && data.message) {
                             _this5.log('Status error: ' + data.message, 'error');
                         }
