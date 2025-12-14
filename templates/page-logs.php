@@ -13,7 +13,6 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 $logs = isset( $logs ) ? $logs : Backup_Lite_Log_Handler::get_logs();
-// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 ?>
 
 <div class="wrap backup-lite-admin backup-lite-logs">

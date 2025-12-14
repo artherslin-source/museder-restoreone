@@ -5,8 +5,6 @@
     const restConfig = window.BackupLiteV2 || {};
     const base = (restConfig.restUrl || '').replace(/\/?$/, '/');
     const restNonce = restConfig.nonce || '';
-    const uploadHandlerUrl = restConfig.uploadHandler || '';
-    const uploadSecret = restConfig.uploadSecret || '';
 
     if (!base) {
         console.error('Backup Lite V2: REST base URL missing.');
@@ -43,7 +41,6 @@
     let uploadId = '';
     let processedChunks = new Set();
     let useMultipartFallback = false;
-    let useNativeHandler = !!(uploadHandlerUrl && uploadSecret);
 
     if (searchToggle && searchFields) {
         searchToggle.addEventListener('change', function () {
@@ -229,60 +226,6 @@
         return formData;
     }
 
-    async function sendChunkNative(buffer, chunkSha1, index, totalChunks, fileSize) {
-        if (!useNativeHandler) {
-            throw new Error('native_handler_disabled');
-        }
-
-        const headers = {
-            'X-Backup-Secret': uploadSecret,
-            'X-Backup-Upload-Id': uploadId,
-            'X-Chunk-Index': String(index),
-            'X-Chunk-Total': String(totalChunks),
-            'X-Chunk-Size': String(buffer.byteLength),
-            'X-Chunk-Sha1': chunkSha1,
-            'X-File-Sha1': fileSha1Hex,
-            'X-File-Size': String(fileSize),
-            'Content-Type': 'application/octet-stream'
-        };
-
-        try {
-            const response = await fetch(uploadHandlerUrl, {
-                method: 'POST',
-                headers,
-                body: buffer,
-                credentials: 'same-origin'
-            });
-
-            const text = await response.text();
-            let json = {};
-
-            if (text) {
-                try {
-                    json = JSON.parse(text);
-                } catch (err) {
-                    const parseError = new Error('native_parse_error');
-                    parseError.status = response.status;
-                    parseError.responseText = text;
-                    throw parseError;
-                }
-            }
-
-            if (!response.ok || !json || json.ok === false) {
-                const error = new Error(json && json.message ? json.message : 'native_handler_failed');
-                error.status = response.status;
-                error.code = json && json.code ? json.code : 'native_error';
-                error.payload = json;
-                throw error;
-            }
-
-            return json;
-        } catch (error) {
-            useNativeHandler = false;
-            throw error;
-        }
-    }
-
     async function sendChunkBinary(buffer, chunkSha1, index, totalChunks, fileSize, fileName) {
         const headers = buildHeaders({
             'X-Backup-Lite-Action': 'chunk',
@@ -338,14 +281,6 @@
     }
 
     async function sendChunk(buffer, chunkSha1, index, totalChunks, file) {
-        if (useNativeHandler) {
-            try {
-                return await sendChunkNative(buffer, chunkSha1, index, totalChunks, file.size);
-            } catch (nativeError) {
-                console.warn('Native upload handler failed, falling back to REST', nativeError);
-            }
-        }
-
         if (useMultipartFallback) {
             return sendChunkMultipart(buffer, chunkSha1, index, totalChunks, file.size, file.name);
         }
@@ -364,7 +299,7 @@
     async function uploadChunkWithRetry(buffer, chunkSha1, index, totalChunks, file) {
         const start = index * CHUNK_SIZE;
         const end = Math.min(file.size, start + CHUNK_SIZE);
-        console.log(`[Chunk ${index}] uploading bytes ${start}-${end} (${buffer.byteLength} bytes) via ${useNativeHandler ? 'native handler' : (useMultipartFallback ? 'REST multipart' : 'REST binary')}`);
+        console.log(`[Chunk ${index}] uploading bytes ${start}-${end} (${buffer.byteLength} bytes) via ${useMultipartFallback ? 'REST multipart' : 'REST binary'}`);
 
         for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
             try {
@@ -453,7 +388,6 @@
         processedChunks = new Set();
         uploadedBytes = 0;
         useMultipartFallback = false;
-        useNativeHandler = !!(uploadHandlerUrl && uploadSecret);
 
         updateStatus(ui.strings && ui.strings.calculating ? ui.strings.calculating : 'Calculating file SHA1...');
         const fileBuffer = await file.arrayBuffer();

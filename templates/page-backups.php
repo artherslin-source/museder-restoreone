@@ -14,7 +14,6 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 $status  = isset( $status ) ? $status : Backup_Lite_UI::get_environment_status();
 $backups = isset( $backups ) ? $backups : Backup_Lite_UI::get_backups_list();
-// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 ?>
 
 <div class="wrap backup-lite-admin backup-lite-backups">

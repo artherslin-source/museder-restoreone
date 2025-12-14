@@ -726,32 +726,23 @@ function backup_lite_get_download_url( $path ) {
         return '';
     }
 
-    $filename = basename( $path );
-    $secret   = '';
+    // IMPORTANT:
+    // - Do NOT use wp_nonce_url() here because it runs esc_url() which HTML-escapes "&" into "&amp;".
+    // - When this URL is returned via JSON and assigned by JS (e.g. element.href = url),
+    //   the browser will send "amp;file" instead of "file", causing $_GET['file'] to be empty.
+    $filename = basename( (string) $path );
 
-    if ( class_exists( 'Backup_Lite_Upload_Secret' ) ) {
-        $secret = (string) Backup_Lite_Upload_Secret::get_secret();
-    }
-
-    if ( ! empty( $secret ) ) {
-        $expires = time() + apply_filters( 'backup_lite_download_ttl', 20 * MINUTE_IN_SECONDS, $path );
-        $token   = hash_hmac( 'sha256', $filename . '|' . $expires, $secret );
-        $handler = plugins_url( 'download-handler.php', BACKUP_LITE_PATH . 'download-handler.php' );
-
-        return add_query_arg(
-            [
-                'file'    => $filename,
-                'expires' => $expires,
-                'token'   => $token,
-            ],
-            $handler
-        );
-    }
-
-    return wp_nonce_url(
-        admin_url( 'admin-post.php?action=backup_lite_download_backup&file=' . rawurlencode( $filename ) ),
-        'backup_lite_download_' . $filename
+    $url = add_query_arg(
+        [
+            'action' => 'backup_lite_download_backup',
+            'file'   => $filename,
+            '_backup_lite_download_nonce' => wp_create_nonce( 'backup_lite_download_backup' ),
+        ],
+        admin_url( 'admin-post.php' )
     );
+
+    // Return a raw (non-HTML-escaped) URL string. Callers rendering into HTML must escape it.
+    return $url;
 }
 
 function backup_lite_log( $level, $message, $context = [] ) {
