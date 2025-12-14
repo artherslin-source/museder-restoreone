@@ -1,0 +1,176 @@
+{\rtf1\ansi\ansicpg950\cocoartf2822
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica-Bold;\f1\fswiss\fcharset0 Helvetica;\f2\fnil\fcharset136 PingFangTC-Regular;
+\f3\fswiss\fcharset0 ArialMT;\f4\fnil\fcharset0 AppleColorEmoji;\f5\fnil\fcharset0 LucidaGrande;
+\f6\fnil\fcharset136 STSongti-TC-Regular;\f7\fnil\fcharset0 EuphemiaUCAS;}
+{\colortbl;\red255\green255\blue255;\red0\green0\blue0;\red66\green0\blue67;\red16\green60\blue192;
+\red117\green117\blue117;}
+{\*\expandedcolortbl;;\cspthree\c0\c0\c0;\cspthree\c30293\c3896\c32133;\cspthree\c15490\c32819\c77140;
+\cspthree\c53330\c53330\c53330;}
+\paperw11900\paperh16840\margl1440\margr1440\vieww33220\viewh19680\viewkind0
+\pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\pardirnatural\partightenfactor0
+
+\f0\b\fs27 \cf2 [WordPress Plugin Directory] Review in Progress: Museder RestoreOne\
+
+\fs19\fsmilli9750 WordPress.org Plugin Directory 
+\f1\b0 <plugins@wordpress.org> 2025
+\f2 \'a6\'7e
+\f1 12
+\f2 \'a4\'eb
+\f1 14
+\f2 \'a4\'e9\'ad\'e2\'b1\'e1
+\f1 12:04\
+
+\f2 \'a6\'ac\'a5\'f3\'aa\'cc
+\f3 : Jerry Lin <jerry@museder.com>\
+
+\f4 \uc0\u10071 
+\f0\b  
+\f3\b0 I have reviewed the issues shared in the previous email and unfortunately I don't see 
+\f0\b what changes you have\
+made to fix the following issue(s)
+\f3\b0 .\
+
+\f0\b Out of Date Libraries\
+\cf3 Allowing direct file access to plugin files\
+
+\f3\b0 \cf2 Can you 
+\f0\b please recheck it
+\f3\b0  and, if necessary, share additional information about how did you fix that? In case you\
+have any doubts don't hesitate to ask.\
+Once this is sorted out, we can continue with the review.\
+Thanks!\
+Review: CHANGESNOTMADE museder-restoreone/artherslin/1Dec25/T2 12Dec25/3.7.1\
+
+\f1 \cf3 --\
+WordPress Plugins Team | 
+\f3 \cf4 plugins@wordpress.org\
+https://make.wordpress.org/plugins/\
+https://developer.wordpress.org/plugins/wordpress-org/detailed-plugin-guidelines/\
+https://wordpress.org/plugins/plugin-check/\
+
+\f1 \cf3 On Fri, Dec 5, 2025 at 6:06 PM UTC, Jerry Lin <
+\f3 \cf4 jerry@museder.com
+\f1 \cf3 > wrote:\
+
+\f3 Hi Plugin Review Team, Thank you for your previous feedback on 
+\f0\b Museder RestoreOne
+\f3\b0 . I have gone through your\
+comments and the Plugin Check report and pushed a 
+\f0\b new version 2.7.40
+\f3\b0  of the plugin (uploaded on the "Add Your\
+Plugin" page to replace the original submission). In this version I have:\
+
+\f1 1. 
+\f0\b File handling / AlternativeFunctions\
+
+\f1\b0 Wrapped all required low-level file functions (fopen, fread, fwrite, fclose, readfile, unlink, chmod,\
+etc.) in clearly documented phpcs:disable/enable blocks.\
+Added explanations that these calls are only used for streaming large backup archives where\
+WP_Filesystem is not reliable or e
+\f5 \uc0\u64259 
+\f1 cient.\
+Where possible, wp_delete\
+_\
+file() is used instead of unlink().\
+2. 
+\f0\b Security: nonce verification and sanitization\
+
+\f1\b0 Added or centralized check_ajax_referer() / check_admin_referer() for all AJAX and form\
+handlers.\
+Sanitized all $_POST, $_GET and $_FILES inputs using sanitize_text\
+_\
+field(), absint(),\
+sanitize\
+_\
+file_name(), esc_url_raw(), is_uploaded\
+_\
+file(), and array_map() where appropriate.\
+Clarified in comments where the plugin uses HMAC-based tokens instead of nonces (for\
+download links), and that those parameters are validated and do not accept arbitrary user input.\
+3. 
+\f0\b Direct database queries\
+
+\f1\b0 Reviewed all direct SQL queries and added phpcs:disable/enable annotations with explanations.\
+All table names are taken from $wpdb properties or internal whitelists; no user input is\
+interpolated into SQL.\
+4. 
+\f0\b REST / AJAX permissions and development helpers\
+
+\f1\b0 Ensured that all REST and AJAX callbacks have proper capability checks or permission\
+callbacks.\
+
+\fs15\fsmilli7995 \cf2 https://mail.google.com/mail/u/0/?ik=e38ba1f747&view=pt&search=all&permmsgid=msg-f:1851409733218221868&simpl=msg-f:1851409733218221868 1/22025/12/14 
+\f6 \'ad\'e2\'b1\'e1
+\f1 4:16 
+\f6 \'c2\'d5\'ab\'e4\'b3\'d0\'b7\'4e\'b3\'5d\'ad\'70\'a4\'75\'a7\'40\'ab\'c7
+\f1  
+\f6 \'b6\'6c\'a5\'f3
+\f1  - [WordPress Plugin Directory] Review in Progress: Museder RestoreOne\
+
+\fs19\fsmilli9750 \cf3 Guarded calls to set_time_limit() and ini_set() with function_exists() checks and documented\
+them as needed for long-running backup/restore jobs.\
+5. 
+\f0\b Templates and globals\
+
+\f1\b0 Added PHPCS annotations to template files explaining that the variables are local view context\
+passed from the plugin's controller and are not exposed as reusable global APIs.\
+All plugin globals and hooks are prefixed with museder_restoreone_.\
+
+\f3 After these changes I re-ran 
+\f0\b WordPress Plugin Check
+\f3\b0 . All previously reported 
+\f1 cri t i c al 
+\f3 issues (unsafe file I/O,\
+missing nonce checks, unsanitized input, and undocumented SQL) have been addressed. The remaining findings\
+are:\
+
+\f1 A few WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound notices where\
+variables are already prefixed with museder_restoreone_ and only used inside the plugin's own\
+templates or handlers.\
+Some warni n g-l evel items for set_time_limit() / ini_set() and direct database queries, which are now\
+documented and guarded as described above.\
+
+\f3 If you would like me to adjust anything further (for example, refactoring away the remaining globals), I will be happy\
+to make additional changes. Thank you again for your time and for reviewing Museder RestoreOne. Best regards,\
+Jerry Lin 
+\f7 \uc0\u5159 
+\f3  WordPress.org Plugin Directory <\cf4 plugins@wordpress.org\cf3 > 
+\f2 \'a9\'f3
+\f3  2025
+\f2 \'a6\'7e
+\f3 12
+\f2 \'a4\'eb
+\f3 2
+\f2 \'a4\'e9\'b6\'67\'a4\'47
+\f3  
+\f2 \'a4\'57\'a4\'c8
+\f3 2:34
+\f2 \'bc\'67\'b9\'44
+\f1 \
+
+\f2 \'a1\'47
+\f1 \
+On Fri, Dec 5, 2025 at 6:01 PM UTC, WordPress.org Plugin Directory <
+\f3 \cf4 plugins@wordpress.org
+\f1 \cf3 > wrote:\
+This is an automated message to confirm that we have received your updated plugin file.\
+File updated by artherslin, version 2.7.40.\
+
+\f3 \cf2 Comment: Hi Plugin Review Team,\
+
+\f1\fs18 \cf5 [
+\f2 \'c1\'f4\'c2\'c3\'a4\'de\'a5\'ce\'a4\'e5\'a6\'72
+\f1 ]\
+
+\f3\fs19\fsmilli9750 \cf4 https://wordpress.org/plugins/files/2025/11/05_18-01-09_museder-restoreone.zip\
+
+\f1 \cf3 --\
+WordPress Plugins Team | 
+\f3 \cf4 plugins@wordpress.org\
+https://make.wordpress.org/plugins/\
+https://developer.wordpress.org/plugins/wordpress-org/detailed-plugin-guidelines/\
+https://wordpress.org/plugins/plugin-check/\
+
+\f1 \cf3 On Mon, Dec 1, 2025 at 6:33 PM UTC, WordPress.org Plugin Directory <
+\f3 \cf4 plugins@wordpress.org
+\f1 \cf3 > wrote:}

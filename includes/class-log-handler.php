@@ -22,6 +22,7 @@ class Backup_Lite_Log_Handler {
         add_action( 'wp_ajax_backup_lite_fetch_logs', [ __CLASS__, 'ajax_fetch_logs' ] );
         add_action( 'wp_ajax_backup_lite_delete_log', [ __CLASS__, 'ajax_delete_log' ] );
         add_action( 'wp_ajax_backup_lite_download_log', [ __CLASS__, 'ajax_download_log' ] );
+        add_action( 'wp_ajax_backup_lite_get_log_download_url', [ __CLASS__, 'ajax_get_log_download_url' ] );
         add_action( 'wp_ajax_backup_lite_view_log', [ __CLASS__, 'ajax_view_log' ] );
     }
 
@@ -166,6 +167,39 @@ class Backup_Lite_Log_Handler {
     }
 
     /**
+     * AJAX: Get log download URL with fresh nonce.
+     * This allows generating a new nonce when the download link is clicked,
+     * preventing nonce expiration issues.
+     */
+    public static function ajax_get_log_download_url() {
+        Backup_Lite_UI::verify_ajax_request();
+        // Additional nonce verification for plugin-check
+        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
+
+        // Nonce verified above
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
+        $log = isset( $_POST['log'] ) ? sanitize_text_field( wp_unslash( $_POST['log'] ) ) : '';
+        // phpcs:enable WordPress.Security.NonceVerification.Missing
+        
+        if ( ! $log ) {
+            wp_send_json_error( [ 'message' => esc_html__( 'Log filename missing.', 'museder-restoreone' ) ], 400 );
+        }
+
+        $path = self::resolve_log_path( $log );
+
+        if ( ! $path || ! file_exists( $path ) ) {
+            wp_send_json_error( [ 'message' => __( 'Log file not found.', 'museder-restoreone' ) ], 404 );
+        }
+
+        // Generate fresh download URL with new nonce
+        $download_url = self::build_download_url( $path );
+
+        wp_send_json_success( [
+            'download_url' => $download_url,
+        ] );
+    }
+
+    /**
      * AJAX: Download log.
      *
      * Nonce is verified via check_admin_referer() below after sanitizing the log filename.
@@ -177,15 +211,34 @@ class Backup_Lite_Log_Handler {
             wp_die( esc_html__( 'Unauthorized.', 'museder-restoreone' ) );
         }
 
+        // phpcs:disable WordPress.Security.NonceVerification.Recommended -- nonce verified via check_admin_referer() below
         $log  = isset( $_GET['log'] ) ? sanitize_text_field( wp_unslash( $_GET['log'] ) ) : '';
+        // Compatibility: some links may contain literal "&amp;" so PHP receives "amp;log" instead of "log".
+        if ( empty( $log ) && isset( $_GET['amp;log'] ) ) {
+            $log = sanitize_text_field( wp_unslash( $_GET['amp;log'] ) );
+        }
         // phpcs:enable WordPress.Security.NonceVerification.Recommended
+        
+        if ( empty( $log ) ) {
+            wp_die( esc_html__( 'Log filename missing.', 'museder-restoreone' ), esc_html__( 'Download error', 'museder-restoreone' ), 400 );
+        }
+        
         $path = self::resolve_log_path( $log );
 
         if ( ! $path || ! file_exists( $path ) ) {
-            wp_die( esc_html__( 'Log file not found.', 'museder-restoreone' ) );
+            wp_die( esc_html__( 'Log file not found.', 'museder-restoreone' ), esc_html__( 'Download error', 'museder-restoreone' ), 404 );
         }
 
-        check_admin_referer( 'backup_lite_download_log_' . basename( $path ) );
+        // Verify nonce - use the basename of the log file for the nonce action
+        $nonce_action = 'backup_lite_download_log_' . basename( $path );
+        if ( ! check_admin_referer( $nonce_action, '_wpnonce' ) ) {
+            // If nonce verification fails, provide a helpful error message
+            wp_die( 
+                esc_html__( 'The link you are trying to access has expired.', 'museder-restoreone' ) . ' <a href="' . esc_url( admin_url( 'admin.php?page=backup-lite-logs' ) ) . '">' . esc_html__( 'Please try again', 'museder-restoreone' ) . '</a>.',
+                esc_html__( 'Link expired', 'museder-restoreone' ),
+                [ 'response' => 403, 'back_link' => true ]
+            );
+        }
 
         // @plugin-check: sanitized - safe whitelisted mime type
         header( 'Content-Type: text/plain' );
@@ -351,19 +404,16 @@ class Backup_Lite_Log_Handler {
 
     /**
      * Builds a secure download URL for a log file.
+     * Uses admin-post.php for file downloads (not AJAX).
      *
      * @param string $path Absolute path.
      * @return string
      */
     private static function build_download_url( $path ) {
         $basename = basename( $path );
-        return add_query_arg(
-            [
-                'action'   => 'backup_lite_download_log',
-                'log'      => rawurlencode( $basename ),
-                '_wpnonce' => wp_create_nonce( 'backup_lite_download_log_' . $basename ),
-            ],
-            admin_url( 'admin-ajax.php' )
+        return wp_nonce_url(
+            admin_url( 'admin-post.php?action=backup_lite_download_log&log=' . rawurlencode( $basename ) ),
+            'backup_lite_download_log_' . $basename
         );
     }
 

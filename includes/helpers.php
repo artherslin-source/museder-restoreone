@@ -105,6 +105,7 @@ function backup_lite_is_absolute_path( $path ) {
  */
 function backup_lite_get_backup_path( $file ) {
     if ( empty( $file ) ) {
+        backup_lite_log( 'warning', 'backup_lite_get_backup_path called with empty file parameter.' );
         return false;
     }
 
@@ -115,20 +116,78 @@ function backup_lite_get_backup_path( $file ) {
 
     $backups_dir = backup_lite_get_backup_dir();
     if ( empty( $backups_dir ) ) {
+        backup_lite_log( 'error', 'Backup directory not available.', [ 'file' => $file ] );
         return false;
     }
 
-    $candidate = trailingslashit( $backups_dir ) . basename( $file );
+    // Sanitize file name to handle any special characters
+    $sanitized_file = sanitize_file_name( basename( $file ) );
+    $candidate = trailingslashit( $backups_dir ) . $sanitized_file;
 
     // realpath protection to prevent directory traversal
     $real_backups_dir = realpath( $backups_dir );
-    $real_candidate   = $candidate && file_exists( $candidate ) ? realpath( $candidate ) : false;
+    if ( ! $real_backups_dir ) {
+        backup_lite_log( 'error', 'Backup directory realpath failed.', [
+            'backups_dir' => $backups_dir,
+            'file' => $file,
+        ] );
+        return false;
+    }
 
-    if ( ! $real_candidate || 0 !== strpos( $real_candidate, $real_backups_dir ) ) {
+    $real_candidate = $candidate && file_exists( $candidate ) ? realpath( $candidate ) : false;
+
+    if ( ! $real_candidate ) {
+        // Log detailed error for debugging
+        backup_lite_log( 'warning', 'Backup file not found.', [
+            'file' => $file,
+            'sanitized_file' => $sanitized_file,
+            'candidate' => $candidate,
+            'backups_dir' => $backups_dir,
+            'backups_dir_exists' => is_dir( $backups_dir ),
+            'backups_dir_readable' => is_dir( $backups_dir ) ? is_readable( $backups_dir ) : false,
+        ] );
+        
+        // Try to find similar files (case-insensitive or with different extensions)
+        if ( is_dir( $backups_dir ) && is_readable( $backups_dir ) ) {
+            $files = @glob( trailingslashit( $backups_dir ) . '*' . pathinfo( $sanitized_file, PATHINFO_EXTENSION ) );
+            if ( ! empty( $files ) ) {
+                $similar = array_filter( $files, function( $f ) use ( $sanitized_file ) {
+                    $basename = basename( $f );
+                    // Check if filenames are similar (case-insensitive or with variations)
+                    return stripos( $basename, pathinfo( $sanitized_file, PATHINFO_FILENAME ) ) === 0;
+                } );
+                
+                if ( ! empty( $similar ) ) {
+                    backup_lite_log( 'info', 'Found similar backup files.', [
+                        'requested' => $sanitized_file,
+                        'similar' => array_map( 'basename', $similar ),
+                    ] );
+                }
+            }
+        }
+        
+        return false;
+    }
+
+    // Use strpos with strict comparison for path traversal protection
+    // PHP 8.0+ compatibility: strpos can return 0 (false) for match at position 0
+    if ( false === strpos( $real_candidate, $real_backups_dir ) || 0 !== strpos( $real_candidate, $real_backups_dir ) ) {
+        backup_lite_log( 'error', 'Backup file path traversal detected.', [
+            'file' => $file,
+            'real_candidate' => $real_candidate,
+            'real_backups_dir' => $real_backups_dir,
+        ] );
         return false;
     }
 
     if ( ! is_readable( $real_candidate ) ) {
+        backup_lite_log( 'error', 'Backup file exists but is not readable.', [
+            'file' => $file,
+            'real_candidate' => $real_candidate,
+            'file_exists' => file_exists( $real_candidate ),
+            'is_file' => is_file( $real_candidate ),
+            'permissions' => file_exists( $real_candidate ) ? substr( sprintf( '%o', fileperms( $real_candidate ) ), -4 ) : 'unknown',
+        ] );
         return false;
     }
 
@@ -156,7 +215,7 @@ function backup_lite_format_duration( $seconds ) {
     $seconds = (int) $seconds;
 
     if ( $seconds === 0 ) {
-        return '';
+        return '00m 00s';
     }
 
     $hours   = floor( $seconds / 3600 );

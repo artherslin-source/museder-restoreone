@@ -9,8 +9,9 @@ class Backup_Lite_Backup_Jobs {
     const STATE_OPTION      = 'backup_lite_active_job';
     const CRON_HOOK         = 'backup_lite_process_job';
     const LOCK_TTL          = 60;
-    const AJAX_BATCH_FILES  = 200;
-    const AJAX_BATCH_BYTES  = 40 * 1024 * 1024; // 40MB
+    const OPTION_LOCK_TTL   = 180;
+    const AJAX_BATCH_FILES  = 400; // Increased from 200 to improve backup speed
+    const AJAX_BATCH_BYTES  = 80 * 1024 * 1024; // 80MB - Increased from 40MB to improve backup speed
     const CRON_BATCH_FILES  = 600;
     const CRON_BATCH_BYTES  = 120 * 1024 * 1024; // 120MB
 
@@ -107,9 +108,11 @@ class Backup_Lite_Backup_Jobs {
             return;
         }
 
-        if ( ! wp_next_scheduled( self::CRON_HOOK, [ $job_id ] ) ) {
-            wp_schedule_single_event( time(), self::CRON_HOOK, [ $job_id ] );
-        }
+        // Clear any existing scheduled event(s) to avoid duplicates
+        self::clear_scheduled_job( $job_id );
+
+        // Schedule first batch immediately
+        wp_schedule_single_event( time(), self::CRON_HOOK, [ $job_id ] );
     }
 
     /**
@@ -123,6 +126,10 @@ class Backup_Lite_Backup_Jobs {
 
     /**
      * Process a job immediately (used by cron + AJAX fallback).
+     * 
+     * Implements time budget loop: processes multiple batches within a single request
+     * until time limit (dynamically calculated based on max_execution_time) is reached or job completes.
+     * Time budget formula: max(25, min(max_execution_time * 0.75, 90)) seconds.
      *
      * @param string $job_id Job identifier.
      * @param int    $max_files Max files per batch.
@@ -135,41 +142,264 @@ class Backup_Lite_Backup_Jobs {
             return null;
         }
 
-        $locked = self::acquire_lock( $job );
-        if ( ! $locked ) {
+        // Finalize-guard: if a terminal job somehow gets re-invoked (e.g., lingering cron),
+        // do not process again. Also clear active pointer + scheduled events defensively.
+        if ( isset( $job['status'] ) && in_array( $job['status'], [ 'completed', 'failed', 'cancelled' ], true ) ) {
+            self::clear_active_job( $job_id );
+            self::clear_scheduled_job( $job_id );
             return $job;
         }
 
-        $job['stage'] = 'packing';
-        $job['status'] = 'running';
-        self::save_job( $job );
-
-        $limits    = self::resolve_batch_limits( $job, $max_files, $max_bytes );
-        $max_files = $limits['max_files'];
-        $max_bytes = $limits['max_bytes'];
+        // Cross-request atomic lock (prevents concurrent cron/AJAX from processing the same job).
+        $lock_token = self::acquire_option_lock( $job_id );
+        if ( empty( $lock_token ) ) {
+            // Another request owns the lock; return current status only.
+            return $job;
+        }
 
         try {
-            $job = Backup_Lite_Backup::process_job_batch( $job, $max_files, $max_bytes );
+            // Mark as processing for frontend/UI (kept true for the whole request; reset to false at the end).
+            self::acquire_lock( $job );
 
-            if ( in_array( $job['status'], [ 'completed', 'failed', 'cancelled' ], true ) ) {
-                self::clear_active_job( $job['id'] );
+            $job['stage']  = 'packing';
+            $job['status'] = 'running';
+            self::save_job( $job );
+
+            $limits    = self::resolve_batch_limits( $job, $max_files, $max_bytes );
+            $max_files = $limits['max_files'];
+            $max_bytes = $limits['max_bytes'];
+
+        // Calculate time budget dynamically based on max_execution_time
+        // Formula: max(25, min(max_execution_time * 0.75, 90))
+        // This means:
+        // - If max_execution_time = 30 seconds, time_budget = 25 seconds (keep current behavior)
+        // - If max_execution_time = 60 seconds, time_budget = 45 seconds
+        // - If max_execution_time = 120 seconds, time_budget = 90 seconds
+        $max_execution_time = (int) ini_get( 'max_execution_time' );
+        if ( $max_execution_time <= 0 ) {
+            // Default to 30 seconds if max_execution_time is unlimited or not set
+            $max_execution_time = 30;
+        }
+        
+        // Dynamic time budget calculation
+        // Use 75% of max_execution_time, but ensure minimum of 25 seconds
+        // Cap at 90 seconds to prevent extremely long single requests that might timeout
+        // This leaves buffer for frontend timeout (30s) and other operations
+        $time_budget = max( 25, min( (int) ( $max_execution_time * 0.75 ), 90 ) );
+        $start_microtime = microtime( true ); // Use microtime for precise timing
+        $batch_count = 0;
+        $max_batches = 100; // Safety limit to prevent infinite loops
+        
+        // State save optimization: track when to save (every 5 batches or every 3 seconds)
+        $last_save_time = $start_microtime;
+        $save_interval_batches = 5;
+        $save_interval_seconds = 3.0;
+
+        // Open ZipArchive once for the entire time budget loop to reduce I/O overhead
+        $zip = null;
+        if ( backup_lite_can_use_ziparchive() && ! empty( $job['archive_path'] ) && file_exists( $job['archive_path'] ) ) {
+            $zip = new ZipArchive();
+            if ( true === $zip->open( $job['archive_path'], ZipArchive::CREATE ) ) {
+                backup_lite_log( 'info', 'Opened ZipArchive for time budget loop.', [
+                    'job_id' => $job_id,
+                ] );
+            } else {
+                // If opening fails, set to null so we fall back to per-batch opening
+                $zip = null;
+                backup_lite_log( 'warning', 'Failed to open ZipArchive for time budget loop, will open per batch.', [
+                    'job_id' => $job_id,
+                ] );
             }
-        } catch ( Exception $exception ) {
+        }
+
+        $job_completed_in_loop = false;
+        $job_needs_finalize    = false;
+
+            try {
+            // Time budget loop: process multiple batches until time limit or job completion
+            // Use microtime for more precise timing
+            while ( $batch_count < $max_batches ) {
+                // Check if we've exceeded time budget (using microtime for precision)
+                $elapsed = microtime( true ) - $start_microtime;
+                if ( $elapsed >= $time_budget ) {
+                    backup_lite_log( 'info', 'Time budget reached, scheduling next batch.', [
+                        'job_id' => $job_id,
+                        'elapsed' => round( $elapsed, 2 ),
+                        'time_budget' => $time_budget,
+                        'batches_processed' => $batch_count,
+                    ] );
+                    break;
+                }
+
+                // Process one batch (reuse ZipArchive if available)
+                $job = Backup_Lite_Backup::process_job_batch( $job, $max_files, $max_bytes, $zip );
+                $batch_count++;
+
+                // If packing is done, defer finalize until after ZipArchive::close().
+                if ( ! empty( $job['needs_finalize'] ) ) {
+                    $job_needs_finalize = true;
+                    break;
+                }
+
+                // Check if job is complete
+                if ( in_array( $job['status'], [ 'completed', 'failed', 'cancelled' ], true ) ) {
+                    self::clear_active_job( $job['id'] );
+                    $job_completed_in_loop = true;
+                    break;
+                }
+
+                // Save progress conditionally: every 5 batches or every 3 seconds (whichever comes first)
+                $current_time = microtime( true );
+                $time_since_last_save = $current_time - $last_save_time;
+                $should_save = ( $batch_count % $save_interval_batches === 0 ) || ( $time_since_last_save >= $save_interval_seconds );
+                
+                if ( $should_save ) {
+                    $job['processing']    = true;
+                    $job['last_activity'] = time();
+                    $job['updated_at']    = current_time( 'mysql' );
+                    self::save_job( $job );
+                    $last_save_time = $current_time;
+                }
+            }
+
+            // Close ZipArchive if we opened it (single close point).
+            if ( null !== $zip ) {
+                try {
+                    $closed = $zip->close();
+                    if ( false === $closed ) {
+                        throw new RuntimeException( 'ZipArchive::close() returned false.' );
+                    }
+                    backup_lite_log( 'info', 'Closed ZipArchive after time budget loop.', [
+                        'job_id' => $job_id,
+                        'batches_processed' => $batch_count,
+                        'completed' => $job_completed_in_loop,
+                    ] );
+                } catch ( Throwable $throwable ) {
+                    // Prevent fatal "Invalid or uninitialized Zip object" from breaking AJAX polling (500).
+                    backup_lite_log( 'warning', 'Failed to close ZipArchive after time budget loop.', [
+                        'job_id' => $job_id,
+                        'error' => $throwable->getMessage(),
+                    ] );
+                    // If packing finished but we can't close, fail the job to avoid serving partial archives.
+                    if ( $job_needs_finalize ) {
+                        $job['status']  = 'failed';
+                        $job['stage']   = 'failed';
+                        $job['message'] = __( 'Unable to finalize backup archive. Please check logs and try again.', 'museder-restoreone' );
+                        $job_needs_finalize = false;
+                    }
+                }
+                $zip = null;
+            }
+
+            // If packing finished, finalize AFTER close so filesize/metadata are accurate.
+            if ( $job_needs_finalize && ! in_array( $job['status'], [ 'failed', 'cancelled' ], true ) ) {
+                $job = Backup_Lite_Backup::finalize_async_job_after_close( $job );
+                $job_completed_in_loop = true;
+                $job_needs_finalize = false;
+            }
+
+            // If job completed inside the loop, persist final state AFTER close to avoid exposing completed status early.
+            if ( $job_completed_in_loop ) {
+                $job['processing']    = false;
+                $job['last_activity'] = time();
+                $job['updated_at']    = current_time( 'mysql' );
+                self::save_job( $job );
+            }
+
+            // Ensure we save at least once before time budget ends (if we processed any batches)
+            if ( $batch_count > 0 ) {
+                $current_time = microtime( true );
+                $time_since_last_save = $current_time - $last_save_time;
+                // Save if we haven't saved recently (more than 1 second ago)
+                if ( $time_since_last_save >= 1.0 ) {
+                    $job['processing']    = true;
+                    $job['last_activity'] = time();
+                    $job['updated_at']    = current_time( 'mysql' );
+                    self::save_job( $job );
+                }
+            }
+
+            // Log batch processing summary
+            if ( $batch_count > 1 ) {
+                $total_elapsed = microtime( true ) - $start_microtime;
+                backup_lite_log( 'info', 'Processed multiple batches in single request.', [
+                    'job_id' => $job_id,
+                    'batches' => $batch_count,
+                    'elapsed' => round( $total_elapsed, 2 ),
+                ] );
+            }
+
+            } catch ( Exception $exception ) {
+            // Close ZipArchive if we opened it (even on error)
+            if ( null !== $zip ) {
+                $zip->close();
+                backup_lite_log( 'warning', 'Closed ZipArchive after exception.', [
+                    'job_id' => $job_id,
+                    'error' => $exception->getMessage(),
+                ] );
+            }
+            
             $job['status']  = 'failed';
             $job['stage']   = 'failed';
             $job['message'] = $exception->getMessage();
+            }
+
+            if ( in_array( $job['status'], [ 'completed', 'failed', 'cancelled' ], true ) ) {
+                self::clear_active_job( $job['id'] );
+                self::clear_scheduled_job( $job_id );
+                // Don't schedule next event if job is complete
+            } else {
+                // Job is still running - schedule next batch with short interval (10-20 seconds)
+                // This implements "short interval single event" scheduling for cron mode
+                self::schedule_next_batch( $job_id, $job );
+            }
+
+            // Request is ending: mark processing false so UI may nudge/cron may continue.
+            $job['processing']    = false;
+            $job['last_activity'] = time();
+            $job['updated_at']    = current_time( 'mysql' );
+            self::save_job( $job );
+
+            return $job;
+        } finally {
+            self::release_option_lock( $job_id, $lock_token );
+        }
+    }
+
+    /**
+     * Schedule next batch processing with short interval (10-20 seconds).
+     * Only schedules if job status is preparing or packing.
+     *
+     * @param string $job_id Job identifier.
+     * @param array  $job    Current job state.
+     */
+    private static function schedule_next_batch( $job_id, $job ) {
+        // Only schedule if job is in preparing or packing stage
+        if ( ! in_array( $job['stage'], [ 'preparing', 'packing' ], true ) ) {
+            return;
         }
 
-        if ( in_array( $job['status'], [ 'completed', 'failed', 'cancelled' ], true ) ) {
-            self::clear_active_job( $job['id'] );
+        // Only schedule if job is still running
+        if ( $job['status'] !== 'running' ) {
+            return;
         }
 
-        $job['processing']    = false;
-        $job['last_activity'] = time();
-        $job['updated_at']    = current_time( 'mysql' );
-        self::save_job( $job );
+        // Clear any existing scheduled event(s) for this job
+        self::clear_scheduled_job( $job_id );
 
-        return $job;
+        // Schedule next batch with short interval (10-20 seconds, randomly distributed)
+        // This prevents all jobs from running at exactly the same time
+        $interval = 10 + wp_rand( 0, 10 ); // 10-20 seconds
+        $next_run = time() + $interval;
+
+        wp_schedule_single_event( $next_run, self::CRON_HOOK, [ $job_id ] );
+
+        backup_lite_log( 'info', 'Scheduled next batch with short interval.', [
+            'job_id' => $job_id,
+            'interval' => $interval,
+            'next_run' => $next_run,
+            'stage' => $job['stage'],
+        ] );
     }
 
     /**
@@ -206,6 +436,7 @@ class Backup_Lite_Backup_Jobs {
         self::save_job( $job );
         self::cleanup_job( $job );
         self::clear_active_job( $job_id );
+        self::clear_scheduled_job( $job_id );
 
         return true;
     }
@@ -306,13 +537,6 @@ class Backup_Lite_Backup_Jobs {
     private static function acquire_lock( &$job ) {
         $now = time();
 
-        if ( ! empty( $job['processing'] ) && ! empty( $job['last_activity'] ) ) {
-            $age = $now - (int) $job['last_activity'];
-            if ( $age < self::LOCK_TTL ) {
-                return false;
-            }
-        }
-
         $job['processing']    = true;
         $job['last_activity'] = $now;
         $job['updated_at']    = current_time( 'mysql' );
@@ -321,7 +545,81 @@ class Backup_Lite_Backup_Jobs {
     }
 
     /**
+     * Acquire an atomic cross-request lock using options table.
+     *
+     * Uses add_option() for atomicity. Value includes timestamp + token so we only release our own lock.
+     *
+     * @param string $job_id Job identifier.
+     * @return string Lock token when acquired; empty string otherwise.
+     */
+    private static function acquire_option_lock( $job_id ) {
+        $key   = self::get_option_lock_key( $job_id );
+        $now   = time();
+        $token = wp_generate_uuid4();
+        $value = [
+            'ts'    => $now,
+            'token' => $token,
+        ];
+
+        // Atomic attempt.
+        if ( add_option( $key, $value, '', 'no' ) ) {
+            return $token;
+        }
+
+        // Check staleness and try to recover.
+        $existing = get_option( $key );
+        $ts       = 0;
+        if ( is_array( $existing ) && isset( $existing['ts'] ) ) {
+            $ts = (int) $existing['ts'];
+        } elseif ( is_numeric( $existing ) ) {
+            $ts = (int) $existing;
+        } elseif ( is_string( $existing ) && preg_match( '/^(\d+)/', $existing, $matches ) ) {
+            $ts = (int) $matches[1];
+        }
+
+        if ( $ts > 0 && ( $now - $ts ) > self::OPTION_LOCK_TTL ) {
+            delete_option( $key );
+            if ( add_option( $key, $value, '', 'no' ) ) {
+                return $token;
+            }
+        }
+
+        return '';
+    }
+
+    /**
+     * Release the atomic job lock if owned by this request.
+     *
+     * @param string $job_id Job identifier.
+     * @param string $token  Lock token returned by acquire_option_lock().
+     * @return void
+     */
+    private static function release_option_lock( $job_id, $token ) {
+        if ( empty( $token ) ) {
+            return;
+        }
+
+        $key      = self::get_option_lock_key( $job_id );
+        $existing = get_option( $key );
+
+        if ( is_array( $existing ) && isset( $existing['token'] ) && (string) $existing['token'] === (string) $token ) {
+            delete_option( $key );
+        }
+    }
+
+    /**
+     * Build a unique option key for the per-job lock.
+     *
+     * @param string $job_id Job identifier.
+     * @return string
+     */
+    private static function get_option_lock_key( $job_id ) {
+        return 'backup_lite_job_lock_' . $job_id;
+    }
+
+    /**
      * Dynamically scale batch limits to speed up large-site jobs.
+     * Considers both backup size and available memory.
      *
      * @param array $job Job state.
      * @param int   $max_files Requested max files.
@@ -336,6 +634,7 @@ class Backup_Lite_Backup_Jobs {
         $multiplier = 1.0;
         $gigabyte   = 1024 * 1024 * 1024;
 
+        // Scale based on backup size
         if ( $total_bytes > 5 * $gigabyte ) {
             $multiplier = 4.0;
         } elseif ( $total_bytes > 2 * $gigabyte ) {
@@ -346,8 +645,38 @@ class Backup_Lite_Backup_Jobs {
             $multiplier = 1.5;
         }
 
-        $scaled_files = (int) round( $max_files * $multiplier );
-        $scaled_bytes = (int) round( $max_bytes * $multiplier );
+        // Additional scaling based on available memory
+        // Check available memory and increase batch size if sufficient
+        if ( function_exists( 'wp_raise_memory_limit' ) ) {
+            wp_raise_memory_limit( 'admin' );
+        }
+        
+        $memory_limit = wp_convert_hr_to_bytes( ini_get( 'memory_limit' ) );
+        $memory_usage = memory_get_usage( true );
+        $available_memory = $memory_limit > 0 ? ( $memory_limit - $memory_usage ) : 0;
+        
+        // Increase batch size for high-memory environments
+        // Use specific batch sizes rather than multipliers for better control
+        // Default: 400 files/80MB (keep current behavior)
+        // High memory (> 512MB available): 600 files/120MB
+        // Very high memory (> 1024MB available): 800 files/160MB
+        if ( $available_memory > 1024 * 1024 * 1024 ) {
+            // > 1GB available: use 800 files/160MB
+            $memory_batch_files = 800;
+            $memory_batch_bytes = 160 * 1024 * 1024;
+        } elseif ( $available_memory > 512 * 1024 * 1024 ) {
+            // > 512MB available: use 600 files/120MB
+            $memory_batch_files = 600;
+            $memory_batch_bytes = 120 * 1024 * 1024;
+        } else {
+            // Default: keep original values
+            $memory_batch_files = $max_files;
+            $memory_batch_bytes = $max_bytes;
+        }
+
+        // Apply backup size scaling to memory-based batch sizes
+        $scaled_files = (int) round( $memory_batch_files * $multiplier );
+        $scaled_bytes = (int) round( $memory_batch_bytes * $multiplier );
 
         $limits = [
             'max_files' => (int) min( 2000, max( 100, $scaled_files ) ),
@@ -385,6 +714,24 @@ class Backup_Lite_Backup_Jobs {
         $stored = get_option( self::STATE_OPTION, '' );
         if ( $stored === $job_id ) {
             delete_option( self::STATE_OPTION );
+        }
+    }
+
+    /**
+     * Clear any scheduled processing events for a given job.
+     *
+     * @param string $job_id Job identifier.
+     */
+    private static function clear_scheduled_job( $job_id ) {
+        // Remove all scheduled events for this job to prevent duplicate processing.
+        if ( function_exists( 'wp_clear_scheduled_hook' ) ) {
+            wp_clear_scheduled_hook( self::CRON_HOOK, [ $job_id ] );
+        } else {
+            // Fallback: attempt to unschedule the next scheduled event (best-effort).
+            $timestamp = wp_next_scheduled( self::CRON_HOOK, [ $job_id ] );
+            if ( $timestamp ) {
+                wp_unschedule_event( $timestamp, self::CRON_HOOK, [ $job_id ] );
+            }
         }
     }
 }

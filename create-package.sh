@@ -2,7 +2,7 @@
 # 创建 Museder RestoreOne 插件打包文件
 
 PLUGIN_NAME="museder-restoreone"
-VERSION="2.7.10"
+VERSION="2.7.84"
 PACKAGE_NAME="${PLUGIN_NAME}-${VERSION}.zip"
 TEMP_DIR=$(mktemp -d)
 PLUGIN_DIR="${TEMP_DIR}/${PLUGIN_NAME}"
@@ -47,7 +47,8 @@ exclude_items=(
 
 # 创建 ZIP 文件（在项目根目录）
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OUTPUT_FILE="${SCRIPT_DIR}/${PACKAGE_NAME}"
+mkdir -p "${SCRIPT_DIR}/dist"
+OUTPUT_FILE="${SCRIPT_DIR}/dist/${PACKAGE_NAME}"
 
 cd "${TEMP_DIR}"
 echo "正在压缩..."

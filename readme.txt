@@ -4,7 +4,7 @@ Tags: backup, migration, restore, site-backup, database-backup
 Requires at least: 5.8
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 2.7.63
+Stable tag: 2.7.84
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -13,6 +13,135 @@ A lightweight WordPress backup & restore plugin focused on compatibility, single
 == Changelog ==
 
 For full changelog history, please see docs/changelog-archive.md in the plugin folder.
+
+= 2.7.84 =
+* UI: Restore progress text no longer shows a “completed successfully” message while the restore is still running.
+
+= 2.7.83 =
+* Fix: Restore Center Restore History now records and displays restore duration correctly (adds missing started/completed timestamps for duration calculation).
+
+= 2.7.82 =
+* Bug Fix: Prevented concurrent backup job processing across AJAX/cron by adding a job-level atomic lock.
+* Bug Fix: Ensured job processing state stays true during a request to avoid duplicate “continue” nudges and early completion.
+* Bug Fix: Added a guard to fail the job if the backup manifest is missing/empty (prevents partial archives being marked complete).
+* UI: Prevented duplicate completion overlays for the same backup job and hid the currently running archive from the Backups list.
+
+= 2.7.81 =
+* Bug Fix: Prevented backups from being marked completed (and logged with a final filesize) before ZipArchive is closed/flushed, avoiding partial downloads and inconsistent sizes.
+* Bug Fix: Fixed Logs download "Log filename missing" when URLs are HTML-entity escaped (&amp;/&#038;) by decoding in JS and adding a PHP fallback for amp;log.
+
+= 2.7.80 =
+* Bug Fix: Fixed Backups page progress getting stuck and admin-ajax.php 500 errors by correcting ZipArchive close lifecycle and preventing double-close fatal errors.
+* Bug Fix: Reduced console noise on Backups page by scoping log action click handling to log action buttons (and Logs page).
+
+= 2.7.79 =
+* Bug Fix: Fixed backup completion issue - progress bar shows 100% but backup file not complete. Now ensures ZipArchive is closed and flushed to disk before marking job as completed.
+* Bug Fix: Fixed restore completion error handling - when progress reaches 100% but status check fails, now checks restore history before showing error message to prevent false error alerts.
+* Bug Fix: Fixed restore state reset issue - added protection against multiple simultaneous restore operations and improved error handling to prevent browser crashes.
+* Bug Fix: Enhanced log download button handling - improved button element identification with fallback to row data-log attribute when clicking button text or child elements.
+
+= 2.7.78 =
+* Bug Fix: Fixed log download button "Log filename missing" error - improved event handling to correctly identify button element when clicking button text or child elements.
+
+= 2.7.77 =
+* Performance: Implemented dynamic time budget calculation based on max_execution_time - allows longer processing time (up to 90 seconds) on servers with higher execution time limits, improving backup speed for large sites.
+* Improvement: Updated time budget formula to max(25, min(max_execution_time * 0.75, 90)) for better resource utilization while maintaining safety margins.
+
+= 2.7.76 =
+* Bug Fix: Fixed log download "Log filename missing" error - changed to use correct settings object (BackupLite) instead of localizedSettings for AJAX requests.
+* Bug Fix: Completely refactored backup polling logic - now ensures only single polling request runs at a time, prevents overlapping requests and pending/canceled states.
+* Bug Fix: Improved abort detection - aborted requests (page reload, manual cancel, timeout) are now properly distinguished from real errors and don't trigger console.error messages.
+* Improvement: Added backupLitePollAborted flag to prevent scheduling next poll when request is aborted, ensuring clean polling lifecycle.
+* Improvement: Enhanced polling state management - polling only continues if job is still running and request was not aborted.
+
+= 2.7.75 =
+* Bug Fix: Fixed log download "link expired" error - improved nonce verification with better error messages and proper parameter handling in both admin-post.php and AJAX handlers.
+* Performance: Increased backup batch size from 200 files/40MB to 400 files/80MB to improve backup speed significantly.
+* Performance: Increased time budget from 60%/18s to 70%/25s to allow more work per request, reducing total backup time while maintaining frontend timeout safety margin.
+* Improvement: Enhanced error handling in log download handlers with proper HTTP status codes (400, 403, 404) and user-friendly error messages with links back to logs page.
+
+= 2.7.74 =
+* Bug Fix: Fixed backup polling to treat abort as normal condition - aborted requests no longer log as errors, preventing console spam.
+* Bug Fix: Improved polling request management - switched from setInterval to setTimeout to prevent overlapping requests and pending/abort errors.
+* Improvement: Enhanced error handling in backup polling - only real errors are logged, aborted requests use console.debug instead of console.error.
+* Improvement: Added proper cleanup of AbortController and polling timers to prevent memory leaks and ensure clean state management.
+
+= 2.7.73 =
+* Bug Fix: Fixed backup polling timeout issues - unified time budget between frontend (30s) and backend (max 18s) to prevent AbortController from prematurely interrupting requests.
+* Bug Fix: Added request locking mechanism to prevent overlapping backup polling requests that caused console errors and performance issues.
+* Improvement: Enhanced error handling in backup polling - replaced vague "signal is aborted without reason" messages with clearer timeout/network error detection.
+* Performance: Improved time budget calculation using microtime for more precise timing control in batch processing.
+* Performance: Backend time budget now capped at 18 seconds (60% of max_execution_time) to ensure it never exceeds frontend's 30-second timeout.
+
+= 2.7.72 =
+* Bug Fix: Fixed restore completion message display issue - "Restore completed successfully" now only shows when progress reaches 100% and done=true.
+* Performance: Implemented time budget loop in backup processing - single request now processes multiple batches within max_execution_time * 0.7 limit, significantly reducing HTTP requests needed for complete backup.
+* Performance: Implemented short-interval single event scheduling for Cron mode - backup jobs in preparing/packing stage now use 10-20 second intervals for next batch processing, improving backup speed and reducing total completion time.
+* Improvement: Enhanced backup job scheduling to prevent duplicate events and ensure efficient batch processing.
+
+= 2.7.71 =
+* Bug Fix: Fixed critical issue where failed restore jobs would automatically restart when the page reloaded.
+* Bug Fix: Enhanced restore job status checking to prevent auto-resuming failed, cancelled, or completed jobs.
+* Improvement: Added stricter validation in `startRestoreJobMonitor()` to ensure only active jobs (pending/running) can be monitored.
+* Improvement: Improved page load logic to properly handle failed restore jobs and prevent automatic restart.
+
+= 2.7.70 =
+* Bug Fix: Fixed critical database restore failure - removed invalid `--single-transaction` option from mysql CLI command (this option is only for mysqldump, not mysql).
+* Bug Fix: Improved error logging in mysql CLI import - now includes command details (with password hidden) for better debugging.
+* Improvement: Enhanced database import error messages with more context for troubleshooting.
+
+= 2.7.69 =
+* Bug Fix: Fixed restore failure "Backup file not found or unreadable" - enhanced backup_lite_get_backup_path() with detailed error logging and debugging information.
+* Bug Fix: Improved file path resolution in restore operations - added sanitization, better error messages, and similar file detection for troubleshooting.
+* Improvement: Enhanced restore error logging - now includes backup directory status, available files list, and file permissions information for better debugging.
+* Improvement: Added path traversal protection with PHP 8.0+ compatibility in backup_lite_get_backup_path().
+
+= 2.7.68 =
+* Bug Fix: Fixed backup process getting stuck at high percentages - added timeout handling (30s for polling, 60s for initial request) and improved error recovery for network issues.
+* Bug Fix: Fixed backup AJAX requests hanging on connection timeouts - implemented AbortController with proper timeout handling and retry logic for network errors.
+* Bug Fix: Fixed log file download showing "link expired" error - changed to dynamically fetch fresh download URL with new nonce when download button is clicked.
+* Improvement: Enhanced backup polling resilience - network/timeout errors no longer stop the backup process, allowing automatic retry on next poll.
+* Improvement: Better error messages for timeout and network connection issues during backup operations.
+
+= 2.7.67 =
+* Performance: Removed unnecessary filesize() calls in append_files_to_zip() - now uses file sizes from manifest to reduce I/O overhead.
+* Performance: Optimized batch processing - prioritize manifest file sizes, only call filesize() when manifest size is missing.
+* Performance: Increased batch sizes (800/500/300 files, 150MB/100MB/70MB) to reduce AJAX request overhead.
+* Performance: Reduced logging overhead - removed per-file warning logs for large files during scanning.
+* Performance: Optimized cache mechanism - skip caching for small sites (< 1000 files) to reduce overhead.
+* Performance: Improved file size verification in batch processing - use manifest data first, verify only when needed.
+
+= 2.7.66 =
+* Bug Fix: Fixed critical backup error "Undefined constant FilesystemIterator::CATCH_GET_CHILD" - added PHP version compatibility check for iterator flags.
+* Bug Fix: Fixed log file download not working - changed download URL from admin-ajax.php to admin-post.php to match the correct handler.
+* Bug Fix: Fixed floating actions menu incorrectly processing log buttons - now only handles schedule action buttons, log buttons use normal event delegation.
+* Improvement: Enhanced error handling in file manifest building with better compatibility checks.
+* Improvement: Improved floating menu logic to properly handle non-schedule action buttons (log, backup actions, etc.).
+
+= 2.7.65 =
+* Bug Fix: Fixed 500 Internal Server Error when starting backup - added comprehensive error handling for file manifest building.
+* Bug Fix: Fixed potential memory exhaustion when scanning large directories - added file count limit (100,000 files) and better error handling.
+* Bug Fix: Fixed transient cache failures for large file manifests - added size checking and graceful fallback when cache is too large.
+* Improvement: Enhanced error logging for manifest building process - better error messages and stack traces for debugging.
+* Improvement: Added safety checks in build_manifest_from_directories() - prevents crashes when encountering problematic directories.
+* Improvement: Improved JSON encoding error handling with detailed error messages when manifest encoding fails.
+
+= 2.7.64 =
+* Performance: Implemented comprehensive performance optimizations for backup and restore operations.
+* Performance: Added dynamic batch size adjustment based on available system memory (200-500 files per batch).
+* Performance: Optimized ZipArchive compression - large files (>10MB) use no compression for faster processing.
+* Performance: Enhanced database export with optimized mysqldump parameters (--single-transaction, --quick, --skip-comments).
+* Performance: Enhanced database import with optimized mysql CLI parameters (--max_allowed_packet, --single-transaction, --quick).
+* Performance: Implemented file list caching using WordPress Transients API (5-minute cache, reduces redundant directory scans).
+* Performance: Optimized PHP database import with transaction batching (commits every 1000 queries to avoid large transactions).
+* Performance: Optimized PHP database export with stream buffering (64KB buffer, periodic flushes).
+* Performance: Reduced progress update frequency (from every 5% to every 10%) to minimize database writes.
+* Performance: Enhanced file iteration with optimized flags (FOLLOW_SYMLINKS, CATCH_GET_CHILD) for better performance and stability.
+* Performance: Implemented intelligent file filtering with caching mechanism - early returns and pattern matching optimization.
+* Performance: Added file size pre-checking - automatically skips extremely large files (>2GB) to prevent issues.
+* Performance: Optimized directory scanning order - priority processing for important directories (themes, plugins, uploads first).
+* Performance: Expanded exclusion list to skip common unnecessary files/directories (.git, node_modules, vendor, .cache, etc.).
+* Improvement: All optimizations follow WordPress coding standards and include comprehensive error handling and logging.
 
 = 2.7.63 =
 * Bug Fix: Added extensive debugging logs to diagnose schedule action button issues - logs button clicks, function availability, AJAX requests, and errors.

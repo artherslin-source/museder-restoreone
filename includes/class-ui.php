@@ -211,7 +211,7 @@ class Backup_Lite_UI {
             'restUrlV2'      => $rest_url_v2,
             'page'           => $current_page,
             'activeJob'      => $active_job,
-            'jobPollingInterval' => 3,
+            'jobPollingInterval' => 2.0, // Default 2 seconds, will be adjusted dynamically based on progress
             'confirmRestore' => __( 'Restoring will overwrite your current site files and database. Continue?', 'museder-restoreone' ),
             'strings'        => [
                 'runningTitle'    => __( 'Processing…', 'museder-restoreone' ),
@@ -836,16 +836,34 @@ class Backup_Lite_UI {
         // Sanitize log parameter before nonce check
         // phpcs:disable WordPress.Security.NonceVerification.Recommended -- nonce verified via check_admin_referer() below
         $log  = sanitize_text_field( wp_unslash( $_GET['log'] ?? '' ) );
+        // Compatibility: if a link contains literal "&amp;", PHP may receive the parameter key "amp;log".
+        if ( empty( $log ) && isset( $_GET['amp;log'] ) ) {
+            $log = sanitize_text_field( wp_unslash( $_GET['amp;log'] ) );
+        }
         // phpcs:enable WordPress.Security.NonceVerification.Recommended
+        
+        if ( empty( $log ) ) {
+            wp_die( esc_html__( 'Log filename missing.', 'museder-restoreone' ), esc_html__( 'Download error', 'museder-restoreone' ), 400 );
+        }
         
         $path = backup_lite_get_log_dir() . '/' . basename( $log );
         $path = wp_normalize_path( $path );
 
         if ( ! file_exists( $path ) ) {
-            wp_die( esc_html__( 'Log file not found.', 'museder-restoreone' ) );
+            wp_die( esc_html__( 'Log file not found.', 'museder-restoreone' ), esc_html__( 'Download error', 'museder-restoreone' ), 404 );
         }
 
-        check_admin_referer( 'backup_lite_download_log_' . basename( $path ) );
+        // Verify nonce - use the basename of the log file for the nonce action
+        // This matches the nonce action used in build_log_download_link()
+        $nonce_action = 'backup_lite_download_log_' . basename( $path );
+        if ( ! check_admin_referer( $nonce_action, '_wpnonce' ) ) {
+            // If nonce verification fails, provide a helpful error message
+            wp_die( 
+                esc_html__( 'The link you are trying to access has expired.', 'museder-restoreone' ) . ' <a href="' . esc_url( admin_url( 'admin.php?page=backup-lite-logs' ) ) . '">' . esc_html__( 'Please try again', 'museder-restoreone' ) . '</a>.',
+                esc_html__( 'Link expired', 'museder-restoreone' ),
+                [ 'response' => 403, 'back_link' => true ]
+            );
+        }
 
         // @plugin-check: sanitized - safe whitelisted mime type
         header( 'Content-Type: text/plain' );
@@ -1022,6 +1040,20 @@ class Backup_Lite_UI {
 
     public static function get_backups_list( $limit = 0 ) {
         $dir = trailingslashit( backup_lite_get_backup_dir() );
+
+        // Hide the currently-running archive from the library list to avoid exposing partial files.
+        $active_archive = '';
+        if ( class_exists( 'Backup_Lite_Backup_Jobs' ) ) {
+            $active_job = Backup_Lite_Backup_Jobs::get_active_job();
+            if (
+                $active_job
+                && ! empty( $active_job['archive_path'] )
+                && ! empty( $active_job['status'] )
+                && ! in_array( $active_job['status'], [ 'completed', 'failed', 'cancelled' ], true )
+            ) {
+                $active_archive = basename( $active_job['archive_path'] );
+            }
+        }
         
         // Support all ZIP/WPRESS backups regardless of naming convention.
         // Older versions created names like backup-lite-*.zip or museder-restoreone-*.zip,
@@ -1036,8 +1068,13 @@ class Backup_Lite_UI {
         rsort( $glob );
 
         $items = [];
-        foreach ( $glob as $index => $file ) {
-            if ( $limit > 0 && $index >= $limit ) {
+        $shown = 0;
+        foreach ( $glob as $file ) {
+            if ( $active_archive && basename( $file ) === $active_archive ) {
+                continue;
+            }
+
+            if ( $limit > 0 && $shown >= $limit ) {
                 break;
             }
 
@@ -1074,6 +1111,8 @@ class Backup_Lite_UI {
                 'encrypted' => ! empty( $metadata['encrypted'] ),
                 'duration_seconds' => $duration_seconds,
             ];
+
+            $shown++;
         }
 
         return $items;

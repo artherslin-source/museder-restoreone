@@ -38,7 +38,27 @@ class Backup_Lite_Restore_Service {
         $file_path = backup_lite_get_backup_path( $file_name );
 
         if ( ! $file_path ) {
-            backup_lite_log( 'error', 'Restore archive not readable.', [ 'filename' => $file_name ] );
+            // Enhanced error logging with more context
+            $backups_dir = backup_lite_get_backup_dir();
+            $backup_files = [];
+            
+            // Try to list available backup files for debugging
+            if ( is_dir( $backups_dir ) && is_readable( $backups_dir ) ) {
+                $files = @glob( trailingslashit( $backups_dir ) . '*.zip' );
+                if ( ! empty( $files ) ) {
+                    $backup_files = array_map( 'basename', array_slice( $files, 0, 10 ) ); // Limit to first 10 for logging
+                }
+            }
+            
+            backup_lite_log( 'error', 'Restore archive not readable.', [
+                'filename' => $file_name,
+                'source' => $source,
+                'backups_dir' => $backups_dir,
+                'backups_dir_exists' => is_dir( $backups_dir ),
+                'backups_dir_readable' => is_dir( $backups_dir ) ? is_readable( $backups_dir ) : false,
+                'available_files_sample' => $backup_files,
+            ] );
+            
             throw new RuntimeException( esc_html__( 'Backup file not found or unreadable.', 'museder-restoreone' ) );
         }
 

@@ -253,7 +253,8 @@ if ( $safe_mode_active ) {
                             <td>
                                 <?php
                                 $duration = isset( $entry['duration'] ) ? (int) $entry['duration'] : -1;
-                                echo esc_html( backup_lite_format_duration( $duration ) );
+                                $duration_human = backup_lite_format_duration( $duration );
+                                echo esc_html( '' !== $duration_human ? $duration_human : '—' );
                                 ?>
                             </td>
                             <td>

@@ -368,9 +368,11 @@ var backupLiteTimer = {
             viewBtn.dataset.log = log.name;
             viewBtn.textContent = strings.viewLog || 'Preview';
 
-            var downloadLink = document.createElement('a');
+            var downloadLink = document.createElement('button');
+            downloadLink.type = 'button';
             downloadLink.className = 'button';
-            downloadLink.href = log.download_url;
+            downloadLink.dataset.logAction = 'download';
+            downloadLink.dataset.log = log.name;
             downloadLink.textContent = strings.downloadLog || 'Download';
 
             var deleteBtn = document.createElement('button');
@@ -501,7 +503,29 @@ var backupLiteTimer = {
         resetRestoreProgress: resetRestoreProgress
     };
 
-    backupJobContext.pollDelay = Math.max(2500, (settings.jobPollingInterval || 3) * 1000);
+    // Reduced minimum polling delay from 2500ms to 1500ms for better responsiveness
+    // Dynamic polling interval based on backup progress
+    // Default: 2 seconds, adjusted based on progress:
+    // - 0-10%: 2 seconds (frequent, user needs to see progress)
+    // - 10-90%: 3 seconds (reduce requests)
+    // - 90-99%: 1.5 seconds (frequent, preparing for completion)
+    backupJobContext.pollDelay = Math.max(2000, (settings.jobPollingInterval || 2.0) * 1000);
+    backupJobContext.getPollDelay = function(percentage) {
+        if (typeof percentage !== 'number' || isNaN(percentage)) {
+            return backupJobContext.pollDelay;
+        }
+        
+        if (percentage < 10) {
+            // Early stage: 2 seconds (frequent, user needs to see progress)
+            return 2000;
+        } else if (percentage >= 10 && percentage < 90) {
+            // Middle stage: 3 seconds (reduce requests)
+            return 3000;
+        } else {
+            // Near completion (90-99%): 1.5 seconds (frequent, preparing for completion)
+            return 1500;
+        }
+    };
 
     var backupFormEl = null;
     var backupProgressEl = document.getElementById('backup-progress-fill');
@@ -702,27 +726,90 @@ var backupLiteTimer = {
         payload.append('nonce', settings.nonce);
         payload.append('job_id', jobId);
 
+        // Create AbortController for timeout handling
+        // Use 30 seconds to match backend time budget (25s) + buffer
+        const REQUEST_TIMEOUT_MS = 30000; // 30 seconds
+        var controller = new AbortController();
+        var timeoutId = setTimeout(function() {
+            controller.abort();
+        }, REQUEST_TIMEOUT_MS);
+
         fetch(settings.ajaxUrl, {
             method: 'POST',
             credentials: 'same-origin',
-            body: payload
+            body: payload,
+            signal: controller.signal
         }).then(function (response) {
+            clearTimeout(timeoutId);
+            if (!response.ok) {
+                throw new Error('Network response was not ok: ' + response.status);
+            }
             return response.json();
         }).then(function (json) {
+            clearTimeout(timeoutId);
             if (json && json.success && json.data && json.data.job) {
                 handleJobResponse(json.data.job);
             }
-        }).catch(function () {
-            // Silent fallback – manual nudge is best effort.
+        }).catch(function (error) {
+            clearTimeout(timeoutId);
+            // Improved error handling with clearer messages
+            if (error.name === 'AbortError') {
+                // Request was aborted by timeout - silent fallback for nudge
+                // Nudge is best effort, don't log timeout errors
+            } else if (error.message && !error.message.includes('timeout') && !error.message.includes('network')) {
+                // Only log non-timeout/network errors
+                console.warn('[Backup Lite] Nudge request failed:', error.message || error);
+            }
         });
     }
 
+    // Flag to prevent overlapping polling requests
+    var backupLiteIsPolling = false;
+    var backupLitePollTimer = null;
+    var backupLitePollController = null; // Store controller for potential abort
+    var backupLitePollAborted = false; // Track if current request was aborted
+
     function pollBackupJobStatus() {
+        // Check if job exists and is still running
         if (!backupJobContext.current || !backupJobContext.current.id) {
             stopBackupJobPolling();
             return;
         }
 
+        // Check if job is already finished
+        if (backupJobContext.current.status && 
+            ['completed', 'failed', 'cancelled'].includes(backupJobContext.current.status)) {
+            stopBackupJobPolling();
+            return;
+        }
+
+        // Prevent overlapping requests - if already polling, just return
+        if (backupLiteIsPolling) {
+            return;
+        }
+        
+        // Set polling flag
+        backupLiteIsPolling = true;
+        backupLitePollAborted = false; // Reset abort flag
+
+        // Abort previous request if still pending (shouldn't happen, but safety check)
+        if (backupLitePollController) {
+            backupLitePollController.abort();
+            backupLitePollController = null;
+        }
+
+        // Create AbortController for timeout handling
+        // Use 30 seconds to match backend time budget (25s) + buffer
+        const REQUEST_TIMEOUT_MS = 30000; // 30 seconds
+        backupLitePollController = new AbortController();
+        var timeoutId = setTimeout(function() {
+            if (backupLitePollController) {
+                backupLitePollAborted = true; // Mark as aborted
+                backupLitePollController.abort();
+            }
+        }, REQUEST_TIMEOUT_MS);
+
+        // Use WordPress-standard AJAX approach with fetch API
         var payload = new FormData();
         payload.append('action', 'backup_lite_get_job_status');
         payload.append('nonce', settings.nonce);
@@ -731,35 +818,140 @@ var backupLiteTimer = {
         fetch(settings.ajaxUrl, {
             method: 'POST',
             credentials: 'same-origin',
-            body: payload
+            body: payload,
+            signal: backupLitePollController.signal
         }).then(function (response) {
+            clearTimeout(timeoutId);
+            if (!response.ok) {
+                throw new Error('Network response was not ok: ' + response.status);
+            }
             return response.json();
         }).then(function (json) {
+            clearTimeout(timeoutId);
             if (!json || !json.success || !json.data || !json.data.job) {
                 throw json && json.data ? json.data : json;
             }
-            handleJobResponse(json.data.job);
+            var job = json.data.job;
+            handleJobResponse(job);
+            
+            // Update polling delay based on progress
+            if (job && typeof job.percentage === 'number') {
+                backupJobContext.pollDelay = backupJobContext.getPollDelay(job.percentage);
+            }
         }).catch(function (error) {
-            stopBackupJobPolling();
-            setBackupBusy(false);
-            handleError(error && error.message ? error : null);
-            backupJobContext.current = null;
+            clearTimeout(timeoutId);
+            
+            // Check if this was an abort (normal case - page reload, manual abort, timeout)
+            var isAbort = false;
+            if (error && (
+                error.name === 'AbortError' || 
+                (error.message && (
+                    error.message === 'The user aborted a request.' ||
+                    error.message === 'signal is aborted without reason' ||
+                    error.message.includes('aborted')
+                ))
+            )) {
+                isAbort = true;
+            }
+            
+            // If aborted, treat as normal - don't log as error
+            if (isAbort) {
+                // Normal abort - use debug if available, but don't pollute console
+                if (window.console && console.debug) {
+                    console.debug('[Backup Lite] Polling aborted (normal)');
+                }
+                // Mark as aborted so finally block knows not to schedule next poll
+                backupLitePollAborted = true;
+                return;
+            }
+            
+            // Network/timeout errors - log warning but continue polling
+            if (error.message && (
+                error.message.includes('timeout') || 
+                error.message.includes('network') ||
+                error.message.includes('Failed to fetch') ||
+                error.message.includes('ERR_CONNECTION')
+            )) {
+                // Network/timeout error - continue polling but log warning
+                if (window.console && console.warn) {
+                    console.warn('[Backup Lite] Polling request failed, will retry: ' + error.message);
+                }
+            } else {
+                // Other errors - log and stop polling
+                if (window.console && console.error) {
+                    console.error('[Backup Lite] Polling request failed:', error);
+                }
+                stopBackupJobPolling();
+                setBackupBusy(false);
+                handleError(error && error.message ? error : null);
+                backupJobContext.current = null;
+                return;
+            }
+        }).finally(function() {
+            // Always reset the polling flag
+            backupLiteIsPolling = false;
+            backupLitePollController = null;
+            
+            // Only schedule next poll if:
+            // 1. Request was NOT aborted (aborted requests should not trigger next poll)
+            // 2. Job still exists and is still running
+            // 3. Job is not in a finished state
+            if (!backupLitePollAborted && 
+                backupJobContext.current && 
+                backupJobContext.current.id && 
+                backupJobContext.current.status && 
+                !['completed', 'failed', 'cancelled'].includes(backupJobContext.current.status)) {
+                // Clear any existing timer
+                if (backupJobContext.timer) {
+                    clearTimeout(backupJobContext.timer);
+                }
+                // Schedule next poll after delay (dynamically adjusted based on progress)
+                backupJobContext.timer = setTimeout(pollBackupJobStatus, backupJobContext.pollDelay);
+            }
+            
+            // Reset abort flag for next request
+            backupLitePollAborted = false;
         });
     }
 
     function scheduleBackupJobPolling(immediate) {
+        // Stop any existing polling first
         stopBackupJobPolling();
-        backupJobContext.timer = window.setInterval(pollBackupJobStatus, backupJobContext.pollDelay);
+        
+        // Reset abort flag
+        backupLitePollAborted = false;
+        
+        // Check if we have a valid job to poll
+        if (!backupJobContext.current || !backupJobContext.current.id) {
+            return;
+        }
+        
         if (immediate) {
+            // Start polling immediately
             pollBackupJobStatus();
+        } else {
+            // Schedule first poll after delay
+            backupJobContext.timer = setTimeout(pollBackupJobStatus, backupJobContext.pollDelay);
         }
     }
 
     function stopBackupJobPolling() {
+        // Clear timer first
         if (backupJobContext.timer) {
-            window.clearInterval(backupJobContext.timer);
+            clearTimeout(backupJobContext.timer);
             backupJobContext.timer = null;
         }
+        
+        // Abort any pending request
+        if (backupLitePollController) {
+            backupLitePollAborted = true; // Mark as aborted so finally block doesn't schedule next poll
+            backupLitePollController.abort();
+            backupLitePollController = null;
+        }
+        
+        // Reset polling flag
+        backupLiteIsPolling = false;
+        backupLitePollAborted = false;
     }
 
     function startBackupJobRequest(event) {
@@ -785,11 +977,22 @@ var backupLiteTimer = {
         resetBackupProgress();
         setBackupStatusMessage(strings.jobPreparing || strings.runningMessage || '', 'loading');
 
+        // Create AbortController for timeout handling
+        var controller = new AbortController();
+        var timeoutId = setTimeout(function() {
+            controller.abort();
+        }, 60000); // 60 second timeout for initial request
+
         fetch(settings.ajaxUrl, {
             method: 'POST',
             credentials: 'same-origin',
-            body: payload
+            body: payload,
+            signal: controller.signal
         }).then(function (response) {
+            clearTimeout(timeoutId);
+            if (!response.ok) {
+                throw new Error('Network response was not ok: ' + response.status);
+            }
             return response.json();
         }).then(function (json) {
             if (!json || !json.success || !json.data || !json.data.job) {
@@ -799,17 +1002,38 @@ var backupLiteTimer = {
             backupLiteTimer.start(); // Start elapsed time timer
             scheduleBackupJobPolling(true);
         }).catch(function (error) {
+            clearTimeout(timeoutId);
             setBackupBusy(false);
             backupJobContext.current = null;
             resetBackupProgress();
             setBackupCancelable(false);
-            handleError(error && error.message ? error : null);
+            
+            // Provide better error message for timeout/network errors
+            var errorMessage = error && error.message ? error.message : null;
+            if (error.name === 'AbortError' || (errorMessage && (
+                errorMessage.includes('timeout') || 
+                errorMessage.includes('network') ||
+                errorMessage.includes('Failed to fetch')
+            ))) {
+                errorMessage = 'Connection timeout. Please check your network connection and try again.';
+            }
+            
+            handleError(errorMessage ? { message: errorMessage } : error);
         });
 
         return false;
     }
 
+    // Guard against duplicate completion overlays for the same job (e.g., due to retries/polling).
+    var lastCompletedBackupJobId = null;
+
     function finishBackupJob(job) {
+        if (job && job.id) {
+            if (lastCompletedBackupJobId === job.id) {
+                return;
+            }
+            lastCompletedBackupJobId = job.id;
+        }
         stopBackupJobPolling();
         backupLiteTimer.stop(); // Stop elapsed time timer
         setBackupBusy(false);
@@ -1602,6 +1826,24 @@ function initRestoreCenter() {
             if (!job || !job.id) {
                 return;
             }
+            
+            // Prevent auto-resuming failed, cancelled, or completed jobs
+            var jobStatus = job.status || '';
+            if (jobStatus === 'failed' || jobStatus === 'cancelled' || jobStatus === 'success' || jobStatus === 'completed') {
+                console.warn('[Backup Lite] Cannot start restore job monitor: job is already ' + jobStatus, { jobId: job.id, status: jobStatus });
+                stopRestoreJobMonitor();
+                restoreInProgress = false;
+                restoreCompleted = false;
+                activeRestoreJobId = null;
+                if (startButton) {
+                    startButton.disabled = false;
+                }
+                setProgress(0, '', false);
+                syncWizard();
+                updateRestoreCancelState();
+                return;
+            }
+            
             activeRestoreJobId = job.id;
             restoreInProgress = true;
             restoreJobPollStartTime = Date.now();
@@ -1653,7 +1895,8 @@ function initRestoreCenter() {
             startSimulatedProgress();
             
             // If job status is 'pending', try to trigger it immediately
-            if (job.status === 'pending') {
+            // Only trigger if job is not already failed, cancelled, or completed
+            if (job.status === 'pending' && jobStatus !== 'failed' && jobStatus !== 'cancelled' && jobStatus !== 'success' && jobStatus !== 'completed') {
                 // Trigger cron execution immediately via AJAX
                 var triggerFormData = prepareFormData('backup_lite_trigger_restore_job');
                 triggerFormData.append('job_id', job.id);
@@ -1880,7 +2123,8 @@ function initRestoreCenter() {
                 var status = job.status || '';
                 
                 // If job is still pending after 10 seconds, try to trigger it again
-                if (status === 'pending' && restoreJobPollStartTime) {
+                // Only trigger if job is not already failed, cancelled, or completed
+                if (status === 'pending' && restoreJobPollStartTime && status !== 'failed' && status !== 'cancelled' && status !== 'success' && status !== 'completed') {
                     var timeSinceStart = Date.now() - restoreJobPollStartTime;
                     if (timeSinceStart > 10000) {
                         // Job has been pending for more than 10 seconds, try to trigger it
@@ -2158,16 +2402,25 @@ function initRestoreCenter() {
                                     progress,
                                     jobId
                                 });
-                                stopRestoreJobMonitor();
-                                restoreInProgress = false;
-                                restoreCompleted = false;
-                                if (startButton) {
-                                    startButton.disabled = false;
-                                }
-                                syncWizard();
-                                updateRestoreCancelState();
-                                // Show warning toast instead of failure modal
-                                showToast('⚠️ ' + (strings.errorGeneric || 'Could not confirm restore status. Please check logs manually.'), 'warning');
+                                // CRITICAL: Check history one final time before giving up
+                                checkRestoreCompletionFromHistory(jobId);
+                                // Wait a moment for history check to complete
+                                setTimeout(function() {
+                                    // Only reset state if we still don't have a final result
+                                    if (!restoreMonitor.hasFinalResult) {
+                                        stopRestoreJobMonitor();
+                                        restoreInProgress = false;
+                                        restoreCompleted = false;
+                                        activeRestoreJobId = null;
+                                        if (startButton) {
+                                            startButton.disabled = false;
+                                        }
+                                        syncWizard();
+                                        updateRestoreCancelState();
+                                        // Show warning toast instead of failure modal
+                                        showToast('⚠️ ' + (strings.errorGeneric || 'Could not confirm restore status. Please check logs manually.'), 'warning');
+                                    }
+                                }, 1000);
                                 return;
                             }
                             // If we've been at 100% for more than 3 seconds, check history and assume completion/failure
@@ -2532,13 +2785,40 @@ function initRestoreCenter() {
                     });
                 } else {
                     // No active job, but we got an error - might be a stale request
-                    // Reset state to prevent stuck progress
+                    // CRITICAL: If progress is at 100%, check history before resetting state
+                    // This prevents showing error when restore actually completed
+                    if (currentProgress >= 100 || displayProgress >= 100) {
+                        console.log('[Backup Lite] Error at 100% progress, checking history before resetting state');
+                        checkRestoreCompletionFromHistory(jobId);
+                        // Wait a moment for history check to complete
+                        setTimeout(function() {
+                            // Only reset state if we still don't have a final result
+                            if (!restoreMonitor.hasFinalResult) {
+                                if (!silent) {
+                                    console.warn('[Backup Lite] Restore job status failed and no active job, resetting state:', error);
+                                }
+                                stopRestoreJobMonitor();
+                                restoreInProgress = false;
+                                restoreCompleted = false;
+                                activeRestoreJobId = null;
+                                if (startButton) {
+                                    startButton.disabled = false;
+                                }
+                                setProgress(0, '', false);
+                                syncWizard();
+                                updateRestoreCancelState();
+                            }
+                        }, 1000);
+                        return;
+                    }
+                    // Reset state to prevent stuck progress (only if not at 100%)
                     if (!silent) {
                         console.warn('[Backup Lite] Restore job status failed and no active job, resetting state:', error);
                     }
                     stopRestoreJobMonitor();
                     restoreInProgress = false;
                     restoreCompleted = false;
+                    activeRestoreJobId = null;
                     if (startButton) {
                         startButton.disabled = false;
                     }
@@ -2947,6 +3227,18 @@ function initRestoreCenter() {
             var progressText = document.getElementById('restore-progress-text');
             
             var targetPercent = Math.max(0, Math.min(100, percent || 0));
+
+            // Guard: while a restore is still running, avoid showing a "completed" message in the progress text
+            // (can happen if a stale/optimistic message leaks into polling responses).
+            var safeMessage = message || '';
+            if (!done && restoreInProgress && safeMessage) {
+                var lowered = String(safeMessage).toLowerCase();
+                if (lowered.indexOf('completed') !== -1 || lowered.indexOf('successfully') !== -1) {
+                    safeMessage = targetPercent >= 85
+                        ? (strings.restoreFinalizingMessage || strings.restoreFinalizing || 'Finalizing restore…')
+                        : (strings.restoreInProgress || 'Restore in Progress');
+                }
+            }
             
             // Cancel any existing animation
             if (progressAnimationId) {
@@ -2972,16 +3264,21 @@ function initRestoreCenter() {
                 animateProgress(currentProgress, targetPercent, progressBar, progressFill, progressText, duration);
             }
             if (progressStatus) {
-                if (done) {
-                    progressStatus.textContent = message || strings.restoreCompleted || 'Restore Completed.';
-                } else if (message) {
-                    progressStatus.textContent = message;
+                // Only show completion message if done is true AND progress is at 100%
+                // This prevents showing "Restore completed successfully" when progress is still below 100%
+                if (done && targetPercent >= 100) {
+                    progressStatus.textContent = safeMessage || strings.restoreCompleted || 'Restore Completed.';
+                } else if (done && targetPercent < 100) {
+                    // done=true but progress < 100% - show the message but not completion text
+                    progressStatus.textContent = safeMessage || strings.awaitingRestore || 'Awaiting restore.';
+                } else if (safeMessage) {
+                    progressStatus.textContent = safeMessage;
                 } else {
                     progressStatus.textContent = strings.awaitingRestore || 'Awaiting restore.';
                 }
             }
             if (statusMessage) {
-                statusMessage.textContent = message || '';
+                statusMessage.textContent = safeMessage || '';
             }
             
             // Show/hide progress container
@@ -3005,9 +3302,9 @@ function initRestoreCenter() {
             var statusIconInline = document.getElementById('restore-status-icon-inline');
             var statusTitleText = document.getElementById('restore-status-title-text');
             
-            // Only show "Restore Completed" if done is true AND we're actually in a restore operation
-            // Don't show completion status during step 1 (file analysis)
-            if (done && restoreInProgress) {
+            // Only show "Restore Completed" if done is true AND progress is at 100% AND we're actually in a restore operation
+            // Don't show completion status during step 1 (file analysis) or when progress is still below 100%
+            if (done && targetPercent >= 100 && restoreInProgress) {
                 // This is a real restore completion
                 if (statusIcon) {
                     statusIcon.textContent = '✅';
@@ -3077,9 +3374,9 @@ function initRestoreCenter() {
                 }
             }
             
-            // Update restoreCompleted flag - only set to true if done AND in restore operation
-            // Don't set restoreCompleted during step 1 (file analysis)
-            if (done && restoreInProgress) {
+            // Update restoreCompleted flag - only set to true if done AND progress is at 100% AND in restore operation
+            // Don't set restoreCompleted during step 1 (file analysis) or when progress is still below 100%
+            if (done && targetPercent >= 100 && restoreInProgress) {
                 // This is a real restore completion
                 restoreInProgress = false;
                 restoreCompleted = true;
@@ -3286,35 +3583,56 @@ function initRestoreCenter() {
         
         // Check for active or completed restore job
         if (restoreData.job && restoreData.job.id) {
-            if (startButton) {
-                startButton.disabled = true;
-            }
             var fileSize = (restoreData.summary && restoreData.summary.size) ? restoreData.summary.size : 0;
             var jobStatus = restoreData.job.status || '';
             
             // Check if job is already complete on page load (e.g., after re-login)
             if (jobStatus === 'success' || jobStatus === 'completed') {
                 console.log('[Backup Lite] Job already complete on page load, marking as completed', { jobId: restoreData.job.id, status: jobStatus });
+                if (startButton) {
+                    startButton.disabled = false;
+                }
                 // Use setTimeout to ensure all functions are initialized
                 setTimeout(function() {
                     markRestoreCompleted(restoreData.job.message || (strings.restoreCompleted || 'Restore Completed.'));
                 }, 500);
-            } else if (jobStatus === 'failed') {
-                // Job failed, reset progress and state
-                console.log('[Backup Lite] Job failed on page load, resetting state', { jobId: restoreData.job.id, status: jobStatus });
+            } else if (jobStatus === 'failed' || jobStatus === 'cancelled') {
+                // Job failed or cancelled, reset progress and state - DO NOT auto-resume
+                console.log('[Backup Lite] Job ' + jobStatus + ' on page load, resetting state (NOT auto-resuming)', { jobId: restoreData.job.id, status: jobStatus });
                 stopRestoreJobMonitor();
                 restoreInProgress = false;
                 restoreCompleted = false;
-                backupLiteRestoreFailureShown = false; // Reset failure flag when restarting
+                backupLiteRestoreFailureShown = false;
+                restoreCompletionShown = false;
+                activeRestoreJobId = null; // Clear active job ID to prevent auto-resume
                 if (startButton) {
                     startButton.disabled = false;
                 }
                 setProgress(0, '', false);
                 syncWizard();
                 updateRestoreCancelState();
-            } else {
+            } else if (jobStatus === 'running' || jobStatus === 'pending' || jobStatus === 'cancelling') {
                 // Job is still running or pending, start monitoring
+                console.log('[Backup Lite] Job ' + jobStatus + ' on page load, resuming monitoring', { jobId: restoreData.job.id, status: jobStatus });
+                if (startButton) {
+                    startButton.disabled = true;
+                }
                 startRestoreJobMonitor(restoreData.job, fileSize);
+            } else {
+                // Unknown status or empty status - treat as failed to prevent auto-resume
+                console.warn('[Backup Lite] Job has unknown or empty status on page load, resetting state (NOT auto-resuming)', { jobId: restoreData.job.id, status: jobStatus });
+                stopRestoreJobMonitor();
+                restoreInProgress = false;
+                restoreCompleted = false;
+                backupLiteRestoreFailureShown = false;
+                restoreCompletionShown = false;
+                activeRestoreJobId = null; // Clear active job ID to prevent auto-resume
+                if (startButton) {
+                    startButton.disabled = false;
+                }
+                setProgress(0, '', false);
+                syncWizard();
+                updateRestoreCancelState();
             }
         } else {
             // No active job - check history to see if a restore just completed
@@ -3534,6 +3852,22 @@ function initRestoreCenter() {
 
         if (startButton) {
             startButton.addEventListener('click', function () {
+                // CRITICAL: Prevent multiple simultaneous restore operations
+                // Check if restore is already in progress before allowing new restore
+                if (restoreInProgress || activeRestoreJobId) {
+                    console.warn('[Backup Lite] Restore already in progress, ignoring click', {
+                        restoreInProgress: restoreInProgress,
+                        activeRestoreJobId: activeRestoreJobId
+                    });
+                    return;
+                }
+                
+                // Check if button is already disabled (safety check)
+                if (startButton.disabled) {
+                    console.warn('[Backup Lite] Start button already disabled, ignoring click');
+                    return;
+                }
+                
                 if (!overwriteToggle.checked) {
                     var overwriteConfirm = getString('confirmOverwriteData', 'This will overwrite your site data. Continue?');
                     if (!window.confirm('⚠️ ' + overwriteConfirm)) {
@@ -3550,6 +3884,7 @@ function initRestoreCenter() {
                     formData.append('searchReplace', JSON.stringify([]));
                 }
 
+                // CRITICAL: Disable button and set state BEFORE making request to prevent double-clicks
                 startButton.disabled = true;
                 restoreInProgress = true;
                 restoreCompleted = false;
@@ -3624,10 +3959,18 @@ function initRestoreCenter() {
                         );
                     }
                 }).catch(function (error) {
+                    // CRITICAL: Reset all state on error to prevent stuck state and allow retry
                     stopRestoreJobMonitor();
                     restoreInProgress = false;
                     restoreCompleted = false;
-                    startButton.disabled = false;
+                    activeRestoreJobId = null;
+                    restoreMonitor.hasFinalResult = false;
+                    restoreMonitor.lastStatus = null;
+                    restoreCompletionShown = false;
+                    backupLiteRestoreFailureShown = false;
+                    if (startButton) {
+                        startButton.disabled = false;
+                    }
                     syncWizard();
                     updateRestoreCancelState();
                     console.error('Restore enqueue error:', error);
@@ -4891,8 +5234,32 @@ function initRestoreCenter() {
             }
         }
 
-        var action = event.target && event.target.dataset ? event.target.dataset.logAction : null;
-        var logName = event.target && event.target.dataset ? event.target.dataset.log : null;
+        // Only handle log actions when a log action button is clicked.
+        // This prevents noise on other admin pages (e.g., Backups page).
+        var logButton = null;
+        if (event.target && event.target.closest) {
+            logButton = event.target.closest('button[data-log-action]');
+        }
+        if (!logButton) {
+            return;
+        }
+
+        // Optional hard-scope: only act when we're on Logs page.
+        if (currentPage && currentPage !== 'backup-lite-logs') {
+            return;
+        }
+
+        var action = logButton.dataset ? logButton.dataset.logAction : null;
+        var logName = logButton.dataset ? logButton.dataset.log : null;
+
+        // Fallback: try to get log name from row data-log attribute
+        if (!logName && logButton.closest) {
+            var row = logButton.closest('tr[data-log]');
+            if (row && row.dataset && row.dataset.log) {
+                logName = row.dataset.log;
+            }
+        }
+
         if (!action || !logName) {
             return;
         }
@@ -4904,6 +5271,44 @@ function initRestoreCenter() {
                 }
             }).catch(function (error) {
                 var message = (error && error.message) ? error.message : 'Unable to load log.';
+                showToast('⚠️ ' + message, 'warning');
+            });
+        }
+
+        if (action === 'download') {
+            // Get fresh download URL with new nonce to prevent expiration
+            // Use settings.ajaxUrl and settings.nonce (from BackupLite) instead of localizedSettings
+            if (!settings.ajaxUrl) {
+                settings.ajaxUrl = (typeof window.ajaxurl !== 'undefined') ? window.ajaxurl : '/wp-admin/admin-ajax.php';
+            }
+            
+            var formData = new FormData();
+            formData.append('action', 'backup_lite_get_log_download_url');
+            formData.append('nonce', settings.nonce || '');
+            formData.append('log', logName);
+            
+            fetch(settings.ajaxUrl, {
+                method: 'POST',
+                credentials: 'same-origin',
+                body: formData
+            }).then(function (response) {
+                return response.json();
+            }).then(function (json) {
+                if (!json || json.success !== true) {
+                    throw json && json.data ? json.data : json;
+                }
+                var data = json.data || {};
+                if (data.download_url) {
+                    // Decode HTML entities in case the URL was escaped for HTML output (e.g., &amp; / &#038;).
+                    // If we navigate to an entity-escaped URL, PHP receives "amp;log" instead of "log".
+                    var downloadUrl = String(data.download_url);
+                    downloadUrl = downloadUrl.replace(/&amp;/g, '&').replace(/&#038;/g, '&');
+                    window.location.href = downloadUrl;
+                } else {
+                    showToast('⚠️ ' + 'Unable to get download URL.', 'warning');
+                }
+            }).catch(function (error) {
+                var message = (error && error.message) ? error.message : 'Unable to download log.';
                 showToast('⚠️ ' + message, 'warning');
             });
         }
@@ -5267,13 +5672,30 @@ function initRestoreCenter() {
                     }).join(', ')
                 });
                 
-                // Determine action type from class
+                // Determine action type from class - only handle schedule actions
                 if (btnClass.indexOf('backup-lite-schedule-action-start') !== -1) {
                     actionType = 'start';
                 } else if (btnClass.indexOf('backup-lite-schedule-action-edit') !== -1) {
                     actionType = 'edit';
                 } else if (btnClass.indexOf('backup-lite-schedule-action-delete') !== -1) {
                     actionType = 'delete';
+                } else {
+                    // Not a schedule action button (e.g., log action buttons)
+                    // Let the original button handle it via normal event delegation
+                    console.log('[Backup Lite] Portal button is not a schedule action, triggering original button click');
+                    removePortal();
+                    // Find and click the original button
+                    var originalBtn = list.querySelector(btn.tagName.toLowerCase() + '[data-log-action="' + btn.getAttribute('data-log-action') + '"]');
+                    if (originalBtn) {
+                        originalBtn.click();
+                    } else if (btn.dataset.logAction === 'download' && btn.dataset.log) {
+                        // For log download buttons, trigger the download action
+                        btn.click();
+                    } else if (btn.tagName === 'A' && btn.href) {
+                        // For other download links, navigate directly
+                        window.location.href = btn.href;
+                    }
+                    return;
                 }
                 
                 if (!btnId) {

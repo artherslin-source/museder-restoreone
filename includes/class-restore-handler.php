@@ -226,9 +226,31 @@ class Backup_Lite_Restore_Handler {
         $path = backup_lite_get_backup_path( $filename );
 
         if ( ! $path ) {
-            backup_lite_log( 'error', 'Restore archive not readable.', [ 'filename' => $filename ] );
+            // Enhanced error logging with more context
+            $backups_dir = backup_lite_get_backup_dir();
+            $backup_files = [];
+            
+            // Try to list available backup files for debugging
+            if ( is_dir( $backups_dir ) && is_readable( $backups_dir ) ) {
+                $files = @glob( trailingslashit( $backups_dir ) . '*.zip' );
+                if ( ! empty( $files ) ) {
+                    $backup_files = array_map( 'basename', array_slice( $files, 0, 10 ) ); // Limit to first 10 for logging
+                }
+            }
+            
+            backup_lite_log( 'error', 'Restore archive not readable.', [
+                'filename' => $filename,
+                'backups_dir' => $backups_dir,
+                'backups_dir_exists' => is_dir( $backups_dir ),
+                'backups_dir_readable' => is_dir( $backups_dir ) ? is_readable( $backups_dir ) : false,
+                'available_files_sample' => $backup_files,
+            ] );
+            
             // @plugin-check: escaped
-            wp_send_json_error( [ 'message' => esc_html__( 'Backup file not found or unreadable.', 'museder-restoreone' ) ], 404 );
+            wp_send_json_error( [
+                'message' => esc_html__( 'Backup file not found or unreadable.', 'museder-restoreone' ),
+                'filename' => esc_html( $filename ),
+            ], 404 );
         }
 
         // Check if this is an All-in-One WP Migration backup and convert it
@@ -798,15 +820,32 @@ class Backup_Lite_Restore_Handler {
         $timestamp_utc = time(); // Always use UTC timestamp (time() returns UTC Unix timestamp)
         $restore_started_at = $timestamp_utc; // Record restore start time (UTC timestamp)
         
-        $history_entry = isset( $job['history'] ) && is_array( $job['history'] ) ? $job['history'] : [
-            'timestamp_utc' => $timestamp_utc, // Store UTC Unix timestamp (primary field)
-            'file'          => isset( $state['filename'] ) ? $state['filename'] : basename( $state['file'] ),
-            'result'        => 'pending',
-            'log'           => '',
+        $history_entry = isset( $job['history'] ) && is_array( $job['history'] ) ? $job['history'] : [];
+
+        // Ensure required fields exist (job enqueue may have created 'history' without timing fields).
+        if ( empty( $history_entry['file'] ) ) {
+            $history_entry['file'] = isset( $state['filename'] ) ? $state['filename'] : basename( $state['file'] );
+        }
+        if ( empty( $history_entry['result'] ) ) {
+            $history_entry['result'] = 'pending';
+        }
+        if ( ! isset( $history_entry['log'] ) ) {
+            $history_entry['log'] = '';
+        }
+
+        // Start timestamp for duration calculation (UTC).
+        if ( ! isset( $history_entry['restore_started_at'] ) || ! is_numeric( $history_entry['restore_started_at'] ) || (int) $history_entry['restore_started_at'] <= 0 ) {
+            $history_entry['restore_started_at'] = $restore_started_at;
+        }
+
+        // Also store a canonical UTC timestamp for this restore entry (used for date display).
+        if ( ! isset( $history_entry['timestamp_utc'] ) || ! is_numeric( $history_entry['timestamp_utc'] ) || (int) $history_entry['timestamp_utc'] <= 0 ) {
+            $history_entry['timestamp_utc'] = $timestamp_utc;
+        }
+        if ( empty( $history_entry['date'] ) ) {
             // Keep 'date' field for backward compatibility (formatted UTC datetime string)
-            'date'          => gmdate( 'Y-m-d H:i:s', $timestamp_utc ),
-            'restore_started_at' => $restore_started_at,
-        ];
+            $history_entry['date'] = gmdate( 'Y-m-d H:i:s', (int) $history_entry['timestamp_utc'] );
+        }
 
         $suspend_cache_state = null;
 
@@ -1520,12 +1559,23 @@ class Backup_Lite_Restore_Handler {
             // 3. Get result
             $result = isset( $row['result'] ) ? (string) $row['result'] : '';
             
-            // 4. Get duration (use -1 if no data)
+            // 4. Get duration in seconds (use -1 if no data).
+            // Note: allow 0 seconds (very fast restores) and compute from started/completed timestamps when available.
             $duration = -1;
-            if ( isset( $row['duration_seconds'] ) && (int) $row['duration_seconds'] > 0 ) {
+            if ( isset( $row['duration_seconds'] ) && is_numeric( $row['duration_seconds'] ) && (int) $row['duration_seconds'] >= 0 ) {
                 $duration = (int) $row['duration_seconds'];
-            } elseif ( isset( $row['restore_duration_seconds'] ) && (int) $row['restore_duration_seconds'] > 0 ) {
+            } elseif ( isset( $row['restore_duration_seconds'] ) && is_numeric( $row['restore_duration_seconds'] ) && (int) $row['restore_duration_seconds'] >= 0 ) {
                 $duration = (int) $row['restore_duration_seconds'];
+            } elseif (
+                isset( $row['restore_started_at'], $row['restore_completed_at'] )
+                && is_numeric( $row['restore_started_at'] )
+                && is_numeric( $row['restore_completed_at'] )
+            ) {
+                $started   = (int) $row['restore_started_at'];
+                $completed = (int) $row['restore_completed_at'];
+                if ( $started > 0 && $completed >= $started ) {
+                    $duration = $completed - $started;
+                }
             }
             
             // 5. Human-readable time (local timezone)
@@ -1533,8 +1583,8 @@ class Backup_Lite_Restore_Handler {
                 ? backup_lite_format_local_time( $timestamp_utc, 'Y-m-d H:i' )
                 : '';
             
-            // 6. Human-readable duration (will handle -1 in template)
-            $duration_human = $duration > 0
+            // 6. Human-readable duration (0 seconds is valid)
+            $duration_human = $duration >= 0
                 ? backup_lite_format_duration( $duration )
                 : '';
             
@@ -1733,10 +1783,18 @@ class Backup_Lite_Restore_Handler {
     }
 
     private static function handle_job_cancelled( $job_id, array $history_entry ) {
-        // Update timestamp_utc to current UTC time when restore is cancelled
-        $history_entry['timestamp_utc'] = time();
-        $history_entry['date'] = gmdate( 'Y-m-d H:i:s', $history_entry['timestamp_utc'] );
-        $history_entry['result'] = 'cancelled';
+        // Update timestamps and duration when restore is cancelled
+        $restore_completed_at = time();
+        $restore_duration_seconds = 0;
+        if ( isset( $history_entry['restore_started_at'] ) && is_numeric( $history_entry['restore_started_at'] ) ) {
+            $restore_duration_seconds = max( 0, $restore_completed_at - (int) $history_entry['restore_started_at'] );
+        }
+
+        $history_entry['timestamp_utc']            = $restore_completed_at;
+        $history_entry['date']                     = gmdate( 'Y-m-d H:i:s', $history_entry['timestamp_utc'] );
+        $history_entry['result']                   = 'cancelled';
+        $history_entry['restore_completed_at']      = $restore_completed_at;
+        $history_entry['restore_duration_seconds']  = $restore_duration_seconds;
         backup_lite_append_restore_history( $history_entry );
         self::report_job_progress( $job_id, 100, __( 'Restore cancelled.', 'museder-restoreone' ), true );
         Backup_Lite_Restore_Jobs::finalize_cancel( $job_id );
