@@ -22,7 +22,6 @@ class Backup_Lite_UI {
         add_action( 'wp_ajax_backup_lite_get_backups_list', [ __CLASS__, 'handle_get_backups_list' ] );
         add_action( 'wp_ajax_backup_lite_delete_backup', [ __CLASS__, 'handle_delete_backup' ] );
         add_action( 'wp_ajax_backup_lite_delete_backups', [ __CLASS__, 'handle_delete_backups' ] );
-        add_action( 'wp_ajax_backup_lite_delete_restore_history', [ __CLASS__, 'handle_delete_restore_history' ] );
         add_action( 'wp_ajax_backup_lite_start_backup_job', [ __CLASS__, 'ajax_start_backup_job' ] );
         add_action( 'wp_ajax_backup_lite_get_job_status', [ __CLASS__, 'ajax_get_backup_job_status' ] );
         add_action( 'wp_ajax_backup_lite_continue_backup_job', [ __CLASS__, 'ajax_continue_backup_job' ] );
@@ -35,15 +34,7 @@ class Backup_Lite_UI {
     }
 
     public static function enqueue_assets( $hook ) {
-        // Allow toplevel main menu + all backup-lite sub pages
-        // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- page parameter is for UI display only, not for security-sensitive operations
-        $page = isset( $_GET['page'] ) ? sanitize_key( wp_unslash( $_GET['page'] ) ) : '';
-        
-        if (
-            'toplevel_page_museder-restoreone' !== $hook
-            && false === strpos( $hook, 'backup-lite' )
-            && 0 !== strpos( $page, 'backup-lite' )
-        ) {
+        if ( strpos( $hook, self::PAGE_SLUG ) === false ) {
             return;
         }
 
@@ -170,40 +161,6 @@ class Backup_Lite_UI {
 
         $active_job = Backup_Lite_Backup_Jobs::get_active_job_summary();
 
-        // Localize script for schedule actions
-        wp_localize_script(
-            'backup-lite-admin',
-            'backupLiteAdmin',
-            [
-                'ajax_url' => admin_url( 'admin-ajax.php' ),
-                'nonce'    => wp_create_nonce( 'backup_lite_admin_actions' ),
-            ]
-        );
-
-        // Also localize as MusederRestoreOne for compatibility
-        wp_localize_script(
-            'backup-lite-admin',
-            'MusederRestoreOne',
-            [
-                'ajax_url' => admin_url( 'admin-ajax.php' ),
-                'nonce'    => wp_create_nonce( 'backup_lite_admin_actions' ),
-                'i18n_confirm_delete_schedule' => __( 'Delete this schedule?', 'museder-restoreone' ),
-            ]
-        );
-
-        // Localize schedule-specific strings
-        wp_localize_script(
-            'backup-lite-admin',
-            'backupLiteSchedulesL10n',
-            [
-                'ajaxUrl'        => admin_url( 'admin-ajax.php' ),
-                'nonce'          => wp_create_nonce( 'backup_lite_admin_actions' ),
-                'updateSchedule' => __( 'Update Schedule', 'museder-restoreone' ),
-                'saveSchedule'   => __( 'Save Schedule', 'museder-restoreone' ),
-                'confirmDelete'  => __( 'Are you sure you want to delete this schedule?', 'museder-restoreone' ),
-            ]
-        );
-
         wp_localize_script( 'backup-lite-admin', 'BackupLite', [
             'ajaxUrl'        => admin_url( 'admin-ajax.php' ),
             'nonce'          => wp_create_nonce( self::NONCE ),
@@ -211,7 +168,7 @@ class Backup_Lite_UI {
             'restUrlV2'      => $rest_url_v2,
             'page'           => $current_page,
             'activeJob'      => $active_job,
-            'jobPollingInterval' => 2.0, // Default 2 seconds, will be adjusted dynamically based on progress
+            'jobPollingInterval' => 3,
             'confirmRestore' => __( 'Restoring will overwrite your current site files and database. Continue?', 'museder-restoreone' ),
             'strings'        => [
                 'runningTitle'    => __( 'Processing…', 'museder-restoreone' ),
@@ -302,9 +259,6 @@ class Backup_Lite_UI {
                 'provideScheduleTitle'   => __( 'Please provide a schedule title.', 'museder-restoreone' ),
                 'scheduleDeleted'        => __( 'Schedule deleted.', 'museder-restoreone' ),
                 'unableDeleteSchedule'   => __( 'Unable to delete schedule.', 'museder-restoreone' ),
-                'scheduleSaved'          => __( 'Schedule saved successfully.', 'museder-restoreone' ),
-                'updateSchedule'         => __( 'Update Schedule', 'museder-restoreone' ),
-                'saveSchedule'           => __( 'Save Schedule', 'museder-restoreone' ),
                 'licenseError'           => __( 'An error occurred while verifying the license.', 'museder-restoreone' ),
                 'scheduleActionStart'    => __( 'Start Now', 'museder-restoreone' ),
                 'scheduleActionEdit'     => __( 'Edit', 'museder-restoreone' ),
@@ -312,10 +266,6 @@ class Backup_Lite_UI {
                 'scheduleActionsAria'    => __( 'Schedule actions', 'museder-restoreone' ),
                 'confirmDeleteSelected'  => __( 'Are you sure you want to delete the selected backups? This action cannot be undone.', 'museder-restoreone' ),
                 'confirmDeleteSchedule'  => __( 'Delete this schedule?', 'museder-restoreone' ),
-                'confirmDeleteSelectedRestoreHistory' => __( 'Are you sure you want to delete the selected restore history entries? This action cannot be undone.', 'museder-restoreone' ),
-                'restoreHistoryDeleted' => __( 'Restore history entries deleted.', 'museder-restoreone' ),
-                'selectAtLeastOne' => __( 'Please select at least one entry.', 'museder-restoreone' ),
-                'noEntriesSelected' => __( 'No valid entries selected.', 'museder-restoreone' ),
                 'messageReady'           => __( 'Backup ready for restore.', 'museder-restoreone' ),
                 'confirmOverwriteData'   => __( 'This will overwrite your site data. Continue?', 'museder-restoreone' ),
                 'jobPreparing'    => __( 'Preparing backup…', 'museder-restoreone' ),
@@ -490,6 +440,7 @@ class Backup_Lite_UI {
         }
 
         $file = $uploaded_file;
+        $expected_size = isset( $uploaded_file['size'] ) ? (int) $uploaded_file['size'] : 0;
 
         require_once ABSPATH . 'wp-admin/includes/file.php';
 
@@ -503,13 +454,90 @@ class Backup_Lite_UI {
             wp_send_json_error( [ 'message' => esc_html__( 'Failed to upload restore file.', 'museder-restoreone' ) ] );
         }
 
-        $file_path = $uploaded['file'];
+        $file_path = wp_normalize_path( $uploaded['file'] );
         $ext       = strtolower( pathinfo( $file_path, PATHINFO_EXTENSION ) );
+
+        if ( ! in_array( $ext, [ 'zip', 'wpress' ], true ) ) {
+            // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
+            wp_delete_file( $file_path );
+            wp_send_json_error(
+                [
+                    'code'    => 'unsupported_file_type',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Unsupported file type for restore. Allowed: zip, wpress.', 'museder-restoreone' ),
+                ],
+                415
+            );
+        }
+
+        // Basic size integrity check before moving into backup library.
+        $actual_size = file_exists( $file_path ) ? (int) filesize( $file_path ) : 0;
+        if ( $actual_size <= 0 || ( $expected_size > 0 && $actual_size !== $expected_size ) ) {
+            backup_lite_log( 'error', 'restore_upload_size_mismatch', [
+                'name'          => isset( $uploaded_file['name'] ) ? sanitize_file_name( $uploaded_file['name'] ) : basename( $file_path ),
+                'expected_size' => $expected_size,
+                'actual_size'   => $actual_size,
+            ] );
+            // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
+            wp_delete_file( $file_path );
+            wp_send_json_error(
+                [
+                    'code'    => 'upload_incomplete',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Uploaded file appears incomplete. Please re-upload the backup.', 'museder-restoreone' ),
+                ],
+                400
+            );
+        }
+
+        // Quick ZIP structure validation (best-effort) to catch truncated uploads early.
+        if ( 'zip' === $ext ) {
+            $zip_reason = null;
+            if ( ! backup_lite_quick_zip_is_valid( $file_path, $zip_reason ) ) {
+                backup_lite_log( 'error', 'restore_upload_zip_invalid', [
+                    'name'          => isset( $uploaded_file['name'] ) ? sanitize_file_name( $uploaded_file['name'] ) : basename( $file_path ),
+                    'reason'        => $zip_reason,
+                    'expected_size' => $expected_size,
+                    'actual_size'   => $actual_size,
+                ] );
+                // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
+                wp_delete_file( $file_path );
+                wp_send_json_error(
+                    [
+                        'code'    => 'invalid_zip',
+                        // @plugin-check: escaped
+                        'message' => esc_html__( 'Uploaded ZIP archive appears corrupted or incomplete. Please re-upload the backup.', 'museder-restoreone' ),
+                    ],
+                    400
+                );
+            }
+        }
 
         // Move uploaded file into backup directory for logging & future reuse.
         $backup_dir = backup_lite_get_backup_dir();
-        $unique     = wp_unique_filename( $backup_dir, basename( $file_path ) );
-        $destination = trailingslashit( $backup_dir ) . $unique;
+
+        $desired_name  = basename( $file_path );
+        $existing_path = wp_normalize_path( trailingslashit( $backup_dir ) . $desired_name );
+
+        // If a same-named file already exists, and it is identical (size + sha1), reuse it (avoid "-1.zip").
+        if ( $desired_name && file_exists( $existing_path ) && is_readable( $existing_path ) ) {
+            $existing_size = (int) filesize( $existing_path );
+            if ( $existing_size === $actual_size && $actual_size > 0 ) {
+                $new_sha1      = backup_lite_sha1_file( $file_path );
+                $existing_sha1 = backup_lite_sha1_file( $existing_path );
+                if ( $new_sha1 && $existing_sha1 && hash_equals( $existing_sha1, $new_sha1 ) ) {
+                    // Uploaded file is a duplicate of existing archive; delete temp upload and reuse existing.
+                    // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
+                    wp_delete_file( $file_path );
+                    $file_path = $existing_path;
+                }
+            }
+        }
+
+        // If we are still using the temp upload path, store it in backup dir (unique if needed).
+        if ( strpos( wp_normalize_path( $file_path ), wp_normalize_path( $backup_dir ) ) !== 0 ) {
+            $unique      = wp_unique_filename( $backup_dir, $desired_name );
+            $destination = trailingslashit( $backup_dir ) . $unique;
         // This plugin needs low-level rename() here for streaming backup/restore performance.
         // Using WP_Filesystem::move() is not always reliable across all hosting environments.
         // @phpcs:disable WordPress.WP.AlternativeFunctions.rename_rename
@@ -517,17 +545,39 @@ class Backup_Lite_UI {
         // @phpcs:enable WordPress.WP.AlternativeFunctions.rename_rename
         if ( $renamed ) {
             $file_path = $destination;
+            } else {
+                backup_lite_log( 'error', 'restore_upload_store_failed', [
+                    'destination' => wp_normalize_path( $destination ),
+                ] );
+                // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
+                wp_delete_file( $file_path );
+                wp_send_json_error(
+                    [
+                        'code'    => 'store_failed',
+                        // @plugin-check: escaped
+                        'message' => esc_html__( 'Unable to store uploaded file for restore. Please try again.', 'museder-restoreone' ),
+                    ],
+                    500
+                );
+        }
         }
 
-        if ( ! in_array( $ext, [ 'zip', 'wpress' ], true ) ) {
-            $response = [
-                'success' => false,
-                // @plugin-check: escaped
-                'message' => esc_html__( 'Unsupported file type for restore.', 'museder-restoreone' ),
-            ];
-        } else {
-            $response = Backup_Lite_Restore::restore_site( $file_path );
+        // Final sanity check: make sure stored file is valid and readable before restore.
+        if ( ! file_exists( $file_path ) || ! is_readable( $file_path ) ) {
+            backup_lite_log( 'error', 'restore_upload_final_not_readable', [
+                'file' => wp_normalize_path( $file_path ),
+            ] );
+            wp_send_json_error(
+                [
+                    'code'    => 'stored_file_unreadable',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Uploaded file could not be accessed after saving. Please re-upload the backup.', 'museder-restoreone' ),
+                ],
+                500
+            );
         }
+
+        $response = Backup_Lite_Restore::restore_site( $file_path );
 
         if ( ! empty( $response['success'] ) ) {
             wp_send_json_success( $response );
@@ -599,14 +649,11 @@ class Backup_Lite_UI {
         $formatted = array_map(
             function ( $item ) {
                 $size = isset( $item['size'] ) ? (int) $item['size'] : 0;
-                $duration_seconds = isset( $item['duration_seconds'] ) && is_numeric( $item['duration_seconds'] ) ? (int) $item['duration_seconds'] : null;
                 return [
                     'name'       => $item['name'],
                     'size'       => $size,
                     'size_human' => size_format( $size, 2 ),
                     'created'    => $item['created'],
-                    'duration_seconds' => $duration_seconds,
-                    'duration'   => $duration_seconds !== null ? backup_lite_format_duration( $duration_seconds ) : '',
                 ];
             },
             $backups
@@ -743,87 +790,6 @@ class Backup_Lite_UI {
         ] );
     }
 
-    /**
-     * AJAX handler: Delete restore history entries.
-     */
-    public static function handle_delete_restore_history() {
-        self::verify_ajax_request();
-
-        // phpcs:disable WordPress.Security.NonceVerification.Missing,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified in verify_ajax_request() above, will be sanitized in array_map below
-        $raw = array();
-        if ( isset( $_POST['timestamps'] ) ) {
-            $raw = wp_unslash( $_POST['timestamps'] );
-        }
-        // phpcs:enable WordPress.Security.NonceVerification.Missing,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
-
-        if ( is_string( $raw ) ) {
-            $decoded = json_decode( wp_unslash( $raw ), true );
-            $timestamps = is_array( $decoded ) ? $decoded : [];
-        } elseif ( is_array( $raw ) ) {
-            $timestamps = $raw;
-        } else {
-            $timestamps = [];
-        }
-
-        $timestamps = array_unique( array_filter( array_map( static function ( $timestamp ) {
-            return absint( $timestamp );
-        }, $timestamps ) ) );
-
-        if ( empty( $timestamps ) ) {
-            wp_send_json_error( [ 'message' => esc_html__( 'No restore history entries selected.', 'museder-restoreone' ) ], 400 );
-        }
-
-        $history = backup_lite_get_restore_history();
-        $deleted = [];
-        $errors = [];
-
-        foreach ( $timestamps as $timestamp ) {
-            $found = false;
-            foreach ( $history as $index => $entry ) {
-                $entry_timestamp = isset( $entry['timestamp_utc'] ) ? (int) $entry['timestamp_utc'] : 0;
-                if ( ! $entry_timestamp && isset( $entry['timestamp'] ) ) {
-                    // Fallback: try to parse timestamp string
-                    $entry_timestamp = backup_lite_parse_legacy_timestamp( $entry['timestamp'] );
-                }
-                
-                if ( $entry_timestamp === $timestamp ) {
-                    unset( $history[ $index ] );
-                    $deleted[] = $timestamp;
-                    $found = true;
-                    break;
-                }
-            }
-            
-            if ( ! $found ) {
-                $errors[] = [ 'timestamp' => $timestamp, 'message' => esc_html__( 'Restore history entry not found.', 'museder-restoreone' ) ];
-            }
-        }
-
-        // Save updated history
-        if ( ! empty( $deleted ) ) {
-            $history = array_values( $history ); // Re-index array
-            $path = backup_lite_get_restore_history_path();
-            $json = wp_json_encode( $history, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES );
-            
-            // Using native file APIs on local backup directory; paths are sanitized and constrained.
-            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
-            if ( false !== file_put_contents( $path, $json, LOCK_EX ) ) {
-                backup_lite_log( 'info', 'Restore history entries deleted.', [ 'count' => count( $deleted ) ] );
-            } else {
-                $errors[] = [ 'message' => esc_html__( 'Failed to save updated restore history.', 'museder-restoreone' ) ];
-            }
-        }
-
-        if ( empty( $deleted ) && ! empty( $errors ) ) {
-            wp_send_json_error( [ 'errors' => $errors ], 500 );
-        }
-
-        wp_send_json_success( [
-            'deleted' => $deleted,
-            'errors'  => $errors,
-        ] );
-    }
-
     public static function handle_log_download() {
         if ( ! current_user_can( 'manage_options' ) ) {
             wp_die( esc_html__( 'Unauthorized.', 'museder-restoreone' ) );
@@ -832,34 +798,16 @@ class Backup_Lite_UI {
         // Sanitize log parameter before nonce check
         // phpcs:disable WordPress.Security.NonceVerification.Recommended -- nonce verified via check_admin_referer() below
         $log  = sanitize_text_field( wp_unslash( $_GET['log'] ?? '' ) );
-        // Compatibility: if a link contains literal "&amp;", PHP may receive the parameter key "amp;log".
-        if ( empty( $log ) && isset( $_GET['amp;log'] ) ) {
-            $log = sanitize_text_field( wp_unslash( $_GET['amp;log'] ) );
-        }
         // phpcs:enable WordPress.Security.NonceVerification.Recommended
-        
-        if ( empty( $log ) ) {
-            wp_die( esc_html__( 'Log filename missing.', 'museder-restoreone' ), esc_html__( 'Download error', 'museder-restoreone' ), 400 );
-        }
         
         $path = backup_lite_get_log_dir() . '/' . basename( $log );
         $path = wp_normalize_path( $path );
 
         if ( ! file_exists( $path ) ) {
-            wp_die( esc_html__( 'Log file not found.', 'museder-restoreone' ), esc_html__( 'Download error', 'museder-restoreone' ), 404 );
+            wp_die( esc_html__( 'Log file not found.', 'museder-restoreone' ) );
         }
 
-        // Verify nonce - use the basename of the log file for the nonce action
-        // This matches the nonce action used in build_log_download_link()
-        $nonce_action = 'backup_lite_download_log_' . basename( $path );
-        if ( ! check_admin_referer( $nonce_action, '_wpnonce' ) ) {
-            // If nonce verification fails, provide a helpful error message
-            wp_die( 
-                esc_html__( 'The link you are trying to access has expired.', 'museder-restoreone' ) . ' <a href="' . esc_url( admin_url( 'admin.php?page=backup-lite-logs' ) ) . '">' . esc_html__( 'Please try again', 'museder-restoreone' ) . '</a>.',
-                esc_html__( 'Link expired', 'museder-restoreone' ),
-                [ 'response' => 403, 'back_link' => true ]
-            );
-        }
+        check_admin_referer( 'backup_lite_download_log_' . basename( $path ) );
 
         // @plugin-check: sanitized - safe whitelisted mime type
         header( 'Content-Type: text/plain' );
@@ -912,15 +860,20 @@ class Backup_Lite_UI {
             // Long-running backup/restore job: attempt to raise time limit for CLI/cron.
             // @phpcs:disable Squiz.PHP.DiscouragedFunctions.Discouraged
             if ( function_exists( 'set_time_limit' ) ) {
-        @set_time_limit( 0 );
+                @set_time_limit( 0 );
             }
             // @phpcs:enable Squiz.PHP.DiscouragedFunctions.Discouraged
         }
 
-        // Clear any output buffers
+        // Best effort: disable output compression and clear all output buffers so binary output isn't corrupted.
+        if ( function_exists( 'ini_set' ) ) {
+            // @plugin-check: allowed - best-effort runtime config for safe binary streaming.
+            @ini_set( 'zlib.output_compression', '0' );
+        }
+
         if ( function_exists( 'ob_get_level' ) ) {
             while ( ob_get_level() > 0 ) {
-                ob_end_clean();
+                @ob_end_clean();
             }
         }
 
@@ -930,27 +883,30 @@ class Backup_Lite_UI {
         header( 'Content-Type: ' . $mime );
         $download_filename = sanitize_file_name( basename( $path ) ); // @plugin-check: sanitized
         header( 'Content-Disposition: attachment; filename="' . $download_filename . '"' );
-        header( 'Content-Length: ' . (string) filesize( $path ) );
+        // Avoid sending Content-Length to prevent length/encoding mismatches when servers/proxies re-encode the response.
         header( 'Content-Transfer-Encoding: binary' );
         header( 'X-Content-Type-Options: nosniff' );
+        header( 'Content-Encoding: identity' );
 
-        $chunk_size = 1024 * 1024; // 1MB
-        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for streaming large backup files, path validated and sanitized
-        $handle     = fopen( $path, 'rb' );
-        if ( ! $handle ) {
+        $size = (int) filesize( $path );
+        backup_lite_log( 'info', 'download_start', [
+            'filename' => $download_filename,
+            'size'     => $size,
+        ] );
+
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_readfile -- required for streaming large backup files, path validated and sanitized
+        $result = readfile( $path );
+        if ( false === $result ) {
+            backup_lite_log( 'error', 'download_failed', [
+                'filename' => $download_filename,
+            ] );
             wp_die( esc_html__( 'Unable to read backup file.', 'museder-restoreone' ), esc_html__( 'Download error', 'museder-restoreone' ), 500 );
         }
 
-        while ( ! feof( $handle ) ) {
-            // Only reads plugin-generated backup files, path is validated and sanitized.
-            // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fread,WordPress.Security.EscapeOutput.OutputNotEscaped -- required for streaming large backup files, path validated and sanitized, streaming binary file contents not HTML output
-            echo fread( $handle, $chunk_size );
-            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fread,WordPress.Security.EscapeOutput.OutputNotEscaped
-            flush();
-        }
-
-        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-        fclose( $handle );
+        backup_lite_log( 'info', 'download_done', [
+            'filename' => $download_filename,
+            'size'     => $size,
+        ] );
         exit;
     }
 
@@ -1036,20 +992,6 @@ class Backup_Lite_UI {
 
     public static function get_backups_list( $limit = 0 ) {
         $dir = trailingslashit( backup_lite_get_backup_dir() );
-
-        // Hide the currently-running archive from the library list to avoid exposing partial files.
-        $active_archive = '';
-        if ( class_exists( 'Backup_Lite_Backup_Jobs' ) ) {
-            $active_job = Backup_Lite_Backup_Jobs::get_active_job();
-            if (
-                $active_job
-                && ! empty( $active_job['archive_path'] )
-                && ! empty( $active_job['status'] )
-                && ! in_array( $active_job['status'], [ 'completed', 'failed', 'cancelled' ], true )
-            ) {
-                $active_archive = basename( $active_job['archive_path'] );
-            }
-        }
         
         // Support all ZIP/WPRESS backups regardless of naming convention.
         // Older versions created names like backup-lite-*.zip or museder-restoreone-*.zip,
@@ -1064,36 +1006,13 @@ class Backup_Lite_UI {
         rsort( $glob );
 
         $items = [];
-        $shown = 0;
-        foreach ( $glob as $file ) {
-            if ( $active_archive && basename( $file ) === $active_archive ) {
-                continue;
-            }
-
-            if ( $limit > 0 && $shown >= $limit ) {
+        foreach ( $glob as $index => $file ) {
+            if ( $limit > 0 && $index >= $limit ) {
                 break;
             }
 
             $filename = basename( $file );
             $metadata = Backup_Lite_Backup::get_backup_metadata( $filename );
-
-            // Get duration from metadata first, then fallback to logs
-            $duration_seconds = null;
-            if ( isset( $metadata['duration_seconds'] ) && is_numeric( $metadata['duration_seconds'] ) ) {
-                $duration_seconds = (int) $metadata['duration_seconds'];
-            } else {
-                // Fallback to logs
-                $events = Backup_Lite_Log_Handler::get_recent_events( 'backup_result', 10 );
-                foreach ( $events as $event ) {
-                    $context = $event['context'];
-                    if ( isset( $context['file'] ) && basename( $context['file'] ) === $filename ) {
-                        if ( isset( $context['duration_seconds'] ) && is_numeric( $context['duration_seconds'] ) ) {
-                            $duration_seconds = (int) $context['duration_seconds'];
-                            break;
-                        }
-                    }
-                }
-            }
 
             $items[] = [
                 'name'    => $filename,
@@ -1105,10 +1024,7 @@ class Backup_Lite_UI {
                 'download_url' => self::build_backup_download_link( $file ),
                 'label'   => $metadata['label'] ?? '',
                 'encrypted' => ! empty( $metadata['encrypted'] ),
-                'duration_seconds' => $duration_seconds,
             ];
-
-            $shown++;
         }
 
         return $items;
