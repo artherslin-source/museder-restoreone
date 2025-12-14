@@ -105,7 +105,6 @@ function backup_lite_is_absolute_path( $path ) {
  */
 function backup_lite_get_backup_path( $file ) {
     if ( empty( $file ) ) {
-        backup_lite_log( 'warning', 'backup_lite_get_backup_path called with empty file parameter.' );
         return false;
     }
 
@@ -116,78 +115,20 @@ function backup_lite_get_backup_path( $file ) {
 
     $backups_dir = backup_lite_get_backup_dir();
     if ( empty( $backups_dir ) ) {
-        backup_lite_log( 'error', 'Backup directory not available.', [ 'file' => $file ] );
         return false;
     }
 
-    // Sanitize file name to handle any special characters
-    $sanitized_file = sanitize_file_name( basename( $file ) );
-    $candidate = trailingslashit( $backups_dir ) . $sanitized_file;
+    $candidate = trailingslashit( $backups_dir ) . basename( $file );
 
     // realpath protection to prevent directory traversal
     $real_backups_dir = realpath( $backups_dir );
-    if ( ! $real_backups_dir ) {
-        backup_lite_log( 'error', 'Backup directory realpath failed.', [
-            'backups_dir' => $backups_dir,
-            'file' => $file,
-        ] );
-        return false;
-    }
+    $real_candidate   = $candidate && file_exists( $candidate ) ? realpath( $candidate ) : false;
 
-    $real_candidate = $candidate && file_exists( $candidate ) ? realpath( $candidate ) : false;
-
-    if ( ! $real_candidate ) {
-        // Log detailed error for debugging
-        backup_lite_log( 'warning', 'Backup file not found.', [
-            'file' => $file,
-            'sanitized_file' => $sanitized_file,
-            'candidate' => $candidate,
-            'backups_dir' => $backups_dir,
-            'backups_dir_exists' => is_dir( $backups_dir ),
-            'backups_dir_readable' => is_dir( $backups_dir ) ? is_readable( $backups_dir ) : false,
-        ] );
-        
-        // Try to find similar files (case-insensitive or with different extensions)
-        if ( is_dir( $backups_dir ) && is_readable( $backups_dir ) ) {
-            $files = @glob( trailingslashit( $backups_dir ) . '*' . pathinfo( $sanitized_file, PATHINFO_EXTENSION ) );
-            if ( ! empty( $files ) ) {
-                $similar = array_filter( $files, function( $f ) use ( $sanitized_file ) {
-                    $basename = basename( $f );
-                    // Check if filenames are similar (case-insensitive or with variations)
-                    return stripos( $basename, pathinfo( $sanitized_file, PATHINFO_FILENAME ) ) === 0;
-                } );
-                
-                if ( ! empty( $similar ) ) {
-                    backup_lite_log( 'info', 'Found similar backup files.', [
-                        'requested' => $sanitized_file,
-                        'similar' => array_map( 'basename', $similar ),
-                    ] );
-                }
-            }
-        }
-        
-        return false;
-    }
-
-    // Use strpos with strict comparison for path traversal protection
-    // PHP 8.0+ compatibility: strpos can return 0 (false) for match at position 0
-    if ( false === strpos( $real_candidate, $real_backups_dir ) || 0 !== strpos( $real_candidate, $real_backups_dir ) ) {
-        backup_lite_log( 'error', 'Backup file path traversal detected.', [
-            'file' => $file,
-            'real_candidate' => $real_candidate,
-            'real_backups_dir' => $real_backups_dir,
-        ] );
+    if ( ! $real_candidate || 0 !== strpos( $real_candidate, $real_backups_dir ) ) {
         return false;
     }
 
     if ( ! is_readable( $real_candidate ) ) {
-        backup_lite_log( 'error', 'Backup file exists but is not readable.', [
-            'file' => $file,
-            'real_candidate' => $real_candidate,
-            'file_exists' => file_exists( $real_candidate ),
-            'is_file' => is_file( $real_candidate ),
-            'permissions' => file_exists( $real_candidate ) ? substr( sprintf( '%o', fileperms( $real_candidate ) ), -4 ) : 'unknown',
-        ] );
         return false;
     }
 
@@ -201,34 +142,6 @@ function backup_lite_get_backup_path( $file ) {
  * @param string     $format Date format; default is site date + time format.
  * @return string Formatted date/time in site's local timezone.
  */
-/**
- * Format duration in seconds to human-readable string (e.g., "32m 38s" or "1h 02m").
- *
- * @param int|null $seconds Duration in seconds.
- * @return string Formatted duration string, or empty string if invalid.
- */
-function backup_lite_format_duration( $seconds ) {
-    if ( ! is_numeric( $seconds ) || $seconds < 0 ) {
-        return '';
-    }
-
-    $seconds = (int) $seconds;
-
-    if ( $seconds === 0 ) {
-        return '00m 00s';
-    }
-
-    $hours   = floor( $seconds / 3600 );
-    $minutes = floor( ( $seconds % 3600 ) / 60 );
-    $secs    = $seconds % 60;
-
-    if ( $hours > 0 ) {
-        return sprintf( '%02dh %02dm %02ds', $hours, $minutes, $secs );
-    }
-
-    return sprintf( '%02dm %02ds', $minutes, $secs );
-}
-
 function backup_lite_format_local_time( $time, $format = '' ) {
     if ( empty( $format ) ) {
         $format = get_option( 'date_format' ) . ' ' . get_option( 'time_format' );
@@ -785,79 +698,118 @@ function backup_lite_normalize_bool( $value ) {
 }
 
 /**
- * Get list of paths that should be excluded from backup and size estimation.
- * 
- * This function provides a unified list of excluded paths used by both
- * the actual backup process and the size estimation scan to ensure consistency.
+ * Get a cached whitelist of WordPress tables for the current site prefix.
  *
- * @return array<string> Array of normalized directory paths (with trailing slashes) to exclude.
+ * Important:
+ * - SQL identifiers (table names) cannot be safely passed as prepared values.
+ * - We therefore validate identifiers by strict membership in a live whitelist
+ *   sourced from the database engine.
+ *
+ * @return array<int,string> List of table names starting with $wpdb->prefix.
  */
-if ( ! function_exists( 'backup_lite_get_excluded_paths' ) ) {
-    function backup_lite_get_excluded_paths() {
-        $paths = [];
-        
-        $normalize = static function( $path, $must_exist = false ) {
-            if ( empty( $path ) ) {
-                return '';
-            }
-            
-            $normalized = wp_normalize_path( rtrim( $path, '/\\' ) );
-            if ( '' === $normalized ) {
-                return '';
-            }
-            
-            if ( $must_exist && ! file_exists( $normalized ) ) {
-                return '';
-            }
-            
-            return trailingslashit( $normalized );
-        };
-        
-        $storage = backup_lite_get_storage_root();
-        
-        if ( ! empty( $storage['path'] ) ) {
-            $root = trailingslashit( $storage['path'] );
-            $paths[] = $normalize( $root );
-            $paths[] = $normalize( $root . 'backups' );
-            $paths[] = $normalize( $root . 'logs' );
-            $paths[] = $normalize( $root . 'jobs' );
-            $paths[] = $normalize( $root . 'temp' );
-            $paths[] = $normalize( $root . 'reports' );
-            $paths[] = $normalize( $root . 'pro' );
-            $paths[] = $normalize( $root . 'pro/jobs' );
-            $paths[] = $normalize( $root . 'pro/reports' );
-        }
-        
-        // Always exclude the active backup directory (even if customized) and its parent root.
-        $active_backup_dir = backup_lite_get_backup_dir();
-        $paths[] = $normalize( $active_backup_dir );
-        $paths[] = $normalize( trailingslashit( dirname( $active_backup_dir ) ) );
-        $paths[] = $normalize( backup_lite_get_temp_dir() );
-        $paths[] = $normalize( backup_lite_get_jobs_dir() );
-        $paths[] = $normalize( backup_lite_get_reports_dir() );
-        
-        // Legacy directories (only exclude when they exist to avoid false positives).
-        $legacy = [
-            WP_CONTENT_DIR . '/uploads/backup-lite',
-            WP_CONTENT_DIR . '/uploads/backup-lite/backups',
-            WP_CONTENT_DIR . '/uploads/backup-lite/temp',
-            WP_CONTENT_DIR . '/uploads/backup-lite/jobs',
-            WP_CONTENT_DIR . '/uploads/backup-lite/pro',
-            WP_CONTENT_DIR . '/uploads/backup-lite/pro/jobs',
-            WP_CONTENT_DIR . '/uploads/backup-lite/pro/reports',
-            WP_CONTENT_DIR . '/uploads/backup-lite-logs',
-        ];
-        
-        foreach ( $legacy as $legacy_path ) {
-            $normalized = $normalize( $legacy_path, true );
-            if ( $normalized ) {
-                $paths[] = $normalized;
-            }
-        }
-        
-        // Filter out empty paths
-        $paths = array_filter( $paths );
-        
-        return array_values( array_unique( $paths ) );
-    }
+function backup_lite_get_wp_table_whitelist() {
+	static $cached = null;
+
+	if ( null !== $cached ) {
+		return $cached;
+	}
+
+	global $wpdb;
+	if ( ! isset( $wpdb->prefix ) || '' === (string) $wpdb->prefix ) {
+		$cached = [];
+		return $cached;
+	}
+
+	$pattern = $wpdb->esc_like( (string) $wpdb->prefix ) . '%';
+
+	// Introspection query used to list core/site tables for backup/restore operations.
+	// The LIKE pattern is prepared; result table names come from the DB engine (not user input).
+	// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+	$tables = $wpdb->get_col( $wpdb->prepare( 'SHOW TABLES LIKE %s', $pattern ) );
+	// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+	$cached = is_array( $tables ) ? array_values( array_filter( $tables, 'is_string' ) ) : [];
+
+	return $cached;
+}
+
+/**
+ * Validate a WordPress table name by strict membership in the prefix whitelist.
+ *
+ * @param string $table Table name.
+ * @return string|false Validated table name or false.
+ */
+function backup_lite_validate_wp_table_name( $table ) {
+	static $set = null;
+
+	if ( null === $set ) {
+		$set = [];
+		foreach ( backup_lite_get_wp_table_whitelist() as $name ) {
+			$set[ $name ] = true;
+		}
+	}
+
+	$table = (string) $table;
+	if ( '' === $table ) {
+		return false;
+	}
+
+	return isset( $set[ $table ] ) ? $table : false;
+}
+
+/**
+ * Get a cached whitelist of SERVMASK placeholder tables for cleanup.
+ *
+ * This is a special-case to remove leftover tables created by All-in-One WP Migration imports.
+ *
+ * @return array<int,string> List of SERVMASK_PREFIX_* tables.
+ */
+function backup_lite_get_servmask_table_whitelist() {
+	static $cached = null;
+
+	if ( null !== $cached ) {
+		return $cached;
+	}
+
+	global $wpdb;
+	$pattern = 'SERVMASK\_PREFIX\_%';
+
+	// Introspection query used to locate placeholder tables for cleanup during restore.
+	// Pattern is hardcoded and prepared; results come from the DB engine (not user input).
+	// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+	$tables = $wpdb->get_col( $wpdb->prepare( 'SHOW TABLES LIKE %s', $pattern ) );
+	// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+	$cached = is_array( $tables ) ? array_values( array_filter( $tables, 'is_string' ) ) : [];
+
+	return $cached;
+}
+
+/**
+ * Validate a SERVMASK placeholder table name for cleanup.
+ *
+ * @param string $table Table name.
+ * @return string|false Validated table name or false.
+ */
+function backup_lite_validate_servmask_table_name( $table ) {
+	static $set = null;
+
+	if ( null === $set ) {
+		$set = [];
+		foreach ( backup_lite_get_servmask_table_whitelist() as $name ) {
+			$set[ $name ] = true;
+		}
+	}
+
+	$table = (string) $table;
+	if ( '' === $table ) {
+		return false;
+	}
+
+	// Conservative identifier charset/length guard.
+	if ( ! preg_match( '/^[A-Za-z0-9_]{1,64}$/', $table ) ) {
+		return false;
+	}
+
+	return isset( $set[ $table ] ) ? $table : false;
 }

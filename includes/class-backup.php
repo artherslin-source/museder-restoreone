@@ -64,9 +64,6 @@ class Backup_Lite_Backup {
         $sql_path = trailingslashit( $temp_dir ) . 'database.sql';
         $meta_path = trailingslashit( $temp_dir ) . 'meta.json';
 
-        // Record backup start time (UTC timestamp)
-        $backup_started_at = time();
-
         $log = backup_lite_log( 'info', 'Site backup started.', [
             'archive' => $archive_path,
             'method'  => backup_lite_can_use_ziparchive() ? 'ZipArchive' : 'PclZip',
@@ -137,29 +134,19 @@ class Backup_Lite_Backup {
         }
 
         $size = filesize( $archive_path );
-        
-        // Record backup completion time and calculate duration
-        $backup_completed_at = time();
-        $backup_duration_seconds = isset( $backup_started_at ) ? ( $backup_completed_at - $backup_started_at ) : 0;
-
         backup_lite_log( 'info', 'Site backup completed.', [
             'archive' => $archive_path,
             'size'    => $size,
-            'duration_seconds' => $backup_duration_seconds,
         ] );
 
         // Store backup metadata (for labels, etc.)
-        $backup_metadata = [
-            'duration_seconds' => $backup_duration_seconds,
-            'started_at' => isset( $backup_started_at ) ? $backup_started_at : null,
-            'completed_at' => $backup_completed_at,
-        ];
         if ( Backup_Lite_Pro::is_pro_active() && ! empty( $options['label'] ) ) {
-            $backup_metadata['label'] = sanitize_text_field( $options['label'] );
-            $backup_metadata['encrypted'] = ! empty( $options['encrypt'] );
-            $backup_metadata['cloud_destinations'] = $options['cloud_destinations'] ?? [];
+            self::store_backup_metadata( basename( $archive_path ), [
+                'label' => sanitize_text_field( $options['label'] ),
+                'encrypted' => ! empty( $options['encrypt'] ),
+                'cloud_destinations' => $options['cloud_destinations'] ?? [],
+            ] );
         }
-        self::store_backup_metadata( basename( $archive_path ), $backup_metadata );
 
         $response = [
             'success' => true,
@@ -174,9 +161,6 @@ class Backup_Lite_Backup {
             'size_bytes' => $size,
             'size_human' => size_format( $size, 2 ),
             'label'     => $options['label'] ?? '',
-            'started_at' => isset( $backup_started_at ) ? $backup_started_at : null,
-            'completed_at' => $backup_completed_at,
-            'duration_seconds' => $backup_duration_seconds,
         ] );
 
         // PRO: Upload to cloud storage if specified
@@ -254,8 +238,13 @@ class Backup_Lite_Backup {
         self::optimize_runtime_environment();
 
         $zip = new ZipArchive();
-        if ( true !== $zip->open( $archive_path, ZipArchive::CREATE | ZipArchive::OVERWRITE ) ) {
-            backup_lite_log( 'error', 'Unable to create zip archive with ZipArchive.', [ 'path' => $archive_path ] );
+        $open_result = $zip->open( $archive_path, ZipArchive::CREATE | ZipArchive::OVERWRITE );
+        $ok_code     = defined( 'ZipArchive::ER_OK' ) ? ZipArchive::ER_OK : 0;
+        if ( true !== $open_result && $ok_code !== $open_result ) {
+            backup_lite_log( 'error', 'Unable to create zip archive with ZipArchive.', [
+                'path'       => $archive_path,
+                'zip_result' => $open_result,
+            ] );
             return false;
         }
 
@@ -275,7 +264,15 @@ class Backup_Lite_Backup {
             self::add_directory_to_zip( $zip, $source, $target );
         }
 
-        return $zip->close();
+        try {
+            return $zip->close();
+        } catch ( ValueError $e ) {
+            backup_lite_log( 'error', 'ZipArchive close failed.', [
+                'path'  => $archive_path,
+                'error' => $e->getMessage(),
+            ] );
+            return false;
+        }
     }
 
     private static function create_pclzip_bundle( $archive_path, $sql_path, $meta_path, $directories ) {
@@ -325,15 +322,8 @@ class Backup_Lite_Backup {
                 continue;
             }
 
-            // Use optimized iterator flags for better performance
-            // CATCH_GET_CHILD requires PHP 5.6.0+, use version check for compatibility
-            $iterator_flags = FilesystemIterator::SKIP_DOTS | FilesystemIterator::FOLLOW_SYMLINKS;
-            if ( defined( 'FilesystemIterator::CATCH_GET_CHILD' ) ) {
-                $iterator_flags |= FilesystemIterator::CATCH_GET_CHILD;
-            }
-            
             $iterator = new RecursiveIteratorIterator(
-                new RecursiveDirectoryIterator( $source, $iterator_flags ),
+                new RecursiveDirectoryIterator( $source, FilesystemIterator::SKIP_DOTS ),
                 RecursiveIteratorIterator::LEAVES_ONLY
             );
 
@@ -345,18 +335,6 @@ class Backup_Lite_Backup {
 
                 $file_path = $file->getRealPath();
                 if ( ! $file_path || self::should_skip_path( $file_path ) ) {
-                    continue;
-                }
-
-                // Skip extremely large files (>2GB) to prevent issues
-                $size = $file->getSize();
-                $max_file_size = 2147483648; // 2GB
-                if ( $size !== false && $size > $max_file_size ) {
-                    backup_lite_log( 'warning', 'Skipping extremely large file in PclZip manifest.', [
-                        'path' => $file_path,
-                        'size' => $size,
-                        'size_mb' => round( $size / 1048576, 2 ),
-                    ] );
                     continue;
                 }
 
@@ -388,15 +366,8 @@ class Backup_Lite_Backup {
 
         $zip->addEmptyDir( $target );
 
-        // Use optimized iterator flags for better performance
-        // CATCH_GET_CHILD requires PHP 5.6.0+, use version check for compatibility
-        $iterator_flags = FilesystemIterator::SKIP_DOTS | FilesystemIterator::FOLLOW_SYMLINKS;
-        if ( defined( 'FilesystemIterator::CATCH_GET_CHILD' ) ) {
-            $iterator_flags |= FilesystemIterator::CATCH_GET_CHILD;
-        }
-        
         $iterator = new RecursiveIteratorIterator(
-            new RecursiveDirectoryIterator( $source, $iterator_flags ),
+            new RecursiveDirectoryIterator( $source, FilesystemIterator::SKIP_DOTS ),
             RecursiveIteratorIterator::SELF_FIRST
         );
 
@@ -420,66 +391,25 @@ class Backup_Lite_Backup {
             if ( $file->isDir() ) {
                 $zip->addEmptyDir( $entry );
             } else {
-                // Skip extremely large files (>2GB) to prevent issues
-                $size = $file->getSize();
-                $max_file_size = 2147483648; // 2GB
-                if ( $size !== false && $size > $max_file_size ) {
-                    backup_lite_log( 'warning', 'Skipping extremely large file in ZipArchive.', [
-                        'path' => $file_path,
-                        'size' => $size,
-                        'size_mb' => round( $size / 1048576, 2 ),
-                    ] );
-                    continue;
-                }
-                
                 $zip->addFile( $file_path, $entry );
-                
-                // Optimize compression for large files
-                if ( $size !== false && $size > 10485760 ) { // > 10MB
-                    $zip->setCompressionName( $entry, ZipArchive::CM_STORE );
-                } else {
-                    $zip->setCompressionName( $entry, ZipArchive::CM_DEFLATE );
-                }
             }
         }
     }
 
-    /**
-     * Get directory map with optimized priority order.
-     * Important directories (themes, plugins, uploads) are processed first.
-     *
-     * @return array<string, string> Map of target => source directory paths.
-     */
     private static function get_directory_map() {
-        // Priority order: most important directories first
-        // This allows important content to be backed up first, improving perceived performance
-        $priority_dirs = [
-            'themes'     => WP_CONTENT_DIR . '/themes',
-            'plugins'    => WP_CONTENT_DIR . '/plugins',
-            'uploads'    => WP_CONTENT_DIR . '/uploads',
+        $map = [
+            'wp-content' => WP_CONTENT_DIR,
         ];
 
-        $other_dirs = [
+        $maybe = [
+            'themes'  => WP_CONTENT_DIR . '/themes',
+            'plugins' => WP_CONTENT_DIR . '/plugins',
+            'uploads' => WP_CONTENT_DIR . '/uploads',
             'mu-plugins' => WP_CONTENT_DIR . '/mu-plugins',
-            'languages'  => WP_CONTENT_DIR . '/languages',
+            'languages' => WP_CONTENT_DIR . '/languages',
         ];
 
-        $map = [];
-
-        // Add priority directories first
-        foreach ( $priority_dirs as $target => $path ) {
-            if ( is_dir( $path ) ) {
-                $map[ $target ] = $path;
-            }
-        }
-
-        // Add wp-content root if it exists and has content
-        if ( is_dir( WP_CONTENT_DIR ) ) {
-            $map['wp-content'] = WP_CONTENT_DIR;
-        }
-
-        // Add other directories
-        foreach ( $other_dirs as $target => $path ) {
+        foreach ( $maybe as $target => $path ) {
             if ( is_dir( $path ) ) {
                 $map[ $target ] = $path;
             }
@@ -549,34 +479,14 @@ class Backup_Lite_Backup {
 
         self::initialize_archive_with_meta( $archive_path, $sql_path, $meta_path );
 
-        try {
-            $directories    = self::get_directory_map();
-            $manifest_data  = self::get_cached_file_manifest( $directories );
-        } catch ( Exception $e ) {
-            backup_lite_delete_directory( $temp_dir );
-            backup_lite_log( 'error', 'Failed to build file manifest during job preparation.', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ] );
-            throw new RuntimeException( esc_html__( 'Failed to build file manifest. Check logs for details.', 'museder-restoreone' ) );
-        }
-
-        if ( empty( $manifest_data ) || ! isset( $manifest_data['files'] ) ) {
-            backup_lite_delete_directory( $temp_dir );
-            throw new RuntimeException( esc_html__( 'File manifest is empty or invalid.', 'museder-restoreone' ) );
-        }
-
+        $directories    = self::get_directory_map();
+        $manifest_data  = self::build_manifest_from_directories( $directories );
         $manifest_file  = trailingslashit( backup_lite_get_jobs_dir() ) . $job_id . '-manifest.json';
         $manifest_bytes = wp_json_encode( $manifest_data['files'], JSON_UNESCAPED_SLASHES );
 
         if ( false === $manifest_bytes ) {
             backup_lite_delete_directory( $temp_dir );
-            $json_error = function_exists( 'json_last_error_msg' ) ? json_last_error_msg() : 'Unknown JSON error';
-            backup_lite_log( 'error', 'Failed to encode backup manifest to JSON.', [
-                'json_error' => $json_error,
-                'file_count' => isset( $manifest_data['count'] ) ? $manifest_data['count'] : 0,
-            ] );
-            throw new RuntimeException( esc_html__( 'Failed to encode backup manifest. The site may have too many files.', 'museder-restoreone' ) );
+            throw new RuntimeException( esc_html__( 'Failed to encode backup manifest.', 'museder-restoreone' ) );
         }
 
         // Using native file APIs on local backup directory; paths are sanitized and constrained.
@@ -603,85 +513,23 @@ class Backup_Lite_Backup {
     }
 
     /**
-     * Get optimal batch size based on available system resources.
-     *
-     * @return array{max_files: int, max_bytes: int}
-     */
-    private static function get_optimal_batch_size() {
-        // Use WordPress memory management functions
-        if ( function_exists( 'wp_raise_memory_limit' ) ) {
-            wp_raise_memory_limit( 'admin' );
-        }
-
-        $memory_limit = wp_convert_hr_to_bytes( ini_get( 'memory_limit' ) );
-        $memory_usage = memory_get_usage( true );
-        $available_memory = $memory_limit > 0 ? ( $memory_limit - $memory_usage ) : 0;
-
-        // Dynamically adjust batch size based on available memory
-        // Increased batch sizes to reduce AJAX request overhead
-        if ( $available_memory > 512 * 1024 * 1024 ) {
-            // > 512MB available: larger batches
-            return [
-                'max_files' => 800,
-                'max_bytes' => 157286400, // 150MB
-            ];
-        } elseif ( $available_memory > 256 * 1024 * 1024 ) {
-            // > 256MB available: medium batches
-            return [
-                'max_files' => 500,
-                'max_bytes' => 104857600, // 100MB
-            ];
-        }
-
-        // Default: smaller batches for limited memory environments
-        return [
-            'max_files' => 300,
-            'max_bytes' => 73400320, // 70MB
-        ];
-    }
-
-    /**
      * Process a chunk of files for the asynchronous backup job.
      *
-     * @param array      $job        Job state.
-     * @param int        $max_files  Maximum files per batch (optional, will be auto-calculated if not provided).
-     * @param int        $max_bytes  Maximum bytes per batch (optional, will be auto-calculated if not provided).
-     * @param ZipArchive $zip        Optional ZipArchive instance to reuse (for performance optimization).
+     * @param array $job        Job state.
+     * @param int   $max_files  Maximum files per batch.
+     * @param int   $max_bytes  Maximum bytes per batch.
      * @return array
      */
-    public static function process_job_batch( array $job, $max_files = null, $max_bytes = null, $zip = null ) {
+    public static function process_job_batch( array $job, $max_files = 200, $max_bytes = 52428800 ) {
         self::optimize_runtime_environment();
-
-        // Auto-calculate optimal batch size if not provided
-        if ( null === $max_files || null === $max_bytes ) {
-            $optimal = self::get_optimal_batch_size();
-            $max_files = $max_files ?? $optimal['max_files'];
-            $max_bytes = $max_bytes ?? $optimal['max_bytes'];
-        }
 
         $manifest = self::load_manifest_for_job( $job );
         $total    = isset( $job['total_files'] ) ? (int) $job['total_files'] : count( $manifest );
         $pointer  = isset( $job['pointer'] ) ? (int) $job['pointer'] : 0;
         $pointer  = max( 0, min( $pointer, $total ) );
 
-        // Guard: if total_files indicates there should be work, but manifest is empty/missing,
-        // do NOT fast-forward to "completed" (would create a partial archive with only meta+DB).
-        if ( $total > 0 && empty( $manifest ) ) {
-            throw new RuntimeException(
-                esc_html__( 'Backup manifest is missing or empty. Please restart the backup job.', 'museder-restoreone' )
-            );
-        }
-
-        // If there is nothing to pack (or we've already reached the end), defer finalize until the archive is closed.
-        // This prevents reporting "completed" (and computing filesize/metadata) before ZipArchive::close() flushes data.
         if ( $total <= 0 || $pointer >= $total ) {
-            $job['processed_files'] = isset( $job['total_files'] ) ? (int) $job['total_files'] : ( $job['processed_files'] ?? 0 );
-            $job['processed_bytes'] = isset( $job['total_bytes'] ) ? (int) $job['total_bytes'] : ( $job['processed_bytes'] ?? 0 );
-            $job['status']          = 'running';
-            $job['stage']           = 'finalizing';
-            $job['message']         = __( 'Finalising backup archive…', 'museder-restoreone' );
-            $job['needs_finalize']  = true;
-            return $job;
+            return self::finalize_async_job( $job );
         }
 
         $batch = [];
@@ -697,44 +545,19 @@ class Backup_Lite_Backup {
 
             $path = wp_normalize_path( $entry['path'] );
             if ( ! file_exists( $path ) ) {
-                // Skip missing files silently to reduce I/O overhead
+                backup_lite_log( 'warning', 'Skipped missing file during backup job.', [ 'path' => $path ] );
                 $index++;
                 continue;
             }
 
-            // Use manifest size if available (already calculated during scan) - avoid unnecessary filesize() call
-            $manifest_size = isset( $entry['size'] ) ? (int) $entry['size'] : 0;
-            
-            // Skip extremely large files (>2GB) even if in manifest
-            // Skip silently to reduce I/O overhead from logging
-            $max_file_size = 2147483648; // 2GB
-            if ( $manifest_size > $max_file_size ) {
-                $index++;
-                continue;
-            }
-
-            // Only verify file size if manifest size is missing or zero
-            // This reduces I/O overhead for most files
-            $file_size = $manifest_size;
-            if ( $file_size <= 0 ) {
-                // Fallback: get actual size only if manifest size is missing
-                $actual_size = filesize( $path );
-                if ( $actual_size > $max_file_size ) {
-                    $index++;
-                    continue;
-                }
-                $file_size = $actual_size > 0 ? $actual_size : 0;
-            }
-            
             $entry['path'] = $path;
-            $entry['size'] = $file_size;
             $batch[]       = $entry;
-            $bytes        += $file_size;
+            $bytes        += isset( $entry['size'] ) ? (int) $entry['size'] : filesize( $path );
             $index++;
         }
 
         if ( ! empty( $batch ) ) {
-            self::append_files_to_zip( $job['archive_path'], $batch, $zip );
+            self::append_files_to_zip( $job['archive_path'], $batch );
         }
 
         $job['pointer']         = $index;
@@ -751,27 +574,10 @@ class Backup_Lite_Backup {
         $job['message'] = __( 'Backup running…', 'museder-restoreone' );
 
         if ( $job['pointer'] >= $total ) {
-            // Defer finalize until after ZipArchive::close() in the job processor.
-            $job['processed_files'] = isset( $job['total_files'] ) ? (int) $job['total_files'] : $job['processed_files'];
-            $job['processed_bytes'] = isset( $job['total_bytes'] ) ? (int) $job['total_bytes'] : $job['processed_bytes'];
-            $job['status']          = 'running';
-            $job['stage']           = 'finalizing';
-            $job['message']         = __( 'Finalising backup archive…', 'museder-restoreone' );
-            $job['needs_finalize']  = true;
-            return $job;
+            return self::finalize_async_job( $job );
         }
 
         return $job;
-    }
-
-    /**
-     * Finalize a prepared async job AFTER the ZIP archive has been closed.
-     *
-     * @param array $job Job state.
-     * @return array Finalized job state.
-     */
-    public static function finalize_async_job_after_close( array $job ) {
-        return self::finalize_async_job( $job );
     }
 
     /**
@@ -779,94 +585,19 @@ class Backup_Lite_Backup {
      */
     private static function initialize_archive_with_meta( $archive_path, $sql_path, $meta_path ) {
         $zip = new ZipArchive();
-        if ( true !== $zip->open( $archive_path, ZipArchive::CREATE | ZipArchive::OVERWRITE ) ) {
+        $open_result = $zip->open( $archive_path, ZipArchive::CREATE | ZipArchive::OVERWRITE );
+        $ok_code     = defined( 'ZipArchive::ER_OK' ) ? ZipArchive::ER_OK : 0;
+        if ( true !== $open_result && $ok_code !== $open_result ) {
             throw new RuntimeException( esc_html__( 'Unable to initialize archive.', 'museder-restoreone' ) );
         }
 
         $zip->addFile( $sql_path, 'database.sql' );
         $zip->addFile( $meta_path, 'meta.json' );
-        $zip->close();
-    }
-
-    /**
-     * Get cached file manifest or build new one.
-     * Uses WordPress Transients API to cache file lists for 5 minutes.
-     * Note: Large manifests may not be cached due to WordPress transient size limits.
-     * For small sites (< 1000 files), skip caching to reduce overhead.
-     *
-     * @param array $directories Directory map.
-     * @return array
-     */
-    private static function get_cached_file_manifest( $directories ) {
-        // For small sites, skip caching to reduce overhead
-        // Build manifest directly without cache checks
         try {
-            $manifest = self::build_manifest_from_directories( $directories );
-        } catch ( Exception $e ) {
-            backup_lite_log( 'error', 'Failed to build file manifest.', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ] );
-            throw $e;
+            $zip->close();
+        } catch ( ValueError $e ) {
+            throw new RuntimeException( esc_html__( 'Unable to finalize archive.', 'museder-restoreone' ) );
         }
-        
-        $file_count = isset( $manifest['count'] ) ? (int) $manifest['count'] : 0;
-        
-        // Only use cache for larger sites (> 1000 files) where cache benefits outweigh overhead
-        if ( $file_count < 1000 ) {
-            // Small site: skip caching to reduce overhead
-            backup_lite_log( 'info', 'Built file manifest (cache skipped for small site).', [
-                'files' => $file_count,
-                'bytes' => $manifest['bytes'] ?? 0,
-            ] );
-            return $manifest;
-        }
-        
-        // For larger sites, try to use cache
-        $directories_json = wp_json_encode( $directories );
-        if ( false === $directories_json ) {
-            // If encoding fails, skip cache and return manifest
-            return $manifest;
-        }
-        
-        $cache_key = 'backup_lite_manifest_' . md5( $directories_json );
-        
-        // Try to get cached manifest
-        $cached = get_transient( $cache_key );
-        
-        if ( false !== $cached && isset( $cached['timestamp'] ) && isset( $cached['manifest'] ) ) {
-            $age = time() - $cached['timestamp'];
-            // Use cache if it's less than 5 minutes old
-            if ( $age < 300 && is_array( $cached['manifest'] ) ) {
-                backup_lite_log( 'info', 'Using cached file manifest.', [
-                    'age_seconds' => $age,
-                    'files' => $cached['manifest']['count'] ?? 0,
-                ] );
-                return $cached['manifest'];
-            }
-        }
-        
-        // Try to cache, but don't fail if caching fails (transient may be too large)
-        $cache_data = [
-            'manifest' => $manifest,
-            'timestamp' => time(),
-        ];
-        
-        // Estimate cache size (rough estimate: ~200 bytes per file entry)
-        $estimated_size = $file_count * 200;
-        $max_cache_size = 900 * 1024; // 900KB (WordPress transient limit is usually 1MB)
-        
-        if ( $estimated_size < $max_cache_size ) {
-            $cached_result = set_transient( $cache_key, $cache_data, 600 );
-            // Don't log cache failures to reduce I/O overhead
-        }
-        
-        backup_lite_log( 'info', 'Built file manifest.', [
-            'files' => $file_count,
-            'bytes' => $manifest['bytes'] ?? 0,
-        ] );
-        
-        return $manifest;
     }
 
     /**
@@ -874,13 +605,10 @@ class Backup_Lite_Backup {
      *
      * @param array $directories Directory map.
      * @return array
-     * @throws RuntimeException If manifest building fails.
      */
     private static function build_manifest_from_directories( $directories ) {
         $manifest = [];
         $bytes    = 0;
-        $file_count = 0;
-        $max_files = 100000; // Safety limit: prevent memory exhaustion
 
         foreach ( $directories as $target => $source ) {
             if ( ! is_dir( $source ) ) {
@@ -892,76 +620,37 @@ class Backup_Lite_Backup {
                 continue;
             }
 
-            try {
-            // Use optimized iterator flags for better performance
-            // CATCH_GET_CHILD requires PHP 5.6.0+, use version check for compatibility
-            $iterator_flags = FilesystemIterator::SKIP_DOTS | FilesystemIterator::FOLLOW_SYMLINKS;
-            if ( defined( 'FilesystemIterator::CATCH_GET_CHILD' ) ) {
-                $iterator_flags |= FilesystemIterator::CATCH_GET_CHILD;
-            }
-            
             $iterator = new RecursiveIteratorIterator(
-                new RecursiveDirectoryIterator( $source, $iterator_flags ),
+                new RecursiveDirectoryIterator( $source, FilesystemIterator::SKIP_DOTS ),
                 RecursiveIteratorIterator::LEAVES_ONLY
             );
 
-                foreach ( $iterator as $file ) {
-                    // Safety check: prevent memory exhaustion
-                    if ( $file_count >= $max_files ) {
-                        backup_lite_log( 'warning', 'File manifest limit reached, stopping scan.', [
-                            'max_files' => $max_files,
-                            'scanned' => $file_count,
-                        ] );
-                        break 2; // Break out of both loops
-                    }
-
-                    /** @var SplFileInfo $file */
-                    if ( $file->isDir() ) {
-                        continue;
-                    }
-
-                    $file_path = $file->getRealPath();
-                    if ( ! $file_path || self::should_skip_path( $file_path ) ) {
-                        continue;
-                    }
-
-                    $relative = ltrim( substr( $file_path, strlen( $source ) ), '/\\' );
-                    if ( '' === $relative ) {
-                        continue;
-                    }
-
-                    $size = $file->getSize();
-                    
-                    // Skip extremely large files (>2GB) to prevent issues
-                    // These are typically log files, database dumps, or other non-essential files
-                    // Skip silently to reduce I/O overhead from logging
-                    $max_file_size = 2147483648; // 2GB
-                    if ( $size !== false && $size > $max_file_size ) {
-                        // Skip without logging to improve performance
-                        continue;
-                    }
-
-                    $file_size = $size !== false ? (int) $size : 0;
-                    $manifest[] = [
-                        'path'   => wp_normalize_path( $file_path ),
-                        'target' => $target . '/' . str_replace( '\\', '/', $relative ),
-                        'size'   => $file_size,
-                    ];
-
-                    if ( $file_size > 0 ) {
-                        $bytes += $file_size;
-                    }
-
-                    $file_count++;
+            foreach ( $iterator as $file ) {
+                /** @var SplFileInfo $file */
+                if ( $file->isDir() ) {
+                    continue;
                 }
-            } catch ( Exception $e ) {
-                backup_lite_log( 'error', 'Error scanning directory for manifest.', [
-                    'source' => $source,
-                    'target' => $target,
-                    'error' => $e->getMessage(),
-                ] );
-                // Continue with other directories instead of failing completely
-                continue;
+
+                $file_path = $file->getRealPath();
+                if ( ! $file_path || self::should_skip_path( $file_path ) ) {
+                    continue;
+                }
+
+                $relative = ltrim( substr( $file_path, strlen( $source ) ), '/\\' );
+                if ( '' === $relative ) {
+                    continue;
+                }
+
+                $size = $file->getSize();
+                $manifest[] = [
+                    'path'   => wp_normalize_path( $file_path ),
+                    'target' => $target . '/' . str_replace( '\\', '/', $relative ),
+                    'size'   => $size !== false ? (int) $size : 0,
+                ];
+
+                if ( $size && $size > 0 ) {
+                    $bytes += (int) $size;
+                }
             }
         }
 
@@ -1009,29 +698,15 @@ class Backup_Lite_Backup {
      * @param string $archive_path Archive path.
      * @param array  $files        Files to add.
      */
-    /**
-     * Append files to ZIP archive with optimized compression.
-     * Large files (>10MB) use no compression for better performance.
-     *
-     * @param string     $archive_path Path to ZIP archive.
-     * @param array      $files        Array of file entries with 'path', 'target', and 'size' keys.
-     * @param ZipArchive $zip          Optional ZipArchive instance to reuse (for performance optimization).
-     *                                 If not provided, a new instance will be created and closed.
-     */
-    private static function append_files_to_zip( $archive_path, array $files, $zip = null ) {
-        $should_close = false;
-        
-        // If no ZipArchive instance provided, create and open a new one
-        if ( null === $zip ) {
-            $zip = new ZipArchive();
-            if ( true !== $zip->open( $archive_path, ZipArchive::CREATE ) ) {
-                throw new RuntimeException( esc_html__( 'Unable to append files to archive.', 'museder-restoreone' ) );
-            }
-            $should_close = true;
+    private static function append_files_to_zip( $archive_path, array $files ) {
+        $zip = new ZipArchive();
+        $open_result = $zip->open( $archive_path, ZipArchive::CREATE );
+        $ok_code     = defined( 'ZipArchive::ER_OK' ) ? ZipArchive::ER_OK : 0;
+        if ( true !== $open_result && $ok_code !== $open_result ) {
+            throw new RuntimeException( esc_html__( 'Unable to append files to archive.', 'museder-restoreone' ) );
         }
 
         $created_dirs = [];
-        $large_file_threshold = 10485760; // 10MB
 
         foreach ( $files as $file ) {
             $path   = $file['path'];
@@ -1047,34 +722,18 @@ class Backup_Lite_Backup {
                 $created_dirs[ $dir ] = true;
             }
 
-            // Get file size from manifest (already calculated during scan) - avoid unnecessary filesize() call
-            $file_size = isset( $file['size'] ) ? (int) $file['size'] : 0;
-            
-            // Skip extremely large files (>2GB) that should have been filtered during manifest building
-            if ( $file_size > 2147483648 ) {
-                continue;
-            }
-
-            // Add file to archive
             $zip->addFile( $path, $target );
-
-            // Optimize compression: large files use no compression for better performance
-            // Only set compression if file size is known (from manifest)
-            if ( $file_size > 0 ) {
-                if ( $file_size > $large_file_threshold ) {
-                    // Use no compression for large files (faster)
-                    $zip->setCompressionName( $target, ZipArchive::CM_STORE );
-                } else {
-                    // Use standard compression for smaller files (better compression ratio)
-                    $zip->setCompressionName( $target, ZipArchive::CM_DEFLATE );
-                }
-            }
-            // If size is unknown, let ZipArchive use default compression
         }
 
-        // Only close if we created the ZipArchive instance
-        if ( $should_close ) {
+        try {
             $zip->close();
+        } catch ( ValueError $e ) {
+            // Avoid PHP 8+ ValueError fatal (invalid/uninitialized Zip object) causing admin-ajax 500.
+            backup_lite_log( 'error', 'ZipArchive close failed while appending files.', [
+                'path'  => $archive_path,
+                'error' => $e->getMessage(),
+            ] );
+            throw new RuntimeException( esc_html__( 'Unable to finalize archive.', 'museder-restoreone' ) );
         }
     }
 
@@ -1098,19 +757,9 @@ class Backup_Lite_Backup {
             $job['download_url'] = backup_lite_get_download_url( $job['archive_path'] );
         }
 
-        // Calculate duration if started_at exists
-        $backup_completed_at = time();
-        $backup_duration_seconds = 0;
-        if ( isset( $job['started_at'] ) && is_numeric( $job['started_at'] ) ) {
-            $backup_duration_seconds = $backup_completed_at - (int) $job['started_at'];
-        }
-        $job['completed_at'] = $backup_completed_at;
-        $job['duration_seconds'] = $backup_duration_seconds;
-
         backup_lite_log( 'info', 'Backup job completed.', [
             'archive' => $job['archive_path'],
             'size'    => $size,
-            'duration_seconds' => $backup_duration_seconds,
         ] );
 
         self::record_backup_event( 'success', [
@@ -1118,23 +767,15 @@ class Backup_Lite_Backup {
             'size_bytes' => $size,
             'size_human' => size_format( $size, 2 ),
             'label'      => $job['options']['label'] ?? '',
-            'started_at' => isset( $job['started_at'] ) ? (int) $job['started_at'] : null,
-            'completed_at' => $backup_completed_at,
-            'duration_seconds' => $backup_duration_seconds,
         ] );
 
-        // Store backup metadata (including duration)
-        $backup_metadata = [
-            'duration_seconds' => $backup_duration_seconds,
-            'started_at' => isset( $job['started_at'] ) ? (int) $job['started_at'] : null,
-            'completed_at' => $backup_completed_at,
-        ];
         if ( Backup_Lite_Pro::is_pro_active() && ! empty( $job['options']['label'] ) ) {
-            $backup_metadata['label'] = sanitize_text_field( $job['options']['label'] );
-            $backup_metadata['encrypted'] = ! empty( $job['options']['encrypt'] );
-            $backup_metadata['cloud_destinations'] = $job['options']['cloud_destinations'] ?? [];
+            self::store_backup_metadata( basename( $job['archive_path'] ), [
+                'label'               => sanitize_text_field( $job['options']['label'] ),
+                'encrypted'           => ! empty( $job['options']['encrypt'] ),
+                'cloud_destinations'  => $job['options']['cloud_destinations'] ?? [],
+            ] );
         }
-        self::store_backup_metadata( basename( $job['archive_path'] ), $backup_metadata );
 
         if ( class_exists( 'Backup_Lite_Backup_Jobs' ) ) {
             Backup_Lite_Backup_Jobs::cleanup_job( $job );
@@ -1143,39 +784,13 @@ class Backup_Lite_Backup {
         return $job;
     }
 
-    /**
-     * Export database using mysqldump with optimized parameters.
-     * Uses --single-transaction for consistency and --quick for better performance.
-     *
-     * @param string $filepath Path to output SQL file.
-     * @return bool
-     */
     private static function export_database_with_mysqldump( $filepath ) {
-        // Build optimized mysqldump command
-        // --single-transaction: Ensures consistency without locking tables
-        // --quick: Processes rows one at a time, reducing memory usage
-        // --lock-tables=false: Don't lock tables (works with --single-transaction)
-        // --skip-comments: Skip comments to reduce file size
-        // --no-tablespaces: Avoid tablespace issues
-        $db_host = defined( 'DB_HOST' ) ? DB_HOST : 'localhost';
-        $db_user = escapeshellarg( DB_USER );
-        $db_pass = escapeshellarg( DB_PASSWORD );
-        $db_name = escapeshellarg( DB_NAME );
-        $filepath_escaped = escapeshellarg( $filepath );
-
-        // Handle DB_HOST with port or socket
-        $host_parts = explode( ':', $db_host );
-        $host = escapeshellarg( $host_parts[0] );
-        $port = isset( $host_parts[1] ) ? ' -P' . escapeshellarg( $host_parts[1] ) : '';
-
         $command = sprintf(
-            'mysqldump --single-transaction --quick --lock-tables=false --skip-comments --no-tablespaces -h%s%s -u%s -p%s %s > %s 2>&1',
-            $host,
-            $port,
-            $db_user,
-            $db_pass,
-            $db_name,
-            $filepath_escaped
+            'mysqldump --no-tablespaces -u%s -p%s %s > %s',
+            escapeshellarg( DB_USER ),
+            escapeshellarg( DB_PASSWORD ),
+            escapeshellarg( DB_NAME ),
+            escapeshellarg( $filepath )
         );
 
         $output  = '';
@@ -1183,11 +798,6 @@ class Backup_Lite_Backup {
 
         if ( ! $success ) {
             backup_lite_log( 'error', 'mysqldump command failed.', [ 'output' => $output ] );
-        } else {
-            backup_lite_log( 'info', 'Database exported with optimized mysqldump parameters.', [
-                'file' => basename( $filepath ),
-                'size' => file_exists( $filepath ) ? filesize( $filepath ) : 0,
-            ] );
         }
 
         return $success;
@@ -1197,15 +807,10 @@ class Backup_Lite_Backup {
         global $wpdb;
 
         // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for writing SQL dump file, path validated and sanitized
-        $handle = fopen( $filepath, 'wb' ); // Use binary mode for better performance
+        $handle = fopen( $filepath, 'w' );
         if ( ! $handle ) {
             backup_lite_log( 'error', 'Unable to open SQL file for writing.', [ 'path' => $filepath ] );
             return false;
-        }
-
-        // Set write buffer for better I/O performance (64KB buffer)
-        if ( function_exists( 'stream_set_write_buffer' ) ) {
-            stream_set_write_buffer( $handle, 65536 );
         }
 
         $wpdb->hide_errors();
@@ -1234,22 +839,25 @@ class Backup_Lite_Backup {
         }
 
         foreach ( $tables as $table ) {
-            // @plugin-check: safe table name from whitelist
-            // $table comes from SHOW TABLES result (system query, not user input)
-            // Sanitize table name to ensure only safe characters
-            $safe_table = preg_replace( '/[^A-Za-z0-9_]/', '', $table );
-            if ( empty( $safe_table ) ) {
+            // Table identifiers cannot be prepared. Validate against a live whitelist (prefix-only).
+            $safe_table = backup_lite_validate_wp_table_name( $table );
+            if ( ! $safe_table ) {
                 continue;
             }
 
             // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing SQL dump file
             fwrite( $handle, sprintf( "-- Table structure for table `%s`\n\n", $safe_table ) );
 
-            // 這段查詢用於備份／還原流程中的資料庫狀態檢查或結構調整，
-            // 輸入值來自系統內部狀態，不包含直接的使用者輸入。
-            // 為了確保相容性與效能，此處使用直接查詢而非 WP_Query。
+            // Schema introspection required to export a consistent backup.
+            // The table identifier cannot be prepared; validated via backup_lite_validate_wp_table_name().
             // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-            $create = $wpdb->get_row( $wpdb->prepare( "SHOW CREATE TABLE `%s`", $safe_table ), ARRAY_N ); // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- safe: table name sanitized from SHOW TABLES result
+            $create = $wpdb->get_row(
+                // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- Identifier cannot be passed as a prepared value; validated via backup_lite_validate_wp_table_name() (live prefix whitelist).
+                // phpcs:ignore WordPress.DB.DirectDatabaseQuery.SchemaChange -- "SHOW CREATE TABLE" is schema introspection, not a schema change.
+                // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Identifier cannot be prepared; validated via backup_lite_validate_wp_table_name() (live prefix whitelist).
+                "SHOW CREATE TABLE `{$safe_table}`",
+                ARRAY_N
+            );
             // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
             if ( isset( $create[1] ) ) {
                 // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing SQL dump file
@@ -1258,11 +866,14 @@ class Backup_Lite_Backup {
                 fwrite( $handle, $create[1] . ";\n\n" );
             }
 
-            // 這段查詢用於備份／還原流程中的資料庫狀態檢查或結構調整，
-            // 輸入值來自系統內部狀態，不包含直接的使用者輸入。
-            // 為了確保相容性與效能，此處使用直接查詢而非 WP_Query。
+            // COUNT(*) is required to batch export large tables.
+            // The table identifier cannot be prepared; validated via backup_lite_validate_wp_table_name().
             // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-            $row_count = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM `%s`", $safe_table ) );
+            $row_count = (int) $wpdb->get_var(
+                // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- Identifier cannot be passed as a prepared value; validated via backup_lite_validate_wp_table_name() (live prefix whitelist).
+                // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Identifier cannot be prepared; validated via backup_lite_validate_wp_table_name() (live prefix whitelist).
+                "SELECT COUNT(*) FROM `{$safe_table}`"
+            );
             // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
             if ( $row_count === 0 ) {
                 // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing SQL dump file
@@ -1275,16 +886,18 @@ class Backup_Lite_Backup {
 
             $offset = 0;
             while ( $offset < $row_count ) {
-                // 這段查詢用於備份／還原流程中的資料庫狀態檢查或結構調整，
-                // 輸入值來自系統內部狀態，不包含直接的使用者輸入。
-                // 為了確保相容性與效能，此處使用直接查詢而非 WP_Query。
+                // Chunked export: direct query is required here; table name is whitelist-sanitized.
                 // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-                $rows = $wpdb->get_results( $wpdb->prepare(
-                    "SELECT * FROM `%s` LIMIT %d OFFSET %d",
-                    $safe_table,
-                    self::CHUNK_SIZE,
-                    $offset
-                ), ARRAY_A );
+                $rows = $wpdb->get_results(
+                    // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- Identifier cannot be passed as a prepared value; validated via backup_lite_validate_wp_table_name() (live prefix whitelist).
+                    $wpdb->prepare(
+                        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table identifier cannot be prepared; validated via backup_lite_validate_wp_table_name() (live prefix whitelist).
+                        "SELECT * FROM `{$safe_table}` LIMIT %d OFFSET %d",
+                        self::CHUNK_SIZE,
+                        $offset
+                    ),
+                    ARRAY_A
+                );
                 // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 
                 if ( empty( $rows ) ) {
@@ -1332,80 +945,32 @@ class Backup_Lite_Backup {
         return 1;
     }
 
-    /**
-     * Check if a path should be skipped during backup.
-     * Optimized with early returns and cached exclusions.
-     *
-     * @param string $path File or directory path.
-     * @return bool True if should skip, false otherwise.
-     */
     private static function should_skip_path( $path ) {
-        static $skip_basenames = null;
-        static $exclusion_cache = [];
-
-        // Cache skip basenames
-        if ( null === $skip_basenames ) {
-            $skip_basenames = [
-                '.DS_Store',
-                'desktop.ini',
-                'Thumbs.db',
-                '.git',
-                '.svn',
-                '.hg',
-                'node_modules',
-                '.npm',
-                '.yarn',
-                'vendor',
-                '.composer',
-                '.cache',
-                '.tmp',
-                '.temp',
-            ];
-        }
-
         $normalized = wp_normalize_path( $path );
 
-        // Quick check: cache lookup
-        if ( isset( $exclusion_cache[ $normalized ] ) ) {
-            return $exclusion_cache[ $normalized ];
-        }
-
-        // Quick check: basename (fastest)
-        $basename = basename( $normalized );
-        if ( in_array( $basename, $skip_basenames, true ) ) {
-            $exclusion_cache[ $normalized ] = true;
-            return true;
-        }
-
-        // Quick check: common exclusion patterns (before expensive operations)
-        if ( strpos( $normalized, '/uploads/museder-restoreone' ) !== false ) {
-            $exclusion_cache[ $normalized ] = true;
-            return true;
-        }
-
-        // Check backup files in uploads directory
-        if ( strpos( $normalized, '/uploads/' ) !== false && preg_match( '/\.(zip|wpress)$/i', $normalized ) ) {
-            if ( strpos( $normalized, '/backups/' ) !== false || strpos( $normalized, '/museder-restoreone' ) !== false ) {
-                $exclusion_cache[ $normalized ] = true;
-                return true;
-            }
-        }
-
-        // Check against internal exclusions (most expensive, do last)
-        $exclusions = self::get_internal_exclusions();
-        foreach ( $exclusions as $excluded ) {
+        foreach ( self::get_internal_exclusions() as $excluded ) {
             if ( '' !== $excluded && 0 === strpos( $normalized, $excluded ) ) {
-                $exclusion_cache[ $normalized ] = true;
                 return true;
             }
         }
 
-        // Cache negative result (limit cache size to prevent memory issues)
-        if ( count( $exclusion_cache ) < 1000 ) {
-            $exclusion_cache[ $normalized ] = false;
+        // Also exclude any museder-restoreone-* directories in uploads (handles versioned directories)
+        if ( strpos( $normalized, '/uploads/museder-restoreone' ) !== false ) {
+            return true;
         }
 
-        return false;
+        // Exclude backup files (.zip) in uploads directory
+        if ( strpos( $normalized, '/uploads/' ) !== false && preg_match( '/\.(zip|wpress)$/i', $normalized ) ) {
+            // Only exclude if it's in a backup-related directory
+            if ( strpos( $normalized, '/backups/' ) !== false || strpos( $normalized, '/museder-restoreone' ) !== false ) {
+                return true;
+            }
+        }
+
+        $basename = basename( $normalized );
+        $skip     = [ '.DS_Store', 'desktop.ini', 'Thumbs.db' ];
+
+        return in_array( $basename, $skip, true );
     }
 
     /**
@@ -1418,10 +983,8 @@ class Backup_Lite_Backup {
             return self::$internal_exclusions;
         }
 
-        // Use shared helper function for consistency
-        $paths = backup_lite_get_excluded_paths();
-        
-        // Add additional exclusions specific to backup process
+        $paths = [];
+
         $normalize = static function( $path, $must_exist = false ) {
             if ( empty( $path ) ) {
                 return '';
@@ -1438,34 +1001,48 @@ class Backup_Lite_Backup {
 
             return trailingslashit( $normalized );
         };
-        
-        // Exclude all museder-restoreone-* directories in uploads (handles versioned plugin directories)
-        $uploads_dir = WP_CONTENT_DIR . '/uploads';
-        if ( is_dir( $uploads_dir ) && is_readable( $uploads_dir ) ) {
-            try {
-                $iterator = new DirectoryIterator( $uploads_dir );
-                foreach ( $iterator as $file ) {
-                    if ( $file->isDir() && ! $file->isDot() ) {
-                        $dir_name = $file->getFilename();
-                        // Match museder-restoreone, museder-restoreone-1, museder-restoreone-2, etc.
-                        if ( preg_match( '/^museder-restoreone(-\d+)?$/', $dir_name ) ) {
-                            $normalized_path = $normalize( $file->getPathname() );
-                            if ( $normalized_path ) {
-                                $paths[] = $normalized_path;
-                            }
-                        }
-                    }
-                }
-            } catch ( Exception $e ) {
-                // Silently continue if directory iteration fails
-                backup_lite_log( 'warning', 'Failed to scan uploads directory for exclusions.', [ 'error' => $e->getMessage() ] );
-            }
+
+        $storage = backup_lite_get_storage_root();
+
+        if ( ! empty( $storage['path'] ) ) {
+            $root = trailingslashit( $storage['path'] );
+            $paths[] = $normalize( $root );
+            $paths[] = $normalize( $root . 'backups' );
+            $paths[] = $normalize( $root . 'logs' );
+            $paths[] = $normalize( $root . 'jobs' );
+            $paths[] = $normalize( $root . 'temp' );
+            $paths[] = $normalize( $root . 'reports' );
+            $paths[] = $normalize( $root . 'pro' );
+            $paths[] = $normalize( $root . 'pro/jobs' );
+            $paths[] = $normalize( $root . 'pro/reports' );
         }
 
-        // Deduplicate while preserving order.
-        $paths = array_values( array_unique( array_filter( $paths ) ) );
-        
-        self::$internal_exclusions = $paths;
+        // Always exclude the active backup directory (even if customized) and its parent root.
+        $active_backup_dir = backup_lite_get_backup_dir();
+        $paths[] = $normalize( $active_backup_dir );
+        $paths[] = $normalize( trailingslashit( dirname( $active_backup_dir ) ) );
+        $paths[] = $normalize( backup_lite_get_temp_dir() );
+        $paths[] = $normalize( backup_lite_get_jobs_dir() );
+        $paths[] = $normalize( backup_lite_get_reports_dir() );
+
+        // Legacy directories (only exclude when they exist to avoid false positives).
+        $legacy = [
+            WP_CONTENT_DIR . '/uploads/backup-lite',
+            WP_CONTENT_DIR . '/uploads/backup-lite/backups',
+            WP_CONTENT_DIR . '/uploads/backup-lite/temp',
+            WP_CONTENT_DIR . '/uploads/backup-lite/jobs',
+            WP_CONTENT_DIR . '/uploads/backup-lite/pro',
+            WP_CONTENT_DIR . '/uploads/backup-lite/pro/jobs',
+            WP_CONTENT_DIR . '/uploads/backup-lite/pro/reports',
+            WP_CONTENT_DIR . '/uploads/backup-lite-logs',
+        ];
+
+        foreach ( $legacy as $legacy_path ) {
+            $normalized = $normalize( $legacy_path, true );
+            if ( $normalized ) {
+                $paths[] = $normalized;
+            }
+        }
 
         // Exclude all museder-restoreone-* directories in uploads (handles versioned plugin directories)
         $uploads_dir = WP_CONTENT_DIR . '/uploads';
@@ -1626,14 +1203,9 @@ class Backup_Lite_Backup {
     }
 
     private static function get_tables() {
-        global $wpdb;
-        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery
-        // phpcs:disable WordPress.DB.DirectDatabaseQuery.NoCaching
-        // 說明：以下查詢用於備份/還原過程，必須直接操作資料表結構，table 名稱皆來自 $wpdb 或白名單，不接受使用者輸入。
-        $tables = $wpdb->get_col( 'SHOW TABLES' );
-        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery
-        // phpcs:enable WordPress.DB.DirectDatabaseQuery.NoCaching
-        return is_array( $tables ) ? $tables : [];
+        // Backup Lite export is intentionally limited to this site's $wpdb->prefix tables.
+        // Table identifiers cannot be prepared; we use a live whitelist from the DB engine.
+        return backup_lite_get_wp_table_whitelist();
     }
 
     private static function escape_value( $value ) {
@@ -1671,8 +1243,10 @@ class Backup_Lite_Backup {
      * @return bool
      */
     private static function store_backup_metadata( $filename, $metadata ) {
-        // Always store metadata (duration, timestamps) even without PRO
-        // PRO features (label, encrypted, cloud_destinations) are only stored if PRO is active
+        if ( ! Backup_Lite_Pro::is_pro_active() ) {
+            return false;
+        }
+
         $meta_file = backup_lite_get_backup_dir() . '/.backup-meta.json';
         $all_meta = [];
 
@@ -1683,10 +1257,7 @@ class Backup_Lite_Backup {
             $all_meta = json_decode( $content, true ) ?: [];
         }
 
-        // Merge with existing metadata to preserve PRO features
-        $existing = $all_meta[ $filename ] ?? [];
-        $merged = array_merge( $existing, $metadata );
-        $all_meta[ $filename ] = $merged;
+        $all_meta[ $filename ] = $metadata;
 
         // Using native file APIs on local backup directory; paths are sanitized and constrained.
         // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_read_file_put_contents
@@ -1700,14 +1271,15 @@ class Backup_Lite_Backup {
      * @return array
      */
     public static function get_backup_metadata( $filename ) {
-        // Always return metadata (duration, timestamps) even without PRO
+        if ( ! Backup_Lite_Pro::is_pro_active() ) {
+            return [];
+        }
+
         $meta_file = backup_lite_get_backup_dir() . '/.backup-meta.json';
         if ( ! file_exists( $meta_file ) ) {
             return [];
         }
 
-        // Using native file APIs on local backup directory; paths are sanitized and constrained.
-        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
         $content = file_get_contents( $meta_file );
         $all_meta = json_decode( $content, true ) ?: [];
 

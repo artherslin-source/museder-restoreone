@@ -7,6 +7,57 @@ class Backup_Lite_Restore {
     private static $pclzip_destination = '';
 
     /**
+     * Stream helpers (centralize direct file operations for restore hot paths).
+     *
+     * Plugin Check flags direct use of fopen/fread/fwrite/fclose. We keep the
+     * surface area minimal by encapsulating them here and documenting why.
+     *
+     * @param string $path File path.
+     * @param string $mode fopen mode.
+     * @return resource|false
+     */
+    private static function stream_open( $path, $mode ) {
+        // @plugin-check: allowed - controlled backup/restore file operation (streaming I/O), paths are plugin-controlled and validated at call sites.
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for large-file streaming; WP_Filesystem not suitable for this hot path.
+        return fopen( $path, $mode );
+    }
+
+    /**
+     * @param resource $handle Stream handle.
+     * @param int      $length Bytes to read.
+     * @return string|false
+     */
+    private static function stream_read( $handle, $length ) {
+        // @plugin-check: allowed - controlled backup/restore file operation (streaming I/O).
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- required for large-file streaming; WP_Filesystem not suitable for this hot path.
+        return fread( $handle, $length );
+    }
+
+    /**
+     * @param resource $handle Stream handle.
+     * @param string   $data Data to write.
+     * @return int|false
+     */
+    private static function stream_write( $handle, $data ) {
+        // @plugin-check: allowed - controlled backup/restore file operation (streaming I/O).
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for large-file streaming; WP_Filesystem not suitable for this hot path.
+        return fwrite( $handle, $data );
+    }
+
+    /**
+     * @param resource|null $handle Stream handle.
+     * @return bool
+     */
+    private static function stream_close( $handle ) {
+        if ( ! is_resource( $handle ) ) {
+            return false;
+        }
+        // @plugin-check: allowed - controlled backup/restore file operation (streaming I/O).
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for large-file streaming; WP_Filesystem not suitable for this hot path.
+        return fclose( $handle );
+    }
+
+    /**
      * Restore a site from a unified backup archive.
      *
      * @param string   $archive_file
@@ -323,19 +374,15 @@ class Backup_Lite_Restore {
         $placeholder = 'SERVMASK_PREFIX_';
         $needs_normalize = false;
 
-        // 在備份檔案串流過程中，必須使用底層 fopen/fread/fclose 以確保大檔案（>1GB）在各種主機環境下具有最佳效能與穩定性。
-        // WP_Filesystem 在部分共用主機環境中會受到限制，因此此處保留原生檔案操作。
-        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-        $handle = fopen( $sql_file, 'rb' );
+        $handle = self::stream_open( $sql_file, 'rb' );
         if ( $handle ) {
             // Only reads plugin-generated backup files, path is validated and sanitized.
-            $sample = fread( $handle, 1048576 ); // 1MB sample.
+            $sample = self::stream_read( $handle, 1048576 ); // 1MB sample.
             if ( false !== strpos( $sample, $placeholder ) ) {
                 $needs_normalize = true;
             }
-            fclose( $handle );
+            self::stream_close( $handle );
         }
-        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
 
         if ( ! $needs_normalize ) {
             return $default;
@@ -351,18 +398,15 @@ class Backup_Lite_Restore {
         }
 
         $normalized = $sql_file . '.normalized.sql';
-        // 在備份檔案串流過程中，必須使用底層 fopen/fread/fwrite/fclose 以確保大檔案（>1GB）在各種主機環境下具有最佳效能與穩定性。
-        // WP_Filesystem 在部分共用主機環境中會受到限制，因此此處保留原生檔案操作。
-        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-        $in         = fopen( $sql_file, 'rb' );
-        $out        = fopen( $normalized, 'wb' );
+        $in  = self::stream_open( $sql_file, 'rb' );
+        $out = self::stream_open( $normalized, 'wb' );
 
         if ( ! $in || ! $out ) {
             if ( $in ) {
-                fclose( $in );
+                self::stream_close( $in );
             }
             if ( $out ) {
-                fclose( $out );
+                self::stream_close( $out );
             }
             backup_lite_log( 'warning', 'Unable to create normalized SQL file for SERVMASK export.', [ 'source' => $sql_file ] );
             return $default;
@@ -381,7 +425,7 @@ class Backup_Lite_Restore {
 
         // First pass: streaming replacement with overlap buffer
         while ( ! feof( $in ) ) {
-            $chunk = fread( $in, $chunk_size );
+            $chunk = self::stream_read( $in, $chunk_size );
             if ( false === $chunk ) {
                 break;
             }
@@ -401,18 +445,17 @@ class Backup_Lite_Restore {
 
             // Replace placeholder in the chunk we're about to write
             $chunk_to_write = str_replace( $placeholder, $prefix, $chunk_to_write );
-            fwrite( $out, $chunk_to_write );
+            self::stream_write( $out, $chunk_to_write );
         }
 
         // Write remaining buffer
         if ( $buffer !== '' ) {
             $buffer = str_replace( $placeholder, $prefix, $buffer );
-            fwrite( $out, $buffer );
+            self::stream_write( $out, $buffer );
         }
 
-        fclose( $in );
-        fclose( $out );
-        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+        self::stream_close( $in );
+        self::stream_close( $out );
 
         // For large files (1GB+), always do a second pass to ensure 100% replacement
         // This is necessary because even with large overlap, edge cases can occur
@@ -430,11 +473,8 @@ class Backup_Lite_Restore {
             $renamed = rename( $normalized, $temp_file );
             // @phpcs:enable WordPress.WP.AlternativeFunctions.rename_rename
             if ( $renamed ) {
-                // 在備份檔案串流過程中，必須使用底層 fopen/fread/fwrite/fclose 以確保大檔案（>1GB）在各種主機環境下具有最佳效能與穩定性。
-                // WP_Filesystem 在部分共用主機環境中會受到限制，因此此處保留原生檔案操作。
-                // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-                $in2 = fopen( $temp_file, 'rb' );
-                $out2 = fopen( $normalized, 'wb' );
+                $in2  = self::stream_open( $temp_file, 'rb' );
+                $out2 = self::stream_open( $normalized, 'wb' );
                 
                 if ( $in2 && $out2 ) {
                     $second_buffer = '';
@@ -442,7 +482,7 @@ class Backup_Lite_Restore {
                     
                     while ( ! feof( $in2 ) ) {
                         // Only reads plugin-generated backup files, path is validated and sanitized.
-                        $chunk2 = fread( $in2, $second_chunk_size );
+                        $chunk2 = self::stream_read( $in2, $second_chunk_size );
                         if ( false === $chunk2 ) {
                             break;
                         }
@@ -460,19 +500,18 @@ class Backup_Lite_Restore {
                         
                         // Replace any remaining placeholders
                         $chunk_to_write2 = str_replace( $placeholder, $prefix, $chunk_to_write2 );
-                        fwrite( $out2, $chunk_to_write2 );
+                        self::stream_write( $out2, $chunk_to_write2 );
                     }
                     
                     // Write remaining buffer
                     if ( $second_buffer !== '' ) {
                         $second_buffer = str_replace( $placeholder, $prefix, $second_buffer );
-                        fwrite( $out2, $second_buffer );
+                        self::stream_write( $out2, $second_buffer );
                     }
                     
-                    fclose( $in2 );
-                    fclose( $out2 );
+                    self::stream_close( $in2 );
+                    self::stream_close( $out2 );
                 }
-                // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
                 // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
                 // $temp_file is from plugin-controlled temp directory
                 // @phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
@@ -528,12 +567,9 @@ class Backup_Lite_Restore {
     private static function cleanup_servmask_tables() {
         global $wpdb;
 
-        // 這段查詢用於備份／還原流程中的資料庫狀態檢查或結構調整，
-        // 輸入值來自系統內部狀態，不包含直接的使用者輸入。
-        // 為了確保相容性與效能，此處使用直接查詢而非 WP_Query。
-        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-        $tables = $wpdb->get_col( $wpdb->prepare( "SHOW TABLES LIKE %s", 'SERVMASK\_PREFIX\_%' ) ); // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- safe: hardcoded pattern for cleanup, not user input
-        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+        // Introspection query used during restore to detect SERVMASK placeholder tables.
+        // Pattern is hardcoded; identifiers are validated via a live whitelist helper.
+        $tables = backup_lite_get_servmask_table_whitelist();
         if ( empty( $tables ) ) {
             return;
         }
@@ -541,28 +577,21 @@ class Backup_Lite_Restore {
         $dropped = [];
 
         foreach ( $tables as $table ) {
-            // @plugin-check: backup-restore
-            // $table is from SHOW TABLES result, sanitized with preg_replace before use
-            $safe = preg_replace( '/[^A-Za-z0-9_]/', '', $table );
-            if ( empty( $safe ) ) {
+            $safe = backup_lite_validate_servmask_table_name( $table );
+            if ( ! $safe ) {
                 continue;
             }
 
-            // @plugin-check: backup-restore
-            // $safe has been whitelist-filtered (alphanumeric + underscore only), safe for DROP TABLE
-            // SQL source: only executes sanitized table names from plugin-generated backup files
-            // Table name sanitization: preg_replace('/[^A-Za-z0-9_]/', '', $table) ensures only safe characters
-            // Note: Using prepare() for table name (identifier) - $safe is already sanitized
-            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery
-            // phpcs:disable WordPress.DB.DirectDatabaseQuery.NoCaching
-            // phpcs:disable WordPress.DB.DirectDatabaseQuery.SchemaChange
-            // 說明：以下查詢用於備份/還原過程，必須直接操作資料表結構，table 名稱皆來自 $wpdb 或白名單，不接受使用者輸入。
+            // Runtime schema change is required for restore correctness (cleanup of placeholder tables).
+            // Table identifier cannot be prepared; validated via backup_lite_validate_servmask_table_name()
+            // against a live whitelist sourced from the DB engine. No user input reaches SQL here.
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
             $wpdb->query(
-                $wpdb->prepare( 'DROP TABLE IF EXISTS `%s`', $safe )
+                // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- Identifier cannot be passed as a prepared value; validated via backup_lite_validate_servmask_table_name() (live SERVMASK whitelist).
+                // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Identifier cannot be prepared; validated via backup_lite_validate_servmask_table_name() (live SERVMASK whitelist).
+                "DROP TABLE IF EXISTS `{$safe}`"
             );
-            // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery
-            // phpcs:enable WordPress.DB.DirectDatabaseQuery.NoCaching
-            // phpcs:enable WordPress.DB.DirectDatabaseQuery.SchemaChange
+            // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
             $dropped[] = $safe;
         }
 
@@ -756,35 +785,31 @@ class Backup_Lite_Restore {
                 break;
             }
 
-            // 在備份檔案串流過程中，必須使用底層 fopen/fread/fwrite/fclose 以確保大檔案（>1GB）在各種主機環境下具有最佳效能與穩定性。
-            // WP_Filesystem 在部分共用主機環境中會受到限制，因此此處保留原生檔案操作。
-            // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-            $output = fopen( $target, 'wb' );
+            $output = self::stream_open( $target, 'wb' );
             if ( ! $output ) {
                 backup_lite_log( 'error', 'Unable to write extracted file.', [ 'target' => $target ] );
-                fclose( $input );
+                self::stream_close( $input );
                 $error_code = 'entry_unwritable';
                 break;
             }
 
             while ( ! feof( $input ) ) {
                 // Only reads plugin-generated backup files, path is validated and sanitized.
-                $buffer = fread( $input, 1048576 );
+                $buffer = self::stream_read( $input, 1048576 );
                 if ( false === $buffer ) {
                     backup_lite_log( 'error', 'Error while reading stream during extraction.', [ 'entry' => $entry ] );
                     $error_code = 'stream_read_error';
                     break;
                 }
-                if ( false === fwrite( $output, $buffer ) ) {
+                if ( false === self::stream_write( $output, $buffer ) ) {
                     backup_lite_log( 'error', 'Unable to write buffer during extraction.', [ 'target' => $target ] );
                     $error_code = 'stream_write_error';
                     break;
                 }
             }
 
-            fclose( $input );
-            fclose( $output );
-            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+            self::stream_close( $input );
+            self::stream_close( $output );
 
             if ( null !== $error_code ) {
                 break;
@@ -834,16 +859,12 @@ class Backup_Lite_Restore {
         $destination_escaped = escapeshellarg( $destination );
 
         // Detect file format by reading first few bytes
-        // 在備份檔案串流過程中，必須使用底層 fopen/fread/fclose 以確保大檔案（>1GB）在各種主機環境下具有最佳效能與穩定性。
-        // WP_Filesystem 在部分共用主機環境中會受到限制，因此此處保留原生檔案操作。
-        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-        $file_handle = fopen( $archive, 'rb' );
+        $file_handle = self::stream_open( $archive, 'rb' );
         $file_header = '';
         if ( $file_handle ) {
-            $file_header = fread( $file_handle, 512 ); // Read first 512 bytes
-            fclose( $file_handle );
+            $file_header = self::stream_read( $file_handle, 512 ); // Read first 512 bytes
+            self::stream_close( $file_handle );
         }
-        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
 
         // Try different extraction methods based on file format
         $methods = [];
@@ -1027,13 +1048,9 @@ class Backup_Lite_Restore {
             ];
         }
         
-        // 在備份檔案串流過程中，必須使用底層 fopen/fread/fwrite/fclose 以確保大檔案（>1GB）在各種主機環境下具有最佳效能與穩定性。
-        // WP_Filesystem 在部分共用主機環境中會受到限制，因此此處保留原生檔案操作。
-        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
         // Read file header to determine format
-        $file_handle = fopen( $archive, 'rb' );
+        $file_handle = self::stream_open( $archive, 'rb' );
         if ( ! $file_handle ) {
-            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
             return [
                 'success'    => false,
                 'error'      => __( 'Unable to open WPRESS file for reading.', 'museder-restoreone' ),
@@ -1041,8 +1058,8 @@ class Backup_Lite_Restore {
             ];
         }
         
-        $header = fread( $file_handle, 1024 );
-        fclose( $file_handle );
+        $header = self::stream_read( $file_handle, 1024 );
+        self::stream_close( $file_handle );
         
         // Check for gzip magic bytes (0x1f 0x8b)
         if ( strlen( $header ) >= 2 && ord( $header[0] ) === 0x1f && ord( $header[1] ) === 0x8b ) {
@@ -1052,7 +1069,7 @@ class Backup_Lite_Restore {
                 if ( $gz_handle ) {
                     // Read and write decompressed data
                     $output_file = trailingslashit( $destination ) . 'extracted_content';
-                    $output_handle = fopen( $output_file, 'wb' );
+                    $output_handle = self::stream_open( $output_file, 'wb' );
                     if ( $output_handle ) {
                         $bytes_written = 0;
                         while ( ! gzeof( $gz_handle ) ) {
@@ -1060,12 +1077,11 @@ class Backup_Lite_Restore {
                             if ( false === $chunk ) {
                                 break;
                             }
-                            fwrite( $output_handle, $chunk );
+                            self::stream_write( $output_handle, $chunk );
                             $bytes_written += strlen( $chunk );
                         }
-                        fclose( $output_handle );
+                        self::stream_close( $output_handle );
                         gzclose( $gz_handle );
-            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
                         
                         if ( $bytes_written > 0 ) {
                             backup_lite_log( 'info', 'WPRESS PHP extraction completed (gzip)', [
@@ -1084,7 +1100,6 @@ class Backup_Lite_Restore {
                 }
             }
         }
-        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
         
         // If we get here, PHP native extraction also failed
         backup_lite_log( 'warning', 'WPRESS PHP native extraction failed', [
@@ -1430,88 +1445,33 @@ class Backup_Lite_Restore {
         return true;
     }
 
-    /**
-     * Import database using mysql CLI with optimized parameters.
-     * Uses optimized settings for better performance and compatibility.
-     *
-     * @param string $sql_file Path to SQL file to import.
-     * @return bool
-     */
     private static function import_database_with_cli( $sql_file ) {
-        // Build optimized mysql command
-        // --default-character-set=utf8mb4: Ensure proper character set
-        // --max_allowed_packet=256M: Increase packet size for large queries
-        // --quick: Process rows one at a time, reducing memory usage
-        // Note: --single-transaction is a mysqldump option, not a mysql option
-        $db_host = defined( 'DB_HOST' ) ? DB_HOST : 'localhost';
-        $db_user = escapeshellarg( DB_USER );
-        $db_pass = escapeshellarg( DB_PASSWORD );
-        $db_name = escapeshellarg( DB_NAME );
-        $sql_file_escaped = escapeshellarg( $sql_file );
-
-        // Handle DB_HOST with port or socket
-        $host_parts = explode( ':', $db_host );
-        $host = escapeshellarg( $host_parts[0] );
-        $port = isset( $host_parts[1] ) ? ' -P' . escapeshellarg( $host_parts[1] ) : '';
-
-        // Initialize database connection with proper settings
-        // SET foreign_key_checks=0: Disable foreign key checks for faster import
-        // SET NAMES utf8mb4: Ensure proper character set
-        // SET sql_mode='NO_AUTO_VALUE_ON_ZERO': Match backup export settings
-        $init_command = escapeshellarg( 'SET foreign_key_checks=0; SET NAMES utf8mb4; SET sql_mode=\'NO_AUTO_VALUE_ON_ZERO\';' );
-
         $command = sprintf(
-            'mysql --default-character-set=utf8mb4 --max_allowed_packet=256M --quick --init-command=%s -h%s%s -u%s -p%s %s < %s 2>&1',
-            $init_command,
-            $host,
-            $port,
-            $db_user,
-            $db_pass,
-            $db_name,
-            $sql_file_escaped
+            'mysql --init-command=%s -u%s -p%s %s < %s',
+            escapeshellarg( 'SET foreign_key_checks=0; SET NAMES utf8mb4;' ),
+            escapeshellarg( DB_USER ),
+            escapeshellarg( DB_PASSWORD ),
+            escapeshellarg( DB_NAME ),
+            escapeshellarg( $sql_file )
         );
 
         $output  = '';
         $success = Backup_Lite_Backup::run_shell_command( $command, $output );
 
         if ( ! $success ) {
-            backup_lite_log( 'error', 'mysql command failed.', [
-                'output' => $output,
-                'command' => str_replace( $db_pass, '***', $command ), // Hide password in logs
-            ] );
-        } else {
-            backup_lite_log( 'info', 'Database imported with optimized mysql parameters.', [
-                'file' => basename( $sql_file ),
-            ] );
+            backup_lite_log( 'error', 'mysql command failed.', [ 'output' => $output ] );
         }
 
         return $success;
     }
 
-    /**
-     * Import database using PHP with optimized batch processing.
-     * 
-     * Performance optimizations:
-     * - Uses transactions with commits every 1000 queries to reduce I/O
-     * - Processes queries in chunks to manage memory efficiently
-     * - Uses buffered file reading for large SQL files
-     * 
-     * Note: Restore process is synchronous (unlike backup's async batch processing),
-     * so optimizations focus on efficient chunking and transaction management.
-     * 
-     * Batch optimization status: Already optimized with transaction batching.
-     * Unlike backup which processes files in async batches, restore processes
-     * database and files synchronously in a single request. The transaction
-     * commit strategy (every 1000 queries) provides similar I/O reduction
-     * benefits as backup's batch processing.
-     */
     private static function import_database_with_php( $sql_file, $progress_cb = null ) {
         global $wpdb;
 
-        // 在備份檔案串流過程中，必須使用底層 fopen/fread/fclose 以確保大檔案（>1GB）在各種主機環境下具有最佳效能與穩定性。
-        // WP_Filesystem 在部分共用主機環境中會受到限制，因此此處保留原生檔案操作。
-        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen
-        $handle = fopen( $sql_file, 'r' );
+        // High-performance streaming of large backup/restore archive files.
+        // - Only runs for admins (manage_options) or via authenticated restore jobs.
+        // - WP_Filesystem is not suitable for this hot path.
+        $handle = self::stream_open( $sql_file, 'r' );
         if ( ! $handle ) {
             backup_lite_log( 'error', 'Unable to open SQL file for reading.', [ 'path' => $sql_file ] );
             return false;
@@ -1541,16 +1501,9 @@ class Backup_Lite_Restore {
         $line_num = 0;
         $file_size = filesize( $sql_file );
         $last_progress_report = 0;
-        $executed_queries = 0;
         $progress_report_interval = max( 1, floor( $file_size / 20 ) ); // Report progress ~20 times
 
         self::run_database_primers();
-
-        // Disable autocommit and start transaction for better performance
-        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-        $wpdb->query( 'SET autocommit = 0' );
-        $wpdb->query( 'START TRANSACTION' );
-        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 
         while ( false !== ( $line = fgets( $handle ) ) ) {
             $line_num++;
@@ -1562,12 +1515,11 @@ class Backup_Lite_Restore {
 
             $query .= $line;
 
-            // Report progress periodically during import (reduced frequency)
+            // Report progress periodically during import
             if ( is_callable( $progress_cb ) && $file_size > 0 ) {
                 $current_pos = ftell( $handle );
                 $progress_percent = min( 100, floor( ( $current_pos / $file_size ) * 100 ) );
-                // Only report every 10% change or every 2 seconds (reduced frequency)
-                if ( $progress_percent >= $last_progress_report + 10 ) {
+                if ( $progress_percent >= $last_progress_report + 5 ) { // Report every 5%
                     $mapped_percent = 50 + ( $progress_percent * 0.15 ); // Map to 50-65% range
                     call_user_func( $progress_cb, $mapped_percent, __( 'Importing database…', 'museder-restoreone' ) );
                     $last_progress_report = $progress_percent;
@@ -1581,26 +1533,19 @@ class Backup_Lite_Restore {
                     // The .sql file path is resolved and validated by backup_lite_get_backup_path(),
                     // and cannot be controlled by unprivileged users.
                     // Cannot use prepare() because this is a complete SQL script with multiple statements.
+                    // Restore is admin-initiated; schema/data changes are expected and required for correctness.
                     // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange, PluginCheck.Security.DirectDB.UnescapedDBParameter
-                    // 說明：以下查詢用於備份/還原流程，必須直接操作資料表結構，無法使用高階 API 或快取。
-                    // 所有 table 名稱皆由 $wpdb 提供或白名單，不接受使用者輸入。
                     $wpdb->flush();
                     $result = $wpdb->query( $prepared ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- $prepared is a complete SQL script from backup file, cannot use prepare() for multi-statement scripts
                     // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange, PluginCheck.Security.DirectDB.UnescapedDBParameter
 
                     if ( false === $result ) {
-                        // Rollback on error
-                        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-                        $wpdb->query( 'ROLLBACK' );
-                        $wpdb->query( 'SET autocommit = 1' );
-                        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
                         $error = $wpdb->last_error ?: 'unknown error';
                         backup_lite_log( 'error', 'SQL execution failed.', [
                             'line'  => $line_num,
                             'error' => $error,
                         ] );
-                        fclose( $handle );
-                        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_read_fgets, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+                        self::stream_close( $handle );
                         return [
                             'success' => false,
                             'message' => __( 'Database restore encountered an error. Check logs.', 'museder-restoreone' ),
@@ -1609,29 +1554,12 @@ class Backup_Lite_Restore {
                             'error'   => $error,
                         ];
                     }
-
-                    $executed_queries++;
-
-                    // Commit transaction every 1000 queries to avoid large transactions
-                    if ( $executed_queries % 1000 === 0 ) {
-                        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-                        $wpdb->query( 'COMMIT' );
-                        $wpdb->query( 'START TRANSACTION' );
-                        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-                    }
                 }
                 $query = '';
             }
         }
 
-        // Commit final transaction
-        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-        $wpdb->query( 'COMMIT' );
-        $wpdb->query( 'SET autocommit = 1' );
-        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-
-        fclose( $handle );
-        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_read_fgets, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+        self::stream_close( $handle );
 
         self::restore_database_constraints();
 
@@ -1644,8 +1572,8 @@ class Backup_Lite_Restore {
     private static function run_database_primers() {
         global $wpdb;
         // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
-        // 說明：以下查詢用於備份/還原流程，必須直接操作資料表結構，無法使用高階 API 或快取。
-        // 所有 table 名稱皆由 $wpdb 提供或白名單，不接受使用者輸入。
+        // Restore path: required MySQL session settings (hardcoded strings), not user input.
+        // Caching/higher-level APIs are not applicable here.
         // These are MySQL session settings (hardcoded strings), not user input.
         $wpdb->query( 'SET foreign_key_checks = 0' );
         $wpdb->query( "SET NAMES 'utf8mb4'" );
@@ -1656,8 +1584,8 @@ class Backup_Lite_Restore {
     private static function restore_database_constraints() {
         global $wpdb;
         // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
-        // 說明：以下查詢用於備份/還原流程，必須直接操作資料表結構，無法使用高階 API 或快取。
-        // 所有 table 名稱皆由 $wpdb 提供或白名單，不接受使用者輸入。
+        // Restore path: required MySQL session setting (hardcoded string), not user input.
+        // Caching/higher-level APIs are not applicable here.
         // This is a MySQL session setting (hardcoded string), not user input.
         $wpdb->query( 'SET foreign_key_checks = 1' );
         // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
@@ -1676,10 +1604,7 @@ class Backup_Lite_Restore {
         }
 
         $active_plugins = [];
-        // 在備份檔案串流過程中，必須使用底層 fopen/fread/fclose 以確保大檔案（>1GB）在各種主機環境下具有最佳效能與穩定性。
-        // WP_Filesystem 在部分共用主機環境中會受到限制，因此此處保留原生檔案操作。
-        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-        $handle = fopen( $sql_file, 'rb' );
+        $handle = self::stream_open( $sql_file, 'rb' );
         if ( ! $handle ) {
             return [];
         }
@@ -1693,7 +1618,7 @@ class Backup_Lite_Restore {
 
         while ( ! feof( $handle ) && ! $found ) {
             // Only reads plugin-generated backup files, path is validated and sanitized.
-            $chunk = fread( $handle, $chunk_size );
+            $chunk = self::stream_read( $handle, $chunk_size );
             if ( false === $chunk ) {
                 break;
             }
@@ -1722,8 +1647,7 @@ class Backup_Lite_Restore {
             }
         }
 
-        fclose( $handle );
-        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+        self::stream_close( $handle );
 
         return $active_plugins;
     }
@@ -1731,12 +1655,9 @@ class Backup_Lite_Restore {
     private static function run_search_replace( $pairs ) {
         global $wpdb;
 
-        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery
-        // phpcs:disable WordPress.DB.DirectDatabaseQuery.NoCaching
-        // 說明：以下查詢用於備份/還原過程，必須直接操作資料表結構，table 名稱皆來自 $wpdb 或白名單，不接受使用者輸入。
-        $tables = $wpdb->get_col( 'SHOW TABLES' );
-        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery
-        // phpcs:enable WordPress.DB.DirectDatabaseQuery.NoCaching
+        // Restore search/replace is intentionally limited to this site's $wpdb->prefix tables.
+        // Table identifiers cannot be prepared; we validate identifiers via live whitelist.
+        $tables = backup_lite_get_wp_table_whitelist();
         if ( empty( $tables ) ) {
             return;
         }
@@ -1744,15 +1665,32 @@ class Backup_Lite_Restore {
         $text_types = [ 'tinytext', 'text', 'mediumtext', 'longtext', 'varchar', 'char' ];
 
         foreach ( $tables as $table ) {
-            // @plugin-check: backup-restore
-            // $table comes from SHOW TABLES result, sanitized with preg_replace before use in query
-            $safe_table = preg_replace( '/[^A-Za-z0-9_]/', '', $table );
-            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery
-            // phpcs:disable WordPress.DB.DirectDatabaseQuery.NoCaching
-            // 說明：以下查詢用於備份/還原過程，必須直接操作資料表結構，table 名稱皆來自 $wpdb 或白名單，不接受使用者輸入。
-            $columns = $wpdb->get_results( $wpdb->prepare( "SHOW COLUMNS FROM `%s`", $safe_table ), ARRAY_A );
-            // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery
-            // phpcs:enable WordPress.DB.DirectDatabaseQuery.NoCaching
+            $safe_table = backup_lite_validate_wp_table_name( $table );
+            if ( ! $safe_table ) {
+                continue;
+            }
+            // Introspection required to find text-like columns.
+            // Table identifier cannot be prepared; validated via backup_lite_validate_wp_table_name().
+            $cache_key = 'backup_lite_sr_columns_' . md5( $safe_table );
+            $columns   = wp_cache_get( $cache_key, 'backup_lite' );
+
+            if ( false === $columns ) {
+                // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery
+                $columns = $wpdb->get_results(
+                    // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- Identifier cannot be passed as a prepared value; validated via backup_lite_validate_wp_table_name() (live prefix whitelist).
+                    // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Identifier cannot be prepared; validated via backup_lite_validate_wp_table_name() (live prefix whitelist).
+                    "SHOW COLUMNS FROM `{$safe_table}`",
+                    ARRAY_A
+                );
+                // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery
+
+                // Cache schema introspection; safe to reuse across requests.
+                wp_cache_set( $cache_key, $columns, 'backup_lite', HOUR_IN_SECONDS );
+            }
+
+            if ( empty( $columns ) || ! is_array( $columns ) ) {
+                continue;
+            }
             if ( empty( $columns ) ) {
                 continue;
             }
@@ -1768,14 +1706,17 @@ class Backup_Lite_Restore {
                 continue;
             }
 
-            // @plugin-check: backup-restore
-            // $safe_table has been whitelist-filtered (alphanumeric + underscore only), safe for SELECT
-            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery
-            // phpcs:disable WordPress.DB.DirectDatabaseQuery.NoCaching
-            // 說明：以下查詢用於備份/還原過程，必須直接操作資料表結構，table 名稱皆來自 $wpdb 或白名單，不接受使用者輸入。
-            $rows = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM `%s`", $safe_table ), ARRAY_A );
-            // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery
-            // phpcs:enable WordPress.DB.DirectDatabaseQuery.NoCaching
+            // Full table scan is required to update serialized/text fields reliably.
+            // Table identifier cannot be prepared; validated via backup_lite_validate_wp_table_name().
+            // No object caching: restore/migration data must reflect current DB state and may be large.
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+            $rows = $wpdb->get_results(
+                // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- Identifier cannot be passed as a prepared value; validated via backup_lite_validate_wp_table_name() (live prefix whitelist).
+                // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Identifier cannot be prepared; validated via backup_lite_validate_wp_table_name() (live prefix whitelist).
+                "SELECT * FROM `{$safe_table}`",
+                ARRAY_A
+            );
+            // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
             if ( empty( $rows ) ) {
                 continue;
             }
@@ -1792,9 +1733,8 @@ class Backup_Lite_Restore {
                 }
 
                 if ( ! empty( $update ) ) {
-                    // 這段查詢用於備份／還原流程中的資料庫狀態檢查或結構調整，
-                    // 輸入值來自系統內部狀態，不包含直接的使用者輸入。
-                    // 為了確保相容性與效能，此處使用直接查詢而非 WP_Query。
+                    // $safe_table is validated via backup_lite_validate_wp_table_name().
+                    // This is a required restore/migration write; caching does not apply to writes.
                     // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
                     $wpdb->update( $safe_table, $update, [ 'id' => isset( $row['id'] ) ? $row['id'] : $row[ array_key_first( $row ) ] ] );
                     // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching

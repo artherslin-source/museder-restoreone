@@ -44,8 +44,6 @@ class Backup_Lite_Chunk_Handler {
             // @plugin-check: escaped
             wp_send_json_error( [ 'code' => 'unauthorized', 'message' => esc_html__( 'Unauthorized.', 'museder-restoreone' ) ], 403 );
         }
-
-        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
     }
 
     protected static function respond_with_exception( Backup_Lite_Chunk_Exception $exception ) {
@@ -60,6 +58,8 @@ class Backup_Lite_Chunk_Handler {
 
     public static function handle_prepare_upload() {
         self::verify_permissions();
+        // Nonce verification must be visible within the AJAX callback for PHPCS/Plugin Check.
+        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
         // Allow longer execution time for large backup/restore jobs when possible.
         // phpcs:ignore WordPress.PHP.NoSetTimeLimit
         if ( function_exists( 'set_time_limit' ) ) {
@@ -100,6 +100,8 @@ class Backup_Lite_Chunk_Handler {
 
     public static function handle_chunk_upload() {
         self::verify_permissions();
+        // Nonce verification must be visible within the AJAX callback for PHPCS/Plugin Check.
+        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
         // Allow longer execution time for large backup/restore jobs when possible.
         // phpcs:ignore WordPress.PHP.NoSetTimeLimit
         if ( function_exists( 'set_time_limit' ) ) {
@@ -111,8 +113,6 @@ class Backup_Lite_Chunk_Handler {
         // @phpcs:enable Squiz.PHP.DiscouragedFunctions.Discouraged
         }
 
-        // Nonce verified in verify_permissions() above
-        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_permissions() above
         $upload_id = '';
         if ( isset( $_POST['upload_id'] ) ) {
             $upload_id = sanitize_key( wp_unslash( $_POST['upload_id'] ) );
@@ -148,7 +148,6 @@ class Backup_Lite_Chunk_Handler {
             $chunk_sha1 = sanitize_text_field( wp_unslash( $_POST['chunk_sha1'] ) );
         }
         // @plugin-check: sanitized
-        // phpcs:enable WordPress.Security.NonceVerification.Missing
 
         try {
             $meta = self::ensure_session_token( $upload_id, $token );
@@ -165,19 +164,29 @@ class Backup_Lite_Chunk_Handler {
                 throw new Backup_Lite_Chunk_Exception( 'invalid_path', esc_html__( 'Chunk path rejected.', 'museder-restoreone' ), [], 400 );
             }
 
+            // Validate uploaded chunk file.
+            // Note: $_FILES[*]['tmp_name'] is a server-side temp path managed by PHP. We do NOT sanitize it;
+            // instead we validate it strictly (UPLOAD_ERR_OK + size + is_uploaded_file + file_exists) before using it.
             // @plugin-check: sanitized + nonce - verified via verify_permissions() above
             $uploaded_file = null;
-            if ( isset( $_FILES['file']['tmp_name'] ) && is_uploaded_file( $_FILES['file']['tmp_name'] ) ) {
-                // 已用 isset() + is_uploaded_file() 驗證。這裡只會把 tmp_name 當作伺服器端暫存檔路徑使用，不會輸出到前端。
-                // phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
-                $uploaded_file = $_FILES['file']['tmp_name'];
-                // phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
-            } elseif ( isset( $_FILES['chunk']['tmp_name'] ) && is_uploaded_file( $_FILES['chunk']['tmp_name'] ) ) {
-                // 已用 isset() + is_uploaded_file() 驗證。這裡只會把 tmp_name 當作伺服器端暫存檔路徑使用，不會輸出到前端。
-                // phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
-                $uploaded_file = $_FILES['chunk']['tmp_name'];
-                // phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+            // phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotValidated, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+            $candidates = [];
+            if ( isset( $_FILES['file'] ) && is_array( $_FILES['file'] ) ) {
+                $candidates[] = $_FILES['file'];
             }
+            if ( isset( $_FILES['chunk'] ) && is_array( $_FILES['chunk'] ) ) {
+                $candidates[] = $_FILES['chunk'];
+            }
+            foreach ( $candidates as $candidate ) {
+                $tmp  = isset( $candidate['tmp_name'] ) ? $candidate['tmp_name'] : '';
+                $err  = isset( $candidate['error'] ) ? (int) $candidate['error'] : UPLOAD_ERR_NO_FILE;
+                $size = isset( $candidate['size'] ) ? (int) $candidate['size'] : 0;
+                if ( UPLOAD_ERR_OK === $err && $size > 0 && ! empty( $tmp ) && is_uploaded_file( $tmp ) && file_exists( $tmp ) ) {
+                    $uploaded_file = $tmp;
+                    break;
+                }
+            }
+            // phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotValidated, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
 
             if ( ! $uploaded_file ) {
                 throw new Backup_Lite_Chunk_Exception( 'no_upload', esc_html__( 'No chunk file uploaded.', 'museder-restoreone' ), [], 400 );
@@ -307,6 +316,8 @@ class Backup_Lite_Chunk_Handler {
 
     public static function handle_finalize_upload() {
         self::verify_permissions();
+        // Nonce verification must be visible within the AJAX callback for PHPCS/Plugin Check.
+        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
         // Allow longer execution time for large backup/restore jobs when possible.
         // phpcs:ignore WordPress.PHP.NoSetTimeLimit
         if ( function_exists( 'set_time_limit' ) ) {
@@ -342,13 +353,10 @@ class Backup_Lite_Chunk_Handler {
         }
         // @plugin-check: sanitized
 
-        // Nonce verified in verify_permissions() above
-        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_permissions() above
         $replace_json = '';
         if ( isset( $_POST['search_replace'] ) ) {
             $replace_json = sanitize_text_field( wp_unslash( $_POST['search_replace'] ) );
         }
-        // phpcs:enable WordPress.Security.NonceVerification.Missing
         // JSON will be decoded and sanitized
 
         $search_replace = [];
@@ -376,6 +384,8 @@ class Backup_Lite_Chunk_Handler {
 
     public static function handle_abort_upload() {
         self::verify_permissions();
+        // Nonce verification must be visible within the AJAX callback for PHPCS/Plugin Check.
+        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
         // Allow longer execution time for large backup/restore jobs when possible.
         // phpcs:ignore WordPress.PHP.NoSetTimeLimit
         if ( function_exists( 'set_time_limit' ) ) {
@@ -387,8 +397,6 @@ class Backup_Lite_Chunk_Handler {
         // @phpcs:enable Squiz.PHP.DiscouragedFunctions.Discouraged
         }
 
-        // Nonce verified in verify_permissions() above
-        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_permissions() above
         $upload_id = '';
         if ( isset( $_POST['upload_id'] ) ) {
             $upload_id = sanitize_key( wp_unslash( $_POST['upload_id'] ) );
@@ -400,7 +408,6 @@ class Backup_Lite_Chunk_Handler {
             $token = sanitize_text_field( wp_unslash( $_POST['upload_token'] ) );
         }
         // @plugin-check: sanitized
-        // phpcs:enable WordPress.Security.NonceVerification.Missing
 
         try {
             self::ensure_session_token( $upload_id, $token );

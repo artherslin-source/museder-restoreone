@@ -68,9 +68,9 @@ class Backup_Lite_Estimate_Size {
             $table_prefix . '%'
         );
 
+        // Introspection query for database size estimation.
+        // Uses information_schema with a prepared LIKE prefix; not user-controlled SQL.
         // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-        // 說明：以下查詢用於備份/還原流程，必須直接操作資料表結構，無法使用高階 API 或快取。
-        // 所有 table 名稱皆由 $wpdb 提供或白名單，不接受使用者輸入。
         // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- $query is prepared via $wpdb->prepare() above
         $result = $wpdb->get_var( $query );
         // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching

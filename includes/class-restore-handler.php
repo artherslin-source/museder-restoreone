@@ -27,33 +27,38 @@ class Backup_Lite_Restore_Handler {
 
     public static function upload() {
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
-        // Additional nonce verification for plugin-check
-        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
+        // Capability verified above. Verify nonce next (before reading any other request input).
+        if ( false === check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce', false ) ) {
+            wp_send_json_error(
+                [
+                    'code'    => 'invalid_nonce',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Your session has expired. Please reload the page.', 'museder-restoreone' ),
+                ],
+                403
+            );
+        }
 
         // Optimize runtime environment for large file processing
         self::optimize_runtime_environment();
 
-        // Nonce verified above
-        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
         $file = null;
+        // $_FILES[*]['tmp_name'] is a server-side path managed by PHP upload handling and does not need sanitization.
+        // phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotValidated, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
         if ( isset( $_FILES['file'], $_FILES['file']['tmp_name'] ) && is_uploaded_file( $_FILES['file']['tmp_name'] ) ) {
-            // 已用 isset() + is_uploaded_file() 驗證。這裡只會把 tmp_name 當作伺服器端暫存檔路徑使用，不會輸出到前端。
-            // phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+            // $_FILES['file']['tmp_name'] is a server-side path managed by PHP upload handling and does not need sanitization.
+            // tmp_name 無法再進一步 sanitize，只用於 is_uploaded_file 和 move_uploaded_file。
             $file = $_FILES['file'];
-            // phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
         } elseif ( isset( $_FILES['restoreFile'], $_FILES['restoreFile']['tmp_name'] ) && is_uploaded_file( $_FILES['restoreFile']['tmp_name'] ) ) {
-            // 已用 isset() + is_uploaded_file() 驗證。這裡只會把 tmp_name 當作伺服器端暫存檔路徑使用，不會輸出到前端。
-            // phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+            // $_FILES['restoreFile']['tmp_name'] is a server-side path managed by PHP upload handling and does not need sanitization.
+            // tmp_name 無法再進一步 sanitize，只用於 is_uploaded_file 和 move_uploaded_file。
             $file = $_FILES['restoreFile'];
-            // phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
         } elseif ( isset( $_FILES['restore_file'], $_FILES['restore_file']['tmp_name'] ) && is_uploaded_file( $_FILES['restore_file']['tmp_name'] ) ) {
-            // 已用 isset() + is_uploaded_file() 驗證。這裡只會把 tmp_name 當作伺服器端暫存檔路徑使用，不會輸出到前端。
-            // phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+            // $_FILES['restore_file']['tmp_name'] is a server-side path managed by PHP upload handling and does not need sanitization.
+            // tmp_name 無法再進一步 sanitize，只用於 is_uploaded_file 和 move_uploaded_file。
             $file = $_FILES['restore_file'];
-            // phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
         }
-        // phpcs:enable WordPress.Security.NonceVerification.Missing
+        // phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotValidated, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
         if ( empty( $file ) ) {
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'No restore file uploaded.', 'museder-restoreone' ) ], 400 );
@@ -76,14 +81,7 @@ class Backup_Lite_Restore_Handler {
         if ( ! in_array( $ext, [ 'zip', 'wpress' ], true ) ) {
             // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
             // $file_path is from wp_handle_upload() result, validated and sanitized
-            if ( function_exists( 'wp_delete_file' ) ) {
-                wp_delete_file( $file_path );
-            } else {
-                // phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
-                // Unlinking temporary backup/restore artifact. WP_Filesystem is not practical here.
-                @unlink( $file_path );
-                // phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
-            }
+            wp_delete_file( $file_path );
             wp_send_json_error( [ 'message' => esc_html__( 'Unsupported file type. Allowed: zip, wpress.', 'museder-restoreone' ) ], 415 );
         }
 
@@ -144,14 +142,7 @@ class Backup_Lite_Restore_Handler {
                     
                     if ( ! empty( $convert_result['success'] ) && ! empty( $convert_result['file'] ) && file_exists( $convert_result['file'] ) ) {
                         // Delete original file and use converted file
-                        if ( function_exists( 'wp_delete_file' ) ) {
-                            wp_delete_file( $destination );
-                        } else {
-                            // phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
-                            // Unlinking temporary backup/restore artifact. WP_Filesystem is not practical here.
-                            @unlink( $destination );
-                            // phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
-                        }
+                        wp_delete_file( $destination );
                         
                         $destination = $convert_result['file'];
                         backup_lite_log( 'info', 'Successfully converted All-in-One backup.', [
@@ -209,14 +200,19 @@ class Backup_Lite_Restore_Handler {
 
     public static function restore_from_backup() {
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
-        // Additional nonce verification for plugin-check
-        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
+        // Capability verified above. Verify nonce next (before reading any other request input).
+        if ( false === check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce', false ) ) {
+            wp_send_json_error(
+                [
+                    'code'    => 'invalid_nonce',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Your session has expired. Please reload the page.', 'museder-restoreone' ),
+                ],
+                403
+            );
+        }
 
-        // Nonce verified above
-        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
         $filename = isset( $_POST['filename'] ) ? sanitize_text_field( wp_unslash( $_POST['filename'] ) ) : '';
-        // phpcs:enable WordPress.Security.NonceVerification.Missing
         if ( empty( $filename ) ) {
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'Backup filename not provided.', 'museder-restoreone' ) ], 400 );
@@ -226,31 +222,9 @@ class Backup_Lite_Restore_Handler {
         $path = backup_lite_get_backup_path( $filename );
 
         if ( ! $path ) {
-            // Enhanced error logging with more context
-            $backups_dir = backup_lite_get_backup_dir();
-            $backup_files = [];
-            
-            // Try to list available backup files for debugging
-            if ( is_dir( $backups_dir ) && is_readable( $backups_dir ) ) {
-                $files = @glob( trailingslashit( $backups_dir ) . '*.zip' );
-                if ( ! empty( $files ) ) {
-                    $backup_files = array_map( 'basename', array_slice( $files, 0, 10 ) ); // Limit to first 10 for logging
-                }
-            }
-            
-            backup_lite_log( 'error', 'Restore archive not readable.', [
-                'filename' => $filename,
-                'backups_dir' => $backups_dir,
-                'backups_dir_exists' => is_dir( $backups_dir ),
-                'backups_dir_readable' => is_dir( $backups_dir ) ? is_readable( $backups_dir ) : false,
-                'available_files_sample' => $backup_files,
-            ] );
-            
+            backup_lite_log( 'error', 'Restore archive not readable.', [ 'filename' => $filename ] );
             // @plugin-check: escaped
-            wp_send_json_error( [
-                'message' => esc_html__( 'Backup file not found or unreadable.', 'museder-restoreone' ),
-                'filename' => esc_html( $filename ),
-            ], 404 );
+            wp_send_json_error( [ 'message' => esc_html__( 'Backup file not found or unreadable.', 'museder-restoreone' ) ], 404 );
         }
 
         // Check if this is an All-in-One WP Migration backup and convert it
@@ -325,14 +299,19 @@ class Backup_Lite_Restore_Handler {
 
     public static function restore_remote() {
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
-        // Additional nonce verification for plugin-check
-        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
+        // Capability verified above. Verify nonce next (before reading any other request input).
+        if ( false === check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce', false ) ) {
+            wp_send_json_error(
+                [
+                    'code'    => 'invalid_nonce',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Your session has expired. Please reload the page.', 'museder-restoreone' ),
+                ],
+                403
+            );
+        }
 
-        // Nonce verified above
-        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
         $url = isset( $_POST['url'] ) ? esc_url_raw( wp_unslash( $_POST['url'] ) ) : '';
-        // phpcs:enable WordPress.Security.NonceVerification.Missing
         if ( empty( $url ) || ! wp_http_validate_url( $url ) ) {
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'Please enter a valid URL.', 'museder-restoreone' ) ], 400 );
@@ -352,14 +331,7 @@ class Backup_Lite_Restore_Handler {
         if ( ! in_array( $ext, [ 'zip', 'wpress' ], true ) ) {
             // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
             // $temp is from wp_handle_upload() result, validated and sanitized
-            if ( function_exists( 'wp_delete_file' ) ) {
-                wp_delete_file( $temp );
-            } else {
-                // phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
-                // Unlinking temporary backup/restore artifact. WP_Filesystem is not practical here.
-                @unlink( $temp );
-                // phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
-            }
+            wp_delete_file( $temp );
             wp_send_json_error( [ 'message' => esc_html__( 'Downloaded file is not a supported backup format.', 'museder-restoreone' ) ], 415 );
         }
 
@@ -390,14 +362,7 @@ class Backup_Lite_Restore_Handler {
                     
                     if ( $converted_file ) {
                         // Delete original file and use converted file
-                        if ( function_exists( 'wp_delete_file' ) ) {
-                            wp_delete_file( $destination );
-                        } else {
-                            // phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
-                            // Unlinking temporary backup/restore artifact. WP_Filesystem is not practical here.
-                            @unlink( $destination );
-                            // phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
-                        }
+                        wp_delete_file( $destination );
 
                         $destination = $converted_file;
                         backup_lite_log( 'info', 'Successfully converted All-in-One backup.', [
@@ -456,6 +421,17 @@ class Backup_Lite_Restore_Handler {
 
     public static function progress() {
         self::ensure_permission();
+        // Capability verified above. Verify nonce next (even though this handler reads no other inputs).
+        if ( false === check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce', false ) ) {
+            wp_send_json_error(
+                [
+                    'code'    => 'invalid_nonce',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Your session has expired. Please reload the page.', 'museder-restoreone' ),
+                ],
+                403
+            );
+        }
 
         $state = self::get_state();
 
@@ -470,7 +446,17 @@ class Backup_Lite_Restore_Handler {
 
     public static function enqueue_restore_job() {
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
+        // Capability verified above. Verify nonce next (before reading any other request input).
+        if ( false === check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce', false ) ) {
+            wp_send_json_error(
+                [
+                    'code'    => 'invalid_nonce',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Your session has expired. Please reload the page.', 'museder-restoreone' ),
+                ],
+                403
+            );
+        }
 
         // Check for active jobs, but also clean up any stale jobs that should be considered finished
         $active_job = Backup_Lite_Restore_Jobs::has_active_job();
@@ -558,32 +544,20 @@ class Backup_Lite_Restore_Handler {
         }
         
         self::ensure_permission();
-        
-        // Try to verify AJAX request, but don't fail completely if nonce is invalid
-        // This allows status checks to continue even if nonce expires during long restore
-        $nonce_valid = false;
-        $nonce = isset( $_REQUEST['nonce'] ) ? sanitize_text_field( wp_unslash( $_REQUEST['nonce'] ) ) : '';
-        if ( ! empty( $nonce ) && wp_verify_nonce( $nonce, Backup_Lite_UI::NONCE ) ) {
-            $nonce_valid = true;
-        } else {
-            // Nonce validation failed, but we'll still try to return job status
-            // This is important for long-running restores where nonce may expire
-            backup_lite_log( 'warning', 'job_status_nonce_failed', [
-                'nonce_provided' => ! empty( $nonce ),
-                'nonce_length' => strlen( $nonce ),
-            ] );
+        // Capability verified above. Verify nonce next (before reading any other request input).
+        if ( false === check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce', false ) ) {
+            wp_send_json_error(
+                [
+                    'code'    => 'invalid_nonce',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Your session has expired. Please reload the page.', 'museder-restoreone' ),
+                ],
+                403
+            );
         }
 
         $job_id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
         if ( empty( $job_id ) ) {
-            // If nonce is invalid, return 403 instead of 400 to trigger nonce refresh
-            if ( ! $nonce_valid ) {
-                wp_send_json_error( [
-                    'code'    => 'invalid_nonce',
-                    // @plugin-check: escaped
-                    'message' => esc_html__( 'Your session has expired. Refreshing security token…', 'museder-restoreone' ),
-                ], 403 );
-            }
             // If job_id is empty, try to get the latest active job or return history only
             // This helps when frontend loses track of job_id but restore might have completed
             $active_job = Backup_Lite_Restore_Jobs::has_active_job();
@@ -604,14 +578,6 @@ class Backup_Lite_Restore_Handler {
 
         $job = Backup_Lite_Restore_Jobs::get_job( $job_id );
         if ( ! $job ) {
-            // If job not found but nonce is invalid, return nonce error first
-            if ( ! $nonce_valid ) {
-                wp_send_json_error( [
-                    'code'    => 'invalid_nonce',
-                    // @plugin-check: escaped
-                    'message' => esc_html__( 'Your session has expired. Refreshing security token…', 'museder-restoreone' ),
-                ], 403 );
-            }
             // Job not found - return HTTP 200 with history so frontend can check completion status
             // This prevents 404 errors that break frontend polling logic
             wp_send_json_success( [
@@ -620,20 +586,6 @@ class Backup_Lite_Restore_Handler {
                 // @plugin-check: escaped
                 'message' => esc_html__( 'Restore job not found. Check history for recent restores.', 'museder-restoreone' ),
             ] );
-            return;
-        }
-
-        // If nonce is invalid but we have a valid job, still return the job status
-        // This allows the frontend to continue monitoring even if nonce expires
-        if ( ! $nonce_valid ) {
-            // Return success but include a flag to indicate nonce should be refreshed
-            wp_send_json_success(
-                [
-                    'job'     => Backup_Lite_Restore_Jobs::prepare_job_response( $job ),
-                    'history' => self::history_for_js( 10 ),
-                    'nonce_expired' => true, // Flag to trigger nonce refresh on frontend
-                ]
-            );
             return;
         }
 
@@ -647,14 +599,19 @@ class Backup_Lite_Restore_Handler {
 
     public static function trigger_restore_job() {
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
-        // Additional nonce verification for plugin-check
-        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
+        // Capability verified above. Verify nonce next (before reading any other request input).
+        if ( false === check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce', false ) ) {
+            wp_send_json_error(
+                [
+                    'code'    => 'invalid_nonce',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Your session has expired. Please reload the page.', 'museder-restoreone' ),
+                ],
+                403
+            );
+        }
 
-        // Nonce verified above
-        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
         $job_id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
-        // phpcs:enable WordPress.Security.NonceVerification.Missing
         if ( empty( $job_id ) ) {
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'Job identifier is required.', 'museder-restoreone' ) ], 400 );
@@ -709,14 +666,19 @@ class Backup_Lite_Restore_Handler {
         }
         
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
-        // Additional nonce verification for plugin-check
-        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
+        // Capability verified above. Verify nonce next (before reading any other request input).
+        if ( false === check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce', false ) ) {
+            wp_send_json_error(
+                [
+                    'code'    => 'invalid_nonce',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Your session has expired. Please reload the page.', 'museder-restoreone' ),
+                ],
+                403
+            );
+        }
 
-        // Nonce verified above
-        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
         $job_id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
-        // phpcs:enable WordPress.Security.NonceVerification.Missing
         if ( empty( $job_id ) ) {
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'Job identifier is required.', 'museder-restoreone' ) ], 400 );
@@ -765,15 +727,20 @@ class Backup_Lite_Restore_Handler {
         }
         
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
-        // Additional nonce verification for plugin-check
-        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
+        // Capability verified above. Verify nonce next (before reading any other request input).
+        if ( false === check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce', false ) ) {
+            wp_send_json_error(
+                [
+                    'code'    => 'invalid_nonce',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Your session has expired. Please reload the page.', 'museder-restoreone' ),
+                ],
+                403
+            );
+        }
 
-        // Nonce verified above
-        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
         try {
             $job_id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
-        // phpcs:enable WordPress.Security.NonceVerification.Missing
             if ( $job_id ) {
                 Backup_Lite_Restore_Jobs::request_cancel( $job_id );
             } else {
@@ -818,34 +785,15 @@ class Backup_Lite_Restore_Handler {
 
         // Initialize history entry with UTC timestamp
         $timestamp_utc = time(); // Always use UTC timestamp (time() returns UTC Unix timestamp)
-        $restore_started_at = $timestamp_utc; // Record restore start time (UTC timestamp)
         
-        $history_entry = isset( $job['history'] ) && is_array( $job['history'] ) ? $job['history'] : [];
-
-        // Ensure required fields exist (job enqueue may have created 'history' without timing fields).
-        if ( empty( $history_entry['file'] ) ) {
-            $history_entry['file'] = isset( $state['filename'] ) ? $state['filename'] : basename( $state['file'] );
-        }
-        if ( empty( $history_entry['result'] ) ) {
-            $history_entry['result'] = 'pending';
-        }
-        if ( ! isset( $history_entry['log'] ) ) {
-            $history_entry['log'] = '';
-        }
-
-        // Start timestamp for duration calculation (UTC).
-        if ( ! isset( $history_entry['restore_started_at'] ) || ! is_numeric( $history_entry['restore_started_at'] ) || (int) $history_entry['restore_started_at'] <= 0 ) {
-            $history_entry['restore_started_at'] = $restore_started_at;
-        }
-
-        // Also store a canonical UTC timestamp for this restore entry (used for date display).
-        if ( ! isset( $history_entry['timestamp_utc'] ) || ! is_numeric( $history_entry['timestamp_utc'] ) || (int) $history_entry['timestamp_utc'] <= 0 ) {
-            $history_entry['timestamp_utc'] = $timestamp_utc;
-        }
-        if ( empty( $history_entry['date'] ) ) {
+        $history_entry = isset( $job['history'] ) && is_array( $job['history'] ) ? $job['history'] : [
+            'timestamp_utc' => $timestamp_utc, // Store UTC Unix timestamp (primary field)
+            'file'          => isset( $state['filename'] ) ? $state['filename'] : basename( $state['file'] ),
+            'result'        => 'pending',
+            'log'           => '',
             // Keep 'date' field for backward compatibility (formatted UTC datetime string)
-            $history_entry['date'] = gmdate( 'Y-m-d H:i:s', (int) $history_entry['timestamp_utc'] );
-        }
+            'date'          => gmdate( 'Y-m-d H:i:s', $timestamp_utc ),
+        ];
 
         $suspend_cache_state = null;
 
@@ -908,17 +856,10 @@ class Backup_Lite_Restore_Handler {
                 ) );
                 
                 // Update timestamp_utc to current UTC time when restore fails
-                $restore_completed_at = time();
-                $restore_duration_seconds = 0;
-                if ( isset( $history_entry['restore_started_at'] ) && is_numeric( $history_entry['restore_started_at'] ) ) {
-                    $restore_duration_seconds = $restore_completed_at - (int) $history_entry['restore_started_at'];
-                }
-                $history_entry['timestamp_utc'] = $restore_completed_at;
+                $history_entry['timestamp_utc'] = time();
                 $history_entry['date'] = gmdate( 'Y-m-d H:i:s', $history_entry['timestamp_utc'] );
                 $history_entry['result'] = 'failed';
                 $history_entry['message'] = esc_html__( 'Backup file not found or unreadable.', 'museder-restoreone' );
-                $history_entry['restore_completed_at'] = $restore_completed_at;
-                $history_entry['restore_duration_seconds'] = $restore_duration_seconds;
                 backup_lite_append_restore_history( $history_entry );
                 self::report_job_progress( $job_id, 100, $history_entry['message'], true, 'failed' );
                 return [
@@ -966,15 +907,6 @@ class Backup_Lite_Restore_Handler {
                 ];
             }
 
-            // Calculate restore duration
-            $restore_completed_at = time();
-            $restore_duration_seconds = 0;
-            if ( isset( $history_entry['restore_started_at'] ) && is_numeric( $history_entry['restore_started_at'] ) ) {
-                $restore_duration_seconds = $restore_completed_at - (int) $history_entry['restore_started_at'];
-            }
-            $history_entry['restore_completed_at'] = $restore_completed_at;
-            $history_entry['restore_duration_seconds'] = $restore_duration_seconds;
-
             if ( ! empty( $restore['success'] ) ) {
                 self::report_job_progress( $job_id, 95, __( 'Finalizing restore…', 'museder-restoreone' ) );
                 
@@ -983,13 +915,10 @@ class Backup_Lite_Restore_Handler {
                 
                 // Explicitly set status to success when reporting 100% completion
                 // This ensures the frontend can detect completion immediately
-                backup_lite_log( 'info', 'Restore completed successfully, setting job status to success', [ 
-                    'job_id' => $job_id,
-                    'duration_seconds' => $restore_duration_seconds,
-                ] );
+                backup_lite_log( 'info', 'Restore completed successfully, setting job status to success', [ 'job_id' => $job_id ] );
                 self::report_job_progress( $job_id, 100, __( 'Restore completed successfully.', 'museder-restoreone' ), true, 'success' );
                 // Update timestamp_utc to current UTC time when restore completes
-                $history_entry['timestamp_utc'] = $restore_completed_at;
+                $history_entry['timestamp_utc'] = time();
                 $history_entry['date'] = gmdate( 'Y-m-d H:i:s', $history_entry['timestamp_utc'] );
                 $history_entry['result'] = 'success';
             } else {
@@ -1017,12 +946,11 @@ class Backup_Lite_Restore_Handler {
                     'message' => $message,
                     'error_code' => $error_code,
                     'restore_result' => $restore,
-                    'duration_seconds' => $restore_duration_seconds,
                 ] );
                 
                 // Update history entry with error message
                 // Update timestamp_utc to current UTC time when restore fails
-                $history_entry['timestamp_utc'] = $restore_completed_at;
+                $history_entry['timestamp_utc'] = time();
                 $history_entry['date'] = gmdate( 'Y-m-d H:i:s', $history_entry['timestamp_utc'] );
                 $history_entry['result'] = 'failed';
                 $history_entry['message'] = $message;
@@ -1066,19 +994,11 @@ class Backup_Lite_Restore_Handler {
                 ]
             );
 
-            // Calculate restore duration for exception case
-            $restore_completed_at = time();
-            $restore_duration_seconds = 0;
-            if ( isset( $history_entry['restore_started_at'] ) && is_numeric( $history_entry['restore_started_at'] ) ) {
-                $restore_duration_seconds = $restore_completed_at - (int) $history_entry['restore_started_at'];
-            }
             // Update timestamp_utc to current UTC time when restore fails
-            $history_entry['timestamp_utc'] = $restore_completed_at;
+            $history_entry['timestamp_utc'] = time();
             $history_entry['date'] = gmdate( 'Y-m-d H:i:s', $history_entry['timestamp_utc'] );
             $history_entry['result'] = 'failed';
             $history_entry['message'] = $message;
-            $history_entry['restore_completed_at'] = $restore_completed_at;
-            $history_entry['restore_duration_seconds'] = $restore_duration_seconds;
             backup_lite_append_restore_history( $history_entry );
 
             // Explicitly set job status to failed when reporting progress
@@ -1152,7 +1072,17 @@ class Backup_Lite_Restore_Handler {
 
     public static function chunk_prepare() {
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
+        // Capability verified above. Verify nonce next (before reading any other request input).
+        if ( false === check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce', false ) ) {
+            wp_send_json_error(
+                [
+                    'code'    => 'invalid_nonce',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Your session has expired. Please reload the page.', 'museder-restoreone' ),
+                ],
+                403
+            );
+        }
 
         $filename = '';
         if ( isset( $_POST['filename'] ) ) {
@@ -1213,7 +1143,17 @@ class Backup_Lite_Restore_Handler {
 
     public static function chunk_upload() {
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
+        // Capability verified above. Verify nonce next (before reading any other request input).
+        if ( false === check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce', false ) ) {
+            wp_send_json_error(
+                [
+                    'code'    => 'invalid_nonce',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Your session has expired. Please reload the page.', 'museder-restoreone' ),
+                ],
+                403
+            );
+        }
 
         $session_id = '';
         if ( isset( $_POST['session_id'] ) ) {
@@ -1238,14 +1178,20 @@ class Backup_Lite_Restore_Handler {
             wp_send_json_error( [ 'message' => esc_html__( 'Chunk session not found.', 'museder-restoreone' ) ], 404 );
         }
 
-        // 此方法是透過 verify_ajax_request() 間接呼叫，該函式已完成 nonce 驗證與權限檢查。
-        // 因此此處存取 $_FILES 僅使用已驗證過的請求資料。
-        // phpcs:disable WordPress.Security.NonceVerification.Missing
-        if ( ! isset( $_FILES['chunk']['tmp_name'] ) || ! is_uploaded_file( $_FILES['chunk']['tmp_name'] ) ) {
+        // Validate uploaded chunk file.
+        // Note: $_FILES['chunk']['tmp_name'] is a server-side temp path managed by PHP. We do NOT sanitize it;
+        // instead we validate it strictly (UPLOAD_ERR_OK + size + is_uploaded_file + file_exists) before using it.
+        // phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotValidated, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+        $chunk_file = isset( $_FILES['chunk'] ) && is_array( $_FILES['chunk'] ) ? $_FILES['chunk'] : null;
+        $chunk_tmp  = ( is_array( $chunk_file ) && isset( $chunk_file['tmp_name'] ) ) ? $chunk_file['tmp_name'] : '';
+        $chunk_err  = ( is_array( $chunk_file ) && isset( $chunk_file['error'] ) ) ? (int) $chunk_file['error'] : UPLOAD_ERR_NO_FILE;
+        $chunk_size = ( is_array( $chunk_file ) && isset( $chunk_file['size'] ) ) ? (int) $chunk_file['size'] : 0;
+        // phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotValidated, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+
+        if ( ! is_array( $chunk_file ) || UPLOAD_ERR_OK !== $chunk_err || $chunk_size <= 0 || empty( $chunk_tmp ) || ! is_uploaded_file( $chunk_tmp ) || ! file_exists( $chunk_tmp ) ) {
             // @plugin-check: escaped
-            wp_send_json_error( [ 'message' => esc_html__( 'Invalid chunk file upload.', 'museder-restoreone' ) ], 400 );
+            wp_send_json_error( [ 'message' => esc_html__( 'No chunk file uploaded.', 'museder-restoreone' ) ], 400 );
         }
-        // phpcs:enable WordPress.Security.NonceVerification.Missing
 
         $chunk_dir = self::chunk_session_dir( $session_id );
         if ( ! file_exists( $chunk_dir ) && ! wp_mkdir_p( $chunk_dir ) ) {
@@ -1255,22 +1201,14 @@ class Backup_Lite_Restore_Handler {
 
         // @plugin-check: allowed - required for chunked backup upload, path and filename sanitized
         // $chunk_dir is from plugin-controlled temp directory, $index is validated integer
+        // $chunk_tmp is verified via is_uploaded_file() check above
         $chunk_path = trailingslashit( $chunk_dir ) . sprintf( 'chunk-%06d.part', $index );
-        
-        // 已用 isset() + is_uploaded_file() 驗證。這裡只會把 tmp_name 當作伺服器端暫存檔路徑使用，不會輸出到前端。
-        // phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
-        $tmp_name = $_FILES['chunk']['tmp_name'];
-        // phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
 
         // Use stream_copy_to_stream instead of move_uploaded_file to avoid WordPress Plugin Check warning
-        // $chunk_path is from plugin-controlled temp directory, $tmp_name is verified via is_uploaded_file() check
-        if ( empty( $tmp_name ) ) {
-            // @plugin-check: escaped
-            wp_send_json_error( [ 'message' => esc_html__( 'Unable to store uploaded chunk.', 'museder-restoreone' ) ], 500 );
-        }
+        // $chunk_path is from plugin-controlled temp directory, $chunk_tmp is verified via is_uploaded_file() check
 
         // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- direct fopen is required for large backup streaming, paths are validated by our helper.
-        $input  = fopen( $tmp_name, 'rb' );
+        $input  = fopen( $chunk_tmp, 'rb' );
         // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- direct fopen is required for large backup streaming, paths are validated by our helper.
         $output = fopen( $chunk_path, 'wb' );
         if ( ! $input || ! $output ) {
@@ -1304,7 +1242,17 @@ class Backup_Lite_Restore_Handler {
 
     public static function chunk_finalize() {
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
+        // Capability verified above. Verify nonce next (before reading any other request input).
+        if ( false === check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce', false ) ) {
+            wp_send_json_error(
+                [
+                    'code'    => 'invalid_nonce',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Your session has expired. Please reload the page.', 'museder-restoreone' ),
+                ],
+                403
+            );
+        }
 
         $session_id = isset( $_POST['session_id'] ) ? sanitize_text_field( wp_unslash( $_POST['session_id'] ) ) : '';
 
@@ -1400,7 +1348,17 @@ class Backup_Lite_Restore_Handler {
 
     public static function chunk_abort() {
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
+        // Capability verified above. Verify nonce next (before reading any other request input).
+        if ( false === check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce', false ) ) {
+            wp_send_json_error(
+                [
+                    'code'    => 'invalid_nonce',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Your session has expired. Please reload the page.', 'museder-restoreone' ),
+                ],
+                403
+            );
+        }
 
         $session_id = isset( $_POST['session_id'] ) ? sanitize_text_field( wp_unslash( $_POST['session_id'] ) ) : '';
         if ( $session_id ) {
@@ -1517,106 +1475,66 @@ class Backup_Lite_Restore_Handler {
         $raw      = backup_lite_get_restore_history( $limit );
         $prepared = [];
 
-        foreach ( $raw as $row ) {
+        foreach ( $raw as $entry ) {
+            $row = $entry;
+            
             // 1. Get UTC timestamp (support both new and old data formats)
             $timestamp_utc = 0;
             
             // Priority 1: Use timestamp_utc if available (most accurate, stored as UTC Unix timestamp)
-            if ( isset( $row['timestamp_utc'] ) && (int) $row['timestamp_utc'] > 0 ) {
-                $timestamp_utc = (int) $row['timestamp_utc'];
-            } elseif ( ! empty( $row['date'] ) ) {
+            if ( isset( $entry['timestamp_utc'] ) && $entry['timestamp_utc'] ) {
+                $timestamp_utc = (int) $entry['timestamp_utc'];
+            } elseif ( ! empty( $entry['date'] ) ) {
                 // Priority 2: Old data compatibility - parse date string as UTC
                 // The 'date' field is stored as UTC datetime string (gmdate format)
-                // MySQL datetime string (no timezone), treat as UTC base
-                $timestamp_utc = strtotime( $row['date'] . ' UTC' );
+                $timestamp_utc = strtotime( $entry['date'] . ' UTC' );
                 if ( false === $timestamp_utc || $timestamp_utc <= 0 ) {
                     // Fallback: try parsing as-is (may be old local time entry)
-                    $timestamp_utc = strtotime( $row['date'] );
+                    $timestamp_utc = strtotime( $entry['date'] );
                 }
-            } elseif ( isset( $row['timestamp'] ) && $row['timestamp'] ) {
+            } elseif ( isset( $entry['timestamp'] ) && $entry['timestamp'] ) {
                 // Priority 3: Parse legacy timestamp using helper function
-                $timestamp_utc = backup_lite_parse_legacy_timestamp( $row['timestamp'] );
+                $timestamp_utc = backup_lite_parse_legacy_timestamp( $entry['timestamp'] );
             }
             
             // Fallback: If still no valid timestamp, use current time or file modification time
             if ( $timestamp_utc <= 0 ) {
                 // Try to get file modification time as last resort
-                if ( ! empty( $row['file'] ) ) {
-                    $backup_path = backup_lite_get_backup_path( $row['file'] );
+                if ( ! empty( $entry['file'] ) ) {
+                    $backup_path = backup_lite_get_backup_path( $entry['file'] );
                     if ( $backup_path && file_exists( $backup_path ) ) {
                         $timestamp_utc = filemtime( $backup_path );
                     }
                 }
-                // If still no timestamp, use current_time with GMT flag (UTC)
+                // If still no timestamp, use current time
                 if ( $timestamp_utc <= 0 ) {
-                    $timestamp_utc = current_time( 'timestamp', true );
+                    $timestamp_utc = time();
                 }
             }
             
-            // 2. Get file name (pure filename, no path)
-            $file_name = isset( $row['file'] ) ? basename( $row['file'] ) : '';
+            // 2. Convert UTC timestamp to local timezone string using backup_lite_format_local_time()
+            // backup_lite_format_local_time() expects UTC timestamp and converts to site's local timezone
+            $display_time = backup_lite_format_local_time( $timestamp_utc, 'Y-m-d H:i' );
             
-            // 3. Get result
-            $result = isset( $row['result'] ) ? (string) $row['result'] : '';
+            // 3. Build array for frontend
+            $row['timestamp']     = $display_time;     // Human-readable string for display (PHP template uses this)
+            $row['timestamp_utc'] = $timestamp_utc;    // Preserve UTC timestamp for JS calculations
+            $row['datetime']      = $display_time;      // Alias for clarity
+            $row['display_time']  = $display_time;      // Alias for clarity
+            $row['timestamp_raw'] = $timestamp_utc;    // Backward compatibility (JS uses this)
+            $row['file']          = isset( $entry['file'] ) ? $entry['file'] : '';
+            $row['result']        = isset( $entry['result'] ) ? $entry['result'] : '';
+            $row['log']           = isset( $entry['log'] ) ? $entry['log'] : '';
             
-            // 4. Get duration in seconds (use -1 if no data).
-            // Note: allow 0 seconds (very fast restores) and compute from started/completed timestamps when available.
-            $duration = -1;
-            if ( isset( $row['duration_seconds'] ) && is_numeric( $row['duration_seconds'] ) && (int) $row['duration_seconds'] >= 0 ) {
-                $duration = (int) $row['duration_seconds'];
-            } elseif ( isset( $row['restore_duration_seconds'] ) && is_numeric( $row['restore_duration_seconds'] ) && (int) $row['restore_duration_seconds'] >= 0 ) {
-                $duration = (int) $row['restore_duration_seconds'];
-            } elseif (
-                isset( $row['restore_started_at'], $row['restore_completed_at'] )
-                && is_numeric( $row['restore_started_at'] )
-                && is_numeric( $row['restore_completed_at'] )
-            ) {
-                $started   = (int) $row['restore_started_at'];
-                $completed = (int) $row['restore_completed_at'];
-                if ( $started > 0 && $completed >= $started ) {
-                    $duration = $completed - $started;
-                }
-            }
-            
-            // 5. Human-readable time (local timezone)
-            $date_human = $timestamp_utc > 0
-                ? backup_lite_format_local_time( $timestamp_utc, 'Y-m-d H:i' )
-                : '';
-            
-            // 6. Human-readable duration (0 seconds is valid)
-            $duration_human = $duration >= 0
-                ? backup_lite_format_duration( $duration )
-                : '';
-            
-            // 7. Log download URL (if available)
-            $log_download_url = '';
-            if ( ! empty( $row['log'] ) ) {
-                $log_download_url = wp_nonce_url(
-                    admin_url( 'admin-post.php?action=backup_lite_download_log&log=' . rawurlencode( $row['log'] ) ),
-                    'backup_lite_download_log_' . $row['log']
+            if ( ! empty( $entry['log'] ) ) {
+                $row['log_url'] = wp_nonce_url(
+                    admin_url( 'admin-post.php?action=backup_lite_download_log&log=' . rawurlencode( $entry['log'] ) ),
+                    'backup_lite_download_log_' . $entry['log']
                 );
-            } elseif ( ! empty( $row['log_file'] ) ) {
-                // Fallback: try log_file field
-                $log_download_url = wp_nonce_url(
-                    admin_url( 'admin-post.php?action=backup_lite_download_log&log=' . rawurlencode( $row['log_file'] ) ),
-                    'backup_lite_download_log_' . $row['log_file']
-                );
+            } else {
+                $row['log_url'] = '';
             }
-            
-            // 8. Get ID (prefer actual id, fallback to timestamp_utc)
-            $id = isset( $row['id'] ) && (int) $row['id'] > 0 ? (int) $row['id'] : $timestamp_utc;
-            
-            // 9. Build clean array for template (no nested arrays, no foreach on strings, no 'undefined' strings)
-            $prepared[] = [
-                'id'               => $id,
-                'file'             => $file_name,
-                'result'           => $result,
-                'timestamp_utc'   => $timestamp_utc,
-                'duration'        => $duration, // Use -1 if no data
-                'date_human'      => $date_human,
-                'duration_human'   => $duration_human,
-                'log_download_url'=> $log_download_url,
-            ];
+            $prepared[] = $row;
         }
 
         return $prepared;
@@ -1642,18 +1560,8 @@ class Backup_Lite_Restore_Handler {
         // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
         // $source and $destination are from plugin-controlled directories
         if ( @copy( $source, $destination ) ) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_copy -- required for file move operation, paths from plugin-controlled directories
-            // phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
             // Unlinking temporary backup/restore artifact. WP_Filesystem is not practical here.
-            if ( function_exists( 'wp_delete_file' ) ) {
-                wp_delete_file( $source );
-            } else {
-                // Fallback for non-standard environments.
-                if ( file_exists( $source ) ) {
-                    @unlink( $source );
-                }
-            }
-            // phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
-            // @phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
+            wp_delete_file( $source );
             return true;
         }
 
@@ -1717,30 +1625,20 @@ class Backup_Lite_Restore_Handler {
     }
 
     private static function compose_summary( $state ) {
-        // $state['file'] now stores only filename, not full path
-        // Use backup_lite_get_backup_path() to resolve full path when needed
-        $file_name = isset( $state['file'] ) ? $state['file'] : '';
-        $path = backup_lite_get_backup_path( $file_name );
-        
-        // Use size from state if available (already calculated in prepare_session)
-        $size = ( ! empty( $state['size'] ) ) ? (float) $state['size'] : 0;
-        
-        // Fallback: if size not in state and file exists, get it from file
-        if ( $size <= 0 && $path && file_exists( $path ) ) {
-            $size = filesize( $path );
-        }
+        $path = isset( $state['file'] ) ? $state['file'] : '';
+        $size = ( ! empty( $state['size'] ) ) ? (float) $state['size'] : ( ( file_exists( $path ) ) ? filesize( $path ) : 0 );
         
         // Use SHA1 from state if available, otherwise skip for large files
         $sha1 = '';
         if ( ! empty( $state['sha1'] ) ) {
             $sha1 = $state['sha1'];
-        } elseif ( $path && file_exists( $path ) && $size > 0 && $size <= ( 500 * 1024 * 1024 ) ) {
+        } elseif ( file_exists( $path ) && $size > 0 && $size <= ( 500 * 1024 * 1024 ) ) {
             // Only calculate SHA1 for files under 500MB
             $sha1 = sha1_file( $path );
         }
 
         return [
-            'name'    => isset( $state['filename'] ) ? $state['filename'] : ( $file_name ? basename( $file_name ) : '' ),
+            'name'    => isset( $state['filename'] ) ? $state['filename'] : basename( $path ),
             'size'    => size_format( $size, 2 ),
             'bytes'   => (float) $size,
             'sha1'    => $sha1,
@@ -1783,18 +1681,10 @@ class Backup_Lite_Restore_Handler {
     }
 
     private static function handle_job_cancelled( $job_id, array $history_entry ) {
-        // Update timestamps and duration when restore is cancelled
-        $restore_completed_at = time();
-        $restore_duration_seconds = 0;
-        if ( isset( $history_entry['restore_started_at'] ) && is_numeric( $history_entry['restore_started_at'] ) ) {
-            $restore_duration_seconds = max( 0, $restore_completed_at - (int) $history_entry['restore_started_at'] );
-        }
-
-        $history_entry['timestamp_utc']            = $restore_completed_at;
-        $history_entry['date']                     = gmdate( 'Y-m-d H:i:s', $history_entry['timestamp_utc'] );
-        $history_entry['result']                   = 'cancelled';
-        $history_entry['restore_completed_at']      = $restore_completed_at;
-        $history_entry['restore_duration_seconds']  = $restore_duration_seconds;
+        // Update timestamp_utc to current UTC time when restore is cancelled
+        $history_entry['timestamp_utc'] = time();
+        $history_entry['date'] = gmdate( 'Y-m-d H:i:s', $history_entry['timestamp_utc'] );
+        $history_entry['result'] = 'cancelled';
         backup_lite_append_restore_history( $history_entry );
         self::report_job_progress( $job_id, 100, __( 'Restore cancelled.', 'museder-restoreone' ), true );
         Backup_Lite_Restore_Jobs::finalize_cancel( $job_id );
@@ -1812,25 +1702,11 @@ class Backup_Lite_Restore_Handler {
         $state = self::get_state();
 
         if ( ! empty( $state['file'] ) && isset( $state['source'] ) && in_array( $state['source'], [ 'upload', 'remote' ], true ) ) {
-            // $state['file'] now stores only filename, not full path
-            // Use backup_lite_get_backup_path() to resolve full path
-            $file_name = $state['file'];
-            $path = backup_lite_get_backup_path( $file_name );
-            
             // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
-            // $path is from plugin state, validated and sanitized via backup_lite_get_backup_path()
+            // $path is from plugin state, validated and sanitized
+            $path = wp_normalize_path( $state['file'] );
             if ( $path && file_exists( $path ) && is_file( $path ) ) {
-                // 備份／還原流程中必須確保能刪除暫存檔案，以釋放磁碟空間並避免堆積 temp 檔案。
-                // 優先使用 wp_delete_file()，若不可用則使用 PHP unlink() 作為後備。
-                // phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
-                if ( function_exists( 'wp_delete_file' ) ) {
-                    wp_delete_file( $path );
-                } else {
-                    // 備份／還原流程中必須確保能刪除暫存檔案，使用 PHP unlink() 作為後備。
-                    // @phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink
-                    @unlink( $path );
-                }
-                // phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
+                wp_delete_file( $path );
             }
         }
 
@@ -1870,7 +1746,17 @@ class Backup_Lite_Restore_Handler {
      */
     public static function exit_safe_mode() {
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
+        // Capability verified above. Verify nonce next (before reading any other request input).
+        if ( false === check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce', false ) ) {
+            wp_send_json_error(
+                [
+                    'code'    => 'invalid_nonce',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Your session has expired. Please reload the page.', 'museder-restoreone' ),
+                ],
+                403
+            );
+        }
 
         try {
             $result = Backup_Lite_Restore::exit_safe_mode();

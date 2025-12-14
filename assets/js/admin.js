@@ -1371,6 +1371,7 @@ function initRestoreCenter() {
         var restoreInProgress = false;
         var restoreCompleted = !!(restoreData.progress && restoreData.progress.done);
         var backupLiteRestoreFailureShown = false; // Flag to prevent duplicate failure modals
+        var backupLiteSessionExpiredShown = false; // Flag to prevent duplicate session-expired overlays
         
         // Restore monitor state - single source of truth for restore job status
         var restoreMonitor = {
@@ -2627,34 +2628,27 @@ function initRestoreCenter() {
                 }
                 
                 if (isNonceError) {
-                    console.log('[Backup Lite] Nonce expired, refreshing and retrying...', { jobId, error });
-                    refreshAjaxNonce().then(function () {
-                        if (activeRestoreJobId === jobId) {
-                            // After refreshing nonce, immediately check job status again
-                            // Also check history as fallback to detect completion
-                            pollRestoreJob(jobId, silent);
-                            
-                            // Additional fallback: check history directly after nonce refresh
-                            setTimeout(function() {
-                                if (activeRestoreJobId === jobId) {
-                                    checkRestoreCompletionFromHistory(jobId);
-                                }
-                            }, 1000);
-                            
-                            // Also check history immediately if we've been polling for a while
-                            // This handles the case where restore completed during nonce expiration
-                            if (restoreJobPollStartTime && (Date.now() - restoreJobPollStartTime) > 60000) {
-                                // If we've been polling for more than 1 minute, check history immediately
-                                checkRestoreCompletionFromHistory(jobId);
-                            }
-                        }
-                    }).catch(function (refreshError) {
-                        console.error('Backup Lite: unable to refresh nonce after failure.', refreshError);
-                        // Even if refresh fails, try to check completion from history
-                        if (activeRestoreJobId === jobId) {
-                            checkRestoreCompletionFromHistory(jobId);
-                        }
-                    });
+                    console.warn('[Backup Lite] Nonce expired (403). Stopping polling and requesting reload.', { jobId, error });
+                    stopRestoreJobMonitor();
+                    restoreInProgress = false;
+                    restoreCompleted = false;
+                    if (startButton) {
+                        startButton.disabled = false;
+                    }
+                    syncWizard();
+                    updateRestoreCancelState();
+
+                    if (!backupLiteSessionExpiredShown) {
+                        backupLiteSessionExpiredShown = true;
+                        var msg = (error && error.message) ? error.message : (strings.sessionExpired || 'Your session has expired. Please reload the page to continue.');
+                        showCompletionOverlay({
+                            icon: '🔒',
+                            title: strings.sessionExpiredTitle || 'Session expired',
+                            message: msg,
+                            confirmText: strings.reload || 'Reload',
+                            type: 'error'
+                        });
+                    }
                     return;
                 }
                 
