@@ -116,7 +116,10 @@ class Backup_Lite_Schedule_Handler {
     public static function ajax_delete_schedule() {
         self::verify_ajax();
 
+        // Nonce verified via verify_ajax() above.
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified via verify_ajax() above
         $id = isset( $_POST['id'] ) ? sanitize_text_field( wp_unslash( $_POST['id'] ) ) : '';
+        // phpcs:enable WordPress.Security.NonceVerification.Missing
 
         if ( ! $id ) {
             wp_send_json_error( [ 'message' => __( 'Schedule ID missing.', 'museder-restoreone' ) ], 400 );
@@ -144,8 +147,11 @@ class Backup_Lite_Schedule_Handler {
     public static function ajax_toggle_schedule() {
         self::verify_ajax();
 
+        // Nonce verified via verify_ajax() above.
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified via verify_ajax() above
         $id     = isset( $_POST['id'] ) ? sanitize_text_field( wp_unslash( $_POST['id'] ) ) : '';
         $status = isset( $_POST['status'] ) ? sanitize_text_field( wp_unslash( $_POST['status'] ) ) : 'enabled';
+        // phpcs:enable WordPress.Security.NonceVerification.Missing
 
         if ( ! $id ) {
             wp_send_json_error( [ 'message' => __( 'Schedule ID missing.', 'museder-restoreone' ) ], 400 );
@@ -167,7 +173,10 @@ class Backup_Lite_Schedule_Handler {
         self::verify_ajax();
 
         $data = self::read_schedule_data();
+        // Nonce verified via verify_ajax() above.
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified via verify_ajax() above
         $id   = isset( $_POST['id'] ) ? sanitize_text_field( wp_unslash( $_POST['id'] ) ) : '';
+        // phpcs:enable WordPress.Security.NonceVerification.Missing
 
         // Check PRO limit for Free users
         if ( ! $id ) {
@@ -201,7 +210,10 @@ class Backup_Lite_Schedule_Handler {
     public static function ajax_run_schedule_now() {
         self::verify_ajax();
 
+        // Nonce verified via verify_ajax() above.
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified via verify_ajax() above
         $id = isset( $_POST['id'] ) ? sanitize_text_field( wp_unslash( $_POST['id'] ) ) : '';
+        // phpcs:enable WordPress.Security.NonceVerification.Missing
 
         if ( ! $id ) {
             wp_send_json_error( [ 'message' => __( 'Schedule ID missing.', 'museder-restoreone' ) ], 400 );
@@ -773,10 +785,11 @@ class Backup_Lite_Schedule_Handler {
      * @return array
      */
     private static function read_schedule_data() {
-        // Nonce verified via verify_ajax() in calling method
-        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified via verify_ajax() in calling method
+        // Nonce verified via verify_ajax() in calling method.
+        // $_POST['schedule'] is a JSON string; it is decoded and each field is sanitized below.
+        // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.InputNotValidated, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified via verify_ajax(); raw JSON sanitized after decode
         $raw = isset( $_POST['schedule'] ) ? wp_unslash( $_POST['schedule'] ) : '';
-        // phpcs:enable WordPress.Security.NonceVerification.Missing
+        // phpcs:enable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.InputNotValidated, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
 
         if ( empty( $raw ) ) {
             // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- reading JSON from php://input stream

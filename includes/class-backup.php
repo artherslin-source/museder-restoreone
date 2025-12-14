@@ -238,8 +238,13 @@ class Backup_Lite_Backup {
         self::optimize_runtime_environment();
 
         $zip = new ZipArchive();
-        if ( true !== $zip->open( $archive_path, ZipArchive::CREATE | ZipArchive::OVERWRITE ) ) {
-            backup_lite_log( 'error', 'Unable to create zip archive with ZipArchive.', [ 'path' => $archive_path ] );
+        $open_result = $zip->open( $archive_path, ZipArchive::CREATE | ZipArchive::OVERWRITE );
+        $ok_code     = defined( 'ZipArchive::ER_OK' ) ? ZipArchive::ER_OK : 0;
+        if ( true !== $open_result && $ok_code !== $open_result ) {
+            backup_lite_log( 'error', 'Unable to create zip archive with ZipArchive.', [
+                'path'       => $archive_path,
+                'zip_result' => $open_result,
+            ] );
             return false;
         }
 
@@ -259,7 +264,15 @@ class Backup_Lite_Backup {
             self::add_directory_to_zip( $zip, $source, $target );
         }
 
-        return $zip->close();
+        try {
+            return $zip->close();
+        } catch ( ValueError $e ) {
+            backup_lite_log( 'error', 'ZipArchive close failed.', [
+                'path'  => $archive_path,
+                'error' => $e->getMessage(),
+            ] );
+            return false;
+        }
     }
 
     private static function create_pclzip_bundle( $archive_path, $sql_path, $meta_path, $directories ) {
@@ -572,13 +585,19 @@ class Backup_Lite_Backup {
      */
     private static function initialize_archive_with_meta( $archive_path, $sql_path, $meta_path ) {
         $zip = new ZipArchive();
-        if ( true !== $zip->open( $archive_path, ZipArchive::CREATE | ZipArchive::OVERWRITE ) ) {
+        $open_result = $zip->open( $archive_path, ZipArchive::CREATE | ZipArchive::OVERWRITE );
+        $ok_code     = defined( 'ZipArchive::ER_OK' ) ? ZipArchive::ER_OK : 0;
+        if ( true !== $open_result && $ok_code !== $open_result ) {
             throw new RuntimeException( esc_html__( 'Unable to initialize archive.', 'museder-restoreone' ) );
         }
 
         $zip->addFile( $sql_path, 'database.sql' );
         $zip->addFile( $meta_path, 'meta.json' );
-        $zip->close();
+        try {
+            $zip->close();
+        } catch ( ValueError $e ) {
+            throw new RuntimeException( esc_html__( 'Unable to finalize archive.', 'museder-restoreone' ) );
+        }
     }
 
     /**
@@ -681,7 +700,9 @@ class Backup_Lite_Backup {
      */
     private static function append_files_to_zip( $archive_path, array $files ) {
         $zip = new ZipArchive();
-        if ( true !== $zip->open( $archive_path, ZipArchive::CREATE ) ) {
+        $open_result = $zip->open( $archive_path, ZipArchive::CREATE );
+        $ok_code     = defined( 'ZipArchive::ER_OK' ) ? ZipArchive::ER_OK : 0;
+        if ( true !== $open_result && $ok_code !== $open_result ) {
             throw new RuntimeException( esc_html__( 'Unable to append files to archive.', 'museder-restoreone' ) );
         }
 
@@ -704,7 +725,16 @@ class Backup_Lite_Backup {
             $zip->addFile( $path, $target );
         }
 
-        $zip->close();
+        try {
+            $zip->close();
+        } catch ( ValueError $e ) {
+            // Avoid PHP 8+ ValueError fatal (invalid/uninitialized Zip object) causing admin-ajax 500.
+            backup_lite_log( 'error', 'ZipArchive close failed while appending files.', [
+                'path'  => $archive_path,
+                'error' => $e->getMessage(),
+            ] );
+            throw new RuntimeException( esc_html__( 'Unable to finalize archive.', 'museder-restoreone' ) );
+        }
     }
 
     /**

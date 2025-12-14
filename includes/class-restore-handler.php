@@ -37,22 +37,22 @@ class Backup_Lite_Restore_Handler {
         // Nonce verified above
         // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
         $file = null;
+        // $_FILES[*]['tmp_name'] is a server-side path managed by PHP upload handling and does not need sanitization.
+        // phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotValidated, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
         if ( isset( $_FILES['file'], $_FILES['file']['tmp_name'] ) && is_uploaded_file( $_FILES['file']['tmp_name'] ) ) {
             // $_FILES['file']['tmp_name'] is a server-side path managed by PHP upload handling and does not need sanitization.
             // tmp_name 無法再進一步 sanitize，只用於 is_uploaded_file 和 move_uploaded_file。
-            // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
             $file = $_FILES['file'];
         } elseif ( isset( $_FILES['restoreFile'], $_FILES['restoreFile']['tmp_name'] ) && is_uploaded_file( $_FILES['restoreFile']['tmp_name'] ) ) {
             // $_FILES['restoreFile']['tmp_name'] is a server-side path managed by PHP upload handling and does not need sanitization.
             // tmp_name 無法再進一步 sanitize，只用於 is_uploaded_file 和 move_uploaded_file。
-            // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
             $file = $_FILES['restoreFile'];
         } elseif ( isset( $_FILES['restore_file'], $_FILES['restore_file']['tmp_name'] ) && is_uploaded_file( $_FILES['restore_file']['tmp_name'] ) ) {
             // $_FILES['restore_file']['tmp_name'] is a server-side path managed by PHP upload handling and does not need sanitization.
             // tmp_name 無法再進一步 sanitize，只用於 is_uploaded_file 和 move_uploaded_file。
-            // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
             $file = $_FILES['restore_file'];
         }
+        // phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotValidated, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
         // phpcs:enable WordPress.Security.NonceVerification.Missing
         if ( empty( $file ) ) {
             // @plugin-check: escaped
@@ -76,14 +76,7 @@ class Backup_Lite_Restore_Handler {
         if ( ! in_array( $ext, [ 'zip', 'wpress' ], true ) ) {
             // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
             // $file_path is from wp_handle_upload() result, validated and sanitized
-            if ( function_exists( 'wp_delete_file' ) ) {
-                wp_delete_file( $file_path );
-            } else {
-                // phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
-                // Unlinking temporary backup/restore artifact. WP_Filesystem is not practical here.
-                @unlink( $file_path );
-                // phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
-            }
+            wp_delete_file( $file_path );
             wp_send_json_error( [ 'message' => esc_html__( 'Unsupported file type. Allowed: zip, wpress.', 'museder-restoreone' ) ], 415 );
         }
 
@@ -144,14 +137,7 @@ class Backup_Lite_Restore_Handler {
                     
                     if ( ! empty( $convert_result['success'] ) && ! empty( $convert_result['file'] ) && file_exists( $convert_result['file'] ) ) {
                         // Delete original file and use converted file
-                        if ( function_exists( 'wp_delete_file' ) ) {
-                            wp_delete_file( $destination );
-                        } else {
-                            // phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
-                            // Unlinking temporary backup/restore artifact. WP_Filesystem is not practical here.
-                            @unlink( $destination );
-                            // phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
-                        }
+                        wp_delete_file( $destination );
                         
                         $destination = $convert_result['file'];
                         backup_lite_log( 'info', 'Successfully converted All-in-One backup.', [
@@ -330,14 +316,7 @@ class Backup_Lite_Restore_Handler {
         if ( ! in_array( $ext, [ 'zip', 'wpress' ], true ) ) {
             // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
             // $temp is from wp_handle_upload() result, validated and sanitized
-            if ( function_exists( 'wp_delete_file' ) ) {
-                wp_delete_file( $temp );
-            } else {
-                // phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
-                // Unlinking temporary backup/restore artifact. WP_Filesystem is not practical here.
-                @unlink( $temp );
-                // phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
-            }
+            wp_delete_file( $temp );
             wp_send_json_error( [ 'message' => esc_html__( 'Downloaded file is not a supported backup format.', 'museder-restoreone' ) ], 415 );
         }
 
@@ -368,14 +347,7 @@ class Backup_Lite_Restore_Handler {
                     
                     if ( $converted_file ) {
                         // Delete original file and use converted file
-                        if ( function_exists( 'wp_delete_file' ) ) {
-                            wp_delete_file( $destination );
-                        } else {
-                            // phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
-                            // Unlinking temporary backup/restore artifact. WP_Filesystem is not practical here.
-                            @unlink( $destination );
-                            // phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
-                        }
+                        wp_delete_file( $destination );
 
                         $destination = $converted_file;
                         backup_lite_log( 'info', 'Successfully converted All-in-One backup.', [
@@ -1533,18 +1505,8 @@ class Backup_Lite_Restore_Handler {
         // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
         // $source and $destination are from plugin-controlled directories
         if ( @copy( $source, $destination ) ) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_copy -- required for file move operation, paths from plugin-controlled directories
-            // phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
             // Unlinking temporary backup/restore artifact. WP_Filesystem is not practical here.
-            if ( function_exists( 'wp_delete_file' ) ) {
-                wp_delete_file( $source );
-            } else {
-                // Fallback for non-standard environments.
-                if ( file_exists( $source ) ) {
-                    @unlink( $source );
-                }
-            }
-            // phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
-            // @phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
+            wp_delete_file( $source );
             return true;
         }
 
@@ -1689,11 +1651,7 @@ class Backup_Lite_Restore_Handler {
             // $path is from plugin state, validated and sanitized
             $path = wp_normalize_path( $state['file'] );
             if ( $path && file_exists( $path ) && is_file( $path ) ) {
-                if ( function_exists( 'wp_delete_file' ) ) {
-                    wp_delete_file( $path );
-                } else {
-                    @unlink( $path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_unlink -- required for cleanup, path from plugin-controlled directory
-                }
+                wp_delete_file( $path );
             }
         }
 

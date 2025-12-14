@@ -22,7 +22,6 @@ $museder_restoreone_enabled_count   = 0;
 $museder_restoreone_next_run_label  = __( 'Not scheduled', 'museder-restoreone' );
 $museder_restoreone_next_run_title  = '—';
 $museder_restoreone_next_run_diff   = '';
-// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 
 if ( $museder_restoreone_total_schedules ) {
     $museder_restoreone_now = time();
@@ -136,7 +135,7 @@ if ( $museder_restoreone_total_schedules ) {
             <?php // @plugin-check: escaped ?>
             <button type="button" class="button button-primary <?php echo esc_attr( $is_pro || $museder_restoreone_total_schedules === 0 ? '' : 'pro-locked' ); ?>" id="bl-new-schedule" <?php echo $is_pro || $museder_restoreone_total_schedules === 0 ? '' : 'data-upgrade="' . esc_attr( 'pro' ) . '"'; // @plugin-check: escaped ?>>
                 ＋ <?php esc_html_e( 'New Schedule', 'museder-restoreone' ); ?>
-                <?php if ( ! $is_pro && $total_schedules >= 1 ) : ?>
+                <?php if ( ! $is_pro && $museder_restoreone_total_schedules >= 1 ) : ?>
                     <span class="pro-badge">PRO</span>
                 <?php endif; ?>
             </button>

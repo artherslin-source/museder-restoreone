@@ -13,12 +13,7 @@
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
-
-// Template context: This variable is scoped to this template file and provided by the rendering function.
-// It uses a short name for template readability but is not global namespace pollution.
-// phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 $logs = isset( $logs ) ? $logs : Backup_Lite_Log_Handler::get_logs();
-// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 ?>
 
 <div class="wrap backup-lite-admin backup-lite-logs">

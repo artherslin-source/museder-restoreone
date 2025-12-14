@@ -7,6 +7,57 @@ class Backup_Lite_Restore {
     private static $pclzip_destination = '';
 
     /**
+     * Stream helpers (centralize direct file operations for restore hot paths).
+     *
+     * Plugin Check flags direct use of fopen/fread/fwrite/fclose. We keep the
+     * surface area minimal by encapsulating them here and documenting why.
+     *
+     * @param string $path File path.
+     * @param string $mode fopen mode.
+     * @return resource|false
+     */
+    private static function stream_open( $path, $mode ) {
+        // @plugin-check: allowed - controlled backup/restore file operation (streaming I/O), paths are plugin-controlled and validated at call sites.
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for large-file streaming; WP_Filesystem not suitable for this hot path.
+        return fopen( $path, $mode );
+    }
+
+    /**
+     * @param resource $handle Stream handle.
+     * @param int      $length Bytes to read.
+     * @return string|false
+     */
+    private static function stream_read( $handle, $length ) {
+        // @plugin-check: allowed - controlled backup/restore file operation (streaming I/O).
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- required for large-file streaming; WP_Filesystem not suitable for this hot path.
+        return fread( $handle, $length );
+    }
+
+    /**
+     * @param resource $handle Stream handle.
+     * @param string   $data Data to write.
+     * @return int|false
+     */
+    private static function stream_write( $handle, $data ) {
+        // @plugin-check: allowed - controlled backup/restore file operation (streaming I/O).
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for large-file streaming; WP_Filesystem not suitable for this hot path.
+        return fwrite( $handle, $data );
+    }
+
+    /**
+     * @param resource|null $handle Stream handle.
+     * @return bool
+     */
+    private static function stream_close( $handle ) {
+        if ( ! is_resource( $handle ) ) {
+            return false;
+        }
+        // @plugin-check: allowed - controlled backup/restore file operation (streaming I/O).
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for large-file streaming; WP_Filesystem not suitable for this hot path.
+        return fclose( $handle );
+    }
+
+    /**
      * Restore a site from a unified backup archive.
      *
      * @param string   $archive_file
@@ -323,18 +374,15 @@ class Backup_Lite_Restore {
         $placeholder = 'SERVMASK_PREFIX_';
         $needs_normalize = false;
 
-        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-        // Reason: High-performance streaming of large backup/restore archives. WP_Filesystem is not suitable for this hot path. Access is limited to admins with manage_options.
-        $handle = fopen( $sql_file, 'rb' );
+        $handle = self::stream_open( $sql_file, 'rb' );
         if ( $handle ) {
             // Only reads plugin-generated backup files, path is validated and sanitized.
-            $sample = fread( $handle, 1048576 ); // 1MB sample.
+            $sample = self::stream_read( $handle, 1048576 ); // 1MB sample.
             if ( false !== strpos( $sample, $placeholder ) ) {
                 $needs_normalize = true;
             }
-            fclose( $handle );
+            self::stream_close( $handle );
         }
-        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
 
         if ( ! $needs_normalize ) {
             return $default;
@@ -350,17 +398,15 @@ class Backup_Lite_Restore {
         }
 
         $normalized = $sql_file . '.normalized.sql';
-        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-        // 說明：大型備份檔案需要串流讀寫，WP_Filesystem 無法安全且有效率處理此場景，只能使用底層檔案函式。
-        $in         = fopen( $sql_file, 'rb' );
-        $out        = fopen( $normalized, 'wb' );
+        $in  = self::stream_open( $sql_file, 'rb' );
+        $out = self::stream_open( $normalized, 'wb' );
 
         if ( ! $in || ! $out ) {
             if ( $in ) {
-                fclose( $in );
+                self::stream_close( $in );
             }
             if ( $out ) {
-                fclose( $out );
+                self::stream_close( $out );
             }
             backup_lite_log( 'warning', 'Unable to create normalized SQL file for SERVMASK export.', [ 'source' => $sql_file ] );
             return $default;
@@ -379,7 +425,7 @@ class Backup_Lite_Restore {
 
         // First pass: streaming replacement with overlap buffer
         while ( ! feof( $in ) ) {
-            $chunk = fread( $in, $chunk_size );
+            $chunk = self::stream_read( $in, $chunk_size );
             if ( false === $chunk ) {
                 break;
             }
@@ -399,18 +445,17 @@ class Backup_Lite_Restore {
 
             // Replace placeholder in the chunk we're about to write
             $chunk_to_write = str_replace( $placeholder, $prefix, $chunk_to_write );
-            fwrite( $out, $chunk_to_write );
+            self::stream_write( $out, $chunk_to_write );
         }
 
         // Write remaining buffer
         if ( $buffer !== '' ) {
             $buffer = str_replace( $placeholder, $prefix, $buffer );
-            fwrite( $out, $buffer );
+            self::stream_write( $out, $buffer );
         }
 
-        fclose( $in );
-        fclose( $out );
-        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+        self::stream_close( $in );
+        self::stream_close( $out );
 
         // For large files (1GB+), always do a second pass to ensure 100% replacement
         // This is necessary because even with large overlap, edge cases can occur
@@ -428,10 +473,8 @@ class Backup_Lite_Restore {
             $renamed = rename( $normalized, $temp_file );
             // @phpcs:enable WordPress.WP.AlternativeFunctions.rename_rename
             if ( $renamed ) {
-                // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-                // Reason: High-performance streaming of large backup/restore archives. WP_Filesystem is not suitable for this hot path. Access is limited to admins with manage_options.
-                $in2 = fopen( $temp_file, 'rb' );
-                $out2 = fopen( $normalized, 'wb' );
+                $in2  = self::stream_open( $temp_file, 'rb' );
+                $out2 = self::stream_open( $normalized, 'wb' );
                 
                 if ( $in2 && $out2 ) {
                     $second_buffer = '';
@@ -439,7 +482,7 @@ class Backup_Lite_Restore {
                     
                     while ( ! feof( $in2 ) ) {
                         // Only reads plugin-generated backup files, path is validated and sanitized.
-                        $chunk2 = fread( $in2, $second_chunk_size );
+                        $chunk2 = self::stream_read( $in2, $second_chunk_size );
                         if ( false === $chunk2 ) {
                             break;
                         }
@@ -457,19 +500,18 @@ class Backup_Lite_Restore {
                         
                         // Replace any remaining placeholders
                         $chunk_to_write2 = str_replace( $placeholder, $prefix, $chunk_to_write2 );
-                        fwrite( $out2, $chunk_to_write2 );
+                        self::stream_write( $out2, $chunk_to_write2 );
                     }
                     
                     // Write remaining buffer
                     if ( $second_buffer !== '' ) {
                         $second_buffer = str_replace( $placeholder, $prefix, $second_buffer );
-                        fwrite( $out2, $second_buffer );
+                        self::stream_write( $out2, $second_buffer );
                     }
                     
-                    fclose( $in2 );
-                    fclose( $out2 );
+                    self::stream_close( $in2 );
+                    self::stream_close( $out2 );
                 }
-                // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
                 // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
                 // $temp_file is from plugin-controlled temp directory
                 // @phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
@@ -751,34 +793,31 @@ class Backup_Lite_Restore {
                 break;
             }
 
-            // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-            // 說明：大型備份檔案需要串流讀寫，WP_Filesystem 無法安全且有效率處理此場景，只能使用底層檔案函式。
-            $output = fopen( $target, 'wb' );
+            $output = self::stream_open( $target, 'wb' );
             if ( ! $output ) {
                 backup_lite_log( 'error', 'Unable to write extracted file.', [ 'target' => $target ] );
-                fclose( $input );
+                self::stream_close( $input );
                 $error_code = 'entry_unwritable';
                 break;
             }
 
             while ( ! feof( $input ) ) {
                 // Only reads plugin-generated backup files, path is validated and sanitized.
-                $buffer = fread( $input, 1048576 );
+                $buffer = self::stream_read( $input, 1048576 );
                 if ( false === $buffer ) {
                     backup_lite_log( 'error', 'Error while reading stream during extraction.', [ 'entry' => $entry ] );
                     $error_code = 'stream_read_error';
                     break;
                 }
-                if ( false === fwrite( $output, $buffer ) ) {
+                if ( false === self::stream_write( $output, $buffer ) ) {
                     backup_lite_log( 'error', 'Unable to write buffer during extraction.', [ 'target' => $target ] );
                     $error_code = 'stream_write_error';
                     break;
                 }
             }
 
-            fclose( $input );
-            fclose( $output );
-            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+            self::stream_close( $input );
+            self::stream_close( $output );
 
             if ( null !== $error_code ) {
                 break;
@@ -828,15 +867,12 @@ class Backup_Lite_Restore {
         $destination_escaped = escapeshellarg( $destination );
 
         // Detect file format by reading first few bytes
-        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-        // 說明：大型備份檔案需要串流讀寫，WP_Filesystem 無法安全且有效率處理此場景，只能使用底層檔案函式。
-        $file_handle = fopen( $archive, 'rb' );
+        $file_handle = self::stream_open( $archive, 'rb' );
         $file_header = '';
         if ( $file_handle ) {
-            $file_header = fread( $file_handle, 512 ); // Read first 512 bytes
-            fclose( $file_handle );
+            $file_header = self::stream_read( $file_handle, 512 ); // Read first 512 bytes
+            self::stream_close( $file_handle );
         }
-        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
 
         // Try different extraction methods based on file format
         $methods = [];
@@ -1020,12 +1056,9 @@ class Backup_Lite_Restore {
             ];
         }
         
-        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-        // 說明：以下程式碼用於大型備份檔案的串流讀寫，WP_Filesystem 在這種情境下效能與穩定性不足，且路徑已經過白名單與 sanitize_file_name 保護。
         // Read file header to determine format
-        $file_handle = fopen( $archive, 'rb' );
+        $file_handle = self::stream_open( $archive, 'rb' );
         if ( ! $file_handle ) {
-            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
             return [
                 'success'    => false,
                 'error'      => __( 'Unable to open WPRESS file for reading.', 'museder-restoreone' ),
@@ -1033,8 +1066,8 @@ class Backup_Lite_Restore {
             ];
         }
         
-        $header = fread( $file_handle, 1024 );
-        fclose( $file_handle );
+        $header = self::stream_read( $file_handle, 1024 );
+        self::stream_close( $file_handle );
         
         // Check for gzip magic bytes (0x1f 0x8b)
         if ( strlen( $header ) >= 2 && ord( $header[0] ) === 0x1f && ord( $header[1] ) === 0x8b ) {
@@ -1044,7 +1077,7 @@ class Backup_Lite_Restore {
                 if ( $gz_handle ) {
                     // Read and write decompressed data
                     $output_file = trailingslashit( $destination ) . 'extracted_content';
-                    $output_handle = fopen( $output_file, 'wb' );
+                    $output_handle = self::stream_open( $output_file, 'wb' );
                     if ( $output_handle ) {
                         $bytes_written = 0;
                         while ( ! gzeof( $gz_handle ) ) {
@@ -1052,12 +1085,11 @@ class Backup_Lite_Restore {
                             if ( false === $chunk ) {
                                 break;
                             }
-                            fwrite( $output_handle, $chunk );
+                            self::stream_write( $output_handle, $chunk );
                             $bytes_written += strlen( $chunk );
                         }
-                        fclose( $output_handle );
+                        self::stream_close( $output_handle );
                         gzclose( $gz_handle );
-            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
                         
                         if ( $bytes_written > 0 ) {
                             backup_lite_log( 'info', 'WPRESS PHP extraction completed (gzip)', [
@@ -1076,7 +1108,6 @@ class Backup_Lite_Restore {
                 }
             }
         }
-        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
         
         // If we get here, PHP native extraction also failed
         backup_lite_log( 'warning', 'WPRESS PHP native extraction failed', [
@@ -1445,11 +1476,10 @@ class Backup_Lite_Restore {
     private static function import_database_with_php( $sql_file, $progress_cb = null ) {
         global $wpdb;
 
-        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen
-        // Reason: High-performance streaming of large backup/restore archive files.
+        // High-performance streaming of large backup/restore archive files.
         // - Only runs for admins (manage_options) or via authenticated restore jobs.
         // - WP_Filesystem is not suitable for this hot path.
-        $handle = fopen( $sql_file, 'r' );
+        $handle = self::stream_open( $sql_file, 'r' );
         if ( ! $handle ) {
             backup_lite_log( 'error', 'Unable to open SQL file for reading.', [ 'path' => $sql_file ] );
             return false;
@@ -1524,8 +1554,7 @@ class Backup_Lite_Restore {
                             'line'  => $line_num,
                             'error' => $error,
                         ] );
-                        fclose( $handle );
-                        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_read_fgets, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+                        self::stream_close( $handle );
                         return [
                             'success' => false,
                             'message' => __( 'Database restore encountered an error. Check logs.', 'museder-restoreone' ),
@@ -1539,8 +1568,7 @@ class Backup_Lite_Restore {
             }
         }
 
-        fclose( $handle );
-        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_read_fgets, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+        self::stream_close( $handle );
 
         self::restore_database_constraints();
 
@@ -1585,9 +1613,7 @@ class Backup_Lite_Restore {
         }
 
         $active_plugins = [];
-        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-        // Reason: High-performance streaming of large backup/restore archives. WP_Filesystem is not suitable for this hot path. Access is limited to admins with manage_options.
-        $handle = fopen( $sql_file, 'rb' );
+        $handle = self::stream_open( $sql_file, 'rb' );
         if ( ! $handle ) {
             return [];
         }
@@ -1601,7 +1627,7 @@ class Backup_Lite_Restore {
 
         while ( ! feof( $handle ) && ! $found ) {
             // Only reads plugin-generated backup files, path is validated and sanitized.
-            $chunk = fread( $handle, $chunk_size );
+            $chunk = self::stream_read( $handle, $chunk_size );
             if ( false === $chunk ) {
                 break;
             }
@@ -1630,8 +1656,7 @@ class Backup_Lite_Restore {
             }
         }
 
-        fclose( $handle );
-        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+        self::stream_close( $handle );
 
         return $active_plugins;
     }

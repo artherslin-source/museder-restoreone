@@ -4,7 +4,7 @@ Tags: backup, migration, restore, site-backup, database-backup
 Requires at least: 5.8
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 2.7.40
+Stable tag: 2.7.40.7
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -13,6 +13,32 @@ A lightweight WordPress backup & restore plugin focused on compatibility, single
 == Changelog ==
 
 For full changelog history, please see docs/changelog-archive.md in the plugin folder.
+
+= 2.7.40.7 =
+* Code Quality: Centralized restore/S3 streaming I/O into helper methods to reduce Plugin Check file operation errors.
+
+= 2.7.40.6 =
+* Code Quality: Plugin Check compliance fixes (file operation PHPCS blocks, nonce verification annotations, and template global prefix scope).
+
+= 2.7.40.5 =
+* Bug Fix: Fixed backup download links generated for JavaScript/JSON contexts (avoid HTML-escaped query separators that could break the `file` parameter).
+* Bug Fix: Prevented PHP 8+ `ZipArchive->close()` ValueError from causing `admin-ajax.php` 500 during backup job processing.
+
+= 2.7.40.4 =
+* Documentation: Clarified changelog wording and added third-party library source information.
+
+= 2.7.40.3 =
+* Security: Removed any remaining legacy “native/secret upload” code path in the frontend; uploads are handled via WordPress REST routes only.
+* Security: upload-handler.php and download-handler.php are deprecated stubs; uploads/downloads are handled via WordPress routes only.
+
+= 2.7.40.2 =
+* Security: Removed direct upload endpoint usage; uploads are handled via WordPress REST routes only.
+* Security: Deprecated upload-handler.php as a non-executable stub to avoid direct file access concerns.
+
+= 2.7.40.1 =
+* Security: Removed direct executable behavior from download-handler.php; downloads now go through WordPress admin-post routes.
+* Security: upload-handler.php and download-handler.php are deprecated stubs; uploads/downloads are handled via WordPress routes only.
+* Security: Updated vendored Chart.js library to v4.5.1.
 
 = 2.7.40 =
 * Bug Fix: Fixed download-handler.php showing blank page when downloading backup files. Restored actual download functionality with proper WordPress bootstrap, HMAC token verification, and file streaming.

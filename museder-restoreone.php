@@ -3,7 +3,7 @@
 Plugin Name: Museder RestoreOne
 Plugin URI: https://museder.com/restoreone
 Description: Museder RestoreOne is a simple backup & restore plugin for WordPress.
-Version: 2.7.40
+Version: 2.7.40.7
 Requires at least: 5.8
 Tested up to: 6.9
 Requires PHP: 7.4
@@ -17,13 +17,12 @@ Domain Path: /languages
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-define( 'BACKUP_LITE_VERSION', '2.7.40' );
+define( 'BACKUP_LITE_VERSION', '2.7.40.7' );
 define( 'BACKUP_LITE_PATH', plugin_dir_path( __FILE__ ) );
 define( 'BACKUP_LITE_URL', plugin_dir_url( __FILE__ ) );
 
 require_once BACKUP_LITE_PATH . 'includes/helpers.php';
 require_once BACKUP_LITE_PATH . 'includes/class-pro.php';
-require_once BACKUP_LITE_PATH . 'includes/class-upload-secret.php';
 require_once BACKUP_LITE_PATH . 'includes/class-backup.php';
 require_once BACKUP_LITE_PATH . 'includes/class-backup-jobs.php';
 require_once BACKUP_LITE_PATH . 'includes/class-restore.php';
@@ -89,10 +88,6 @@ function backup_lite_bootstrap() {
                 backup_lite_get_temp_dir();
                 backup_lite_ensure_access_controls();
                 
-                if ( class_exists( 'Backup_Lite_Upload_Secret' ) ) {
-                    Backup_Lite_Upload_Secret::init();
-                }
-                
                 // Only synchronise cron events if class is available and method exists
                 if ( class_exists( 'Backup_Lite_Schedule_Handler' ) && method_exists( 'Backup_Lite_Schedule_Handler', 'synchronise_cron_events' ) ) {
                     Backup_Lite_Schedule_Handler::synchronise_cron_events();
@@ -122,7 +117,6 @@ function backup_lite_bootstrap() {
     
     backup_lite_ensure_access_controls();
     Backup_Lite_Pro::init();
-    Backup_Lite_Upload_Secret::init();
     Backup_Lite_UI::init();
     Backup_Lite_Backup_Jobs::init();
     Backup_Lite_Restore_Jobs::init();
@@ -234,9 +228,9 @@ function backup_lite_render_dashboard() {
 
     wp_enqueue_script(
         'chartjs',
-        BACKUP_LITE_URL . 'assets/vendor/chart.4.4.4.min.js',
+        BACKUP_LITE_URL . 'assets/vendor/chart.4.5.1.min.js',
         [],
-        '4.4.4',
+        '4.5.1',
         true
     );
 
@@ -436,9 +430,9 @@ function backup_lite_render_pro_reports() {
     // Enqueue Chart.js for trend charts
     wp_enqueue_script(
         'chartjs',
-        BACKUP_LITE_URL . 'assets/vendor/chart.4.4.4.min.js',
+        BACKUP_LITE_URL . 'assets/vendor/chart.4.5.1.min.js',
         [],
-        '4.4.4',
+        '4.5.1',
         true
     );
 

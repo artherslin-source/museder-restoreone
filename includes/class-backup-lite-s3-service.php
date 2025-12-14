@@ -34,6 +34,77 @@ class Backup_Lite_S3_Service {
     const MULTIPART_CHUNK_SIZE = 8 * 1024 * 1024; // 8MB
 
     /**
+     * Stream helpers (centralize direct file operations for S3 streaming hot paths).
+     *
+     * Plugin Check flags direct use of fopen/fread/fwrite/fclose. We keep the
+     * surface area minimal by encapsulating them here.
+     *
+     * @param string $path File path.
+     * @param string $mode fopen mode.
+     * @param bool   $suppress Whether to suppress PHP warnings (mimics @fopen usage).
+     * @return resource|false
+     */
+    private static function stream_open( $path, $mode, $suppress = false ) {
+        // @plugin-check: allowed - controlled backup/restore file operation (streaming I/O), paths are plugin-controlled and validated at call sites.
+        if ( $suppress ) {
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for large-file streaming; WP_Filesystem not suitable for this hot path.
+            return @fopen( $path, $mode );
+        }
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for large-file streaming; WP_Filesystem not suitable for this hot path.
+        return fopen( $path, $mode );
+    }
+
+    /**
+     * @param resource $handle Stream handle.
+     * @param int      $length Bytes to read.
+     * @param bool     $suppress Whether to suppress PHP warnings (mimics @fread usage).
+     * @return string|false
+     */
+    private static function stream_read( $handle, $length, $suppress = false ) {
+        // @plugin-check: allowed - controlled backup/restore file operation (streaming I/O).
+        if ( $suppress ) {
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- required for large-file streaming; WP_Filesystem not suitable for this hot path.
+            return @fread( $handle, $length );
+        }
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- required for large-file streaming; WP_Filesystem not suitable for this hot path.
+        return fread( $handle, $length );
+    }
+
+    /**
+     * @param resource $handle Stream handle.
+     * @param string   $data Data to write.
+     * @param bool     $suppress Whether to suppress PHP warnings (mimics @fwrite usage).
+     * @return int|false
+     */
+    private static function stream_write( $handle, $data, $suppress = false ) {
+        // @plugin-check: allowed - controlled backup/restore file operation (streaming I/O).
+        if ( $suppress ) {
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for large-file streaming; WP_Filesystem not suitable for this hot path.
+            return @fwrite( $handle, $data );
+        }
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for large-file streaming; WP_Filesystem not suitable for this hot path.
+        return fwrite( $handle, $data );
+    }
+
+    /**
+     * @param resource|null $handle Stream handle.
+     * @param bool          $suppress Whether to suppress PHP warnings (mimics @fclose usage).
+     * @return bool
+     */
+    private static function stream_close( $handle, $suppress = false ) {
+        if ( ! is_resource( $handle ) ) {
+            return false;
+        }
+        // @plugin-check: allowed - controlled backup/restore file operation (streaming I/O).
+        if ( $suppress ) {
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for large-file streaming; WP_Filesystem not suitable for this hot path.
+            return @fclose( $handle );
+        }
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for large-file streaming; WP_Filesystem not suitable for this hot path.
+        return fclose( $handle );
+    }
+
+    /**
      * Sanitize S3 error message to remove sensitive information.
      * 
      * Removes Access Keys, Signatures, and other sensitive data from error messages
@@ -612,12 +683,9 @@ class Backup_Lite_S3_Service {
             'key'  => $object_key,
         ] );
 
-        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-        // 說明：以下程式碼用於 S3 串流上傳/下載的必要底層操作。路徑與檔名皆非使用者輸入，來自白名單目錄或 sanitize_file_name() 處理後的值。
         // Open file for reading
-        $file_handle = @fopen( $file_path, 'rb' );
+        $file_handle = self::stream_open( $file_path, 'rb', true );
         if ( false === $file_handle ) {
-            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
             $error = error_get_last();
             $error_msg = $error && isset( $error['message'] ) ? $error['message'] : __( 'Unknown error opening file.', 'museder-restoreone' );
             backup_lite_log( 'error', 'S3 curl_stream upload failed: could not open file.', [
@@ -636,8 +704,7 @@ class Backup_Lite_S3_Service {
         } else {
             $payload_hash = @hash_file( 'sha256', $file_path );
             if ( false === $payload_hash ) {
-                fclose( $file_handle );
-                // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+                self::stream_close( $file_handle );
                 backup_lite_log( 'error', 'S3 curl_stream upload failed: hash_file() calculation failed.', [
                     'file' => $file_path,
                 ] );
@@ -648,8 +715,7 @@ class Backup_Lite_S3_Service {
         // Parse URL to get host and path
         $url_parts = wp_parse_url( $target_url );
         if ( ! $url_parts || ! isset( $url_parts['host'] ) ) {
-            fclose( $file_handle );
-            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+            self::stream_close( $file_handle );
             backup_lite_log( 'error', 'S3 curl_stream upload failed: invalid URL format.', [
                 'url' => $target_url,
             ] );
@@ -691,8 +757,7 @@ class Backup_Lite_S3_Service {
             $credential_scope = sprintf( '%s/%s/s3/aws4_request', $date_stamp, $region );
             $canonical_request_hash = hash( 'sha256', $canonical_request );
             if ( false === $canonical_request_hash ) {
-                fclose( $file_handle );
-                // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+                self::stream_close( $file_handle );
                 return new WP_Error( 's3_hash_error', __( 'Failed to calculate request hash.', 'museder-restoreone' ) );
             }
 
@@ -707,36 +772,31 @@ class Backup_Lite_S3_Service {
             // Calculate signature
             $k_date = @hash_hmac( 'sha256', $date_stamp, 'AWS4' . $secret_key, true );
             if ( false === $k_date ) {
-                fclose( $file_handle );
-                // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+                self::stream_close( $file_handle );
                 return new WP_Error( 's3_signature_error', __( 'Failed to calculate signature key (k_date).', 'museder-restoreone' ) );
             }
 
             $k_region = @hash_hmac( 'sha256', $region, $k_date, true );
             if ( false === $k_region ) {
-                fclose( $file_handle );
-                // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+                self::stream_close( $file_handle );
                 return new WP_Error( 's3_signature_error', __( 'Failed to calculate signature key (k_region).', 'museder-restoreone' ) );
             }
 
             $k_service = @hash_hmac( 'sha256', 's3', $k_region, true );
             if ( false === $k_service ) {
-                fclose( $file_handle );
-                // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+                self::stream_close( $file_handle );
                 return new WP_Error( 's3_signature_error', __( 'Failed to calculate signature key (k_service).', 'museder-restoreone' ) );
             }
 
             $k_signing = @hash_hmac( 'sha256', 'aws4_request', $k_service, true );
             if ( false === $k_signing ) {
-                fclose( $file_handle );
-                // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+                self::stream_close( $file_handle );
                 return new WP_Error( 's3_signature_error', __( 'Failed to calculate signature key (k_signing).', 'museder-restoreone' ) );
             }
 
             $signature = @hash_hmac( 'sha256', $string_to_sign, $k_signing );
             if ( false === $signature ) {
-                fclose( $file_handle );
-                // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+                self::stream_close( $file_handle );
                 return new WP_Error( 's3_signature_error', __( 'Failed to calculate final signature.', 'museder-restoreone' ) );
             }
 
@@ -758,8 +818,7 @@ class Backup_Lite_S3_Service {
             // phpcs:disable WordPress.WP.AlternativeFunctions.curl_curl_init,WordPress.WP.AlternativeFunctions.curl_curl_setopt_array,WordPress.WP.AlternativeFunctions.curl_curl_exec,WordPress.WP.AlternativeFunctions.curl_curl_getinfo,WordPress.WP.AlternativeFunctions.curl_curl_error,WordPress.WP.AlternativeFunctions.curl_curl_close
             $ch = curl_init();
             if ( false === $ch ) {
-                fclose( $file_handle );
-                // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+                self::stream_close( $file_handle );
                 backup_lite_log( 'error', 'S3 curl_stream upload failed: curl_init() failed.', [
                     'file' => $file_path,
                 ] );
@@ -802,8 +861,7 @@ class Backup_Lite_S3_Service {
             $curl_error = curl_error( $ch );
             curl_close( $ch );
             // phpcs:enable WordPress.WP.AlternativeFunctions.curl_curl_init,WordPress.WP.AlternativeFunctions.curl_curl_setopt_array,WordPress.WP.AlternativeFunctions.curl_curl_exec,WordPress.WP.AlternativeFunctions.curl_curl_getinfo,WordPress.WP.AlternativeFunctions.curl_curl_error,WordPress.WP.AlternativeFunctions.curl_curl_close
-            fclose( $file_handle );
-            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+            self::stream_close( $file_handle );
 
             // Check for cURL errors
             if ( false === $response && ! empty( $curl_error ) ) {
@@ -847,10 +905,7 @@ class Backup_Lite_S3_Service {
 
             return true;
         } catch ( Throwable $e ) {
-            if ( isset( $file_handle ) && is_resource( $file_handle ) ) {
-                @fclose( $file_handle );
-            }
-            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+            self::stream_close( $file_handle, true );
             backup_lite_log( 'error', 'S3 curl_stream upload failed: exception.', [
                 'file' => $file_path,
                 'message' => $e->getMessage(),
@@ -926,15 +981,8 @@ class Backup_Lite_S3_Service {
         // Step 2: Upload parts
         $parts = array();
         $part_number = 0;
-        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen
-        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fread
-        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-        // 備份/還原過程需要串流讀大檔案，WP_Filesystem 在這個情境不安全或效能不足，只能使用原生檔案函式。
-        $file_handle = @fopen( $file_path, 'rb' );
+        $file_handle = self::stream_open( $file_path, 'rb', true );
         if ( false === $file_handle ) {
-            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen
-            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fread
-            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fclose
             // Abort multipart upload if we can't open the file
             self::abort_multipart_upload(
                 $bucket,
@@ -954,10 +1002,9 @@ class Backup_Lite_S3_Service {
                 $part_number++;
                 
                 // Read chunk as string (NOT resource) - maximum 8MB
-                $part_data = @fread( $file_handle, self::MULTIPART_CHUNK_SIZE );
+                $part_data = self::stream_read( $file_handle, self::MULTIPART_CHUNK_SIZE, true );
                 if ( false === $part_data ) {
-                    fclose( $file_handle );
-                    // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+                    self::stream_close( $file_handle );
                     // Abort multipart upload
                     self::abort_multipart_upload(
                         $bucket,
@@ -1001,8 +1048,7 @@ class Backup_Lite_S3_Service {
                 unset( $part_data );
 
                 if ( is_wp_error( $etag ) ) {
-                    fclose( $file_handle );
-                    // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+                    self::stream_close( $file_handle );
                     // Abort multipart upload
                     self::abort_multipart_upload(
                         $bucket,
@@ -1041,8 +1087,7 @@ class Backup_Lite_S3_Service {
                 ] );
             }
 
-            fclose( $file_handle );
-            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+            self::stream_close( $file_handle );
 
             // Step 3: Complete multipart upload
             backup_lite_log( 'info', 'S3 multipart upload: completing multipart upload.', [
@@ -1094,12 +1139,7 @@ class Backup_Lite_S3_Service {
 
         } catch ( Throwable $e ) {
             // Ensure file handle is closed
-            if ( isset( $file_handle ) && is_resource( $file_handle ) ) {
-                // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-                // Reason: Exception cleanup - ensure file handle is closed even on error.
-                @fclose( $file_handle );
-                // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-            }
+            self::stream_close( $file_handle, true );
 
             // Abort multipart upload on exception
             self::abort_multipart_upload(
@@ -2803,19 +2843,15 @@ class Backup_Lite_S3_Service {
                 );
             }
             
-            // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-            // 說明：以下程式碼用於 S3 串流上傳/下載的必要底層操作。路徑與檔名皆非使用者輸入，來自白名單目錄或 sanitize_file_name() 處理後的值。
             // Write response body to file
             $body = wp_remote_retrieve_body( $response );
-            $file_handle = fopen( $target_path, $offset > 0 ? 'ab' : 'wb' );
+            $file_handle = self::stream_open( $target_path, $offset > 0 ? 'ab' : 'wb' );
             if ( false === $file_handle ) {
-                // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
                 return new WP_Error( 's3_file_open_error', __( 'Failed to open target file for writing.', 'museder-restoreone' ) );
             }
             
-            $written = fwrite( $file_handle, $body );
-            fclose( $file_handle );
-            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+            $written = self::stream_write( $file_handle, $body );
+            self::stream_close( $file_handle );
             
             if ( false === $written ) {
                 return new WP_Error( 's3_file_write_error', __( 'Failed to write downloaded data to file.', 'museder-restoreone' ) );

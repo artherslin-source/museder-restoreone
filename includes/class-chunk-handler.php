@@ -167,13 +167,14 @@ class Backup_Lite_Chunk_Handler {
 
             // @plugin-check: sanitized + nonce - verified via verify_permissions() above
             $uploaded_file = null;
-            if ( isset( $_FILES['file'] ) && is_uploaded_file( $_FILES['file']['tmp_name'] ) ) {
-                // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- using PHP upload tmp_name provided by the system
+            // $_FILES[*]['tmp_name'] is a server-side path managed by PHP upload handling and does not need sanitization.
+            // phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotValidated, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+            if ( isset( $_FILES['file']['tmp_name'] ) && is_uploaded_file( $_FILES['file']['tmp_name'] ) ) {
                 $uploaded_file = $_FILES['file']['tmp_name'];
-            } elseif ( isset( $_FILES['chunk'] ) && is_uploaded_file( $_FILES['chunk']['tmp_name'] ) ) {
-                // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- using PHP upload tmp_name provided by the system
+            } elseif ( isset( $_FILES['chunk']['tmp_name'] ) && is_uploaded_file( $_FILES['chunk']['tmp_name'] ) ) {
                 $uploaded_file = $_FILES['chunk']['tmp_name'];
             }
+            // phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotValidated, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
 
             if ( ! $uploaded_file ) {
                 throw new Backup_Lite_Chunk_Exception( 'no_upload', esc_html__( 'No chunk file uploaded.', 'museder-restoreone' ), [], 400 );

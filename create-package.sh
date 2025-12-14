@@ -2,7 +2,7 @@
 # 创建 Museder RestoreOne 插件打包文件
 
 PLUGIN_NAME="museder-restoreone"
-VERSION="2.7.10"
+VERSION="$(php -r '$c=file_get_contents("museder-restoreone.php"); if(preg_match("/^Version:\\s*(.+)$/m",$c,$m)) { echo trim($m[1]); }')"
 PACKAGE_NAME="${PLUGIN_NAME}-${VERSION}.zip"
 TEMP_DIR=$(mktemp -d)
 PLUGIN_DIR="${TEMP_DIR}/${PLUGIN_NAME}"
@@ -29,6 +29,9 @@ if [ -d "dist" ]; then
     cp -r dist "${PLUGIN_DIR}/" 2>/dev/null || true
 fi
 
+# 清理 macOS / editor noise
+find "${PLUGIN_DIR}" -name ".DS_Store" -delete 2>/dev/null || true
+
 # 排除的文件和目录
 exclude_items=(
     ".git"
@@ -51,7 +54,13 @@ OUTPUT_FILE="${SCRIPT_DIR}/${PACKAGE_NAME}"
 
 cd "${TEMP_DIR}"
 echo "正在压缩..."
-zip -r "${OUTPUT_FILE}" "${PLUGIN_NAME}" -q
+# Ensure a clean archive (zip updates existing archives by default).
+rm -f "${OUTPUT_FILE}"
+# Exclude OS / editor artifacts from the archive.
+# Note: zip's exclude patterns are not bash globs; keep them explicit.
+zip -r "${OUTPUT_FILE}" "${PLUGIN_NAME}" -q \
+  -x '*.DS_Store' '*/.DS_Store' '*/*/.DS_Store' '*/*/*/.DS_Store' '*/*/*/*/.DS_Store' \
+  -x '__MACOSX/*' '*/__MACOSX/*' '*/*/__MACOSX/*' '*/*/*/__MACOSX/*'
 
 # 清理临时目录
 cd "${SCRIPT_DIR}"

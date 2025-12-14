@@ -301,16 +301,12 @@ class Backup_Lite_UI {
             ],
         ] );
 
-        $upload_handler_url = plugins_url( 'upload-handler.php', BACKUP_LITE_PATH . 'upload-handler.php' );
-
         wp_localize_script(
             'backup-lite-chunk-upload-v2',
             'BackupLiteV2',
             [
                 'restUrl'        => esc_url_raw( $rest_url_v2 ),
                 'nonce'          => wp_create_nonce( 'wp_rest' ),
-                'uploadHandler'  => esc_url_raw( $upload_handler_url ),
-                'uploadSecret'   => Backup_Lite_Upload_Secret::get_secret(),
             ]
         );
     }
