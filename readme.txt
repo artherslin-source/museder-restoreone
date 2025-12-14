@@ -4,7 +4,7 @@ Tags: backup, migration, restore, site-backup, database-backup
 Requires at least: 5.8
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 2.7.40.11
+Stable tag: 2.7.40.15
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -13,6 +13,19 @@ A lightweight WordPress backup & restore plugin focused on compatibility, single
 == Changelog ==
 
 For full changelog history, please see docs/changelog-archive.md in the plugin folder.
+
+= 2.7.40.15 =
+* Bug Fix: Hardened restore upload integrity checks (size match + quick ZIP structure validation + dedupe identical collisions) to prevent incomplete/corrupted archives from persisting (avoid broken “-1.zip”).
+
+= 2.7.40.14 =
+* Bug Fix: Prevented broken duplicate uploads during restore (avoid leaving corrupted “-1.zip” by validating upload size/ZIP structure, deduping identical name collisions, and cleaning up incomplete archives).
+
+= 2.7.40.13 =
+* Bug Fix: Hardened backup download streaming to prevent corrupted/invalid responses on some hosts (clear all output buffers, disable compression best-effort, stream via readfile, avoid Content-Length).
+
+= 2.7.40.12 =
+* Code Quality: Make DB-derived table allowlist provenance explicit (allowlist “set” helpers) and iterate allowlisted tables directly to satisfy Plugin Check DB identifier rules (no logic change).
+* Security: Tighten minimal-scope PHPCS ignores for SQL identifiers (table names cannot be prepared) with consistent, reviewer-friendly rationale.
 
 = 2.7.40.11 =
 * Security: Addressed remaining Plugin Check DirectDB warnings by documenting allowlist-validated identifiers (identifiers cannot be prepared) with minimal-scope PHPCS ignores.

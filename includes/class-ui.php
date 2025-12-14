@@ -440,6 +440,7 @@ class Backup_Lite_UI {
         }
 
         $file = $uploaded_file;
+        $expected_size = isset( $uploaded_file['size'] ) ? (int) $uploaded_file['size'] : 0;
 
         require_once ABSPATH . 'wp-admin/includes/file.php';
 
@@ -453,13 +454,90 @@ class Backup_Lite_UI {
             wp_send_json_error( [ 'message' => esc_html__( 'Failed to upload restore file.', 'museder-restoreone' ) ] );
         }
 
-        $file_path = $uploaded['file'];
+        $file_path = wp_normalize_path( $uploaded['file'] );
         $ext       = strtolower( pathinfo( $file_path, PATHINFO_EXTENSION ) );
+
+        if ( ! in_array( $ext, [ 'zip', 'wpress' ], true ) ) {
+            // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
+            wp_delete_file( $file_path );
+            wp_send_json_error(
+                [
+                    'code'    => 'unsupported_file_type',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Unsupported file type for restore. Allowed: zip, wpress.', 'museder-restoreone' ),
+                ],
+                415
+            );
+        }
+
+        // Basic size integrity check before moving into backup library.
+        $actual_size = file_exists( $file_path ) ? (int) filesize( $file_path ) : 0;
+        if ( $actual_size <= 0 || ( $expected_size > 0 && $actual_size !== $expected_size ) ) {
+            backup_lite_log( 'error', 'restore_upload_size_mismatch', [
+                'name'          => isset( $uploaded_file['name'] ) ? sanitize_file_name( $uploaded_file['name'] ) : basename( $file_path ),
+                'expected_size' => $expected_size,
+                'actual_size'   => $actual_size,
+            ] );
+            // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
+            wp_delete_file( $file_path );
+            wp_send_json_error(
+                [
+                    'code'    => 'upload_incomplete',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Uploaded file appears incomplete. Please re-upload the backup.', 'museder-restoreone' ),
+                ],
+                400
+            );
+        }
+
+        // Quick ZIP structure validation (best-effort) to catch truncated uploads early.
+        if ( 'zip' === $ext ) {
+            $zip_reason = null;
+            if ( ! backup_lite_quick_zip_is_valid( $file_path, $zip_reason ) ) {
+                backup_lite_log( 'error', 'restore_upload_zip_invalid', [
+                    'name'          => isset( $uploaded_file['name'] ) ? sanitize_file_name( $uploaded_file['name'] ) : basename( $file_path ),
+                    'reason'        => $zip_reason,
+                    'expected_size' => $expected_size,
+                    'actual_size'   => $actual_size,
+                ] );
+                // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
+                wp_delete_file( $file_path );
+                wp_send_json_error(
+                    [
+                        'code'    => 'invalid_zip',
+                        // @plugin-check: escaped
+                        'message' => esc_html__( 'Uploaded ZIP archive appears corrupted or incomplete. Please re-upload the backup.', 'museder-restoreone' ),
+                    ],
+                    400
+                );
+            }
+        }
 
         // Move uploaded file into backup directory for logging & future reuse.
         $backup_dir = backup_lite_get_backup_dir();
-        $unique     = wp_unique_filename( $backup_dir, basename( $file_path ) );
-        $destination = trailingslashit( $backup_dir ) . $unique;
+
+        $desired_name  = basename( $file_path );
+        $existing_path = wp_normalize_path( trailingslashit( $backup_dir ) . $desired_name );
+
+        // If a same-named file already exists, and it is identical (size + sha1), reuse it (avoid "-1.zip").
+        if ( $desired_name && file_exists( $existing_path ) && is_readable( $existing_path ) ) {
+            $existing_size = (int) filesize( $existing_path );
+            if ( $existing_size === $actual_size && $actual_size > 0 ) {
+                $new_sha1      = backup_lite_sha1_file( $file_path );
+                $existing_sha1 = backup_lite_sha1_file( $existing_path );
+                if ( $new_sha1 && $existing_sha1 && hash_equals( $existing_sha1, $new_sha1 ) ) {
+                    // Uploaded file is a duplicate of existing archive; delete temp upload and reuse existing.
+                    // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
+                    wp_delete_file( $file_path );
+                    $file_path = $existing_path;
+                }
+            }
+        }
+
+        // If we are still using the temp upload path, store it in backup dir (unique if needed).
+        if ( strpos( wp_normalize_path( $file_path ), wp_normalize_path( $backup_dir ) ) !== 0 ) {
+            $unique      = wp_unique_filename( $backup_dir, $desired_name );
+            $destination = trailingslashit( $backup_dir ) . $unique;
         // This plugin needs low-level rename() here for streaming backup/restore performance.
         // Using WP_Filesystem::move() is not always reliable across all hosting environments.
         // @phpcs:disable WordPress.WP.AlternativeFunctions.rename_rename
@@ -467,17 +545,39 @@ class Backup_Lite_UI {
         // @phpcs:enable WordPress.WP.AlternativeFunctions.rename_rename
         if ( $renamed ) {
             $file_path = $destination;
+            } else {
+                backup_lite_log( 'error', 'restore_upload_store_failed', [
+                    'destination' => wp_normalize_path( $destination ),
+                ] );
+                // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
+                wp_delete_file( $file_path );
+                wp_send_json_error(
+                    [
+                        'code'    => 'store_failed',
+                        // @plugin-check: escaped
+                        'message' => esc_html__( 'Unable to store uploaded file for restore. Please try again.', 'museder-restoreone' ),
+                    ],
+                    500
+                );
+        }
         }
 
-        if ( ! in_array( $ext, [ 'zip', 'wpress' ], true ) ) {
-            $response = [
-                'success' => false,
-                // @plugin-check: escaped
-                'message' => esc_html__( 'Unsupported file type for restore.', 'museder-restoreone' ),
-            ];
-        } else {
-            $response = Backup_Lite_Restore::restore_site( $file_path );
+        // Final sanity check: make sure stored file is valid and readable before restore.
+        if ( ! file_exists( $file_path ) || ! is_readable( $file_path ) ) {
+            backup_lite_log( 'error', 'restore_upload_final_not_readable', [
+                'file' => wp_normalize_path( $file_path ),
+            ] );
+            wp_send_json_error(
+                [
+                    'code'    => 'stored_file_unreadable',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Uploaded file could not be accessed after saving. Please re-upload the backup.', 'museder-restoreone' ),
+                ],
+                500
+            );
         }
+
+        $response = Backup_Lite_Restore::restore_site( $file_path );
 
         if ( ! empty( $response['success'] ) ) {
             wp_send_json_success( $response );
@@ -765,8 +865,16 @@ class Backup_Lite_UI {
             // @phpcs:enable Squiz.PHP.DiscouragedFunctions.Discouraged
         }
 
-        if ( function_exists( 'ob_get_length' ) && ob_get_length() ) {
-            @ob_end_clean();
+        // Best effort: disable output compression and clear all output buffers so binary output isn't corrupted.
+        if ( function_exists( 'ini_set' ) ) {
+            // @plugin-check: allowed - best-effort runtime config for safe binary streaming.
+            @ini_set( 'zlib.output_compression', '0' );
+        }
+
+        if ( function_exists( 'ob_get_level' ) ) {
+            while ( ob_get_level() > 0 ) {
+                @ob_end_clean();
+            }
         }
 
         nocache_headers();
@@ -775,27 +883,30 @@ class Backup_Lite_UI {
         header( 'Content-Type: ' . $mime );
         $download_filename = sanitize_file_name( basename( $path ) ); // @plugin-check: sanitized
         header( 'Content-Disposition: attachment; filename="' . $download_filename . '"' );
-        header( 'Content-Length: ' . (string) filesize( $path ) );
+        // Avoid sending Content-Length to prevent length/encoding mismatches when servers/proxies re-encode the response.
         header( 'Content-Transfer-Encoding: binary' );
         header( 'X-Content-Type-Options: nosniff' );
+        header( 'Content-Encoding: identity' );
 
-        $chunk_size = 1024 * 1024; // 1MB
-        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for streaming large backup files, path validated and sanitized
-        $handle     = fopen( $path, 'rb' );
-        if ( ! $handle ) {
+        $size = (int) filesize( $path );
+        backup_lite_log( 'info', 'download_start', [
+            'filename' => $download_filename,
+            'size'     => $size,
+        ] );
+
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_readfile -- required for streaming large backup files, path validated and sanitized
+        $result = readfile( $path );
+        if ( false === $result ) {
+            backup_lite_log( 'error', 'download_failed', [
+                'filename' => $download_filename,
+            ] );
             wp_die( esc_html__( 'Unable to read backup file.', 'museder-restoreone' ), esc_html__( 'Download error', 'museder-restoreone' ), 500 );
         }
 
-        while ( ! feof( $handle ) ) {
-            // Only reads plugin-generated backup files, path is validated and sanitized.
-            // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fread,WordPress.Security.EscapeOutput.OutputNotEscaped -- required for streaming large backup files, path validated and sanitized, streaming binary file contents not HTML output
-            echo fread( $handle, $chunk_size );
-            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fread,WordPress.Security.EscapeOutput.OutputNotEscaped
-            flush();
-        }
-
-        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-        fclose( $handle );
+        backup_lite_log( 'info', 'download_done', [
+            'filename' => $download_filename,
+            'size'     => $size,
+        ] );
         exit;
     }
 

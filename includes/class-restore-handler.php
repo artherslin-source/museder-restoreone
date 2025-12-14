@@ -64,6 +64,8 @@ class Backup_Lite_Restore_Handler {
             wp_send_json_error( [ 'message' => esc_html__( 'No restore file uploaded.', 'museder-restoreone' ) ], 400 );
         }
 
+        $expected_size = isset( $file['size'] ) ? (int) $file['size'] : 0;
+
         require_once ABSPATH . 'wp-admin/includes/file.php';
 
         $overrides = [ 'test_form' => false ];
@@ -85,17 +87,107 @@ class Backup_Lite_Restore_Handler {
             wp_send_json_error( [ 'message' => esc_html__( 'Unsupported file type. Allowed: zip, wpress.', 'museder-restoreone' ) ], 415 );
         }
 
-        $backup_dir = backup_lite_get_backup_dir();
-        $unique     = wp_unique_filename( $backup_dir, basename( $file_path ) );
-        $destination = trailingslashit( $backup_dir ) . $unique;
+        // Basic size integrity check before moving into backup library.
+        $actual_size = file_exists( $file_path ) ? (int) filesize( $file_path ) : 0;
+        if ( $actual_size <= 0 || ( $expected_size > 0 && $actual_size !== $expected_size ) ) {
+            backup_lite_log( 'error', 'restore_upload_size_mismatch', [
+                'name'          => isset( $file['name'] ) ? sanitize_file_name( $file['name'] ) : basename( $file_path ),
+                'expected_size' => $expected_size,
+                'actual_size'   => $actual_size,
+            ] );
+            // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
+            wp_delete_file( $file_path );
+            wp_send_json_error(
+                [
+                    'code'    => 'upload_incomplete',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Uploaded file appears incomplete. Please re-upload the backup.', 'museder-restoreone' ),
+                ],
+                400
+            );
+        }
 
-        if ( ! self::move_file( $file_path, $destination ) ) {
-            // @plugin-check: escaped
-            wp_send_json_error( [ 'message' => esc_html__( 'Unable to store uploaded file for restore.', 'museder-restoreone' ) ], 500 );
+        // Quick ZIP structure validation (best-effort) to catch truncated uploads early.
+        if ( 'zip' === $ext ) {
+            $zip_reason = null;
+            if ( ! backup_lite_quick_zip_is_valid( $file_path, $zip_reason ) ) {
+                backup_lite_log( 'error', 'restore_upload_zip_invalid', [
+                    'name'          => isset( $file['name'] ) ? sanitize_file_name( $file['name'] ) : basename( $file_path ),
+                    'reason'        => $zip_reason,
+                    'expected_size' => $expected_size,
+                    'actual_size'   => $actual_size,
+                ] );
+                // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
+                wp_delete_file( $file_path );
+                wp_send_json_error(
+                    [
+                        'code'    => 'invalid_zip',
+                        // @plugin-check: escaped
+                        'message' => esc_html__( 'Uploaded ZIP archive appears corrupted or incomplete. Please re-upload the backup.', 'museder-restoreone' ),
+                    ],
+                    400
+                );
+            }
+        }
+
+        $backup_dir = backup_lite_get_backup_dir();
+        $desired_name  = basename( $file_path );
+        $existing_path = wp_normalize_path( trailingslashit( $backup_dir ) . $desired_name );
+
+        // If a same-named file already exists, and it is identical (size + sha1), reuse it (avoid "-1.zip").
+        if ( $desired_name && file_exists( $existing_path ) && is_readable( $existing_path ) ) {
+            $existing_size = (int) filesize( $existing_path );
+            if ( $existing_size === $actual_size && $actual_size > 0 ) {
+                $new_sha1      = backup_lite_sha1_file( $file_path );
+                $existing_sha1 = backup_lite_sha1_file( $existing_path );
+                if ( $new_sha1 && $existing_sha1 && hash_equals( $existing_sha1, $new_sha1 ) ) {
+                    // Uploaded file is a duplicate of existing archive; delete temp upload and reuse existing.
+                    // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
+                    wp_delete_file( $file_path );
+                    $file_path = $existing_path;
+                }
+            }
+        }
+
+        // If we are still using the temp upload path, store it in backup dir (unique if needed).
+        $destination = '';
+        if ( strpos( wp_normalize_path( $file_path ), wp_normalize_path( $backup_dir ) ) !== 0 ) {
+            $unique      = wp_unique_filename( $backup_dir, $desired_name );
+            $destination = trailingslashit( $backup_dir ) . $unique;
+
+            if ( ! self::move_file( $file_path, $destination ) ) {
+                backup_lite_log( 'error', 'restore_upload_store_failed', [
+                    'destination' => wp_normalize_path( $destination ),
+                ] );
+                // @plugin-check: escaped
+                wp_send_json_error(
+                    [
+                        'code'    => 'store_failed',
+                        'message' => esc_html__( 'Unable to store uploaded file for restore.', 'museder-restoreone' ),
+                    ],
+                    500
+                );
+            }
+            $file_path = wp_normalize_path( $destination );
+        }
+
+        // Final sanity check: make sure stored file is valid and readable before processing.
+        if ( ! file_exists( $file_path ) || ! is_readable( $file_path ) ) {
+            backup_lite_log( 'error', 'restore_upload_final_not_readable', [
+                'file' => wp_normalize_path( $file_path ),
+            ] );
+            wp_send_json_error(
+                [
+                    'code'    => 'stored_file_unreadable',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Uploaded file could not be accessed after saving. Please re-upload the backup.', 'museder-restoreone' ),
+                ],
+                500
+            );
         }
 
         // Check file size for large file handling
-        $file_size = file_exists( $destination ) ? filesize( $destination ) : 0;
+        $file_size = file_exists( $file_path ) ? filesize( $file_path ) : 0;
         $large_file_threshold = 500 * 1024 * 1024; // 500MB
         $very_large_file_threshold = 1000 * 1024 * 1024; // 1GB
         
@@ -121,9 +213,9 @@ class Backup_Lite_Restore_Handler {
         
         if ( $should_attempt_conversion ) {
             try {
-                if ( class_exists( 'Backup_Lite_AI1WM_Converter' ) && Backup_Lite_AI1WM_Converter::is_ai1wm_backup( $destination ) ) {
+                if ( class_exists( 'Backup_Lite_AI1WM_Converter' ) && Backup_Lite_AI1WM_Converter::is_ai1wm_backup( $file_path ) ) {
                     backup_lite_log( 'info', 'Detected All-in-One WP Migration backup, converting to Museder RestoreOne format.', [
-                        'file' => basename( $destination ),
+                        'file' => basename( $file_path ),
                         'size' => size_format( $file_size, 2 ),
                     ] );
                     
@@ -138,15 +230,15 @@ class Backup_Lite_Restore_Handler {
                         // @phpcs:enable Squiz.PHP.DiscouragedFunctions.Discouraged
                     }
                     
-                    $convert_result = Backup_Lite_AI1WM_Converter::convert( $destination );
+                    $convert_result = Backup_Lite_AI1WM_Converter::convert( $file_path );
                     
                     if ( ! empty( $convert_result['success'] ) && ! empty( $convert_result['file'] ) && file_exists( $convert_result['file'] ) ) {
                         // Delete original file and use converted file
-                        wp_delete_file( $destination );
+                        wp_delete_file( $file_path );
                         
-                        $destination = $convert_result['file'];
+                        $file_path = $convert_result['file'];
                         backup_lite_log( 'info', 'Successfully converted All-in-One backup.', [
-                            'converted_file' => basename( $destination ),
+                            'converted_file' => basename( $file_path ),
                         ] );
                     } else {
                         // Conversion failed, but we can still try to restore the original file
@@ -172,12 +264,12 @@ class Backup_Lite_Restore_Handler {
 
         // Prepare session with error handling
         try {
-            if ( ! file_exists( $destination ) ) {
+            if ( ! file_exists( $file_path ) ) {
                 wp_send_json_error( [ 'message' => esc_html__( 'Backup file not found after processing.', 'museder-restoreone' ) ], 404 );
                 return;
             }
             
-            $summary = self::prepare_session( $destination, 'upload' );
+            $summary = self::prepare_session( $file_path, 'upload' );
             
             wp_send_json_success( [
                 'summary' => $summary,
@@ -187,7 +279,7 @@ class Backup_Lite_Restore_Handler {
             // @plugin-check: sanitized - exception message is for logging only, not user-facing
             backup_lite_log( 'error', 'Failed to prepare restore session after upload.', [
                 'error' => sanitize_text_field( $e->getMessage() ),
-                'file' => basename( $destination ),
+                'file' => basename( $file_path ),
                 'trace' => sanitize_text_field( $e->getTraceAsString() ),
             ] );
             
@@ -1313,6 +1405,67 @@ class Backup_Lite_Restore_Handler {
         fclose( $output );
 
         self::delete_chunk_session( $session_id );
+
+        // Verify merged file size matches expected (prevents truncated/incomplete archive from persisting).
+        $expected_size = isset( $meta['filesize'] ) ? (int) $meta['filesize'] : 0;
+        $actual_size   = file_exists( $final_path ) ? (int) filesize( $final_path ) : 0;
+        if ( $actual_size <= 0 || ( $expected_size > 0 && $expected_size !== $actual_size ) ) {
+            backup_lite_log( 'error', 'restore_chunk_finalize_size_mismatch', [
+                'filename'      => isset( $meta['filename'] ) ? sanitize_file_name( $meta['filename'] ) : basename( $final_path ),
+                'expected_size' => $expected_size,
+                'actual_size'   => $actual_size,
+            ] );
+            // @plugin-check: allowed - controlled backup/restore file operation, path from plugin-controlled directory
+            wp_delete_file( $final_path );
+            // @plugin-check: escaped
+            wp_send_json_error(
+                [
+                    'code'    => 'upload_incomplete',
+                    'message' => esc_html__( 'Merged backup file appears incomplete. Please re-upload the backup.', 'museder-restoreone' ),
+                ],
+                400
+            );
+        }
+
+        $ext = strtolower( pathinfo( $final_path, PATHINFO_EXTENSION ) );
+        if ( 'zip' === $ext ) {
+            $zip_reason = null;
+            if ( ! backup_lite_quick_zip_is_valid( $final_path, $zip_reason ) ) {
+                backup_lite_log( 'error', 'restore_chunk_finalize_zip_invalid', [
+                    'filename'      => isset( $meta['filename'] ) ? sanitize_file_name( $meta['filename'] ) : basename( $final_path ),
+                    'reason'        => $zip_reason,
+                    'expected_size' => $expected_size,
+                    'actual_size'   => $actual_size,
+                ] );
+                // @plugin-check: allowed - controlled backup/restore file operation, path from plugin-controlled directory
+                wp_delete_file( $final_path );
+                wp_send_json_error(
+                    [
+                        'code'    => 'invalid_zip',
+                        // @plugin-check: escaped
+                        'message' => esc_html__( 'Merged ZIP archive appears corrupted or incomplete. Please re-upload the backup.', 'museder-restoreone' ),
+                    ],
+                    400
+                );
+            }
+        }
+
+        // If the user uploaded a file with the same original name, and an identical archive already exists,
+        // reuse the existing one and delete the newly merged unique "-1" file.
+        $desired_name  = isset( $meta['filename'] ) ? basename( (string) $meta['filename'] ) : '';
+        $existing_path = $desired_name ? wp_normalize_path( trailingslashit( $backup_dir ) . $desired_name ) : '';
+        if ( $desired_name && $existing_path && $existing_path !== wp_normalize_path( $final_path ) && file_exists( $existing_path ) && is_readable( $existing_path ) ) {
+            $existing_size = (int) filesize( $existing_path );
+            if ( $existing_size === $actual_size && $actual_size > 0 ) {
+                $new_sha1      = backup_lite_sha1_file( $final_path );
+                $existing_sha1 = backup_lite_sha1_file( $existing_path );
+                if ( $new_sha1 && $existing_sha1 && hash_equals( $existing_sha1, $new_sha1 ) ) {
+                    // @plugin-check: allowed - controlled backup/restore file operation, path from plugin-controlled directory
+                    wp_delete_file( $final_path );
+                    $final_path = $existing_path;
+                }
+            }
+        }
 
         // Optimize runtime environment before preparing session
         self::optimize_runtime_environment();

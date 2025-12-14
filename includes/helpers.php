@@ -464,6 +464,144 @@ function backup_lite_is_allowed_backup_extension( $filename ) {
     return in_array( $extension, [ 'zip', 'wpress' ], true );
 }
 
+/**
+ * Quick ZIP structure validation.
+ *
+ * Best-effort checks:
+ * - Start of file should look like a ZIP header ("PK\x03\x04", "PK\x05\x06", or "PK\x07\x08")
+ * - End of file should contain End Of Central Directory record (EOCD) signature "PK\x05\x06"
+ *   within the last 64KB (+22 bytes).
+ *
+ * This does not fully validate the archive; it is meant to catch truncated uploads early.
+ *
+ * @param string      $path   Absolute file path.
+ * @param string|null $reason Optional; populated with a short reason code on failure.
+ * @return bool
+ */
+function backup_lite_quick_zip_is_valid( $path, &$reason = null ) {
+    $reason = null;
+    $path   = (string) $path;
+
+    if ( '' === $path || ! file_exists( $path ) || ! is_readable( $path ) || ! is_file( $path ) ) {
+        $reason = 'not_readable';
+        return false;
+    }
+
+    $size = @filesize( $path );
+    if ( false === $size || $size < 22 ) {
+        $reason = 'too_small';
+        return false;
+    }
+
+    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- direct fopen is required for quick ZIP validation, path validated above
+    $fh = @fopen( $path, 'rb' );
+    if ( ! $fh ) {
+        $reason = 'open_failed';
+        return false;
+    }
+
+    // Read first 4 bytes for ZIP signature.
+    $head = '';
+    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- required for quick ZIP validation
+    $head = fread( $fh, 4 );
+    $valid_head = in_array( $head, [ "PK\x03\x04", "PK\x05\x06", "PK\x07\x08" ], true );
+    if ( ! $valid_head ) {
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required cleanup
+        fclose( $fh );
+        $reason = 'bad_magic';
+        return false;
+    }
+
+    // Scan for EOCD signature near EOF.
+    $scan_len = (int) min( 65536 + 22, $size );
+    $start    = (int) max( 0, $size - $scan_len );
+
+    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fseek -- required for quick ZIP validation
+    if ( 0 !== fseek( $fh, $start, SEEK_SET ) ) {
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required cleanup
+        fclose( $fh );
+        $reason = 'seek_failed';
+        return false;
+    }
+
+    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- required for quick ZIP validation
+    $tail = fread( $fh, $scan_len );
+    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required cleanup
+    fclose( $fh );
+
+    if ( false === $tail || '' === $tail ) {
+        $reason = 'tail_read_failed';
+        return false;
+    }
+
+    if ( false === strpos( $tail, "PK\x05\x06" ) ) {
+        $reason = 'missing_eocd';
+        return false;
+    }
+
+    return true;
+}
+
+/**
+ * Streamed SHA1 helper (optional utility).
+ *
+ * @param string $path
+ * @param int    $max_bytes If > 0, hash only the first N bytes (NOT equivalent to full-file sha1).
+ * @return string|false Lowercase hex SHA1 hash string on success, false on failure.
+ */
+function backup_lite_sha1_file( $path, $max_bytes = 0 ) {
+    $path      = (string) $path;
+    $max_bytes = (int) $max_bytes;
+
+    if ( '' === $path || ! file_exists( $path ) || ! is_readable( $path ) || ! is_file( $path ) ) {
+        return false;
+    }
+
+    // Full file hash fast-path.
+    if ( $max_bytes <= 0 ) {
+        $hash = @sha1_file( $path );
+        if ( is_string( $hash ) && '' !== $hash ) {
+            return strtolower( $hash );
+        }
+        // Fall through to streamed method if sha1_file() fails.
+    }
+
+    $ctx = hash_init( 'sha1' );
+    if ( ! $ctx ) {
+        return false;
+    }
+
+    $remaining = ( $max_bytes > 0 ) ? $max_bytes : PHP_INT_MAX;
+
+    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- direct fopen required for streamed hashing
+    $fh = @fopen( $path, 'rb' );
+    if ( ! $fh ) {
+        return false;
+    }
+
+    $buf_size = 1024 * 1024; // 1MB
+    while ( $remaining > 0 && ! feof( $fh ) ) {
+        $read_len = (int) min( $buf_size, $remaining );
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- required for streamed hashing
+        $data = fread( $fh, $read_len );
+        if ( false === $data ) {
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required cleanup
+            fclose( $fh );
+            return false;
+        }
+        if ( '' === $data ) {
+            break;
+        }
+        hash_update( $ctx, $data );
+        $remaining -= strlen( $data );
+    }
+
+    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required cleanup
+    fclose( $fh );
+
+    return strtolower( hash_final( $ctx ) );
+}
+
 function backup_lite_safe_path_join( $base, $path ) {
     $base     = wp_normalize_path( $base );
     $relative = str_replace( '\\', '/', (string) $path );
@@ -734,26 +872,46 @@ function backup_lite_get_wp_table_whitelist() {
 }
 
 /**
+ * Get the WordPress table allowlist as an associative "set" (tableName => true).
+ *
+ * Provenance:
+ * - Built from the DB engine via SHOW TABLES LIKE %s for the current $wpdb->prefix.
+ * - Results are DB-derived identifiers (not user input).
+ *
+ * @return array<string,true>
+ */
+function backup_lite_get_wp_table_allowlist_set() {
+	static $set = null;
+
+	if ( null !== $set ) {
+		return $set;
+	}
+
+	$set = [];
+	foreach ( backup_lite_get_wp_table_whitelist() as $name ) {
+		if ( is_string( $name ) && '' !== $name ) {
+			$set[ $name ] = true;
+		}
+	}
+
+	return $set;
+}
+
+/**
  * Validate a WordPress table name by strict membership in the prefix whitelist.
  *
  * @param string $table Table name.
  * @return string|false Validated table name or false.
  */
 function backup_lite_validate_wp_table_name( $table ) {
-	static $set = null;
-
-	if ( null === $set ) {
-		$set = [];
-		foreach ( backup_lite_get_wp_table_whitelist() as $name ) {
-			$set[ $name ] = true;
-		}
-	}
-
 	$table = (string) $table;
 	if ( '' === $table ) {
 		return false;
 	}
 
+	$set = backup_lite_get_wp_table_allowlist_set();
+
+	// Return the exact input string if it matches the live allowlist (no rewriting).
 	return isset( $set[ $table ] ) ? $table : false;
 }
 
@@ -786,21 +944,38 @@ function backup_lite_get_servmask_table_whitelist() {
 }
 
 /**
+ * Get the SERVMASK placeholder table allowlist as an associative "set" (tableName => true).
+ *
+ * Provenance:
+ * - Built from the DB engine via SHOW TABLES LIKE %s for SERVMASK\_PREFIX\_%.
+ * - Results are DB-derived identifiers (not user input).
+ *
+ * @return array<string,true>
+ */
+function backup_lite_get_servmask_table_allowlist_set() {
+	static $set = null;
+
+	if ( null !== $set ) {
+		return $set;
+	}
+
+	$set = [];
+	foreach ( backup_lite_get_servmask_table_whitelist() as $name ) {
+		if ( is_string( $name ) && '' !== $name ) {
+			$set[ $name ] = true;
+		}
+	}
+
+	return $set;
+}
+
+/**
  * Validate a SERVMASK placeholder table name for cleanup.
  *
  * @param string $table Table name.
  * @return string|false Validated table name or false.
  */
 function backup_lite_validate_servmask_table_name( $table ) {
-	static $set = null;
-
-	if ( null === $set ) {
-		$set = [];
-		foreach ( backup_lite_get_servmask_table_whitelist() as $name ) {
-			$set[ $name ] = true;
-		}
-	}
-
 	$table = (string) $table;
 	if ( '' === $table ) {
 		return false;
@@ -811,5 +986,8 @@ function backup_lite_validate_servmask_table_name( $table ) {
 		return false;
 	}
 
+	$set = backup_lite_get_servmask_table_allowlist_set();
+
+	// Return the exact input string if it matches the live allowlist (no rewriting).
 	return isset( $set[ $table ] ) ? $table : false;
 }
