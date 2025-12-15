@@ -855,13 +855,10 @@ class Backup_Lite_UI {
         // @plugin-check: okay - needed for long running backup/restore operations
         // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running backup/restore operations
         if ( function_exists( 'set_time_limit' ) ) {
-            // Allow longer execution time for large backup/restore jobs when possible.
+            // Allow longer execution time for large downloads when possible.
             // phpcs:ignore WordPress.PHP.NoSetTimeLimit
-            // Long-running backup/restore job: attempt to raise time limit for CLI/cron.
             // @phpcs:disable Squiz.PHP.DiscouragedFunctions.Discouraged
-            if ( function_exists( 'set_time_limit' ) ) {
-                @set_time_limit( 0 );
-            }
+            @set_time_limit( 0 );
             // @phpcs:enable Squiz.PHP.DiscouragedFunctions.Discouraged
         }
 
@@ -869,6 +866,13 @@ class Backup_Lite_UI {
         if ( function_exists( 'ini_set' ) ) {
             // @plugin-check: allowed - best-effort runtime config for safe binary streaming.
             @ini_set( 'zlib.output_compression', '0' );
+            @ini_set( 'output_buffering', '0' );
+            @ini_set( 'implicit_flush', '1' );
+        }
+
+        if ( function_exists( 'wp_ob_end_flush_all' ) ) {
+            // Flush any buffers WP knows about (best-effort).
+            wp_ob_end_flush_all();
         }
 
         if ( function_exists( 'ob_get_level' ) ) {
@@ -883,29 +887,78 @@ class Backup_Lite_UI {
         header( 'Content-Type: ' . $mime );
         $download_filename = sanitize_file_name( basename( $path ) ); // @plugin-check: sanitized
         header( 'Content-Disposition: attachment; filename="' . $download_filename . '"' );
-        // Avoid sending Content-Length to prevent length/encoding mismatches when servers/proxies re-encode the response.
         header( 'Content-Transfer-Encoding: binary' );
         header( 'X-Content-Type-Options: nosniff' );
         header( 'Content-Encoding: identity' );
+        header( 'X-Accel-Buffering: no' );
+        header( 'Cache-Control: no-store, no-cache, must-revalidate, max-age=0' );
+        header( 'Pragma: no-cache' );
 
         $size = (int) filesize( $path );
-        backup_lite_log( 'info', 'download_start', [
-            'filename' => $download_filename,
-            'size'     => $size,
-        ] );
-
-        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_readfile -- required for streaming large backup files, path validated and sanitized
-        $result = readfile( $path );
-        if ( false === $result ) {
-            backup_lite_log( 'error', 'download_failed', [
-                'filename' => $download_filename,
-            ] );
-            wp_die( esc_html__( 'Unable to read backup file.', 'museder-restoreone' ), esc_html__( 'Download error', 'museder-restoreone' ), 500 );
+        if ( $size > 0 ) {
+            header( 'Content-Length: ' . $size );
         }
 
-        backup_lite_log( 'info', 'download_done', [
-            'filename' => $download_filename,
-            'size'     => $size,
+        $headers_sent = function_exists( 'headers_sent' ) ? headers_sent() : false;
+        backup_lite_log( 'info', 'download_start', [
+            'filename'     => $download_filename,
+            'size'         => $size,
+            'headers_sent' => (bool) $headers_sent,
+        ] );
+
+        // Stream file in chunks to reduce buffering issues across varied hosting stacks.
+        $bytes_sent  = 0;
+        $chunk_size  = 1024 * 1024; // 1MB.
+        $conn_status = function_exists( 'connection_status' ) ? (int) connection_status() : 0;
+
+        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen,WordPress.WP.AlternativeFunctions.file_system_operations_fread,WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+        $handle = @fopen( $path, 'rb' );
+        if ( ! $handle ) {
+            backup_lite_log( 'error', 'download_failed_open', [
+                'filename' => $download_filename,
+                'size'     => $size,
+            ] );
+            wp_die( esc_html__( 'Unable to open backup file.', 'museder-restoreone' ), esc_html__( 'Download error', 'museder-restoreone' ), 500 );
+        }
+
+        while ( ! feof( $handle ) ) {
+            $buffer = fread( $handle, $chunk_size );
+            if ( false === $buffer ) {
+                break;
+            }
+
+            $len = strlen( $buffer );
+            if ( 0 === $len ) {
+                continue;
+            }
+
+            echo $buffer; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- binary stream
+            $bytes_sent += $len;
+
+            if ( function_exists( 'flush' ) ) {
+                @flush();
+            }
+
+            if ( function_exists( 'connection_status' ) ) {
+                $conn_status = (int) connection_status();
+            }
+
+            if ( function_exists( 'connection_aborted' ) && connection_aborted() ) {
+                break;
+            }
+        }
+
+        fclose( $handle );
+        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen,WordPress.WP.AlternativeFunctions.file_system_operations_fread,WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+
+        $expected = $size > 0 ? $size : null;
+        $ok       = ( null === $expected ) ? ( $bytes_sent > 0 ) : ( $bytes_sent === $expected );
+
+        backup_lite_log( $ok ? 'info' : 'error', $ok ? 'download_done' : 'download_truncated', [
+            'filename'     => $download_filename,
+            'size'         => $size,
+            'bytes_sent'   => $bytes_sent,
+            'conn_status'  => $conn_status,
         ] );
         exit;
     }
