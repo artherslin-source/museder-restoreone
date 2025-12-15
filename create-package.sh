@@ -2,7 +2,7 @@
 # 创建 Museder RestoreOne 插件打包文件
 
 PLUGIN_NAME="museder-restoreone"
-VERSION="2.7.84"
+VERSION="$(php -r '$c=file_get_contents("museder-restoreone.php"); if(preg_match("/^Version:\\s*(.+)$/m",$c,$m)) { echo trim($m[1]); }')"
 PACKAGE_NAME="${PLUGIN_NAME}-${VERSION}.zip"
 TEMP_DIR=$(mktemp -d)
 PLUGIN_DIR="${TEMP_DIR}/${PLUGIN_NAME}"
