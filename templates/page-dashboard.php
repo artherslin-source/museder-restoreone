@@ -226,6 +226,140 @@ if ( $safe_mode_active ) {
             </div>
         </div>
 
+        <?php
+        $museder_restoreone_is_pro_ai = function_exists( 'museder_is_pro_active' ) ? museder_is_pro_active() : false;
+        $museder_restoreone_ai_reports = [];
+        if ( class_exists( 'Museder_AI_Admin_Page' ) ) {
+            $museder_restoreone_ai_reports = Museder_AI_Admin_Page::get_recent_reports( 5 );
+        }
+        $museder_restoreone_ai_latest       = ! empty( $museder_restoreone_ai_reports ) ? $museder_restoreone_ai_reports[0] : null;
+        $museder_restoreone_ai_last_created = is_array( $museder_restoreone_ai_latest ) && isset( $museder_restoreone_ai_latest['created_at_gmt'] ) ? (string) $museder_restoreone_ai_latest['created_at_gmt'] : '';
+        $museder_restoreone_ai_last_items   = [];
+        if ( is_array( $museder_restoreone_ai_latest ) && isset( $museder_restoreone_ai_latest['report']['items'] ) && is_array( $museder_restoreone_ai_latest['report']['items'] ) ) {
+            $museder_restoreone_ai_last_items = $museder_restoreone_ai_latest['report']['items'];
+        }
+        ?>
+        <div class="backup-lite-card" id="backup-lite-ai-card">
+            <h2>
+                🤖 <?php esc_html_e( 'AI Site Scan (Preview)', 'museder-restoreone' ); ?>
+                <?php if ( ! $museder_restoreone_is_pro_ai ) : ?>
+                    <span class="pro-badge">PREVIEW</span>
+                <?php endif; ?>
+            </h2>
+
+            <p class="description" style="margin-top: 8px;">
+                <?php esc_html_e( 'Runs locally in your admin. No external network calls are made.', 'museder-restoreone' ); ?>
+            </p>
+
+            <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top: 10px;">
+                <button type="button" class="button button-primary" id="backup-lite-ai-run-scan">
+                    <?php esc_html_e( 'Run Scan', 'museder-restoreone' ); ?>
+                </button>
+                <span id="backup-lite-ai-status" class="description" aria-live="polite"></span>
+            </div>
+
+            <p class="description" style="margin-top: 10px;">
+                <strong style="display:inline-block; margin-right:6px;"><?php esc_html_e( 'Last scan:', 'museder-restoreone' ); ?></strong>
+                <span id="backup-lite-ai-last-scan">
+                    <?php echo esc_html( $museder_restoreone_ai_last_created ? backup_lite_format_local_time( $museder_restoreone_ai_last_created ) : '—' ); ?>
+                </span>
+            </p>
+
+            <div style="margin-top: 10px;" id="backup-lite-ai-latest-items-wrap" <?php echo empty( $museder_restoreone_ai_last_items ) ? 'hidden' : ''; // @plugin-check: escaped ?>>
+                <strong><?php esc_html_e( 'Top recommendations', 'museder-restoreone' ); ?></strong>
+                <ul class="backup-lite-list" id="backup-lite-ai-latest-items" style="margin-top: 10px;">
+                    <?php foreach ( array_slice( $museder_restoreone_ai_last_items, 0, 5 ) as $museder_restoreone_ai_item ) : ?>
+                        <?php
+                        $ai_severity = isset( $museder_restoreone_ai_item['severity'] ) ? strtolower( (string) $museder_restoreone_ai_item['severity'] ) : 'info';
+                        $ai_title    = isset( $museder_restoreone_ai_item['title'] ) ? (string) $museder_restoreone_ai_item['title'] : '';
+                        $ai_rec      = isset( $museder_restoreone_ai_item['recommendation'] ) ? (string) $museder_restoreone_ai_item['recommendation'] : '';
+                        $ai_badge_class = 'success';
+                        $ai_badge_label = __( 'Info', 'museder-restoreone' );
+                        if ( 'high' === $ai_severity ) {
+                            $ai_badge_class = 'error';
+                            $ai_badge_label = __( 'High', 'museder-restoreone' );
+                        } elseif ( 'medium' === $ai_severity ) {
+                            $ai_badge_class = 'pending';
+                            $ai_badge_label = __( 'Medium', 'museder-restoreone' );
+                        }
+                        ?>
+                        <li>
+                            <span class="badge <?php echo esc_attr( $ai_badge_class ); ?>"><?php echo esc_html( $ai_badge_label ); ?></span>
+                            <?php if ( $ai_title ) : ?>
+                                <strong><?php echo esc_html( $ai_title ); ?></strong>
+                            <?php endif; ?>
+                            <?php if ( $ai_rec ) : ?>
+                                <span><?php echo esc_html( $ai_rec ); ?></span>
+                            <?php endif; ?>
+                        </li>
+                    <?php endforeach; ?>
+                </ul>
+            </div>
+
+            <div style="margin-top: 12px;">
+                <strong><?php esc_html_e( 'Recent reports', 'museder-restoreone' ); ?></strong>
+                <div id="backup-lite-ai-reports-container">
+                    <?php if ( empty( $museder_restoreone_ai_reports ) ) : ?>
+                        <p class="description" id="backup-lite-ai-empty"><?php esc_html_e( 'No AI scan reports yet.', 'museder-restoreone' ); ?></p>
+                    <?php else : ?>
+                        <ul class="backup-lite-list" id="backup-lite-ai-reports">
+                            <?php foreach ( $museder_restoreone_ai_reports as $museder_restoreone_ai_entry ) : ?>
+                                <?php
+                                $museder_restoreone_ai_created = isset( $museder_restoreone_ai_entry['created_at_gmt'] ) ? (string) $museder_restoreone_ai_entry['created_at_gmt'] : '';
+                                $museder_restoreone_ai_summary = isset( $museder_restoreone_ai_entry['report']['summary'] ) ? (string) $museder_restoreone_ai_entry['report']['summary'] : '';
+                                $museder_restoreone_ai_items   = isset( $museder_restoreone_ai_entry['report']['items'] ) && is_array( $museder_restoreone_ai_entry['report']['items'] ) ? $museder_restoreone_ai_entry['report']['items'] : [];
+                                ?>
+                                <li>
+                                    <strong><?php echo esc_html( $museder_restoreone_ai_created ? backup_lite_format_local_time( $museder_restoreone_ai_created ) : '' ); ?></strong>
+                                    <?php if ( $museder_restoreone_ai_summary ) : ?>
+                                        <span><?php echo esc_html( $museder_restoreone_ai_summary ); ?></span>
+                                    <?php endif; ?>
+                                    <?php if ( ! empty( $museder_restoreone_ai_items ) ) : ?>
+                                        <details style="margin-top: 6px;">
+                                            <summary><?php esc_html_e( 'View details', 'museder-restoreone' ); ?></summary>
+                                            <ul style="margin: 8px 0 0 18px;">
+                                                <?php foreach ( array_slice( $museder_restoreone_ai_items, 0, 5 ) as $museder_restoreone_ai_item ) : ?>
+                                                    <?php
+                                                    $ai_severity = isset( $museder_restoreone_ai_item['severity'] ) ? strtolower( (string) $museder_restoreone_ai_item['severity'] ) : 'info';
+                                                    $ai_title    = isset( $museder_restoreone_ai_item['title'] ) ? (string) $museder_restoreone_ai_item['title'] : '';
+                                                    $ai_rec      = isset( $museder_restoreone_ai_item['recommendation'] ) ? (string) $museder_restoreone_ai_item['recommendation'] : '';
+                                                    $ai_badge_class = 'success';
+                                                    $ai_badge_label = __( 'Info', 'museder-restoreone' );
+                                                    if ( 'high' === $ai_severity ) {
+                                                        $ai_badge_class = 'error';
+                                                        $ai_badge_label = __( 'High', 'museder-restoreone' );
+                                                    } elseif ( 'medium' === $ai_severity ) {
+                                                        $ai_badge_class = 'pending';
+                                                        $ai_badge_label = __( 'Medium', 'museder-restoreone' );
+                                                    }
+                                                    ?>
+                                                    <li>
+                                                        <span class="badge <?php echo esc_attr( $ai_badge_class ); ?>"><?php echo esc_html( $ai_badge_label ); ?></span>
+                                                        <?php if ( $ai_title ) : ?>
+                                                            <strong><?php echo esc_html( $ai_title ); ?></strong>
+                                                        <?php endif; ?>
+                                                        <?php if ( $ai_rec ) : ?>
+                                                            <span> — <?php echo esc_html( $ai_rec ); ?></span>
+                                                        <?php endif; ?>
+                                                    </li>
+                                                <?php endforeach; ?>
+                                            </ul>
+                                        </details>
+                                    <?php endif; ?>
+                                </li>
+                            <?php endforeach; ?>
+                        </ul>
+                    <?php endif; ?>
+                </div>
+            </div>
+
+            <?php if ( ! $museder_restoreone_is_pro_ai ) : ?>
+                <a href="<?php echo esc_url( admin_url( 'admin.php?page=backup-lite-pro' ) ); ?>" class="button button-primary" style="margin-top: 10px;">
+                    <?php esc_html_e( 'Upgrade to Pro', 'museder-restoreone' ); ?>
+                </a>
+            <?php endif; ?>
+        </div>
+
         <div class="backup-lite-card">
             <h2>🔥 <?php esc_html_e( 'Latest Logs', 'museder-restoreone' ); ?></h2>
             <?php if ( empty( $recent_logs ) ) : ?>
@@ -245,7 +379,7 @@ if ( $safe_mode_active ) {
         <?php
         // Site Backup Health Score (Pro) — Lite shows promo only, no score
         // Moved to last position as it's a PRO feature and appears grayed out
-        $is_pro = Backup_Lite_Pro::is_pro_active();
+        $is_pro = function_exists( 'museder_is_pro_active' ) ? museder_is_pro_active() : Backup_Lite_Pro::is_pro_active();
         ?>
         <?php // @plugin-check: escaped ?>
         <div class="backup-lite-card <?php echo esc_attr( $is_pro ? '' : 'pro-locked' ); ?>" <?php echo $is_pro ? '' : 'data-upgrade="' . esc_attr( 'pro' ) . '"'; // @plugin-check: escaped ?>>
