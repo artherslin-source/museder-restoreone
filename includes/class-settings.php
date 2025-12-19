@@ -61,7 +61,7 @@ class Backup_Lite_Settings {
     public static function sanitize( $value ) {
         $value = is_array( $value ) ? $value : [];
 
-        $roles        = get_editable_roles();
+        $roles        = self::get_available_roles();
         $default_role = 'administrator';
         $requested_role = isset( $value['min_role'] ) ? sanitize_key( $value['min_role'] ) : $default_role;
         if ( ! array_key_exists( $requested_role, $roles ) ) {
@@ -134,6 +134,40 @@ class Backup_Lite_Settings {
         }
 
         return $sanitized;
+    }
+
+    /**
+     * Get available roles safely (works in admin-ajax contexts too).
+     *
+     * Some hosts/routes load a minimal admin stack where `get_editable_roles()` is not yet available.
+     * In those cases, we load the core file that defines it, then fall back to `wp_roles()` if needed.
+     *
+     * @return array<string,mixed>
+     */
+    public static function get_available_roles(): array {
+        if ( ! function_exists( 'get_editable_roles' ) ) {
+            $user_file = trailingslashit( ABSPATH ) . 'wp-admin/includes/user.php';
+            if ( file_exists( $user_file ) ) {
+                require_once $user_file;
+            }
+        }
+
+        if ( function_exists( 'get_editable_roles' ) ) {
+            $roles = get_editable_roles();
+            return is_array( $roles ) ? $roles : [];
+        }
+
+        if ( function_exists( 'wp_roles' ) ) {
+            $wp_roles = wp_roles();
+            if ( is_object( $wp_roles ) && isset( $wp_roles->roles ) && is_array( $wp_roles->roles ) ) {
+                return $wp_roles->roles;
+            }
+        }
+
+        // Final fallback: ensure at least administrator exists for validation.
+        return [
+            'administrator' => [],
+        ];
     }
 
     /**

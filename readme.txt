@@ -4,7 +4,7 @@ Tags: backup, migration, restore, site-backup, database-backup
 Requires at least: 5.8
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 2.7.91
+Stable tag: 2.7.92
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -13,6 +13,9 @@ A lightweight WordPress backup & restore plugin focused on compatibility, single
 == Changelog ==
 
 For full changelog history, please see docs/changelog-archive.md in the plugin folder.
+
+= 2.7.92 =
+* Fix: Prevented admin-ajax fatal errors (get_editable_roles undefined) that could break backup polling/cancel on some hosts.
 
 = 2.7.91 =
 * Fix: Added backup job watchdog to recover when background processing stalls (shared hosting); cancel now deletes partial archives to avoid confusion; exposed last_activity for better progress handling.

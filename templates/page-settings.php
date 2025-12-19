@@ -16,7 +16,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 // Template context: These variables are scoped to this template file and provided by the rendering function.
 // They use short names for template readability but are not global namespace pollution.
 $settings         = Backup_Lite_Settings::get_settings();
-$roles            = get_editable_roles();
+$roles            = Backup_Lite_Settings::get_available_roles();
 $logs_url         = admin_url( 'admin.php?page=backup-lite-logs' );
 $is_pro           = class_exists( 'Backup_Lite_Pro' ) && Backup_Lite_Pro::is_pro_active();
 $backup_dir       = backup_lite_get_backup_dir();
