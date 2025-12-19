@@ -150,6 +150,19 @@ class Backup_Lite_Backup_Jobs {
             return $job;
         }
 
+        // If a previous request died unexpectedly, the UI may stop nudging when processing=true.
+        // Treat stale processing flag as recoverable.
+        $now_ts = time();
+        if ( ! empty( $job['processing'] ) && ! empty( $job['last_activity'] ) ) {
+            $last_activity = (int) $job['last_activity'];
+            if ( $last_activity > 0 && ( $now_ts - $last_activity ) > 120 ) {
+                $job['processing'] = false;
+                $job['last_activity'] = $now_ts;
+                $job['updated_at'] = current_time( 'mysql' );
+                self::save_job( $job );
+            }
+        }
+
         // Cross-request atomic lock (prevents concurrent cron/AJAX from processing the same job).
         $lock_token = self::acquire_option_lock( $job_id );
         if ( empty( $lock_token ) ) {
@@ -187,6 +200,7 @@ class Backup_Lite_Backup_Jobs {
         // This leaves buffer for frontend timeout (30s) and other operations
         $time_budget = max( 25, min( (int) ( $max_execution_time * 0.75 ), 90 ) );
         $start_microtime = microtime( true ); // Use microtime for precise timing
+        $processed_bytes_start = isset( $job['processed_bytes'] ) ? (int) $job['processed_bytes'] : 0;
         $batch_count = 0;
         $max_batches = 100; // Safety limit to prevent infinite loops
         
@@ -322,17 +336,31 @@ class Backup_Lite_Backup_Jobs {
             // Log batch processing summary
             if ( $batch_count > 1 ) {
                 $total_elapsed = microtime( true ) - $start_microtime;
+                $processed_bytes_end = isset( $job['processed_bytes'] ) ? (int) $job['processed_bytes'] : 0;
+                $delta_bytes = max( 0, $processed_bytes_end - $processed_bytes_start );
+                $throughput_mbps = $total_elapsed > 0 ? round( ( $delta_bytes / 1048576 ) / $total_elapsed, 2 ) : 0;
+                $mode = '';
+                if ( isset( $job['options'] ) && is_array( $job['options'] ) ) {
+                    $mode = isset( $job['options']['backup_mode'] ) ? (string) $job['options']['backup_mode'] : '';
+                }
                 backup_lite_log( 'info', 'Processed multiple batches in single request.', [
                     'job_id' => $job_id,
                     'batches' => $batch_count,
                     'elapsed' => round( $total_elapsed, 2 ),
+                    'bytes' => $delta_bytes,
+                    'mb_per_second' => $throughput_mbps,
+                    'backup_mode' => $mode,
                 ] );
             }
 
-            } catch ( Exception $exception ) {
+            } catch ( Throwable $exception ) {
             // Close ZipArchive if we opened it (even on error)
             if ( null !== $zip ) {
-                $zip->close();
+                try {
+                    $zip->close();
+                } catch ( Throwable $ignored ) {
+                    // ignore
+                }
                 backup_lite_log( 'warning', 'Closed ZipArchive after exception.', [
                     'job_id' => $job_id,
                     'error' => $exception->getMessage(),
@@ -434,6 +462,7 @@ class Backup_Lite_Backup_Jobs {
         $job['message'] = __( 'Backup cancelled by user.', 'museder-restoreone' );
         $job['processing'] = false;
         self::save_job( $job );
+        self::delete_archive_for_job( $job );
         self::cleanup_job( $job );
         self::clear_active_job( $job_id );
         self::clear_scheduled_job( $job_id );
@@ -462,6 +491,49 @@ class Backup_Lite_Backup_Jobs {
                 @unlink( $job['manifest_file'] );
                 // phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
             }
+        }
+    }
+
+    /**
+     * Delete the in-progress archive file for a cancelled/failed job (safely, within backup directory).
+     *
+     * @param array $job Job state.
+     * @return void
+     */
+    private static function delete_archive_for_job( $job ) {
+        if ( empty( $job['archive_path'] ) || ! is_string( $job['archive_path'] ) ) {
+            return;
+        }
+
+        $archive_path = (string) $job['archive_path'];
+        if ( ! file_exists( $archive_path ) ) {
+            return;
+        }
+
+        $backup_dir = backup_lite_get_backup_dir();
+        if ( empty( $backup_dir ) ) {
+            return;
+        }
+
+        $real_backup_dir = realpath( $backup_dir );
+        $real_archive    = realpath( $archive_path );
+        if ( ! $real_backup_dir || ! $real_archive ) {
+            return;
+        }
+
+        $real_backup_dir = trailingslashit( wp_normalize_path( $real_backup_dir ) );
+        $real_archive    = wp_normalize_path( $real_archive );
+
+        if ( 0 !== strpos( $real_archive, $real_backup_dir ) ) {
+            return;
+        }
+
+        if ( function_exists( 'wp_delete_file' ) ) {
+            wp_delete_file( $real_archive );
+        } else {
+            // phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
+            @unlink( $real_archive );
+            // phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
         }
     }
 
@@ -512,6 +584,17 @@ class Backup_Lite_Backup_Jobs {
         $processed_b   = min( $total_bytes, max( 0, (int) $job['processed_bytes'] ) );
         $percentage    = max( 0, min( 100, round( ( $processed_b / $total_bytes ) * 100 ) ) );
 
+        $options = isset( $job['options'] ) && is_array( $job['options'] ) ? $job['options'] : [];
+        $mode    = isset( $options['backup_mode_effective'] ) ? (string) $options['backup_mode_effective'] : ( isset( $options['backup_mode'] ) ? (string) $options['backup_mode'] : '' );
+        $smart   = isset( $options['backup_smart_exclude_effective'] ) ? (string) $options['backup_smart_exclude_effective'] : ( isset( $options['backup_smart_exclude'] ) ? (string) $options['backup_smart_exclude'] : '' );
+
+        if ( ! in_array( $mode, [ 'balanced', 'fast' ], true ) ) {
+            $mode = '';
+        }
+        if ( ! in_array( $smart, [ 'on', 'off' ], true ) ) {
+            $smart = '';
+        }
+
         return [
             'id'              => $job['id'],
             'status'          => $job['status'],
@@ -525,6 +608,13 @@ class Backup_Lite_Backup_Jobs {
             'download_url'    => isset( $job['download_url'] ) ? $job['download_url'] : '',
             'processing'      => ! empty( $job['processing'] ),
             'updated_at'      => isset( $job['updated_at'] ) ? $job['updated_at'] : '',
+            'last_activity'   => isset( $job['last_activity'] ) ? (int) $job['last_activity'] : 0,
+            'started_at'      => isset( $job['started_at'] ) ? (int) $job['started_at'] : 0,
+            'backup_mode'     => $mode,
+            'smart_exclude'   => $smart,
+            'large_site_detected' => ! empty( $options['backup_large_site_detected'] ),
+            'auto_threshold_files' => isset( $options['backup_auto_threshold_files'] ) ? (int) $options['backup_auto_threshold_files'] : 0,
+            'auto_applied'    => ! empty( $options['backup_auto_applied'] ),
         ];
     }
 

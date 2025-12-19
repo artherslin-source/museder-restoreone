@@ -332,6 +332,15 @@ class Backup_Lite_UI {
                 'jobCancelConfirm'=> __( 'Cancel the running backup job?', 'museder-restoreone' ),
                 'jobCancelSuccess'=> __( 'Backup job cancelled.', 'museder-restoreone' ),
                 'jobCancelFailed' => __( 'Unable to cancel backup job. Please try again.', 'museder-restoreone' ),
+                'backupModeLabel' => __( 'Mode', 'museder-restoreone' ),
+                'backupModeFast'  => __( 'Fast', 'museder-restoreone' ),
+                'backupModeBalanced' => __( 'Balanced', 'museder-restoreone' ),
+                'backupModeUnknown'  => __( '—', 'museder-restoreone' ),
+                'smartExcludeOn'  => __( 'Smart Exclude: On', 'museder-restoreone' ),
+                'smartExcludeOff' => __( 'Smart Exclude: Off', 'museder-restoreone' ),
+                'backupModeAutoSwitched' => __( 'Auto enabled Fast mode for a large site.', 'museder-restoreone' ),
+                /* translators: %d: Number of hidden notices. */
+                'hiddenNoticesSummary'   => __( 'Hidden notices (%d)', 'museder-restoreone' ),
                 'restoreCancelConfirm' => __( 'Cancel the current restore process?', 'museder-restoreone' ),
                 'restoreCancelSuccess' => __( 'Restore process cancelled.', 'museder-restoreone' ),
                 'restoreCancelFailed'  => __( 'Unable to cancel restore process. Please try again.', 'museder-restoreone' ),
@@ -967,6 +976,36 @@ class Backup_Lite_UI {
         $options = [];
 
         // phpcs:disable WordPress.Security.NonceVerification.Missing,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified in calling function (handle_backup_request or ajax_start_backup_job) via verify_ajax_request()
+        // Backup mode (Free + Pro)
+        $backup_mode = '';
+        if ( isset( $_POST['backup_mode'] ) ) {
+            $backup_mode = sanitize_key( wp_unslash( $_POST['backup_mode'] ) );
+        }
+        if ( in_array( $backup_mode, [ 'auto', 'balanced', 'fast' ], true ) ) {
+            $options['backup_mode'] = $backup_mode;
+        }
+
+        $smart_exclude = '';
+        if ( isset( $_POST['backup_smart_exclude'] ) ) {
+            $smart_exclude = sanitize_key( wp_unslash( $_POST['backup_smart_exclude'] ) );
+        }
+        if ( in_array( $smart_exclude, [ 'auto', 'on', 'off' ], true ) ) {
+            $options['backup_smart_exclude'] = $smart_exclude;
+        }
+
+        $custom_excludes = '';
+        if ( isset( $_POST['backup_custom_excludes'] ) ) {
+            $custom_excludes = wp_unslash( $_POST['backup_custom_excludes'] );
+            if ( is_string( $custom_excludes ) ) {
+                $custom_excludes = sanitize_textarea_field( $custom_excludes );
+            } else {
+                $custom_excludes = '';
+            }
+        }
+        if ( is_string( $custom_excludes ) && '' !== trim( $custom_excludes ) ) {
+            $options['backup_custom_excludes'] = $custom_excludes;
+        }
+
         if ( Backup_Lite_Pro::is_pro_active() ) {
             $backup_label = '';
             if ( isset( $_POST['backup_label'] ) ) {

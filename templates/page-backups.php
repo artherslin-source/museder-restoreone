@@ -14,6 +14,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 $status  = isset( $status ) ? $status : Backup_Lite_UI::get_environment_status();
 $backups = isset( $backups ) ? $backups : Backup_Lite_UI::get_backups_list();
+$settings = class_exists( 'Backup_Lite_Settings' ) ? Backup_Lite_Settings::get_settings() : [];
 // phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 ?>
 
@@ -92,6 +93,70 @@ $backups = isset( $backups ) ? $backups : Backup_Lite_UI::get_backups_list();
         <form id="backup-lite-backup-form" method="post">
             <?php wp_nonce_field( Backup_Lite_UI::NONCE, 'backup_lite_nonce' ); ?>
             
+            <?php
+            $bl_backup_mode_default = isset( $settings['backup_mode_default'] ) ? (string) $settings['backup_mode_default'] : 'auto';
+            if ( ! in_array( $bl_backup_mode_default, [ 'auto', 'balanced', 'fast' ], true ) ) {
+                $bl_backup_mode_default = 'auto';
+            }
+
+            $bl_smart_exclude_default = isset( $settings['backup_smart_exclude_default'] ) ? (string) $settings['backup_smart_exclude_default'] : 'auto';
+            if ( ! in_array( $bl_smart_exclude_default, [ 'auto', 'on', 'off' ], true ) ) {
+                $bl_smart_exclude_default = 'auto';
+            }
+
+            $bl_custom_excludes_default = isset( $settings['backup_custom_excludes'] ) ? (string) $settings['backup_custom_excludes'] : '';
+            ?>
+
+            <div class="bl-form-control" style="margin-bottom: 16px;">
+                <label for="bl-backup-mode">
+                    <span><?php esc_html_e( 'Backup Mode', 'museder-restoreone' ); ?></span>
+                </label>
+                <select id="bl-backup-mode" name="backup_mode" style="min-width: 240px;">
+                    <option value="auto" <?php selected( $bl_backup_mode_default, 'auto' ); ?>>
+                        <?php esc_html_e( 'Auto (recommended)', 'museder-restoreone' ); ?>
+                    </option>
+                    <option value="balanced" <?php selected( $bl_backup_mode_default, 'balanced' ); ?>>
+                        <?php esc_html_e( 'Balanced (smaller archive, slower)', 'museder-restoreone' ); ?>
+                    </option>
+                    <option value="fast" <?php selected( $bl_backup_mode_default, 'fast' ); ?>>
+                        <?php esc_html_e( 'Fast (larger archive, much faster on shared hosting)', 'museder-restoreone' ); ?>
+                    </option>
+                </select>
+                <small class="description">
+                    <?php esc_html_e( 'Auto will speed up very large sites by reducing compression work and skipping safe-to-regenerate caches.', 'museder-restoreone' ); ?>
+                </small>
+            </div>
+
+            <div class="bl-form-control" style="margin-bottom: 16px;">
+                <label for="bl-backup-smart-exclude">
+                    <span><?php esc_html_e( 'Smart Exclude (cache/temp)', 'museder-restoreone' ); ?></span>
+                </label>
+                <select id="bl-backup-smart-exclude" name="backup_smart_exclude" style="min-width: 240px;">
+                    <option value="auto" <?php selected( $bl_smart_exclude_default, 'auto' ); ?>>
+                        <?php esc_html_e( 'Auto (enable for large sites)', 'museder-restoreone' ); ?>
+                    </option>
+                    <option value="on" <?php selected( $bl_smart_exclude_default, 'on' ); ?>>
+                        <?php esc_html_e( 'On', 'museder-restoreone' ); ?>
+                    </option>
+                    <option value="off" <?php selected( $bl_smart_exclude_default, 'off' ); ?>>
+                        <?php esc_html_e( 'Off', 'museder-restoreone' ); ?>
+                    </option>
+                </select>
+                <small class="description">
+                    <?php esc_html_e( 'Safely skips common cache/temp directories that can be regenerated (helps when there are tons of small files).', 'museder-restoreone' ); ?>
+                </small>
+            </div>
+
+            <div class="bl-form-control" style="margin-bottom: 16px;">
+                <label for="bl-backup-custom-excludes">
+                    <span><?php esc_html_e( 'Custom Excludes (one per line)', 'museder-restoreone' ); ?></span>
+                </label>
+                <textarea id="bl-backup-custom-excludes" name="backup_custom_excludes" rows="4" style="width: 100%; max-width: 680px;" placeholder="<?php esc_attr_e( "Example:\nwp-content/cache/\nwp-content/uploads/cache/\nnode_modules/", 'museder-restoreone' ); ?>"><?php echo esc_textarea( $bl_custom_excludes_default ); ?></textarea>
+                <small class="description">
+                    <?php esc_html_e( 'Optional. Use relative paths like wp-content/cache/ or directory names like node_modules. Avoid excluding important content.', 'museder-restoreone' ); ?>
+                </small>
+            </div>
+
             <?php if ( $is_pro ) : ?>
                 <!-- PRO: Backup Label -->
                 <div class="bl-form-control" style="margin-bottom: 16px;">
@@ -179,6 +244,7 @@ $backups = isset( $backups ) ? $backups : Backup_Lite_UI::get_backups_list();
             <span id="backup-progress-text" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 11px; font-weight: 600; color: #fff; z-index: 10; pointer-events: none;">0%</span>
         </div>
         <p id="backup-elapsed-time" style="margin: 8px 0 0 0; font-size: 12px; color: #64748b; display: none;"></p>
+        <p id="bl-backup-mode-status" style="margin: 6px 0 0 0; font-size: 12px; color: #64748b;"></p>
         <button type="button" id="bl-backup-cancel-btn" class="button button-secondary" style="display:none; margin-top: 12px;">
             <?php esc_html_e( 'Cancel Backup', 'museder-restoreone' ); ?>
         </button>

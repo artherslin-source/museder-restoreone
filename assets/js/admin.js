@@ -74,6 +74,7 @@ var backupLiteTimer = {
 
     const settings = window.BackupLite || {};
     const strings = settings.strings || {};
+    var backupModeStatus = null;
     function getString(key, fallback) {
         if (strings && Object.prototype.hasOwnProperty.call(strings, key) && strings[key]) {
             return strings[key];
@@ -130,6 +131,176 @@ var backupLiteTimer = {
             backgroundColor: background,
             duration: 3000
         }).showToast();
+    }
+
+    /**
+     * Collect third-party notices on Backup Lite pages to prevent layout shifts.
+     *
+     * Policy: move all third-party notices into a collapsible container, except WordPress core
+     * "update-nag" notices which remain visible.
+     */
+    function collectThirdPartyNotices() {
+        try {
+            var wrap = document.querySelector('.wrap.backup-lite-admin');
+            if (!wrap) {
+                return;
+            }
+
+            var wpbody = document.getElementById('wpbody-content');
+            if (!wpbody) {
+                return;
+            }
+
+            var candidates = [];
+
+            // 1) Notices above our wrap (typical WP notice placement).
+            var children = Array.prototype.slice.call(wpbody.children || []);
+            for (var i = 0; i < children.length; i++) {
+                var el = children[i];
+                if (el === wrap) {
+                    break;
+                }
+                if (!el || el.nodeType !== 1) {
+                    continue;
+                }
+                if (el.classList && (el.classList.contains('notice') || el.classList.contains('updated') || el.classList.contains('update-nag') || el.classList.contains('error'))) {
+                    candidates.push(el);
+                }
+            }
+
+            // 2) Notices rendered inside our wrap by other plugins/themes.
+            var inside = wrap.querySelectorAll('.notice, .updated, .update-nag, .error');
+            for (var k = 0; k < inside.length; k++) {
+                candidates.push(inside[k]);
+            }
+
+            if (!candidates.length) {
+                return;
+            }
+
+            // Deduplicate.
+            var unique = [];
+            var seen = new Set();
+            for (var d = 0; d < candidates.length; d++) {
+                var node = candidates[d];
+                if (!node || node.nodeType !== 1) {
+                    continue;
+                }
+                if (seen.has(node)) {
+                    continue;
+                }
+                seen.add(node);
+                unique.push(node);
+            }
+
+            var hidden = [];
+            for (var j = 0; j < unique.length; j++) {
+                var notice = unique[j];
+
+                // Never move our own plugin message box.
+                if (notice.id === 'backup-lite-messages' || notice.classList.contains('backup-lite-messages')) {
+                    continue;
+                }
+
+                // Keep core update nags visible.
+                if (notice.classList.contains('update-nag')) {
+                    continue;
+                }
+
+                hidden.push(notice);
+            }
+
+            if (!hidden.length) {
+                return;
+            }
+
+            var existing = document.getElementById('bl-hidden-notices');
+            var wasOpen = false;
+            if (existing && existing.tagName && existing.tagName.toLowerCase() === 'details') {
+                wasOpen = !!existing.open;
+            }
+            if (existing && existing.parentNode) {
+                existing.parentNode.removeChild(existing);
+            }
+
+            var details = document.createElement('details');
+            details.id = 'bl-hidden-notices';
+            details.className = 'bl-hidden-notices';
+            details.open = wasOpen;
+
+            var summary = document.createElement('summary');
+            var label = getString('hiddenNoticesSummary', 'Hidden notices (%d)').replace('%d', String(hidden.length));
+            summary.textContent = label;
+            // Force toggle to avoid other scripts preventing native <details> behavior.
+            summary.addEventListener('click', function (event) {
+                event.preventDefault();
+                event.stopPropagation();
+                details.open = !details.open;
+            }, true);
+
+            var list = document.createElement('div');
+            list.className = 'bl-hidden-notices__list';
+
+            details.appendChild(summary);
+            details.appendChild(list);
+
+            // Insert at top of plugin wrap.
+            wrap.insertBefore(details, wrap.firstChild);
+
+            hidden.forEach(function (node) {
+                list.appendChild(node);
+            });
+        } catch (e) {
+            // Never break admin page due to notice handling.
+        }
+    }
+
+    /**
+     * Observe admin notices that may be inserted after initial page load and collect them.
+     */
+    function observeThirdPartyNotices() {
+        var wrap = document.querySelector('.wrap.backup-lite-admin');
+        var wpbody = document.getElementById('wpbody-content');
+        if (!wrap || !wpbody || !window.MutationObserver) {
+            return;
+        }
+
+        var pending = null;
+        var schedule = function () {
+            if (pending) {
+                window.clearTimeout(pending);
+            }
+            pending = window.setTimeout(function () {
+                pending = null;
+                collectThirdPartyNotices();
+            }, 150);
+        };
+
+        var observer = new MutationObserver(function (mutations) {
+            for (var i = 0; i < mutations.length; i++) {
+                var m = mutations[i];
+                if (!m || !m.addedNodes || !m.addedNodes.length) {
+                    continue;
+                }
+                // If any added node looks like a notice or contains notices, schedule a collect.
+                for (var j = 0; j < m.addedNodes.length; j++) {
+                    var node = m.addedNodes[j];
+                    if (!node || node.nodeType !== 1) {
+                        continue;
+                    }
+                    if (node.classList && (node.classList.contains('notice') || node.classList.contains('updated') || node.classList.contains('update-nag') || node.classList.contains('error'))) {
+                        schedule();
+                        return;
+                    }
+                    if (node.querySelector && node.querySelector('.notice, .updated, .update-nag, .error')) {
+                        schedule();
+                        return;
+                    }
+                }
+            }
+        });
+
+        observer.observe(wpbody, { childList: true, subtree: true });
     }
 
     function showCompletionOverlay(options) {
@@ -618,6 +789,15 @@ var backupLiteTimer = {
             setBackupCancelable(false);
             backupLiteTimer.stop(); // Stop elapsed time timer
             resetBackupProgress();
+            // Clear the processing banner/message without requiring a full page reload.
+            if (messages && messages.length) {
+                messages.removeClass('is-visible is-success is-error');
+                messages.empty();
+            }
+            var statusEl = document.getElementById('bl-backup-mode-status');
+            if (statusEl) {
+                statusEl.textContent = '';
+            }
             showToast(strings.jobCancelSuccess || 'Backup cancelled.', 'warning');
         }).catch(function (error) {
             var message = (error && error.message) ? error.message : (strings.jobCancelFailed || 'Unable to cancel backup.');
@@ -627,7 +807,28 @@ var backupLiteTimer = {
     }
 
     function appendBackupOptions(payload) {
-        if (!window.BackupLitePro || !window.BackupLitePro.isPro || !backupFormEl) {
+        if (!backupFormEl) {
+            return;
+        }
+
+        // Performance options (available in Free & Pro)
+        var modeField = backupFormEl.querySelector('#bl-backup-mode');
+        if (modeField && modeField.value) {
+            payload.append('backup_mode', String(modeField.value));
+        }
+
+        var smartExcludeField = backupFormEl.querySelector('#bl-backup-smart-exclude');
+        if (smartExcludeField && smartExcludeField.value) {
+            payload.append('backup_smart_exclude', String(smartExcludeField.value));
+        }
+
+        var customExcludesField = backupFormEl.querySelector('#bl-backup-custom-excludes');
+        if (customExcludesField && typeof customExcludesField.value === 'string' && customExcludesField.value.trim()) {
+            payload.append('backup_custom_excludes', customExcludesField.value);
+        }
+
+        // PRO options
+        if (!window.BackupLitePro || !window.BackupLitePro.isPro) {
             return;
         }
 
@@ -672,6 +873,7 @@ var backupLiteTimer = {
         backupJobContext.current = job;
         updateBackupProgress(job.percentage || 0);
         setBackupCancelable(true);
+        updateBackupModeStatus(job);
 
         if ('completed' === job.status) {
             setBackupCancelable(false);
@@ -709,9 +911,99 @@ var backupLiteTimer = {
         }
         setBackupStatusMessage(stageMessage, 'loading');
 
+        maybeWatchdogNudge(job);
         if (!job.processing && job.id) {
             maybeNudgeBackupJob(job.id);
         }
+    }
+
+    // Watchdog: if cron/worker is not progressing, nudge via AJAX continue.
+    backupJobContext.lastSeenBytes = backupJobContext.lastSeenBytes || null;
+    backupJobContext.lastSeenAt = backupJobContext.lastSeenAt || 0;
+    backupJobContext.lastWatchdogNudgeAt = backupJobContext.lastWatchdogNudgeAt || 0;
+
+    function maybeWatchdogNudge(job) {
+        if (!job || !job.id) {
+            return;
+        }
+        if (job.status !== 'running' || job.stage !== 'packing') {
+            return;
+        }
+
+        var nowMs = Date.now();
+        var processedBytes = typeof job.processed_bytes === 'number' ? job.processed_bytes : parseInt(job.processed_bytes || 0, 10);
+        if (isNaN(processedBytes)) {
+            processedBytes = 0;
+        }
+
+        // Initialize baseline on first status.
+        if (backupJobContext.lastSeenBytes === null) {
+            backupJobContext.lastSeenBytes = processedBytes;
+            backupJobContext.lastSeenAt = nowMs;
+            return;
+        }
+
+        if (processedBytes > backupJobContext.lastSeenBytes) {
+            backupJobContext.lastSeenBytes = processedBytes;
+            backupJobContext.lastSeenAt = nowMs;
+            return;
+        }
+
+        // If last_activity is old, treat as stuck even if job.processing=true.
+        var lastActivity = typeof job.last_activity === 'number' ? job.last_activity : parseInt(job.last_activity || 0, 10);
+        var lastActivityAgeMs = lastActivity > 0 ? Math.max(0, nowMs - (lastActivity * 1000)) : 0;
+
+        var noProgressMs = nowMs - (backupJobContext.lastSeenAt || 0);
+        var shouldNudge = (noProgressMs > 20000) || (lastActivityAgeMs > 60000);
+
+        // Don't spam: at most once every 10s.
+        if (shouldNudge && (nowMs - (backupJobContext.lastWatchdogNudgeAt || 0) > 10000)) {
+            backupJobContext.lastWatchdogNudgeAt = nowMs;
+            maybeNudgeBackupJob(job.id);
+        }
+    }
+
+    function updateBackupModeStatus(job) {
+        var statusEl = document.getElementById('bl-backup-mode-status');
+        if (!statusEl) {
+            return;
+        }
+        if (!job) {
+            statusEl.textContent = '';
+            return;
+        }
+
+        var mode = job.backup_mode || '';
+        var smart = job.smart_exclude || '';
+        var labelPrefix = strings.backupModeLabel || 'Mode';
+
+        var modeLabel = strings.backupModeUnknown || '—';
+        if ('fast' === mode) {
+            modeLabel = strings.backupModeFast || 'Fast';
+        } else if ('balanced' === mode) {
+            modeLabel = strings.backupModeBalanced || 'Balanced';
+        } else if (mode) {
+            modeLabel = String(mode);
+        }
+
+        var smartLabel = '';
+        if ('on' === smart) {
+            smartLabel = strings.smartExcludeOn || 'Smart Exclude: On';
+        } else if ('off' === smart) {
+            smartLabel = strings.smartExcludeOff || 'Smart Exclude: Off';
+        }
+
+        var parts = [];
+        parts.push(labelPrefix + ': ' + modeLabel);
+        if (smartLabel) {
+            parts.push(smartLabel);
+        }
+
+        if (job.auto_applied && job.large_site_detected && 'fast' === mode) {
+            parts.push(strings.backupModeAutoSwitched || 'Auto enabled Fast mode for a large site.');
+        }
+
+        statusEl.textContent = parts.join(' · ');
     }
 
     function maybeNudgeBackupJob(jobId) {
@@ -811,7 +1103,7 @@ var backupLiteTimer = {
 
         // Use WordPress-standard AJAX approach with fetch API
         var payload = new FormData();
-        payload.append('action', 'backup_lite_get_job_status');
+        payload.append('action', 'backup_lite_get_backup_job_status');
         payload.append('nonce', settings.nonce);
         payload.append('job_id', backupJobContext.current.id);
 
@@ -1186,9 +1478,14 @@ function initBackupLiteDomReady() {
     var currentPage = localizedSettings.page || '';
     var backupForm = document.getElementById('backup-lite-backup-form');
     var backupProgress = document.getElementById('backup-progress-fill');
+    backupModeStatus = document.getElementById('bl-backup-mode-status');
     var restoreFormV2 = document.getElementById('backup-lite-restore-form-v2');
     var uploadProgress = document.getElementById('upload-progress');
     var uploadInterval = null;
+
+    // On Backup Lite pages, collect non-critical third-party notices to avoid layout shifts.
+    collectThirdPartyNotices();
+    observeThirdPartyNotices();
 
     var showToast = function () {
         if (window.BackupLiteUI && typeof window.BackupLiteUI.showToast === 'function') {
@@ -6278,3 +6575,4 @@ if (document.readyState === 'loading') {
     }
 })();
 })(jQuery);
+

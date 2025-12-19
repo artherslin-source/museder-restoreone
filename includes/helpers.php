@@ -2,6 +2,24 @@
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
+if ( ! function_exists( 'museder_is_pro_active' ) ) {
+    /**
+     * Unified PRO activation check wrapper.
+     *
+     * IMPORTANT: New modules (e.g., AI scaffolding) should only depend on this
+     * function instead of calling Backup_Lite_Pro::is_pro_active() directly.
+     *
+     * @return bool
+     */
+    function museder_is_pro_active(): bool {
+        if ( class_exists( 'Backup_Lite_Pro' ) && method_exists( 'Backup_Lite_Pro', 'is_pro_active' ) ) {
+            return (bool) Backup_Lite_Pro::is_pro_active();
+        }
+
+        return false;
+    }
+}
+
 if ( ! function_exists( 'backup_lite_local_time' ) ) {
     /**
      * Return a timestamp formatted using the site's timezone settings.
@@ -619,7 +637,7 @@ function backup_lite_ensure_access_controls() {
     backup_lite_maybe_protect_directory( backup_lite_get_reports_dir() );
     
     // PRO directories
-    if ( class_exists( 'Backup_Lite_Pro' ) && Backup_Lite_Pro::is_pro_active() ) {
+    if ( museder_is_pro_active() ) {
         backup_lite_maybe_protect_directory( backup_lite_get_pro_jobs_dir() );
         backup_lite_maybe_protect_directory( backup_lite_get_pro_reports_dir() );
     }

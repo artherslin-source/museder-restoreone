@@ -81,8 +81,16 @@ class Backup_Lite_Settings {
             'feature_extended_log'      => ! empty( $value['feature_extended_log'] ),
             'feature_cloud_destinations' => false,
             'feature_advanced_filters'   => false,
+            // Backup performance defaults (Free + Pro)
+            'backup_mode_default'        => in_array( $value['backup_mode_default'] ?? 'auto', [ 'auto', 'balanced', 'fast' ], true ) ? $value['backup_mode_default'] : 'auto',
+            'backup_smart_exclude_default' => in_array( $value['backup_smart_exclude_default'] ?? 'auto', [ 'auto', 'on', 'off' ], true ) ? $value['backup_smart_exclude_default'] : 'auto',
+            'backup_smart_exclude_threshold' => isset( $value['backup_smart_exclude_threshold'] ) ? absint( $value['backup_smart_exclude_threshold'] ) : 50000,
+            'backup_custom_excludes'     => isset( $value['backup_custom_excludes'] ) ? sanitize_textarea_field( $value['backup_custom_excludes'] ) : '',
             'debug_mode'                 => false,
         ];
+
+        // Clamp threshold to a sensible range to avoid pathological settings on shared hosting.
+        $sanitized['backup_smart_exclude_threshold'] = max( 1000, min( 500000, (int) $sanitized['backup_smart_exclude_threshold'] ) );
 
         // PRO Settings
         if ( Backup_Lite_Pro::is_pro_active() ) {
@@ -145,6 +153,10 @@ class Backup_Lite_Settings {
             'feature_extended_log'        => false,
             'feature_cloud_destinations'  => false,
             'feature_advanced_filters'    => false,
+            'backup_mode_default'         => 'auto',
+            'backup_smart_exclude_default'=> 'auto',
+            'backup_smart_exclude_threshold' => 50000,
+            'backup_custom_excludes'      => '',
             'ai_openai_key'               => '',
             'ai_model'                    => 'gpt-4o-mini',
             'ai_temperature'             => 0.7,

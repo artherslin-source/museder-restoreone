@@ -13,6 +13,34 @@ class Backup_Lite_Backup {
     private static $internal_exclusions = null;
 
     /**
+     * Runtime exclusions (job-scoped): absolute directory prefixes (normalized, with trailing slash).
+     *
+     * @var array<string>
+     */
+    private static $runtime_exclude_prefixes = [];
+
+    /**
+     * Runtime exclusions (job-scoped): substring patterns to match against normalized paths.
+     *
+     * @var array<string>
+     */
+    private static $runtime_exclude_patterns = [];
+
+    /**
+     * Runtime exclusions (job-scoped): basenames (directories/files) to skip.
+     *
+     * @var array<string>
+     */
+    private static $runtime_exclude_basenames = [];
+
+    /**
+     * Runtime backup mode (job-scoped): balanced|fast.
+     *
+     * @var string
+     */
+    private static $runtime_backup_mode = 'balanced';
+
+    /**
      * Create a complete site backup containing database, meta and wp-content.
      *
      * @param array $options Optional backup options {
@@ -115,9 +143,14 @@ class Backup_Lite_Backup {
 
         $directories = self::get_directory_map();
 
-        $success = backup_lite_can_use_ziparchive()
+        $success = self::with_runtime_exclusions(
+            $options,
+            function () use ( $archive_path, $sql_path, $meta_path, $directories ) {
+                return backup_lite_can_use_ziparchive()
             ? self::create_zip_bundle( $archive_path, $sql_path, $meta_path, $directories )
             : self::create_pclzip_bundle( $archive_path, $sql_path, $meta_path, $directories );
+            }
+        );
 
         backup_lite_delete_directory( $temp_dir );
 
@@ -266,6 +299,9 @@ class Backup_Lite_Backup {
 
         $zip->addFile( $sql_path, 'database.sql' );
         $zip->addFile( $meta_path, 'meta.json' );
+        // Keep DB/meta compressed even in Fast mode (single files; low overhead; big size win).
+        $zip->setCompressionName( 'database.sql', ZipArchive::CM_DEFLATE );
+        $zip->setCompressionName( 'meta.json', ZipArchive::CM_DEFLATE );
 
         foreach ( $directories as $target => $source ) {
             backup_lite_log( 'info', 'Adding directory to archive.', [
@@ -400,11 +436,35 @@ class Backup_Lite_Backup {
             RecursiveIteratorIterator::SELF_FIRST
         );
 
+        $wp_content_skip_prefixes = [];
+        if ( 'wp-content' === $target ) {
+            // Prevent duplicate inclusion: get_directory_map already includes themes/plugins/uploads separately.
+            $wp_content_skip_prefixes = [
+                wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/themes' ) ),
+                wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/plugins' ) ),
+                wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/uploads' ) ),
+                wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/mu-plugins' ) ),
+                wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/languages' ) ),
+            ];
+        }
+
         foreach ( $iterator as $file ) {
             /** @var SplFileInfo $file */
             $file_path = $file->getRealPath();
             if ( ! $file_path ) {
                 continue;
+            }
+
+            if ( ! empty( $wp_content_skip_prefixes ) ) {
+                $normalized_file_path = wp_normalize_path( $file_path );
+                foreach ( $wp_content_skip_prefixes as $skip_prefix ) {
+                    if ( '' !== $skip_prefix && 0 === strpos( $normalized_file_path, $skip_prefix ) ) {
+                        if ( $file->isDir() && method_exists( $iterator, 'skipChildren' ) ) {
+                            $iterator->skipChildren();
+                        }
+                        continue 2;
+                    }
+                }
             }
 
             if ( self::should_skip_path( $file_path ) ) {
@@ -434,8 +494,12 @@ class Backup_Lite_Backup {
                 
                 $zip->addFile( $file_path, $entry );
                 
-                // Optimize compression for large files
-                if ( $size !== false && $size > 10485760 ) { // > 10MB
+                // Compression strategy:
+                // - Fast mode: store everything to reduce CPU on shared hosting (tons of small files).
+                // - Balanced: store only large files (>10MB), deflate smaller files.
+                if ( 'fast' === self::$runtime_backup_mode ) {
+                    $zip->setCompressionName( $entry, ZipArchive::CM_STORE );
+                } elseif ( $size !== false && $size > 10485760 ) { // > 10MB
                     $zip->setCompressionName( $entry, ZipArchive::CM_STORE );
                 } else {
                     $zip->setCompressionName( $entry, ZipArchive::CM_DEFLATE );
@@ -550,8 +614,17 @@ class Backup_Lite_Backup {
         self::initialize_archive_with_meta( $archive_path, $sql_path, $meta_path );
 
         try {
-            $directories    = self::get_directory_map();
-            $manifest_data  = self::get_cached_file_manifest( $directories );
+            $directories = self::get_directory_map();
+
+            // Resolve Auto mode (large site detection) before building the full manifest.
+            $options = self::resolve_effective_backup_options_for_job( $options, $directories );
+
+            $manifest_data = self::with_runtime_exclusions(
+                $options,
+                function () use ( $directories ) {
+                    return self::get_cached_file_manifest( $directories );
+                }
+            );
         } catch ( Exception $e ) {
             backup_lite_delete_directory( $temp_dir );
             backup_lite_log( 'error', 'Failed to build file manifest during job preparation.', [
@@ -590,6 +663,8 @@ class Backup_Lite_Backup {
             'job'   => $job_id,
             'files' => $manifest_data['count'],
             'bytes' => $manifest_data['bytes'],
+            'backup_mode' => $options['backup_mode_effective'] ?? ( $options['backup_mode'] ?? '' ),
+            'smart_exclude' => $options['backup_smart_exclude_effective'] ?? ( $options['backup_smart_exclude'] ?? '' ),
         ] );
 
         return [
@@ -599,6 +674,201 @@ class Backup_Lite_Backup {
             'manifest_count' => $manifest_data['count'],
             'manifest_bytes' => $manifest_data['bytes'],
             'options'        => $options,
+        ];
+    }
+
+    /**
+     * Resolve effective backup options for Auto mode, including Smart Exclude.
+     *
+     * - Auto mode switches to Fast + Smart Exclude when file count is above threshold.
+     * - Auto mode stays Balanced and keeps Smart Exclude off for smaller sites.
+     *
+     * @param array<string,mixed> $options     Incoming options.
+     * @param array<string,string> $directories Directory map.
+     * @return array<string,mixed> Updated options with *_effective fields.
+     */
+    private static function resolve_effective_backup_options_for_job( array $options, array $directories ): array {
+        $requested_mode = isset( $options['backup_mode'] ) ? (string) $options['backup_mode'] : '';
+        $requested_smart = isset( $options['backup_smart_exclude'] ) ? (string) $options['backup_smart_exclude'] : '';
+        $requested_mode_raw  = $requested_mode;
+        $requested_smart_raw = $requested_smart;
+
+        if ( class_exists( 'Backup_Lite_Settings' ) ) {
+            $settings = Backup_Lite_Settings::get_settings();
+            if ( '' === $requested_mode && isset( $settings['backup_mode_default'] ) ) {
+                $requested_mode = (string) $settings['backup_mode_default'];
+            }
+            if ( '' === $requested_smart && isset( $settings['backup_smart_exclude_default'] ) ) {
+                $requested_smart = (string) $settings['backup_smart_exclude_default'];
+            }
+        }
+
+        if ( ! in_array( $requested_mode, [ 'auto', 'balanced', 'fast' ], true ) ) {
+            $requested_mode = 'auto';
+        }
+        if ( ! in_array( $requested_smart, [ 'auto', 'on', 'off' ], true ) ) {
+            $requested_smart = 'auto';
+        }
+
+        $options['backup_mode'] = $requested_mode;
+        $options['backup_smart_exclude'] = $requested_smart;
+
+        // If no auto behavior requested, keep as-is.
+        if ( 'auto' !== $requested_mode && 'auto' !== $requested_smart ) {
+            $options['backup_mode_effective'] = $requested_mode;
+            $options['backup_smart_exclude_effective'] = $requested_smart;
+            return $options;
+        }
+
+        $threshold = 50000;
+        if ( class_exists( 'Backup_Lite_Settings' ) ) {
+            $settings = Backup_Lite_Settings::get_settings();
+            if ( isset( $settings['backup_smart_exclude_threshold'] ) ) {
+                $threshold = (int) $settings['backup_smart_exclude_threshold'];
+            }
+        }
+
+        /**
+         * Filter the file-count threshold used by Auto mode.
+         *
+         * @param int $threshold File count threshold.
+         */
+        $threshold = (int) apply_filters( 'backup_lite_backup_auto_threshold_files', $threshold );
+        $threshold = max( 1000, min( 500000, $threshold ) );
+
+        // Decide large site based on a lightweight count-only scan (stops once threshold is reached).
+        $decision_options = $options;
+        $decision_options['backup_smart_exclude'] = 'off';
+
+        $stats = self::with_runtime_exclusions(
+            $decision_options,
+            function () use ( $directories, $threshold ) {
+                return self::scan_manifest_stats( $directories, $threshold );
+            }
+        );
+
+        $is_large = ! empty( $stats['reached_threshold'] );
+
+        $effective_mode = $requested_mode;
+        if ( 'auto' === $requested_mode ) {
+            $effective_mode = $is_large ? 'fast' : 'balanced';
+        }
+
+        $effective_smart = $requested_smart;
+        if ( 'auto' === $requested_smart ) {
+            $effective_smart = $is_large ? 'on' : 'off';
+        }
+
+        $options['backup_mode_effective'] = $effective_mode;
+        $options['backup_smart_exclude_effective'] = $effective_smart;
+        $options['backup_large_site_detected'] = $is_large;
+        $options['backup_auto_threshold_files'] = $threshold;
+        $options['backup_auto_applied'] = ( 'auto' === $requested_mode_raw || 'auto' === $requested_smart_raw );
+
+        // Ensure downstream steps use the effective values.
+        $options['backup_mode'] = $effective_mode;
+        $options['backup_smart_exclude'] = $effective_smart;
+
+        backup_lite_log( 'info', 'Backup Auto mode decision.', [
+            'threshold_files' => $threshold,
+            'reached_threshold' => $is_large,
+            'scanned_files' => isset( $stats['count'] ) ? (int) $stats['count'] : 0,
+            'scanned_bytes' => isset( $stats['bytes'] ) ? (int) $stats['bytes'] : 0,
+            'backup_mode_effective' => $effective_mode,
+            'smart_exclude_effective' => $effective_smart,
+        ] );
+
+        return $options;
+    }
+
+    /**
+     * Lightweight manifest scan (count/bytes only), with early stop when reaching threshold.
+     *
+     * @param array<string,string> $directories Directory map.
+     * @param int                 $stop_after_files Stop after reaching this file count.
+     * @return array{count:int,bytes:int,reached_threshold:bool}
+     */
+    private static function scan_manifest_stats( array $directories, int $stop_after_files ): array {
+        $count = 0;
+        $bytes = 0;
+        $reached = false;
+
+        $stop_after_files = max( 1, $stop_after_files );
+
+        foreach ( $directories as $target => $source ) {
+            if ( ! is_dir( $source ) ) {
+                continue;
+            }
+
+            $source = rtrim( $source, '/\\' );
+            if ( self::should_skip_path( $source ) ) {
+                continue;
+            }
+
+            $wp_content_skip_prefixes = [];
+            if ( 'wp-content' === $target ) {
+                $wp_content_skip_prefixes = [
+                    wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/themes' ) ),
+                    wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/plugins' ) ),
+                    wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/uploads' ) ),
+                    wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/mu-plugins' ) ),
+                    wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/languages' ) ),
+                ];
+            }
+
+            // Use optimized iterator flags for better performance.
+            $iterator_flags = FilesystemIterator::SKIP_DOTS | FilesystemIterator::FOLLOW_SYMLINKS;
+            if ( defined( 'FilesystemIterator::CATCH_GET_CHILD' ) ) {
+                $iterator_flags |= FilesystemIterator::CATCH_GET_CHILD;
+            }
+
+            try {
+                $iterator = new RecursiveIteratorIterator(
+                    new RecursiveDirectoryIterator( $source, $iterator_flags ),
+                    RecursiveIteratorIterator::LEAVES_ONLY
+                );
+
+                foreach ( $iterator as $file ) {
+                    /** @var SplFileInfo $file */
+                    if ( $file->isDir() ) {
+                        continue;
+                    }
+
+                    $file_path = $file->getRealPath();
+                    if ( ! $file_path || self::should_skip_path( $file_path ) ) {
+                        continue;
+                    }
+
+                    if ( ! empty( $wp_content_skip_prefixes ) ) {
+                        $normalized_file_path = wp_normalize_path( $file_path );
+                        foreach ( $wp_content_skip_prefixes as $skip_prefix ) {
+                            if ( '' !== $skip_prefix && 0 === strpos( $normalized_file_path, $skip_prefix ) ) {
+                                continue 2;
+                            }
+                        }
+                    }
+
+                    $size = $file->getSize();
+                    if ( $size !== false && $size > 0 ) {
+                        $bytes += (int) $size;
+                    }
+
+                    $count++;
+                    if ( $count >= $stop_after_files ) {
+                        $reached = true;
+                        break 2;
+                    }
+                }
+            } catch ( Exception $e ) {
+                // Ignore scan errors for auto decision; continue other directories.
+                continue;
+            }
+        }
+
+        return [
+            'count' => $count,
+            'bytes' => $bytes,
+            'reached_threshold' => $reached,
         ];
     }
 
@@ -734,7 +1004,13 @@ class Backup_Lite_Backup {
         }
 
         if ( ! empty( $batch ) ) {
-            self::append_files_to_zip( $job['archive_path'], $batch, $zip );
+            $job_options = isset( $job['options'] ) && is_array( $job['options'] ) ? $job['options'] : [];
+            self::with_runtime_exclusions(
+                $job_options,
+                function () use ( $job, $batch, $zip, $job_options ) {
+                    self::append_files_to_zip( $job['archive_path'], $batch, $zip, $job_options );
+                }
+            );
         }
 
         $job['pointer']         = $index;
@@ -785,6 +1061,9 @@ class Backup_Lite_Backup {
 
         $zip->addFile( $sql_path, 'database.sql' );
         $zip->addFile( $meta_path, 'meta.json' );
+        // Default: keep DB/meta compressed.
+        $zip->setCompressionName( 'database.sql', ZipArchive::CM_DEFLATE );
+        $zip->setCompressionName( 'meta.json', ZipArchive::CM_DEFLATE );
         $zip->close();
     }
 
@@ -893,6 +1172,18 @@ class Backup_Lite_Backup {
             }
 
             try {
+            $wp_content_skip_prefixes = [];
+            if ( 'wp-content' === $target ) {
+                // Prevent duplicate inclusion: get_directory_map already includes themes/plugins/uploads separately.
+                $wp_content_skip_prefixes = [
+                    wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/themes' ) ),
+                    wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/plugins' ) ),
+                    wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/uploads' ) ),
+                    wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/mu-plugins' ) ),
+                    wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/languages' ) ),
+                ];
+            }
+
             // Use optimized iterator flags for better performance
             // CATCH_GET_CHILD requires PHP 5.6.0+, use version check for compatibility
             $iterator_flags = FilesystemIterator::SKIP_DOTS | FilesystemIterator::FOLLOW_SYMLINKS;
@@ -923,6 +1214,15 @@ class Backup_Lite_Backup {
                     $file_path = $file->getRealPath();
                     if ( ! $file_path || self::should_skip_path( $file_path ) ) {
                         continue;
+                    }
+
+                    if ( ! empty( $wp_content_skip_prefixes ) ) {
+                        $normalized_file_path = wp_normalize_path( $file_path );
+                        foreach ( $wp_content_skip_prefixes as $skip_prefix ) {
+                            if ( '' !== $skip_prefix && 0 === strpos( $normalized_file_path, $skip_prefix ) ) {
+                                continue 2;
+                            }
+                        }
                     }
 
                     $relative = ltrim( substr( $file_path, strlen( $source ) ), '/\\' );
@@ -1018,7 +1318,7 @@ class Backup_Lite_Backup {
      * @param ZipArchive $zip          Optional ZipArchive instance to reuse (for performance optimization).
      *                                 If not provided, a new instance will be created and closed.
      */
-    private static function append_files_to_zip( $archive_path, array $files, $zip = null ) {
+    private static function append_files_to_zip( $archive_path, array $files, $zip = null, array $options = [] ) {
         $should_close = false;
         
         // If no ZipArchive instance provided, create and open a new one
@@ -1058,18 +1358,23 @@ class Backup_Lite_Backup {
             // Add file to archive
             $zip->addFile( $path, $target );
 
-            // Optimize compression: large files use no compression for better performance
-            // Only set compression if file size is known (from manifest)
-            if ( $file_size > 0 ) {
+            // Compression strategy mirrors add_directory_to_zip().
+            // Fast mode: store everything to reduce CPU on shared hosting.
+            // Balanced: store only large files (>10MB), deflate smaller files.
+            $mode = self::$runtime_backup_mode;
+            if ( isset( $options['backup_mode'] ) && in_array( $options['backup_mode'], [ 'balanced', 'fast' ], true ) ) {
+                $mode = (string) $options['backup_mode'];
+            }
+
+            if ( 'fast' === $mode ) {
+                $zip->setCompressionName( $target, ZipArchive::CM_STORE );
+            } elseif ( $file_size > 0 ) {
                 if ( $file_size > $large_file_threshold ) {
-                    // Use no compression for large files (faster)
                     $zip->setCompressionName( $target, ZipArchive::CM_STORE );
                 } else {
-                    // Use standard compression for smaller files (better compression ratio)
                     $zip->setCompressionName( $target, ZipArchive::CM_DEFLATE );
                 }
             }
-            // If size is unknown, let ZipArchive use default compression
         }
 
         // Only close if we created the ZipArchive instance
@@ -1377,6 +1682,11 @@ class Backup_Lite_Backup {
             return true;
         }
 
+        if ( ! empty( self::$runtime_exclude_basenames ) && in_array( $basename, self::$runtime_exclude_basenames, true ) ) {
+            $exclusion_cache[ $normalized ] = true;
+            return true;
+        }
+
         // Quick check: common exclusion patterns (before expensive operations)
         if ( strpos( $normalized, '/uploads/museder-restoreone' ) !== false ) {
             $exclusion_cache[ $normalized ] = true;
@@ -1397,6 +1707,24 @@ class Backup_Lite_Backup {
             if ( '' !== $excluded && 0 === strpos( $normalized, $excluded ) ) {
                 $exclusion_cache[ $normalized ] = true;
                 return true;
+            }
+        }
+
+        if ( ! empty( self::$runtime_exclude_prefixes ) ) {
+            foreach ( self::$runtime_exclude_prefixes as $excluded ) {
+                if ( '' !== $excluded && 0 === strpos( $normalized, $excluded ) ) {
+                    $exclusion_cache[ $normalized ] = true;
+                    return true;
+                }
+            }
+        }
+
+        if ( ! empty( self::$runtime_exclude_patterns ) ) {
+            foreach ( self::$runtime_exclude_patterns as $pattern ) {
+                if ( '' !== $pattern && strpos( $normalized, $pattern ) !== false ) {
+                    $exclusion_cache[ $normalized ] = true;
+                    return true;
+                }
             }
         }
 
@@ -1467,35 +1795,223 @@ class Backup_Lite_Backup {
         
         self::$internal_exclusions = $paths;
 
-        // Exclude all museder-restoreone-* directories in uploads (handles versioned plugin directories)
-        $uploads_dir = WP_CONTENT_DIR . '/uploads';
-        if ( is_dir( $uploads_dir ) && is_readable( $uploads_dir ) ) {
-            try {
-                $iterator = new DirectoryIterator( $uploads_dir );
-                foreach ( $iterator as $file ) {
-                    if ( $file->isDir() && ! $file->isDot() ) {
-                        $dir_name = $file->getFilename();
-                        // Match museder-restoreone, museder-restoreone-1, museder-restoreone-2, etc.
-                        if ( preg_match( '/^museder-restoreone(-\d+)?$/', $dir_name ) ) {
-                            $normalized_path = $normalize( $file->getPathname() );
-                            if ( $normalized_path ) {
-                                $paths[] = $normalized_path;
-                            }
-                        }
-                    }
-                }
-            } catch ( Exception $e ) {
-                // Silently continue if directory iteration fails
-                backup_lite_log( 'warning', 'Failed to scan uploads directory for exclusions.', [ 'error' => $e->getMessage() ] );
-            }
+        return self::$internal_exclusions;
+    }
+
+    /**
+     * Run a callback with runtime exclusions applied for this request (job-scoped).
+     *
+     * @param array    $options  Backup options.
+     * @param callable $callback Callback to execute.
+     * @return mixed
+     */
+    private static function with_runtime_exclusions( array $options, callable $callback ) {
+        $prev_prefixes  = self::$runtime_exclude_prefixes;
+        $prev_patterns  = self::$runtime_exclude_patterns;
+        $prev_basenames = self::$runtime_exclude_basenames;
+        $prev_mode      = self::$runtime_backup_mode;
+
+        $resolved = self::resolve_runtime_exclusions( $options );
+        self::$runtime_exclude_prefixes  = $resolved['prefixes'];
+        self::$runtime_exclude_patterns  = $resolved['patterns'];
+        self::$runtime_exclude_basenames = $resolved['basenames'];
+        self::$runtime_backup_mode       = self::resolve_runtime_backup_mode( $options );
+
+        try {
+            return call_user_func( $callback );
+        } finally {
+            self::$runtime_exclude_prefixes  = $prev_prefixes;
+            self::$runtime_exclude_patterns  = $prev_patterns;
+            self::$runtime_exclude_basenames = $prev_basenames;
+            self::$runtime_backup_mode       = $prev_mode;
+        }
+    }
+
+    /**
+     * Resolve runtime backup mode for the current request.
+     *
+     * @param array $options Backup options.
+     * @return string balanced|fast
+     */
+    private static function resolve_runtime_backup_mode( array $options ) {
+        $mode = isset( $options['backup_mode'] ) ? (string) $options['backup_mode'] : '';
+        if ( '' === $mode && class_exists( 'Backup_Lite_Settings' ) ) {
+            $settings = Backup_Lite_Settings::get_settings();
+            $mode = isset( $settings['backup_mode_default'] ) ? (string) $settings['backup_mode_default'] : '';
         }
 
-        // Deduplicate while preserving order.
-        $paths = array_values( array_unique( array_filter( $paths ) ) );
+        if ( ! in_array( $mode, [ 'auto', 'balanced', 'fast' ], true ) ) {
+            $mode = 'balanced';
+        }
 
-        self::$internal_exclusions = $paths;
+        // Auto should have been resolved during async job preparation; treat remaining 'auto' as balanced.
+        if ( 'auto' === $mode ) {
+            $mode = 'balanced';
+        }
 
-        return self::$internal_exclusions;
+        return $mode;
+    }
+
+    /**
+     * Resolve runtime exclusions based on options + settings.
+     *
+     * Note: Auto/on/off behavior will be finalized during async job preparation; this function
+     * resolves only explicit exclusions (smart exclude on/off + custom excludes) for the current request.
+     *
+     * @param array $options Backup options.
+     * @return array{prefixes:array<string>,patterns:array<string>,basenames:array<string>}
+     */
+    private static function resolve_runtime_exclusions( array $options ) {
+        $prefixes  = [];
+        $patterns  = [];
+        $basenames = [];
+
+        $smart = isset( $options['backup_smart_exclude'] ) ? (string) $options['backup_smart_exclude'] : '';
+        if ( '' === $smart && class_exists( 'Backup_Lite_Settings' ) ) {
+            $settings = Backup_Lite_Settings::get_settings();
+            $smart = isset( $settings['backup_smart_exclude_default'] ) ? (string) $settings['backup_smart_exclude_default'] : '';
+        }
+        if ( ! in_array( $smart, [ 'auto', 'on', 'off' ], true ) ) {
+            $smart = 'auto';
+        }
+
+        // Only apply smart excludes when explicitly enabled.
+        if ( 'on' === $smart ) {
+            $smart_prefixes = self::get_smart_exclude_prefixes();
+            $prefixes = array_merge( $prefixes, $smart_prefixes );
+        }
+
+        $custom = isset( $options['backup_custom_excludes'] ) ? (string) $options['backup_custom_excludes'] : '';
+        if ( '' === $custom && class_exists( 'Backup_Lite_Settings' ) ) {
+            $settings = Backup_Lite_Settings::get_settings();
+            $custom = isset( $settings['backup_custom_excludes'] ) ? (string) $settings['backup_custom_excludes'] : '';
+        }
+        if ( '' !== trim( $custom ) ) {
+            $parsed = self::parse_custom_excludes( $custom );
+            $prefixes  = array_merge( $prefixes, $parsed['prefixes'] );
+            $patterns  = array_merge( $patterns, $parsed['patterns'] );
+            $basenames = array_merge( $basenames, $parsed['basenames'] );
+        }
+
+        $prefixes  = array_values( array_unique( array_filter( $prefixes ) ) );
+        $patterns  = array_values( array_unique( array_filter( $patterns ) ) );
+        $basenames = array_values( array_unique( array_filter( $basenames ) ) );
+
+        return [
+            'prefixes'  => $prefixes,
+            'patterns'  => $patterns,
+            'basenames' => $basenames,
+        ];
+    }
+
+    /**
+     * Return smart exclude absolute directory prefixes.
+     *
+     * @return array<string>
+     */
+    private static function get_smart_exclude_prefixes() {
+        $prefixes = [
+            trailingslashit( WP_CONTENT_DIR . '/cache' ),
+            trailingslashit( WP_CONTENT_DIR . '/litespeed' ),
+            trailingslashit( WP_CONTENT_DIR . '/w3tc-cache' ),
+            trailingslashit( WP_CONTENT_DIR . '/wp-rocket-cache' ),
+            trailingslashit( WP_CONTENT_DIR . '/uploads/cache' ),
+        ];
+
+        $prefixes = array_map(
+            static function ( $p ) {
+                return wp_normalize_path( $p );
+            },
+            $prefixes
+        );
+
+        /**
+         * Filter smart exclude prefixes.
+         *
+         * @param array<string> $prefixes Normalized directory prefixes with trailing slashes.
+         */
+        $prefixes = apply_filters( 'backup_lite_smart_exclude_prefixes', $prefixes );
+
+        if ( ! is_array( $prefixes ) ) {
+            $prefixes = [];
+        }
+
+        return array_values( array_unique( array_filter( $prefixes ) ) );
+    }
+
+    /**
+     * Parse custom excludes (one per line).
+     *
+     * Supports:\n
+     * - relative paths like wp-content/cache/\n
+     * - absolute paths\n
+     * - basenames like node_modules\n
+     * - simple substring patterns (contains asterisk '*' or starts/ends with '/')
+     *
+     * @param string $raw Raw textarea value.
+     * @return array{prefixes:array<string>,patterns:array<string>,basenames:array<string>}
+     */
+    private static function parse_custom_excludes( $raw ) {
+        $prefixes  = [];
+        $patterns  = [];
+        $basenames = [];
+
+        $lines = preg_split( '/\R/u', (string) $raw );
+        if ( empty( $lines ) || ! is_array( $lines ) ) {
+            return [
+                'prefixes' => [],
+                'patterns' => [],
+                'basenames'=> [],
+            ];
+        }
+
+        foreach ( $lines as $line ) {
+            $line = trim( (string) $line );
+            if ( '' === $line ) {
+                continue;
+            }
+
+            // Strip leading/trailing quotes.
+            $line = trim( $line, " \t\n\r\0\x0B\"'" );
+            if ( '' === $line ) {
+                continue;
+            }
+
+            $line = wp_normalize_path( $line );
+
+            // If no slash, treat as basename to skip (e.g., node_modules).
+            if ( false === strpos( $line, '/' ) ) {
+                $basenames[] = $line;
+                continue;
+            }
+
+            // Substring patterns.
+            if ( strpos( $line, '*' ) !== false ) {
+                $patterns[] = str_replace( '*', '', $line );
+                continue;
+            }
+
+            // Normalize relative roots.
+            if ( 0 === strpos( $line, 'wp-content/' ) ) {
+                $line = wp_normalize_path( WP_CONTENT_DIR . '/' . substr( $line, strlen( 'wp-content/' ) ) );
+            } elseif ( 0 === strpos( $line, 'uploads/' ) ) {
+                $line = wp_normalize_path( WP_CONTENT_DIR . '/uploads/' . substr( $line, strlen( 'uploads/' ) ) );
+            } elseif ( 0 === strpos( $line, './' ) ) {
+                $line = ltrim( $line, './' );
+                $line = wp_normalize_path( ABSPATH . $line );
+            } elseif ( 0 !== strpos( $line, '/' ) && false === preg_match( '#^([a-zA-Z]:/|\\\\\\\\)#', $line ) ) {
+                // Treat as relative to ABSPATH.
+                $line = wp_normalize_path( ABSPATH . ltrim( $line, '/' ) );
+            }
+
+            $prefixes[] = trailingslashit( $line );
+        }
+
+        return [
+            'prefixes'  => array_values( array_unique( array_filter( $prefixes ) ) ),
+            'patterns'  => array_values( array_unique( array_filter( $patterns ) ) ),
+            'basenames' => array_values( array_unique( array_filter( $basenames ) ) ),
+        ];
     }
 
     /**

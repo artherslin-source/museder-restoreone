@@ -4,7 +4,7 @@ Tags: backup, migration, restore, site-backup, database-backup
 Requires at least: 5.8
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 2.7.85
+Stable tag: 2.7.91
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -13,6 +13,24 @@ A lightweight WordPress backup & restore plugin focused on compatibility, single
 == Changelog ==
 
 For full changelog history, please see docs/changelog-archive.md in the plugin folder.
+
+= 2.7.91 =
+* Fix: Added backup job watchdog to recover when background processing stalls (shared hosting); cancel now deletes partial archives to avoid confusion; exposed last_activity for better progress handling.
+
+= 2.7.90 =
+* Fix: Backups page polling now uses the correct AJAX action so progress updates correctly; canceling a backup clears the running banner without reload; “Hidden notices” toggle is now reliable.
+
+= 2.7.89 =
+* UI: On RestoreOne admin pages, third-party notices are collected into a collapsible “Hidden notices” container (keeps WordPress core update nags visible).
+
+= 2.7.88 =
+* Fix: Prevented Backups page JS errors (backupModeStatus undefined) by making status rendering resilient to scope/caching differences.
+
+= 2.7.87 =
+* Performance: Added Auto/Balanced/Fast backup modes with Smart Exclude and job-scoped exclusions to speed up large sites with many small files (shared hosting).
+
+= 2.7.86 =
+* UI: Dashboard AI card now shows last scan time and top recommendations (severity + summary) and updates the list after a successful scan.
 
 = 2.7.85 =
 * Dev: Version bump for ongoing development after 2.7.84 baseline.

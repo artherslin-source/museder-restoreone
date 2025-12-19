@@ -3,7 +3,7 @@
 Plugin Name: Museder RestoreOne
 Plugin URI: https://museder.com/restoreone
 Description: Museder RestoreOne is a simple backup & restore plugin for WordPress.
-Version: 2.7.85
+Version: 2.7.91
 Requires at least: 5.8
 Tested up to: 6.9
 Requires PHP: 7.4
@@ -17,7 +17,7 @@ Domain Path: /languages
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-define( 'BACKUP_LITE_VERSION', '2.7.85' );
+define( 'BACKUP_LITE_VERSION', '2.7.91' );
 define( 'BACKUP_LITE_PATH', plugin_dir_path( __FILE__ ) );
 define( 'BACKUP_LITE_URL', plugin_dir_url( __FILE__ ) );
 
@@ -42,6 +42,16 @@ require_once BACKUP_LITE_PATH . 'includes/class-settings.php';
 require_once BACKUP_LITE_PATH . 'includes/class-chunk-handler.php';
 require_once BACKUP_LITE_PATH . 'includes/class-chunk-handler-v2.php';
 require_once BACKUP_LITE_PATH . 'includes/class-estimate-size.php';
+
+// AI Free scaffolding (no external network calls; Pro provider is not loaded here).
+require_once BACKUP_LITE_PATH . 'includes/ai/interface-ai-provider.php';
+require_once BACKUP_LITE_PATH . 'includes/ai/class-ai-sanitizer.php';
+require_once BACKUP_LITE_PATH . 'includes/ai/class-ai-rate-limiter.php';
+require_once BACKUP_LITE_PATH . 'includes/ai/class-ai-report-repository.php';
+require_once BACKUP_LITE_PATH . 'includes/ai/class-ai-provider-free.php';
+require_once BACKUP_LITE_PATH . 'includes/ai/class-ai-factory.php';
+require_once BACKUP_LITE_PATH . 'includes/ai/class-ai-rest-controller.php';
+require_once BACKUP_LITE_PATH . 'includes/ai/class-ai-admin-page.php';
 
 // PRO Features will be loaded in backup_lite_bootstrap() after WordPress is fully loaded
 // This prevents errors during activation when get_option() may not be available
@@ -136,6 +146,14 @@ function backup_lite_bootstrap() {
     Backup_Lite_Chunk_Handler::init();
     Backup_Lite_Chunk_V2::init();
     Backup_Lite_Estimate_Size::init();
+
+    // AI Free scaffolding (Dashboard Preview).
+    if ( class_exists( 'Museder_AI_REST_Controller' ) ) {
+        Museder_AI_REST_Controller::init();
+    }
+    if ( class_exists( 'Museder_AI_Admin_Page' ) ) {
+        Museder_AI_Admin_Page::init();
+    }
 
     // Load PRO features if PRO is active (deferred from file loading to prevent activation errors)
     if ( class_exists( 'Backup_Lite_Pro' ) && method_exists( 'Backup_Lite_Pro', 'is_pro_active' ) && Backup_Lite_Pro::is_pro_active() ) {
@@ -261,6 +279,17 @@ function backup_lite_render_dashboard() {
                 'failed'  => $chart_failed,
             ],
             'nextRunTimestamp' => $next_run,
+            'ai'               => [
+                'restUrl'    => esc_url_raw( rest_url( 'museder/v1/ai/scan' ) ),
+                'reportsUrl' => esc_url_raw( rest_url( 'museder/v1/ai/reports' ) ),
+                'nonce'      => wp_create_nonce( 'wp_rest' ),
+                'strings'    => [
+                    'run'      => __( 'Run Scan', 'museder-restoreone' ),
+                    'running'  => __( 'Running scan…', 'museder-restoreone' ),
+                    'done'     => __( 'Scan completed.', 'museder-restoreone' ),
+                    'failed'   => __( 'Scan failed.', 'museder-restoreone' ),
+                ],
+            ],
             'strings'          => [
                 'dueNow'       => __( 'Due now', 'museder-restoreone' ),
                 'noData'       => __( 'No activity recorded in the last 7 days.', 'museder-restoreone' ),

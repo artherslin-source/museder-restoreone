@@ -896,6 +896,36 @@ body.backup-lite-admin #wpcontent {
     filter: none !important;
 }
 
+/* ============================================
+   Third-party admin notices (non-critical) collector
+   ============================================ */
+.backup-lite-admin .bl-hidden-notices {
+    margin: 16px 0;
+    padding: 10px 12px;
+    border: 1px solid var(--bl-border, rgba(148, 163, 184, 0.18));
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.45);
+    box-shadow: var(--bl-shadow, 0 8px 18px rgba(0, 0, 0, 0.15));
+}
+
+.backup-lite-admin .bl-hidden-notices summary {
+    cursor: pointer;
+    font-weight: 600;
+    color: var(--bl-text, #0f172a);
+}
+
+.backup-lite-admin .bl-hidden-notices__list {
+    margin-top: 10px;
+    display: grid;
+    gap: 10px;
+}
+
+.backup-lite-admin .bl-hidden-notices__list .notice,
+.backup-lite-admin .bl-hidden-notices__list .updated,
+.backup-lite-admin .bl-hidden-notices__list .error {
+    margin: 0;
+}
+
 /* PRO Upgrade Modal */
 .backup-lite-pro-modal {
     position: fixed;
