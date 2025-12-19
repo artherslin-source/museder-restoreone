@@ -25,6 +25,8 @@ class Backup_Lite_UI {
         add_action( 'wp_ajax_backup_lite_delete_restore_history', [ __CLASS__, 'handle_delete_restore_history' ] );
         add_action( 'wp_ajax_backup_lite_start_backup_job', [ __CLASS__, 'ajax_start_backup_job' ] );
         add_action( 'wp_ajax_backup_lite_get_job_status', [ __CLASS__, 'ajax_get_backup_job_status' ] );
+        // Alias for newer frontend builds (keep both for backward compatibility).
+        add_action( 'wp_ajax_backup_lite_get_backup_job_status', [ __CLASS__, 'ajax_get_backup_job_status' ] );
         add_action( 'wp_ajax_backup_lite_continue_backup_job', [ __CLASS__, 'ajax_continue_backup_job' ] );
         add_action( 'wp_ajax_backup_lite_cancel_backup_job', [ __CLASS__, 'ajax_cancel_backup_job' ] );
         add_action( 'wp_ajax_backup_lite_refresh_nonce', [ __CLASS__, 'ajax_refresh_nonce' ] );

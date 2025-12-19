@@ -709,6 +709,17 @@ var backupLiteTimer = {
         backupSubmitBtn = backupFormEl ? backupFormEl.querySelector('button[type="submit"]') : null;
         resetBackupProgress();
         setBackupCancelable(false);
+
+        // Bind cancel button once.
+        if (backupCancelBtn && !backupCancelBtn.dataset.blBound) {
+            backupCancelBtn.dataset.blBound = '1';
+            backupCancelBtn.addEventListener('click', function (e) {
+                if (e && typeof e.preventDefault === 'function') {
+                    e.preventDefault();
+                }
+                cancelBackupJob();
+            });
+        }
     }
 
     function resetBackupProgress() {
@@ -1103,7 +1114,8 @@ var backupLiteTimer = {
 
         // Use WordPress-standard AJAX approach with fetch API
         var payload = new FormData();
-        payload.append('action', 'backup_lite_get_backup_job_status');
+        // Keep the legacy server action name for maximum compatibility across hosts.
+        payload.append('action', 'backup_lite_get_job_status');
         payload.append('nonce', settings.nonce);
         payload.append('job_id', backupJobContext.current.id);
 
@@ -1290,7 +1302,8 @@ var backupLiteTimer = {
             if (!json || !json.success || !json.data || !json.data.job) {
                 throw json && json.data ? json.data : json;
             }
-            backupJobContext.current = json.data.job;
+            // Normalize via the same handler used by polling for consistent UI behavior.
+            handleJobResponse(json.data.job);
             backupLiteTimer.start(); // Start elapsed time timer
             scheduleBackupJobPolling(true);
         }).catch(function (error) {
