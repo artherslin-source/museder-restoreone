@@ -308,7 +308,7 @@ class Backup_Lite_Backup {
                 'source' => $source,
                 'target' => $target,
             ] );
-            self::add_directory_to_zip( $zip, $source, $target );
+            self::add_directory_to_zip( $zip, $source, $target, $directories );
         }
 
         return $zip->close();
@@ -411,7 +411,7 @@ class Backup_Lite_Backup {
         return $manifest;
     }
 
-    private static function add_directory_to_zip( ZipArchive $zip, $source, $target ) {
+    private static function add_directory_to_zip( ZipArchive $zip, $source, $target, $directory_map = null ) {
         if ( ! is_dir( $source ) ) {
             return;
         }
@@ -438,14 +438,22 @@ class Backup_Lite_Backup {
 
         $wp_content_skip_prefixes = [];
         if ( 'wp-content' === $target ) {
-            // Prevent duplicate inclusion: get_directory_map already includes themes/plugins/uploads separately.
-            $wp_content_skip_prefixes = [
-                wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/themes' ) ),
-                wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/plugins' ) ),
-                wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/uploads' ) ),
-                wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/mu-plugins' ) ),
-                wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/languages' ) ),
+            // Prevent duplicate inclusion ONLY when these directories are actually included elsewhere.
+            // Some hosts may not expose themes/plugins/uploads as separate roots, so skipping unconditionally
+            // can lead to missing uploads in backups.
+            $candidates = [
+                'themes'     => WP_CONTENT_DIR . '/themes',
+                'plugins'    => WP_CONTENT_DIR . '/plugins',
+                'uploads'    => WP_CONTENT_DIR . '/uploads',
+                'mu-plugins' => WP_CONTENT_DIR . '/mu-plugins',
+                'languages'  => WP_CONTENT_DIR . '/languages',
             ];
+
+            foreach ( $candidates as $key => $default_path ) {
+                if ( is_array( $directory_map ) && isset( $directory_map[ $key ] ) && is_string( $directory_map[ $key ] ) && '' !== $directory_map[ $key ] ) {
+                    $wp_content_skip_prefixes[] = wp_normalize_path( trailingslashit( $directory_map[ $key ] ) );
+                }
+            }
         }
 
         foreach ( $iterator as $file ) {
@@ -1174,14 +1182,13 @@ class Backup_Lite_Backup {
             try {
             $wp_content_skip_prefixes = [];
             if ( 'wp-content' === $target ) {
-                // Prevent duplicate inclusion: get_directory_map already includes themes/plugins/uploads separately.
-                $wp_content_skip_prefixes = [
-                    wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/themes' ) ),
-                    wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/plugins' ) ),
-                    wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/uploads' ) ),
-                    wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/mu-plugins' ) ),
-                    wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/languages' ) ),
-                ];
+                // Prevent duplicate inclusion ONLY when those directories are explicitly included elsewhere.
+                $candidates = [ 'themes', 'plugins', 'uploads', 'mu-plugins', 'languages' ];
+                foreach ( $candidates as $key ) {
+                    if ( isset( $directories[ $key ] ) && is_string( $directories[ $key ] ) && '' !== $directories[ $key ] ) {
+                        $wp_content_skip_prefixes[] = wp_normalize_path( trailingslashit( $directories[ $key ] ) );
+                    }
+                }
             }
 
             // Use optimized iterator flags for better performance
