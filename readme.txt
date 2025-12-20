@@ -4,7 +4,7 @@ Tags: backup, migration, restore, site-backup, database-backup
 Requires at least: 5.8
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 2.7.99
+Stable tag: 2.7.100
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -35,6 +35,11 @@ For full changelog history, please see docs/changelog-archive.md in the plugin f
 = 2.7.99 =
 * Fix: Backup start no longer times out on large sites; heavy preparation (DB dump/manifest/self-check) runs in background preparing stage.
 * Improve: If the initial request times out, the UI automatically recovers by resuming polling the active job.
+
+= 2.7.100 =
+* Fix: Prevent duplicate backup jobs when one is already running (avoids restart loops and archive rewrites).
+* Improve: Preparing stage now reports a stable 0–10% based on step, and job payload includes added/skipped diagnostics.
+* Fix: Tighten finalize guard to fail (with diagnostics) when too many files are blocked, instead of stalling or producing partial archives.
 
 = 2.7.93 =
 * Fix: Backups page polling no longer returns 400 on some hosts (action compatibility); cancel button is shown and works reliably during backup jobs.

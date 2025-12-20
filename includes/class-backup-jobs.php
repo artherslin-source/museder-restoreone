@@ -26,6 +26,13 @@ class Backup_Lite_Backup_Jobs {
      * @return array
      */
     public static function create_job( $options = [] ) {
+        // If there's already an active job, return it instead of creating a new one.
+        // This prevents accidental duplicate jobs and "restart loops" when users click multiple times or recover from timeouts.
+        $existing = self::get_active_job();
+        if ( $existing ) {
+            return $existing;
+        }
+
         $job_id = wp_generate_uuid4();
 
         $context = Backup_Lite_Backup::create_async_job_stub_context( $job_id, $options );
@@ -676,8 +683,17 @@ class Backup_Lite_Backup_Jobs {
             // Main work: 10–95.
             $percentage = 10 + (int) round( 85 * $hybrid_ratio );
         } elseif ( 'preparing' === $stage || 'pending' === ( $job['status'] ?? '' ) ) {
-            // Manifest is built before job creation; keep conservative.
-            $percentage = 0;
+            // Preparing runs in background; provide stable 0–10 progression by prep_step.
+            $prep_step = isset( $job['prep_step'] ) ? (string) $job['prep_step'] : '';
+            $map = [
+                'db'       => 1,
+                'meta'     => 3,
+                'archive'  => 5,
+                'manifest' => 8,
+                'selfcheck'=> 9,
+                'done'     => 10,
+            ];
+            $percentage = isset( $map[ $prep_step ] ) ? (int) $map[ $prep_step ] : 0;
         } else {
             // Fallback (failed/cancelled/unknown): show best-effort progress, never 100.
             $percentage = (int) round( 10 + ( 85 * $hybrid_ratio ) );
@@ -704,11 +720,17 @@ class Backup_Lite_Backup_Jobs {
             'status'          => $job['status'],
             'stage'           => $job['stage'],
             'message'         => $job['message'],
+            'prep_step'       => isset( $job['prep_step'] ) ? (string) $job['prep_step'] : '',
+            'pack_method'     => isset( $job['pack_method'] ) ? (string) $job['pack_method'] : '',
             'processed_files' => $processed,
             'total_files'     => $total_files,
             'processed_bytes' => $processed_b,
             'total_bytes'     => $total_bytes,
             'percentage'      => $percentage,
+            'attempted_files' => isset( $job['attempted_files'] ) ? (int) $job['attempted_files'] : 0,
+            'added_files'     => isset( $job['added_files'] ) ? (int) $job['added_files'] : 0,
+            'skipped_files'   => isset( $job['skipped_files'] ) ? (int) $job['skipped_files'] : 0,
+            'skip_reasons'    => isset( $job['skip_reasons'] ) && is_array( $job['skip_reasons'] ) ? $job['skip_reasons'] : [],
             'download_url'    => isset( $job['download_url'] ) ? $job['download_url'] : '',
             'processing'      => ! empty( $job['processing'] ),
             'updated_at'      => isset( $job['updated_at'] ) ? $job['updated_at'] : '',

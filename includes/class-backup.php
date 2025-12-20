@@ -1394,10 +1394,33 @@ class Backup_Lite_Backup {
         }
 
         // If there is nothing to pack (or we've already reached the end), defer finalize until the archive is closed.
-        // This prevents reporting "completed" (and computing filesize/metadata) before ZipArchive::close() flushes data.
+        // Guard against "fake success": only allow finalize when we actually packed most files.
         if ( $total <= 0 || $pointer >= $total ) {
-            $job['processed_files'] = isset( $job['total_files'] ) ? (int) $job['total_files'] : ( $job['processed_files'] ?? 0 );
-            $job['processed_bytes'] = isset( $job['total_bytes'] ) ? (int) $job['total_bytes'] : ( $job['processed_bytes'] ?? 0 );
+            $added_files   = isset( $job['added_files'] ) ? (int) $job['added_files'] : 0;
+            $skipped_files = isset( $job['skipped_files'] ) ? (int) $job['skipped_files'] : 0;
+            $min_ratio     = 0.95;
+
+            if ( $total >= 1000 && $added_files < (int) round( $total * $min_ratio ) ) {
+                backup_lite_log( 'error', 'Backup packing reached end pointer but too many files were skipped/blocked. Marking job failed to avoid incomplete archive.', [
+                    'job_id'        => $job['id'] ?? '',
+                    'total_files'   => $total,
+                    'added_files'   => $added_files,
+                    'skipped_files' => $skipped_files,
+                    'skip_reasons'  => $job['skip_reasons'] ?? [],
+                    'samples'       => $job['diagnostic_samples'] ?? [],
+                    'pack_method'   => $job['pack_method'] ?? '',
+                ] );
+
+                $job['status']  = 'failed';
+                $job['stage']   = 'failed';
+                $job['message'] = __( 'Backup failed: too many files could not be read or added to the archive on this host. Please check logs for details.', 'museder-restoreone' );
+                if ( isset( $job['needs_finalize'] ) ) {
+                    unset( $job['needs_finalize'] );
+                }
+                return $job;
+            }
+
+            $job['processed_files'] = min( $total, max( $added_files, (int) ( $job['processed_files'] ?? 0 ) ) );
             $job['status']          = 'running';
             $job['stage']           = 'finalizing';
             $job['message']         = __( 'Finalising backup archive…', 'museder-restoreone' );
