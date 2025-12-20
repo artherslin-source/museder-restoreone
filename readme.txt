@@ -4,7 +4,7 @@ Tags: backup, migration, restore, site-backup, database-backup
 Requires at least: 5.8
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 2.7.103
+Stable tag: 2.7.104
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -50,6 +50,10 @@ For full changelog history, please see docs/changelog-archive.md in the plugin f
 
 = 2.7.103 =
 * Fix: Detect and fail on truncated/invalid manifest files during packing; log JSON decode errors and manifest file size for diagnostics.
+
+= 2.7.104 =
+* Fix: Automatically invalidate PHP OPcache for plugin files after upgrades to avoid running stale code on shared hosting.
+* Improve: Log build identifier and OPcache status after upgrades (and periodically) for easier debugging.
 
 = 2.7.93 =
 * Fix: Backups page polling no longer returns 400 on some hosts (action compatibility); cancel button is shown and works reliably during backup jobs.

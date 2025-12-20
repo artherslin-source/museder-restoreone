@@ -3,7 +3,7 @@
 Plugin Name: Museder RestoreOne
 Plugin URI: https://museder.com/restoreone
 Description: Museder RestoreOne is a simple backup & restore plugin for WordPress.
-Version: 2.7.103
+Version: 2.7.104
 Requires at least: 5.8
 Tested up to: 6.9
 Requires PHP: 7.4
@@ -17,7 +17,9 @@ Domain Path: /languages
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-define( 'BACKUP_LITE_VERSION', '2.7.103' );
+define( 'BACKUP_LITE_VERSION', '2.7.104' );
+// Build identifier for debugging host-side opcode caching issues.
+define( 'BACKUP_LITE_BUILD_ID', '2.7.104-1' );
 define( 'BACKUP_LITE_PATH', plugin_dir_path( __FILE__ ) );
 define( 'BACKUP_LITE_URL', plugin_dir_url( __FILE__ ) );
 
@@ -89,6 +91,36 @@ function museder_restoreone_load_textdomain() {
 add_action( 'plugins_loaded', 'backup_lite_bootstrap' );
 
 function backup_lite_bootstrap() {
+    // Detect upgrades early so we can invalidate opcode cache for included files (shared hosting often caches includes/*).
+    $stored_version = get_option( 'backup_lite_plugin_version', '' );
+    if ( BACKUP_LITE_VERSION !== $stored_version ) {
+        backup_lite_maybe_invalidate_opcache_for_plugin();
+
+        update_option( 'backup_lite_plugin_version', BACKUP_LITE_VERSION );
+        update_option( 'backup_lite_plugin_build_id', defined( 'BACKUP_LITE_BUILD_ID' ) ? BACKUP_LITE_BUILD_ID : '' );
+
+        if ( function_exists( 'backup_lite_log' ) ) {
+            backup_lite_log( 'info', 'Backup Lite version updated.', [
+                'version'   => BACKUP_LITE_VERSION,
+                'build_id'  => defined( 'BACKUP_LITE_BUILD_ID' ) ? BACKUP_LITE_BUILD_ID : '',
+                'opcache'   => function_exists( 'opcache_get_status' ) ? (bool) ( opcache_get_status( false )['opcache_enabled'] ?? false ) : null,
+                'php'       => PHP_VERSION,
+            ] );
+        }
+    } elseif ( function_exists( 'backup_lite_log' ) && defined( 'BACKUP_LITE_BUILD_ID' ) ) {
+        // Lightweight heartbeat for support: helps confirm which build is executing on the server.
+        // Log at most once per hour.
+        $last = (int) get_option( 'backup_lite_build_log_ts', 0 );
+        if ( time() - $last > 3600 ) {
+            update_option( 'backup_lite_build_log_ts', time() );
+            backup_lite_log( 'info', 'Backup Lite build active.', [
+                'version'  => BACKUP_LITE_VERSION,
+                'build_id' => BACKUP_LITE_BUILD_ID,
+                'opcache'  => function_exists( 'opcache_get_status' ) ? (bool) ( opcache_get_status( false )['opcache_enabled'] ?? false ) : null,
+            ] );
+        }
+    }
+
     // Check if we need to run post-activation initialization
     if ( get_option( 'backup_lite_needs_init', false ) ) {
         // Run initialization tasks that were deferred from activation hook

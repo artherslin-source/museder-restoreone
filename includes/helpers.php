@@ -643,6 +643,92 @@ function backup_lite_ensure_access_controls() {
     }
 }
 
+/**
+ * Attempt to invalidate OPcache entries for this plugin after upgrades.
+ *
+ * Some shared hosting environments keep stale opcode cache for included PHP files (e.g., includes/class-backup.php),
+ * causing the site to run old logic even after updating the plugin. This routine best-effort invalidates plugin files.
+ *
+ * @return void
+ */
+function backup_lite_maybe_invalidate_opcache_for_plugin() {
+    if ( ! function_exists( 'opcache_invalidate' ) ) {
+        return;
+    }
+
+    $base = defined( 'BACKUP_LITE_PATH' ) ? BACKUP_LITE_PATH : '';
+    if ( empty( $base ) || ! is_dir( $base ) ) {
+        return;
+    }
+
+    $invalidated = 0;
+    $failed      = 0;
+    $targets     = [];
+
+    // Limit scope to the plugin root and includes/ only to avoid scanning large trees.
+    $roots = [
+        rtrim( $base, '/\\' ) . DIRECTORY_SEPARATOR . 'museder-restoreone.php',
+        rtrim( $base, '/\\' ) . DIRECTORY_SEPARATOR . 'includes',
+    ];
+
+    foreach ( $roots as $root ) {
+        if ( is_file( $root ) ) {
+            $targets[] = $root;
+            continue;
+        }
+
+        if ( ! is_dir( $root ) ) {
+            continue;
+        }
+
+        try {
+            $it = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator(
+                    $root,
+                    FilesystemIterator::SKIP_DOTS | FilesystemIterator::FOLLOW_SYMLINKS
+                )
+            );
+
+            foreach ( $it as $fileinfo ) {
+                if ( ! $fileinfo instanceof SplFileInfo ) {
+                    continue;
+                }
+                if ( 'php' !== strtolower( (string) $fileinfo->getExtension() ) ) {
+                    continue;
+                }
+                $targets[] = $fileinfo->getPathname();
+            }
+        } catch ( Exception $e ) {
+            // Ignore iterator failures; we still try invalidating known files.
+        }
+    }
+
+    $targets = array_values( array_unique( $targets ) );
+
+    foreach ( $targets as $file ) {
+        // Normalize path for opcache_invalidate.
+        $file = (string) $file;
+        if ( '' === $file || ! is_file( $file ) ) {
+            continue;
+        }
+
+        $ok = @opcache_invalidate( $file, true );
+        if ( $ok ) {
+            $invalidated++;
+        } else {
+            $failed++;
+        }
+    }
+
+    if ( function_exists( 'backup_lite_log' ) ) {
+        backup_lite_log( 'info', 'Attempted OPcache invalidate for plugin files.', [
+            'invalidated' => $invalidated,
+            'failed'      => $failed,
+            'files'       => count( $targets ),
+        ] );
+    }
+}
+
 function backup_lite_is_shell_available() {
     if ( defined( 'BACKUP_LITE_FORCE_NO_SHELL' ) && BACKUP_LITE_FORCE_NO_SHELL ) {
         return false;
