@@ -221,6 +221,9 @@ class Backup_Lite_Backup_Jobs {
         // Cap at 90 seconds to prevent extremely long single requests that might timeout
         // This leaves buffer for frontend timeout (30s) and other operations
         $time_budget = max( 25, min( (int) ( $max_execution_time * 0.75 ), 90 ) );
+        // Hard cap to keep requests short on strict shared hosting (prevents 150s+ requests when a single batch is slow).
+        $hard_budget = 25;
+        $time_budget = min( $time_budget, $hard_budget );
         $start_microtime = microtime( true ); // Use microtime for precise timing
         $processed_bytes_start = isset( $job['processed_bytes'] ) ? (int) $job['processed_bytes'] : 0;
         $batch_count = 0;
@@ -267,6 +270,16 @@ class Backup_Lite_Backup_Jobs {
                     break;
                 }
 
+                // If we are close to the time budget, shrink batch limits for the next operation.
+                $remaining = $time_budget - $elapsed;
+                if ( $remaining < 8 ) {
+                    $max_files = min( $max_files, 60 );
+                    $max_bytes = min( $max_bytes, 12 * 1024 * 1024 ); // 12MB
+                } elseif ( $remaining < 15 ) {
+                    $max_files = min( $max_files, 120 );
+                    $max_bytes = min( $max_bytes, 24 * 1024 * 1024 ); // 24MB
+                }
+
                 // Preparing stage runs before packing to avoid long initial AJAX requests.
                 if ( isset( $job['stage'] ) && 'preparing' === $job['stage'] ) {
                     $job = Backup_Lite_Backup::run_preparing_stage( $job );
@@ -286,17 +299,12 @@ class Backup_Lite_Backup_Jobs {
                         }
                     }
 
-                    // Save progress periodically.
-                    $current_time = microtime( true );
-                    $time_since_last_save = $current_time - $last_save_time;
-                    $should_save = ( $batch_count % $save_interval_batches === 0 ) || ( $time_since_last_save >= $save_interval_seconds );
-                    if ( $should_save ) {
-                        $job['processing']    = true;
-                        $job['last_activity'] = time();
-                        $job['updated_at']    = current_time( 'mysql' );
-                        self::save_job( $job );
-                        $last_save_time = $current_time;
-                    }
+                    // Always save after each preparing step to keep UI responsive.
+                    $job['processing']    = true;
+                    $job['last_activity'] = time();
+                    $job['updated_at']    = current_time( 'mysql' );
+                    self::save_job( $job );
+                    $last_save_time = microtime( true );
 
                     // If still preparing, continue the loop until time budget is reached.
                     if ( 'preparing' === $job['stage'] ) {
@@ -321,18 +329,12 @@ class Backup_Lite_Backup_Jobs {
                     break;
                 }
 
-                // Save progress conditionally: every 5 batches or every 3 seconds (whichever comes first)
-                $current_time = microtime( true );
-                $time_since_last_save = $current_time - $last_save_time;
-                $should_save = ( $batch_count % $save_interval_batches === 0 ) || ( $time_since_last_save >= $save_interval_seconds );
-                
-                if ( $should_save ) {
-                    $job['processing']    = true;
-                    $job['last_activity'] = time();
-                    $job['updated_at']    = current_time( 'mysql' );
-                    self::save_job( $job );
-                    $last_save_time = $current_time;
-                }
+                // Always save after each packing batch to avoid stuck UI when hosts kill long requests.
+                $job['processing']    = true;
+                $job['last_activity'] = time();
+                $job['updated_at']    = current_time( 'mysql' );
+                self::save_job( $job );
+                $last_save_time = microtime( true );
             }
 
             // Close ZipArchive if we opened it (single close point).
@@ -670,7 +672,8 @@ class Backup_Lite_Backup_Jobs {
         $bytes_ratio = $processed_b / $total_bytes;
 
         // Prefer file count for smoothness on shared hosting with many small files.
-        $hybrid_ratio = ( 0.70 * $files_ratio ) + ( 0.30 * $bytes_ratio );
+        // Weight bytes lower to avoid early jumps when a few large files are added first.
+        $hybrid_ratio = ( 0.90 * $files_ratio ) + ( 0.10 * $bytes_ratio );
         $hybrid_ratio = max( 0, min( 1, $hybrid_ratio ) );
 
         $percentage = 0;
