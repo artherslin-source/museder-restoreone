@@ -4,7 +4,7 @@ Tags: backup, migration, restore, site-backup, database-backup
 Requires at least: 5.8
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 2.7.96
+Stable tag: 2.7.97
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -23,6 +23,9 @@ For full changelog history, please see docs/changelog-archive.md in the plugin f
 = 2.7.96 =
 * Fix: Prevent backups from being marked completed before packing finishes; adds finalize safety checks to avoid incomplete archives.
 * Fix: Fail the job if ZipArchive cannot add a file (instead of silently producing an incomplete ZIP); see logs for the first failing path.
+
+= 2.7.97 =
+* Fix: Improve compatibility on hosts using symlinked paths/open_basedir by avoiding realpath() during manifest building; ensures files can be found and packed correctly.
 
 = 2.7.93 =
 * Fix: Backups page polling no longer returns 400 on some hosts (action compatibility); cancel button is shown and works reliably during backup jobs.

@@ -356,6 +356,8 @@ class Backup_Lite_Backup {
             }
 
             $source = rtrim( $source, '/\\' );
+            $normalized_source = wp_normalize_path( $source );
+            $normalized_source = rtrim( $normalized_source, '/' );
 
             if ( self::should_skip_path( $source ) ) {
                 continue;
@@ -379,8 +381,20 @@ class Backup_Lite_Backup {
                     continue;
                 }
 
-                $file_path = $file->getRealPath();
-                if ( ! $file_path || self::should_skip_path( $file_path ) ) {
+                // Use pathname (not realpath) to preserve symlinked paths on hosts with open_basedir constraints.
+                // getRealPath() may resolve to an inaccessible physical path, causing later file_exists() to fail.
+                $file_path = $file->getPathname();
+                if ( empty( $file_path ) ) {
+                    continue;
+                }
+                $file_path = wp_normalize_path( $file_path );
+
+                // Safety: ensure the file stays within the scanned root.
+                if ( 0 !== strpos( $file_path, trailingslashit( $normalized_source ) ) ) {
+                    continue;
+                }
+
+                if ( self::should_skip_path( $file_path ) ) {
                     continue;
                 }
 
@@ -396,7 +410,7 @@ class Backup_Lite_Backup {
                     continue;
                 }
 
-                $relative = ltrim( substr( $file_path, strlen( $source ) ), '/\\' );
+                $relative = ltrim( substr( $file_path, strlen( $normalized_source ) ), '/' );
                 if ( '' === $relative ) {
                     continue;
                 }
@@ -417,6 +431,8 @@ class Backup_Lite_Backup {
         }
 
         $source = rtrim( $source, '/\\' );
+        $normalized_source = wp_normalize_path( $source );
+        $normalized_source = rtrim( $normalized_source, '/' );
 
         if ( self::should_skip_path( $source ) ) {
             return;
@@ -458,15 +474,24 @@ class Backup_Lite_Backup {
 
         foreach ( $iterator as $file ) {
             /** @var SplFileInfo $file */
-            $file_path = $file->getRealPath();
-            if ( ! $file_path ) {
+            // Use pathname (not realpath) to preserve symlinked paths on hosts with open_basedir constraints.
+            $file_path = $file->getPathname();
+            if ( empty( $file_path ) ) {
+                continue;
+            }
+            $file_path = wp_normalize_path( $file_path );
+
+            // Safety: ensure the path stays within the scanned root.
+            if ( 0 !== strpos( $file_path, trailingslashit( $normalized_source ) ) ) {
+                if ( $file->isDir() && method_exists( $iterator, 'skipChildren' ) ) {
+                    $iterator->skipChildren();
+                }
                 continue;
             }
 
             if ( ! empty( $wp_content_skip_prefixes ) ) {
-                $normalized_file_path = wp_normalize_path( $file_path );
                 foreach ( $wp_content_skip_prefixes as $skip_prefix ) {
-                    if ( '' !== $skip_prefix && 0 === strpos( $normalized_file_path, $skip_prefix ) ) {
+                    if ( '' !== $skip_prefix && 0 === strpos( $file_path, $skip_prefix ) ) {
                         if ( $file->isDir() && method_exists( $iterator, 'skipChildren' ) ) {
                             $iterator->skipChildren();
                         }
@@ -482,8 +507,8 @@ class Backup_Lite_Backup {
                 continue;
             }
 
-            $relative = ltrim( substr( $file_path, strlen( $source ) ), '/\\' );
-            $entry    = $target . '/' . str_replace( '\\', '/', $relative );
+            $relative = ltrim( substr( $file_path, strlen( $normalized_source ) ), '/' );
+            $entry    = $target . '/' . $relative;
 
             if ( $file->isDir() ) {
                 $zip->addEmptyDir( $entry );
@@ -809,19 +834,21 @@ class Backup_Lite_Backup {
             }
 
             $source = rtrim( $source, '/\\' );
+            $normalized_source = wp_normalize_path( $source );
+            $normalized_source = rtrim( $normalized_source, '/' );
             if ( self::should_skip_path( $source ) ) {
                 continue;
             }
 
             $wp_content_skip_prefixes = [];
             if ( 'wp-content' === $target ) {
-                $wp_content_skip_prefixes = [
-                    wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/themes' ) ),
-                    wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/plugins' ) ),
-                    wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/uploads' ) ),
-                    wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/mu-plugins' ) ),
-                    wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/languages' ) ),
-                ];
+                // Prevent duplicate inclusion ONLY when those directories are explicitly included elsewhere.
+                $candidates = [ 'themes', 'plugins', 'uploads', 'mu-plugins', 'languages' ];
+                foreach ( $candidates as $key ) {
+                    if ( isset( $directories[ $key ] ) && is_string( $directories[ $key ] ) && '' !== $directories[ $key ] ) {
+                        $wp_content_skip_prefixes[] = wp_normalize_path( trailingslashit( $directories[ $key ] ) );
+                    }
+                }
             }
 
             // Use optimized iterator flags for better performance.
@@ -842,15 +869,25 @@ class Backup_Lite_Backup {
                         continue;
                     }
 
-                    $file_path = $file->getRealPath();
-                    if ( ! $file_path || self::should_skip_path( $file_path ) ) {
+                    // Use pathname (not realpath) to preserve symlinked paths on hosts with open_basedir constraints.
+                    $file_path = $file->getPathname();
+                    if ( empty( $file_path ) ) {
+                        continue;
+                    }
+                    $file_path = wp_normalize_path( $file_path );
+
+                    // Safety: ensure the file stays within the scanned root.
+                    if ( 0 !== strpos( $file_path, trailingslashit( $normalized_source ) ) ) {
+                        continue;
+                    }
+
+                    if ( self::should_skip_path( $file_path ) ) {
                         continue;
                     }
 
                     if ( ! empty( $wp_content_skip_prefixes ) ) {
-                        $normalized_file_path = wp_normalize_path( $file_path );
                         foreach ( $wp_content_skip_prefixes as $skip_prefix ) {
-                            if ( '' !== $skip_prefix && 0 === strpos( $normalized_file_path, $skip_prefix ) ) {
+                            if ( '' !== $skip_prefix && 0 === strpos( $file_path, $skip_prefix ) ) {
                                 continue 2;
                             }
                         }
@@ -1175,6 +1212,8 @@ class Backup_Lite_Backup {
             }
 
             $source = rtrim( $source, '/\\' );
+            $normalized_source = wp_normalize_path( $source );
+            $normalized_source = rtrim( $normalized_source, '/' );
             if ( self::should_skip_path( $source ) ) {
                 continue;
             }
@@ -1218,21 +1257,31 @@ class Backup_Lite_Backup {
                         continue;
                     }
 
-                    $file_path = $file->getRealPath();
-                    if ( ! $file_path || self::should_skip_path( $file_path ) ) {
+                    // Use pathname (not realpath) to preserve symlinked paths on hosts with open_basedir constraints.
+                    $file_path = $file->getPathname();
+                    if ( empty( $file_path ) ) {
+                        continue;
+                    }
+                    $file_path = wp_normalize_path( $file_path );
+
+                    // Safety: ensure the file stays within the scanned root.
+                    if ( 0 !== strpos( $file_path, trailingslashit( $normalized_source ) ) ) {
+                        continue;
+                    }
+
+                    if ( self::should_skip_path( $file_path ) ) {
                         continue;
                     }
 
                     if ( ! empty( $wp_content_skip_prefixes ) ) {
-                        $normalized_file_path = wp_normalize_path( $file_path );
                         foreach ( $wp_content_skip_prefixes as $skip_prefix ) {
-                            if ( '' !== $skip_prefix && 0 === strpos( $normalized_file_path, $skip_prefix ) ) {
+                            if ( '' !== $skip_prefix && 0 === strpos( $file_path, $skip_prefix ) ) {
                                 continue 2;
                             }
                         }
                     }
 
-                    $relative = ltrim( substr( $file_path, strlen( $source ) ), '/\\' );
+                    $relative = ltrim( substr( $file_path, strlen( $normalized_source ) ), '/' );
                     if ( '' === $relative ) {
                         continue;
                     }
@@ -1250,8 +1299,8 @@ class Backup_Lite_Backup {
 
                     $file_size = $size !== false ? (int) $size : 0;
                     $manifest[] = [
-                        'path'   => wp_normalize_path( $file_path ),
-                        'target' => $target . '/' . str_replace( '\\', '/', $relative ),
+                        'path'   => $file_path,
+                        'target' => $target . '/' . $relative,
                         'size'   => $file_size,
                     ];
 
