@@ -307,9 +307,27 @@ class Backup_Lite_Backup_Jobs {
 
             // If packing finished, finalize AFTER close so filesize/metadata are accurate.
             if ( $job_needs_finalize && ! in_array( $job['status'], [ 'failed', 'cancelled' ], true ) ) {
-                $job = Backup_Lite_Backup::finalize_async_job_after_close( $job );
-                $job_completed_in_loop = true;
-                $job_needs_finalize = false;
+                $total_files     = isset( $job['total_files'] ) ? (int) $job['total_files'] : 0;
+                $pointer         = isset( $job['pointer'] ) ? (int) $job['pointer'] : 0;
+                $processed_files = isset( $job['processed_files'] ) ? (int) $job['processed_files'] : 0;
+
+                if ( $total_files > 0 && max( $pointer, $processed_files ) < $total_files ) {
+                    // Safety: do not finalize early (would produce an incomplete archive).
+                    backup_lite_log( 'warning', 'Deferring finalize because packing is not complete.', [
+                        'job_id'          => $job_id,
+                        'total_files'     => $total_files,
+                        'pointer'         => $pointer,
+                        'processed_files' => $processed_files,
+                    ] );
+                    $job['status']  = 'running';
+                    $job['stage']   = 'packing';
+                    $job['message'] = __( 'Backup running…', 'museder-restoreone' );
+                    $job_needs_finalize = false;
+                } else {
+                    $job = Backup_Lite_Backup::finalize_async_job_after_close( $job );
+                    $job_completed_in_loop = true;
+                    $job_needs_finalize = false;
+                }
             }
 
             // If job completed inside the loop, persist final state AFTER close to avoid exposing completed status early.

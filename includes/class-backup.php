@@ -1363,7 +1363,16 @@ class Backup_Lite_Backup {
             }
 
             // Add file to archive
-            $zip->addFile( $path, $target );
+            $added = $zip->addFile( $path, $target );
+            if ( false === $added ) {
+                $status = method_exists( $zip, 'getStatusString' ) ? $zip->getStatusString() : '';
+                backup_lite_log( 'error', 'ZipArchive failed to add file.', [
+                    'path'   => $path,
+                    'target' => $target,
+                    'status' => $status,
+                ] );
+                throw new RuntimeException( esc_html__( 'Failed to add a file to the backup archive. Please check logs and try again.', 'museder-restoreone' ) );
+            }
 
             // Compression strategy mirrors add_directory_to_zip().
             // Fast mode: store everything to reduce CPU on shared hosting.
@@ -1397,6 +1406,28 @@ class Backup_Lite_Backup {
      * @return array
      */
     private static function finalize_async_job( array $job ) {
+        // Safety: never mark a job completed if it hasn't actually reached the end of its manifest.
+        $total_files     = isset( $job['total_files'] ) ? (int) $job['total_files'] : 0;
+        $pointer         = isset( $job['pointer'] ) ? (int) $job['pointer'] : 0;
+        $processed_files = isset( $job['processed_files'] ) ? (int) $job['processed_files'] : 0;
+
+        if ( $total_files > 0 && max( $pointer, $processed_files ) < $total_files ) {
+            backup_lite_log( 'warning', 'Finalize requested before job finished packing. Continuing backup instead of completing.', [
+                'total_files'     => $total_files,
+                'pointer'         => $pointer,
+                'processed_files' => $processed_files,
+            ] );
+
+            $job['status']  = 'running';
+            $job['stage']   = 'packing';
+            $job['message'] = __( 'Backup running…', 'museder-restoreone' );
+            if ( isset( $job['needs_finalize'] ) ) {
+                unset( $job['needs_finalize'] );
+            }
+
+            return $job;
+        }
+
         $job['status']          = 'completed';
         $job['stage']           = 'completed';
         $job['message']         = esc_html__( 'Backup completed successfully.', 'museder-restoreone' );
