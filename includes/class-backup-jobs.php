@@ -28,14 +28,11 @@ class Backup_Lite_Backup_Jobs {
     public static function create_job( $options = [] ) {
         $job_id = wp_generate_uuid4();
 
-        $context = Backup_Lite_Backup::prepare_async_job( $job_id, $options );
-        if ( empty( $context['manifest_file'] ) || empty( $context['manifest_count'] ) ) {
-            throw new RuntimeException( esc_html__( 'Unable to build file manifest for backup.', 'museder-restoreone' ) );
-        }
+        $context = Backup_Lite_Backup::create_async_job_stub_context( $job_id, $options );
 
         $job = [
             'id'              => $job_id,
-            'status'          => 'pending',
+            'status'          => 'running',
             'stage'           => 'preparing',
             'message'         => __( 'Preparing backup…', 'museder-restoreone' ),
             'created_at'      => current_time( 'mysql' ),
@@ -44,8 +41,9 @@ class Backup_Lite_Backup_Jobs {
             'pointer'         => 0,
             'processed_files' => 0,
             'processed_bytes' => 0,
-            'total_files'     => (int) $context['manifest_count'],
-            'total_bytes'     => max( 1, (int) $context['manifest_bytes'] ),
+            // Totals are determined during preparing stage (manifest build).
+            'total_files'     => 1,
+            'total_bytes'     => 1,
             // Diagnostics + completion guards (prevents fake-success archives).
             'attempted_files' => 0,
             'added_files'     => 0,
@@ -55,11 +53,14 @@ class Backup_Lite_Backup_Jobs {
             'skip_reasons'    => [],
             'diagnostic_samples' => [],
             'pack_method'     => backup_lite_can_use_ziparchive() ? 'ziparchive' : 'pclzip',
-            'selfcheck'       => isset( $context['selfcheck'] ) ? $context['selfcheck'] : [],
+            'selfcheck'       => [],
+            'prep_step'       => 'db',
             'archive_path'    => $context['archive_path'],
             'download_url'    => backup_lite_get_download_url( $context['archive_path'] ),
             'temp_dir'        => $context['temp_dir'],
             'manifest_file'   => $context['manifest_file'],
+            'sql_path'        => $context['sql_path'],
+            'meta_path'       => $context['meta_path'],
             'options'         => $context['options'],
             'last_activity'   => time(),
             'started_at'      => time(), // Record backup start time (UTC timestamp)
@@ -184,7 +185,11 @@ class Backup_Lite_Backup_Jobs {
             // Mark as processing for frontend/UI (kept true for the whole request; reset to false at the end).
             self::acquire_lock( $job );
 
-            $job['stage']  = 'packing';
+            // If the job is still in preparing stage, do not force packing yet.
+            // Preparing may take time (DB dump/manifest/self-check) and should run in background.
+            if ( empty( $job['stage'] ) ) {
+                $job['stage'] = 'preparing';
+            }
             $job['status'] = 'running';
             self::save_job( $job );
 
@@ -255,7 +260,44 @@ class Backup_Lite_Backup_Jobs {
                     break;
                 }
 
-                // Process one batch (reuse ZipArchive if available)
+                // Preparing stage runs before packing to avoid long initial AJAX requests.
+                if ( isset( $job['stage'] ) && 'preparing' === $job['stage'] ) {
+                    $job = Backup_Lite_Backup::run_preparing_stage( $job );
+                    $batch_count++;
+
+                    // Move to packing when preparing is done.
+                    if ( isset( $job['prep_step'] ) && 'done' === $job['prep_step'] && 'failed' !== $job['status'] ) {
+                        $job['stage']  = 'packing';
+                        $job['status'] = 'running';
+                    }
+
+                    // If archive is now available and we can reuse ZipArchive, open it.
+                    if ( null === $zip && 'packing' === $job['stage'] && backup_lite_can_use_ziparchive() && ! empty( $job['archive_path'] ) && file_exists( $job['archive_path'] ) ) {
+                        $zip = new ZipArchive();
+                        if ( true !== $zip->open( $job['archive_path'], ZipArchive::CREATE ) ) {
+                            $zip = null;
+                        }
+                    }
+
+                    // Save progress periodically.
+                    $current_time = microtime( true );
+                    $time_since_last_save = $current_time - $last_save_time;
+                    $should_save = ( $batch_count % $save_interval_batches === 0 ) || ( $time_since_last_save >= $save_interval_seconds );
+                    if ( $should_save ) {
+                        $job['processing']    = true;
+                        $job['last_activity'] = time();
+                        $job['updated_at']    = current_time( 'mysql' );
+                        self::save_job( $job );
+                        $last_save_time = $current_time;
+                    }
+
+                    // If still preparing, continue the loop until time budget is reached.
+                    if ( 'preparing' === $job['stage'] ) {
+                        continue;
+                    }
+                }
+
+                // Process one packing batch (reuse ZipArchive if available)
                 $job = Backup_Lite_Backup::process_job_batch( $job, $max_files, $max_bytes, $zip );
                 $batch_count++;
 

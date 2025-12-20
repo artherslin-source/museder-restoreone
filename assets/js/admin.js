@@ -1308,22 +1308,56 @@ var backupLiteTimer = {
             scheduleBackupJobPolling(true);
         }).catch(function (error) {
             clearTimeout(timeoutId);
-            setBackupBusy(false);
-            backupJobContext.current = null;
-            resetBackupProgress();
-            setBackupCancelable(false);
-            
-            // Provide better error message for timeout/network errors
+            // If the initial request timed out, the job may still have been created and is preparing in background.
+            // Try to recover by fetching the active job and resuming polling.
             var errorMessage = error && error.message ? error.message : null;
-            if (error.name === 'AbortError' || (errorMessage && (
-                errorMessage.includes('timeout') || 
+            var isTimeout = (error && error.name === 'AbortError') || (errorMessage && (
+                errorMessage.includes('timeout') ||
                 errorMessage.includes('network') ||
                 errorMessage.includes('Failed to fetch')
-            ))) {
-                errorMessage = 'Connection timeout. Please check your network connection and try again.';
+            ));
+
+            if (!isTimeout || !settings.nonce) {
+                setBackupBusy(false);
+                backupJobContext.current = null;
+                resetBackupProgress();
+                setBackupCancelable(false);
+                if (isTimeout) {
+                    errorMessage = 'Connection timeout. Please check your network connection and try again.';
+                }
+                handleError(errorMessage ? { message: errorMessage } : error);
+                return;
             }
-            
-            handleError(errorMessage ? { message: errorMessage } : error);
+
+            // Keep UI in "busy" mode and attempt recovery.
+            setBackupBusy(true);
+            setBackupStatusMessage(strings.jobPreparing || strings.runningMessage || 'Preparing backup…', 'loading');
+            showToast(strings.jobPreparing || 'Preparing backup…', 'info');
+
+            var recoverPayload = new FormData();
+            recoverPayload.append('action', 'backup_lite_get_active_backup_job');
+            recoverPayload.append('nonce', settings.nonce);
+
+            fetch(settings.ajaxUrl, {
+                method: 'POST',
+                credentials: 'same-origin',
+                body: recoverPayload
+            }).then(function (response) {
+                return response.json();
+            }).then(function (json) {
+                if (!json || json.success !== true || !json.data || !json.data.job) {
+                    throw json && json.data ? json.data : json;
+                }
+                handleJobResponse(json.data.job);
+                backupLiteTimer.start();
+                scheduleBackupJobPolling(true);
+            }).catch(function (recoverError) {
+                setBackupBusy(false);
+                backupJobContext.current = null;
+                resetBackupProgress();
+                setBackupCancelable(false);
+                handleError({ message: 'Connection timeout. Please refresh the page to check backup status.' });
+            });
         });
 
         return false;

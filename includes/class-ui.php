@@ -29,6 +29,7 @@ class Backup_Lite_UI {
         add_action( 'wp_ajax_backup_lite_get_backup_job_status', [ __CLASS__, 'ajax_get_backup_job_status' ] );
         add_action( 'wp_ajax_backup_lite_continue_backup_job', [ __CLASS__, 'ajax_continue_backup_job' ] );
         add_action( 'wp_ajax_backup_lite_cancel_backup_job', [ __CLASS__, 'ajax_cancel_backup_job' ] );
+        add_action( 'wp_ajax_backup_lite_get_active_backup_job', [ __CLASS__, 'ajax_get_active_backup_job' ] );
         add_action( 'wp_ajax_backup_lite_refresh_nonce', [ __CLASS__, 'ajax_refresh_nonce' ] );
 
         add_action( 'admin_post_backup_lite_download_log', [ __CLASS__, 'handle_log_download' ] );
@@ -474,6 +475,21 @@ class Backup_Lite_UI {
 
         // @plugin-check: escaped
         wp_send_json_success( [ 'message' => esc_html__( 'Backup job cancelled.', 'museder-restoreone' ) ] );
+    }
+
+    /**
+     * Return current active backup job (if any) for UI recovery when initial request times out.
+     */
+    public static function ajax_get_active_backup_job() {
+        self::verify_ajax_request();
+
+        $payload = Backup_Lite_Backup_Jobs::get_active_job_summary();
+        if ( ! $payload ) {
+            // @plugin-check: escaped
+            wp_send_json_error( [ 'message' => esc_html__( 'No active backup job found.', 'museder-restoreone' ) ], 404 );
+        }
+
+        wp_send_json_success( [ 'job' => $payload ] );
     }
 
     public static function handle_restore_request() {

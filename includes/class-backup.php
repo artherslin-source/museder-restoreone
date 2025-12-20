@@ -586,6 +586,55 @@ class Backup_Lite_Backup {
     }
 
     /**
+     * Create a lightweight async job context (no DB dump / manifest work).
+     *
+     * @param string $job_id  Job identifier.
+     * @param array  $options Backup options.
+     * @return array<string,mixed>
+     */
+    public static function create_async_job_stub_context( $job_id, $options = [] ) {
+        self::optimize_runtime_environment();
+
+        $backup_dir = trailingslashit( backup_lite_get_backup_dir() );
+        if ( ! self::ensure_writable_directory( $backup_dir ) ) {
+            throw new RuntimeException( esc_html__( 'Backup directory is not writable.', 'museder-restoreone' ) );
+        }
+
+        $site_url = wp_parse_url( home_url(), PHP_URL_HOST );
+        if ( empty( $site_url ) ) {
+            $site_url = 'site';
+        }
+        $site_url = sanitize_file_name( $site_url );
+
+        $date_time    = backup_lite_local_time( 'YmdHis' );
+        $random_code  = wp_generate_password( 6, false, false );
+        $label_suffix = '';
+
+        if ( class_exists( 'Backup_Lite_Pro' ) && Backup_Lite_Pro::is_pro_active() && ! empty( $options['label'] ) ) {
+            $label_suffix = '-' . sanitize_file_name( $options['label'] );
+        }
+
+        $archive_name = sprintf( '%s-%s-%s%s.zip', $site_url, $date_time, $random_code, $label_suffix );
+        $archive_path = $backup_dir . $archive_name;
+
+        $temp_dir  = backup_lite_create_temp_dir( 'build' );
+        $sql_path  = trailingslashit( $temp_dir ) . 'database.sql';
+        $meta_path = trailingslashit( $temp_dir ) . 'meta.json';
+
+        $manifest_file = trailingslashit( backup_lite_get_jobs_dir() ) . sanitize_file_name( $job_id ) . '-manifest.json';
+
+        return [
+            'archive_path'  => $archive_path,
+            'archive_name'  => $archive_name,
+            'temp_dir'      => $temp_dir,
+            'sql_path'      => $sql_path,
+            'meta_path'     => $meta_path,
+            'manifest_file' => $manifest_file,
+            'options'       => is_array( $options ) ? $options : [],
+        ];
+    }
+
+    /**
      * Prepare an asynchronous backup job blueprint.
      *
      * @param string $job_id  Job identifier.
@@ -720,6 +769,136 @@ class Backup_Lite_Backup {
             'options'        => $options,
             'selfcheck'      => $selfcheck,
         ];
+    }
+
+    /**
+     * Background preparing stage for async jobs: DB dump, meta, init archive, manifest build, self-check.
+     *
+     * @param array $job Job state.
+     * @return array Updated job state.
+     */
+    public static function run_preparing_stage( array $job ) {
+        $step = isset( $job['prep_step'] ) ? (string) $job['prep_step'] : 'db';
+
+        $archive_path = isset( $job['archive_path'] ) ? (string) $job['archive_path'] : '';
+        $temp_dir     = isset( $job['temp_dir'] ) ? (string) $job['temp_dir'] : '';
+        $sql_path     = isset( $job['sql_path'] ) ? (string) $job['sql_path'] : '';
+        $meta_path    = isset( $job['meta_path'] ) ? (string) $job['meta_path'] : '';
+        $manifest_file = isset( $job['manifest_file'] ) ? (string) $job['manifest_file'] : '';
+        $options      = isset( $job['options'] ) && is_array( $job['options'] ) ? $job['options'] : [];
+
+        if ( '' === $archive_path || '' === $temp_dir || '' === $sql_path || '' === $meta_path || '' === $manifest_file ) {
+            throw new RuntimeException( esc_html__( 'Backup job is missing required paths. Please restart the backup job.', 'museder-restoreone' ) );
+        }
+
+        $job['status'] = 'running';
+        $job['stage']  = 'preparing';
+
+        if ( 'db' === $step ) {
+            $job['message'] = __( 'Preparing database export…', 'museder-restoreone' );
+            if ( ! self::generate_database_dump( $sql_path ) ) {
+                throw new RuntimeException( esc_html__( 'Database export failed. Check logs for details.', 'museder-restoreone' ) );
+            }
+            $job['prep_step'] = 'meta';
+            return $job;
+        }
+
+        if ( 'meta' === $step ) {
+            $job['message'] = __( 'Preparing backup metadata…', 'museder-restoreone' );
+            if ( ! self::write_meta_file( $meta_path, $options ) ) {
+                throw new RuntimeException( esc_html__( 'Unable to write meta information for backup.', 'museder-restoreone' ) );
+            }
+            $job['prep_step'] = 'archive';
+            return $job;
+        }
+
+        if ( 'archive' === $step ) {
+            $job['message'] = __( 'Preparing backup archive…', 'museder-restoreone' );
+            if ( file_exists( $archive_path ) ) {
+                if ( function_exists( 'wp_delete_file' ) ) {
+                    wp_delete_file( $archive_path );
+                } else {
+                    // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- cleanup in plugin-controlled backup directory
+                    @unlink( $archive_path );
+                }
+            }
+            self::initialize_archive_with_meta( $archive_path, $sql_path, $meta_path );
+            $job['prep_step'] = 'manifest';
+            return $job;
+        }
+
+        if ( 'manifest' === $step ) {
+            $job['message'] = __( 'Building file list…', 'museder-restoreone' );
+
+            $directories = self::get_directory_map();
+            $options     = self::resolve_effective_backup_options_for_job( $options, $directories );
+
+            $manifest_data = self::with_runtime_exclusions(
+                $options,
+                function () use ( $directories ) {
+                    return self::get_cached_file_manifest( $directories );
+                }
+            );
+
+            if ( empty( $manifest_data ) || ! isset( $manifest_data['files'] ) ) {
+                throw new RuntimeException( esc_html__( 'File manifest is empty or invalid.', 'museder-restoreone' ) );
+            }
+
+            $encoded = wp_json_encode( $manifest_data['files'], JSON_UNESCAPED_SLASHES );
+            if ( false === $encoded ) {
+                $json_error = function_exists( 'json_last_error_msg' ) ? json_last_error_msg() : 'Unknown JSON error';
+                backup_lite_log( 'error', 'Failed to encode backup manifest to JSON.', [
+                    'json_error' => $json_error,
+                    'file_count' => isset( $manifest_data['count'] ) ? $manifest_data['count'] : 0,
+                ] );
+                throw new RuntimeException( esc_html__( 'Failed to encode backup manifest. The site may have too many files.', 'museder-restoreone' ) );
+            }
+
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_read_file_put_contents
+            if ( false === file_put_contents( $manifest_file, $encoded, LOCK_EX ) ) {
+                throw new RuntimeException( esc_html__( 'Unable to write backup manifest.', 'museder-restoreone' ) );
+            }
+
+            $job['options']     = $options;
+            $job['total_files'] = isset( $manifest_data['count'] ) ? max( 1, (int) $manifest_data['count'] ) : 1;
+            $job['total_bytes'] = isset( $manifest_data['bytes'] ) ? max( 1, (int) $manifest_data['bytes'] ) : 1;
+
+            backup_lite_log( 'info', 'Backup job prepared (background preparing stage).', [
+                'job'   => $job['id'] ?? '',
+                'files' => $job['total_files'],
+                'bytes' => $job['total_bytes'],
+                'backup_mode' => $options['backup_mode_effective'] ?? ( $options['backup_mode'] ?? '' ),
+                'smart_exclude' => $options['backup_smart_exclude_effective'] ?? ( $options['backup_smart_exclude'] ?? '' ),
+            ] );
+
+            $job['directories'] = $directories;
+            $job['prep_step']   = 'selfcheck';
+            return $job;
+        }
+
+        if ( 'selfcheck' === $step ) {
+            $job['message'] = __( 'Checking file access…', 'museder-restoreone' );
+            $directories = isset( $job['directories'] ) && is_array( $job['directories'] ) ? $job['directories'] : self::get_directory_map();
+            $selfcheck   = self::selfcheck_backup_roots( $archive_path, $directories );
+            $job['selfcheck'] = $selfcheck;
+
+            if ( ! empty( $selfcheck['failed'] ) ) {
+                $job['status']  = 'failed';
+                $job['stage']   = 'failed';
+                $job['message'] = __( 'Backup failed: required directories are not readable on this host. Please check logs for details.', 'museder-restoreone' );
+                backup_lite_log( 'error', 'Backup root self-check failed.', $selfcheck );
+                return $job;
+            }
+
+            // Preparing is complete; packing will start in job processor.
+            $job['prep_step'] = 'done';
+            $job['message']   = __( 'Preparing complete. Starting backup…', 'museder-restoreone' );
+            return $job;
+        }
+
+        // done
+        $job['prep_step'] = 'done';
+        return $job;
     }
 
     /**

@@ -4,7 +4,7 @@ Tags: backup, migration, restore, site-backup, database-backup
 Requires at least: 5.8
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 2.7.98
+Stable tag: 2.7.99
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -31,6 +31,10 @@ For full changelog history, please see docs/changelog-archive.md in the plugin f
 * Fix: Add backup root self-check and detailed diagnostics for skipped/blocked files to prevent \"fake success\" archives.
 * Fix: Progress now reflects files actually packed; backup will fail (with logs) instead of completing when most files cannot be added.
 * Improve: Automatic fallback to PclZip for files that ZipArchive fails to add.
+
+= 2.7.99 =
+* Fix: Backup start no longer times out on large sites; heavy preparation (DB dump/manifest/self-check) runs in background preparing stage.
+* Improve: If the initial request times out, the UI automatically recovers by resuming polling the active job.
 
 = 2.7.93 =
 * Fix: Backups page polling no longer returns 400 on some hosts (action compatibility); cancel button is shown and works reliably during backup jobs.
