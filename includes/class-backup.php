@@ -1599,7 +1599,11 @@ class Backup_Lite_Backup {
             // fail the job to prevent a "fake success" archive.
             $added_files   = isset( $job['added_files'] ) ? (int) $job['added_files'] : 0;
             $skipped_files = isset( $job['skipped_files'] ) ? (int) $job['skipped_files'] : 0;
-            $min_ratio     = 0.80;
+            $min_ratio     = 0.95;
+            $total_bytes   = isset( $job['total_bytes'] ) ? (int) $job['total_bytes'] : 0;
+            $added_bytes   = isset( $job['added_bytes'] ) ? (int) $job['added_bytes'] : 0;
+            // Bytes guard helps catch cases where large directories (e.g. uploads) are missing but file-count looks OK.
+            $min_bytes_ratio = 0.70;
 
             if ( $total >= 1000 && $added_files < (int) round( $total * $min_ratio ) ) {
                 backup_lite_log( 'error', 'Backup packing finished with too many skipped/blocked files. Marking job failed to avoid incomplete archive.', [
@@ -1621,9 +1625,28 @@ class Backup_Lite_Backup {
                 return $job;
             }
 
+            if ( $total_bytes >= 500 * 1024 * 1024 && $added_bytes < (int) round( $total_bytes * $min_bytes_ratio ) ) {
+                backup_lite_log( 'error', 'Backup packing finished but too few bytes were added. Marking job failed to avoid incomplete archive.', [
+                    'job_id'       => $job['id'] ?? '',
+                    'total_files'  => $total,
+                    'added_files'  => $added_files,
+                    'total_bytes'  => $total_bytes,
+                    'added_bytes'  => $added_bytes,
+                    'skip_reasons' => $job['skip_reasons'] ?? [],
+                    'samples'      => $job['diagnostic_samples'] ?? [],
+                    'pack_method'  => $job['pack_method'] ?? '',
+                ] );
+
+                $job['status']  = 'failed';
+                $job['stage']   = 'failed';
+                $job['message'] = __( 'Backup failed: too much content could not be added to the archive on this host. Please check logs for details.', 'museder-restoreone' );
+                if ( isset( $job['needs_finalize'] ) ) {
+                    unset( $job['needs_finalize'] );
+                }
+                return $job;
+            }
+
             // Defer finalize until after ZipArchive::close() in the job processor.
-            $job['processed_files'] = isset( $job['total_files'] ) ? (int) $job['total_files'] : $job['processed_files'];
-            $job['processed_bytes'] = isset( $job['total_bytes'] ) ? (int) $job['total_bytes'] : $job['processed_bytes'];
             $job['status']          = 'running';
             $job['stage']           = 'finalizing';
             $job['message']         = __( 'Finalising backup archive…', 'museder-restoreone' );
@@ -1641,6 +1664,81 @@ class Backup_Lite_Backup {
      * @return array Finalized job state.
      */
     public static function finalize_async_job_after_close( array $job ) {
+        $total_files = isset( $job['total_files'] ) ? (int) $job['total_files'] : 0;
+        $total_bytes = isset( $job['total_bytes'] ) ? (int) $job['total_bytes'] : 0;
+        $added_files = isset( $job['added_files'] ) ? (int) $job['added_files'] : 0;
+        $added_bytes = isset( $job['added_bytes'] ) ? (int) $job['added_bytes'] : 0;
+
+        // Verify manifest integrity at finalize time: if manifest_file decodes to fewer entries than expected,
+        // treat as failure (prevents "fake success" when the manifest JSON is truncated/partial).
+        $manifest = self::load_manifest_for_job( $job );
+        $manifest_count = is_array( $manifest ) ? count( $manifest ) : 0;
+
+        if ( $total_files >= 1000 && $manifest_count > 0 && $manifest_count < (int) round( $total_files * 0.90 ) ) {
+            backup_lite_log( 'error', 'Backup manifest mismatch at finalize; refusing to mark job completed.', [
+                'job_id'          => $job['id'] ?? '',
+                'total_files'     => $total_files,
+                'manifest_count'  => $manifest_count,
+                'added_files'     => $added_files,
+                'added_bytes'     => $added_bytes,
+                'skip_reasons'    => $job['skip_reasons'] ?? [],
+                'samples'         => $job['diagnostic_samples'] ?? [],
+                'manifest_file'   => $job['manifest_file'] ?? '',
+                'pack_method'     => $job['pack_method'] ?? '',
+            ] );
+
+            $job['status']  = 'failed';
+            $job['stage']   = 'failed';
+            $job['message'] = __( 'Backup failed: file list could not be fully prepared on this host. Please check logs for details.', 'museder-restoreone' );
+            if ( isset( $job['needs_finalize'] ) ) {
+                unset( $job['needs_finalize'] );
+            }
+            return $job;
+        }
+
+        // Re-run completion guards here too (after the archive is closed) to prevent false success.
+        if ( $total_files >= 1000 && $added_files < (int) round( $total_files * 0.95 ) ) {
+            backup_lite_log( 'error', 'Finalize guard: too many files were not added; refusing to mark completed.', [
+                'job_id'        => $job['id'] ?? '',
+                'total_files'   => $total_files,
+                'added_files'   => $added_files,
+                'total_bytes'   => $total_bytes,
+                'added_bytes'   => $added_bytes,
+                'skip_reasons'  => $job['skip_reasons'] ?? [],
+                'samples'       => $job['diagnostic_samples'] ?? [],
+                'pack_method'   => $job['pack_method'] ?? '',
+            ] );
+
+            $job['status']  = 'failed';
+            $job['stage']   = 'failed';
+            $job['message'] = __( 'Backup failed: too many files could not be added to the archive on this host. Please check logs for details.', 'museder-restoreone' );
+            if ( isset( $job['needs_finalize'] ) ) {
+                unset( $job['needs_finalize'] );
+            }
+            return $job;
+        }
+
+        if ( $total_bytes >= 500 * 1024 * 1024 && $added_bytes < (int) round( $total_bytes * 0.70 ) ) {
+            backup_lite_log( 'error', 'Finalize guard: too few bytes were added; refusing to mark completed.', [
+                'job_id'        => $job['id'] ?? '',
+                'total_files'   => $total_files,
+                'added_files'   => $added_files,
+                'total_bytes'   => $total_bytes,
+                'added_bytes'   => $added_bytes,
+                'skip_reasons'  => $job['skip_reasons'] ?? [],
+                'samples'       => $job['diagnostic_samples'] ?? [],
+                'pack_method'   => $job['pack_method'] ?? '',
+            ] );
+
+            $job['status']  = 'failed';
+            $job['stage']   = 'failed';
+            $job['message'] = __( 'Backup failed: too much content could not be added to the archive on this host. Please check logs for details.', 'museder-restoreone' );
+            if ( isset( $job['needs_finalize'] ) ) {
+                unset( $job['needs_finalize'] );
+            }
+            return $job;
+        }
+
         return self::finalize_async_job( $job );
     }
 
