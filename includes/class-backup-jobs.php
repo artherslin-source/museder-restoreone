@@ -582,7 +582,41 @@ class Backup_Lite_Backup_Jobs {
         $processed     = min( $total_files, (int) $job['processed_files'] );
         $total_bytes   = max( 1, (int) $job['total_bytes'] );
         $processed_b   = min( $total_bytes, max( 0, (int) $job['processed_bytes'] ) );
-        $percentage    = max( 0, min( 100, round( ( $processed_b / $total_bytes ) * 100 ) ) );
+        $stage         = isset( $job['stage'] ) ? (string) $job['stage'] : '';
+
+        // Progress model:
+        // - preparing: 0–10
+        // - packing: 10–95 (hybrid: file-count backbone + bytes adjustment)
+        // - finalizing: 95–99
+        // - completed: 100
+        $files_ratio = $processed / $total_files;
+        $bytes_ratio = $processed_b / $total_bytes;
+
+        // Prefer file count for smoothness on shared hosting with many small files.
+        $hybrid_ratio = ( 0.70 * $files_ratio ) + ( 0.30 * $bytes_ratio );
+        $hybrid_ratio = max( 0, min( 1, $hybrid_ratio ) );
+
+        $percentage = 0;
+        if ( 'completed' === $stage || 'completed' === ( $job['status'] ?? '' ) ) {
+            $percentage = 100;
+        } elseif ( 'finalizing' === $stage ) {
+            // Finalizing work (ZipArchive::close flush / metadata). Keep near-done but not 100.
+            $percentage = 95 + (int) round( 4 * max( 0, min( 1, $bytes_ratio ) ) );
+        } elseif ( 'packing' === $stage || 'running' === ( $job['status'] ?? '' ) ) {
+            // Main work: 10–95.
+            $percentage = 10 + (int) round( 85 * $hybrid_ratio );
+        } elseif ( 'preparing' === $stage || 'pending' === ( $job['status'] ?? '' ) ) {
+            // Manifest is built before job creation; keep conservative.
+            $percentage = 0;
+        } else {
+            // Fallback (failed/cancelled/unknown): show best-effort progress, never 100.
+            $percentage = (int) round( 10 + ( 85 * $hybrid_ratio ) );
+        }
+
+        $percentage = max( 0, min( 100, $percentage ) );
+        if ( in_array( ( $job['status'] ?? '' ), [ 'failed', 'cancelled' ], true ) ) {
+            $percentage = min( 99, $percentage );
+        }
 
         $options = isset( $job['options'] ) && is_array( $job['options'] ) ? $job['options'] : [];
         $mode    = isset( $options['backup_mode_effective'] ) ? (string) $options['backup_mode_effective'] : ( isset( $options['backup_mode'] ) ? (string) $options['backup_mode'] : '' );
