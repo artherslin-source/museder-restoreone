@@ -672,6 +672,17 @@ class Backup_Lite_Backup {
             throw new RuntimeException( esc_html__( 'File manifest is empty or invalid.', 'museder-restoreone' ) );
         }
 
+        // Root self-check: detect common hosting restrictions (open_basedir/symlink) before starting packing.
+        // This prevents "fake success" archives that contain only a tiny subset of files.
+        $selfcheck = self::selfcheck_backup_roots( $archive_path, $directories );
+        if ( ! empty( $selfcheck['failed'] ) ) {
+            backup_lite_log( 'error', 'Backup root self-check failed.', $selfcheck );
+            backup_lite_delete_directory( $temp_dir );
+            throw new RuntimeException(
+                esc_html__( 'Backup cannot access required WordPress directories on this host. Please check logs for details.', 'museder-restoreone' )
+            );
+        }
+
         $manifest_file  = trailingslashit( backup_lite_get_jobs_dir() ) . $job_id . '-manifest.json';
         $manifest_bytes = wp_json_encode( $manifest_data['files'], JSON_UNESCAPED_SLASHES );
 
@@ -707,7 +718,200 @@ class Backup_Lite_Backup {
             'manifest_count' => $manifest_data['count'],
             'manifest_bytes' => $manifest_data['bytes'],
             'options'        => $options,
+            'selfcheck'      => $selfcheck,
         ];
+    }
+
+    /**
+     * Self-check core WordPress content roots to detect access restrictions early.
+     *
+     * @param string               $archive_path Backup archive path.
+     * @param array<string,string> $directories  Directory map.
+     * @return array<string,mixed>
+     */
+    private static function selfcheck_backup_roots( $archive_path, array $directories ) {
+        $roots = [
+            'uploads'   => $directories['uploads'] ?? ( WP_CONTENT_DIR . '/uploads' ),
+            'plugins'   => $directories['plugins'] ?? ( WP_CONTENT_DIR . '/plugins' ),
+            'themes'    => $directories['themes'] ?? ( WP_CONTENT_DIR . '/themes' ),
+            'wp-content'=> $directories['wp-content'] ?? WP_CONTENT_DIR,
+        ];
+
+        $results = [
+            'failed'  => false,
+            'roots'   => [],
+            'version' => defined( 'BACKUP_LITE_VERSION' ) ? BACKUP_LITE_VERSION : '',
+        ];
+
+        foreach ( $roots as $key => $root ) {
+            $root = wp_normalize_path( (string) $root );
+            $root = rtrim( $root, '/' );
+
+            $root_result = [
+                'root'           => $root,
+                'exists'         => is_dir( $root ),
+                'readable'       => is_readable( $root ),
+                'sampled'        => 0,
+                'read_ok'        => 0,
+                'zip_add_ok'     => 0,
+                'zip_add_failed' => 0,
+                'samples'        => [],
+                'errors'         => [],
+            ];
+
+            if ( ! $root_result['exists'] ) {
+                $results['roots'][ $key ] = $root_result;
+                continue;
+            }
+
+            $samples = self::sample_files_from_root( $root, 8 );
+            $root_result['sampled'] = count( $samples );
+
+            foreach ( $samples as $sample_path ) {
+                $sample = [
+                    'path'      => $sample_path,
+                    'readable'  => @is_readable( $sample_path ),
+                    'error'     => '',
+                    'zip_add'   => null,
+                ];
+
+                $read_error = '';
+                if ( $sample['readable'] ) {
+                    $read_error = self::probe_read_error( $sample_path );
+                } else {
+                    $read_error = self::probe_read_error( $sample_path );
+                }
+
+                if ( '' === $read_error ) {
+                    $root_result['read_ok']++;
+                } else {
+                    $sample['error'] = $read_error;
+                    $root_result['errors'][] = $read_error;
+                }
+
+                if ( backup_lite_can_use_ziparchive() && file_exists( $archive_path ) ) {
+                    $zip = new ZipArchive();
+                    if ( true === $zip->open( $archive_path, ZipArchive::CREATE ) ) {
+                        $test_name = '__bl_selfcheck/' . $key . '/' . basename( $sample_path );
+                        $ok = $zip->addFile( $sample_path, $test_name );
+                        $sample['zip_add'] = (bool) $ok;
+                        if ( $ok ) {
+                            $root_result['zip_add_ok']++;
+                            if ( method_exists( $zip, 'deleteName' ) ) {
+                                $zip->deleteName( $test_name );
+                            }
+                        } else {
+                            $root_result['zip_add_failed']++;
+                            $status = method_exists( $zip, 'getStatusString' ) ? $zip->getStatusString() : '';
+                            if ( '' !== $status ) {
+                                $root_result['errors'][] = $status;
+                            }
+                        }
+                        $zip->close();
+                    }
+                }
+
+                $root_result['samples'][] = $sample;
+                if ( count( $root_result['samples'] ) >= 5 ) {
+                    break;
+                }
+            }
+
+            // Mark as failed if we could not read ANY sampled file from a core root.
+            if ( $root_result['sampled'] > 0 && 0 === $root_result['read_ok'] ) {
+                $results['failed'] = true;
+            }
+
+            $results['roots'][ $key ] = $root_result;
+        }
+
+        return $results;
+    }
+
+    /**
+     * Sample up to N files from a root directory.
+     *
+     * @param string $root Root directory.
+     * @param int    $limit Max number of files.
+     * @return array<int,string>
+     */
+    private static function sample_files_from_root( $root, $limit = 10 ) {
+        $limit = max( 1, (int) $limit );
+        $root  = wp_normalize_path( $root );
+        $root  = rtrim( $root, '/' );
+
+        if ( ! is_dir( $root ) || ! is_readable( $root ) ) {
+            return [];
+        }
+
+        $files = [];
+
+        $iterator_flags = FilesystemIterator::SKIP_DOTS | FilesystemIterator::FOLLOW_SYMLINKS;
+        if ( defined( 'FilesystemIterator::CATCH_GET_CHILD' ) ) {
+            $iterator_flags |= FilesystemIterator::CATCH_GET_CHILD;
+        }
+
+        try {
+            $iterator = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator( $root, $iterator_flags ),
+                RecursiveIteratorIterator::LEAVES_ONLY
+            );
+            foreach ( $iterator as $file ) {
+                /** @var SplFileInfo $file */
+                if ( $file->isDir() ) {
+                    continue;
+                }
+                $path = $file->getPathname();
+                if ( empty( $path ) ) {
+                    continue;
+                }
+                $path = wp_normalize_path( $path );
+                if ( self::should_skip_path( $path ) ) {
+                    continue;
+                }
+                $files[] = $path;
+                if ( count( $files ) >= $limit ) {
+                    break;
+                }
+            }
+        } catch ( Exception $e ) {
+            return $files;
+        }
+
+        return $files;
+    }
+
+    /**
+     * Try to read a file and capture common PHP warnings (e.g. open_basedir restriction).
+     *
+     * @param string $path File path.
+     * @return string Error message (empty when OK).
+     */
+    private static function probe_read_error( $path ) {
+        $path = (string) $path;
+        $path = wp_normalize_path( $path );
+
+        $captured = '';
+        $handler  = static function( $errno, $errstr ) use ( &$captured ) {
+            $captured = (string) $errstr;
+            return true;
+        };
+
+        set_error_handler( $handler );
+        try {
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- probe only; no data is stored
+            $h = @fopen( $path, 'rb' );
+            if ( false === $h ) {
+                restore_error_handler();
+                return '' !== $captured ? $captured : 'Unable to open file for reading.';
+            }
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- probe only
+            @fclose( $h );
+        } finally {
+            restore_error_handler();
+        }
+
+        return $captured;
     }
 
     /**
@@ -979,6 +1183,29 @@ class Backup_Lite_Backup {
         $pointer  = isset( $job['pointer'] ) ? (int) $job['pointer'] : 0;
         $pointer  = max( 0, min( $pointer, $total ) );
 
+        // Initialize diagnostic counters (persisted in job state).
+        if ( ! isset( $job['attempted_files'] ) ) {
+            $job['attempted_files'] = 0;
+        }
+        if ( ! isset( $job['added_files'] ) ) {
+            $job['added_files'] = 0;
+        }
+        if ( ! isset( $job['skipped_files'] ) ) {
+            $job['skipped_files'] = 0;
+        }
+        if ( ! isset( $job['added_bytes'] ) ) {
+            $job['added_bytes'] = 0;
+        }
+        if ( ! isset( $job['skipped_bytes'] ) ) {
+            $job['skipped_bytes'] = 0;
+        }
+        if ( ! isset( $job['skip_reasons'] ) || ! is_array( $job['skip_reasons'] ) ) {
+            $job['skip_reasons'] = [];
+        }
+        if ( ! isset( $job['diagnostic_samples'] ) || ! is_array( $job['diagnostic_samples'] ) ) {
+            $job['diagnostic_samples'] = [];
+        }
+
         // Guard: if total_files indicates there should be work, but manifest is empty/missing,
         // do NOT fast-forward to "completed" (would create a partial archive with only meta+DB).
         if ( $total > 0 && empty( $manifest ) ) {
@@ -1006,13 +1233,41 @@ class Backup_Lite_Backup {
         while ( $index < $total && count( $batch ) < $max_files && $bytes < $max_bytes ) {
             $entry = $manifest[ $index ] ?? null;
             if ( empty( $entry['path'] ) || empty( $entry['target'] ) ) {
+                $job['skipped_files']++;
+                $job['skip_reasons']['invalid_entry'] = isset( $job['skip_reasons']['invalid_entry'] ) ? ( (int) $job['skip_reasons']['invalid_entry'] + 1 ) : 1;
                 $index++;
                 continue;
             }
 
             $path = wp_normalize_path( $entry['path'] );
-            if ( ! file_exists( $path ) ) {
-                // Skip missing files silently to reduce I/O overhead
+            $job['attempted_files']++;
+
+            if ( ! @file_exists( $path ) ) {
+                $job['skipped_files']++;
+                $job['skip_reasons']['missing_or_blocked'] = isset( $job['skip_reasons']['missing_or_blocked'] ) ? ( (int) $job['skip_reasons']['missing_or_blocked'] + 1 ) : 1;
+
+                // Capture a small number of samples with error message for debugging.
+                if ( count( $job['diagnostic_samples'] ) < 20 ) {
+                    $job['diagnostic_samples'][] = [
+                        'type' => 'missing_or_blocked',
+                        'path' => $path,
+                        'error' => self::probe_read_error( $path ),
+                    ];
+                }
+                $index++;
+                continue;
+            }
+
+            if ( ! @is_readable( $path ) ) {
+                $job['skipped_files']++;
+                $job['skip_reasons']['unreadable'] = isset( $job['skip_reasons']['unreadable'] ) ? ( (int) $job['skip_reasons']['unreadable'] + 1 ) : 1;
+                if ( count( $job['diagnostic_samples'] ) < 20 ) {
+                    $job['diagnostic_samples'][] = [
+                        'type' => 'unreadable',
+                        'path' => $path,
+                        'error' => self::probe_read_error( $path ),
+                    ];
+                }
                 $index++;
                 continue;
             }
@@ -1024,6 +1279,8 @@ class Backup_Lite_Backup {
             // Skip silently to reduce I/O overhead from logging
             $max_file_size = 2147483648; // 2GB
             if ( $manifest_size > $max_file_size ) {
+                $job['skipped_files']++;
+                $job['skip_reasons']['too_large'] = isset( $job['skip_reasons']['too_large'] ) ? ( (int) $job['skip_reasons']['too_large'] + 1 ) : 1;
                 $index++;
                 continue;
             }
@@ -1035,6 +1292,8 @@ class Backup_Lite_Backup {
                 // Fallback: get actual size only if manifest size is missing
                 $actual_size = filesize( $path );
                 if ( $actual_size > $max_file_size ) {
+                    $job['skipped_files']++;
+                    $job['skip_reasons']['too_large'] = isset( $job['skip_reasons']['too_large'] ) ? ( (int) $job['skip_reasons']['too_large'] + 1 ) : 1;
                     $index++;
                     continue;
                 }
@@ -1048,30 +1307,118 @@ class Backup_Lite_Backup {
             $index++;
         }
 
+        $append_results = [
+            'attempted'      => 0,
+            'added'          => 0,
+            'failed'         => 0,
+            'added_bytes'    => 0,
+            'failed_samples' => [],
+            'failed_entries' => [],
+        ];
+
         if ( ! empty( $batch ) ) {
             $job_options = isset( $job['options'] ) && is_array( $job['options'] ) ? $job['options'] : [];
-            self::with_runtime_exclusions(
+            $pack_method = isset( $job['pack_method'] ) ? (string) $job['pack_method'] : '';
+            if ( '' === $pack_method ) {
+                $pack_method = backup_lite_can_use_ziparchive() ? 'ziparchive' : 'pclzip';
+            }
+
+            $append_results = self::with_runtime_exclusions(
                 $job_options,
-                function () use ( $job, $batch, $zip, $job_options ) {
-                    self::append_files_to_zip( $job['archive_path'], $batch, $zip, $job_options );
+                function () use ( $job, $batch, $zip, $job_options, $pack_method ) {
+                    if ( 'pclzip' === $pack_method ) {
+                        return self::append_files_to_pclzip( $job['archive_path'], $batch );
+                    }
+
+                    $result = self::append_files_to_zip( $job['archive_path'], $batch, $zip, $job_options );
+
+                    // If ZipArchive failed for some files, try fallback for those failed entries only.
+                    if ( ! empty( $result['failed_entries'] ) ) {
+                        $fallback = self::append_files_to_pclzip( $job['archive_path'], $result['failed_entries'] );
+                        $result['fallback'] = $fallback;
+                    }
+
+                    return $result;
                 }
             );
         }
 
+        // Apply results to job diagnostics.
+        if ( isset( $append_results['added'] ) ) {
+            $job['added_files'] += (int) $append_results['added'];
+        }
+        if ( isset( $append_results['added_bytes'] ) ) {
+            $job['added_bytes'] += (int) $append_results['added_bytes'];
+        }
+        if ( isset( $append_results['failed'] ) && (int) $append_results['failed'] > 0 ) {
+            $job['skip_reasons']['zip_add_failed'] = isset( $job['skip_reasons']['zip_add_failed'] ) ? ( (int) $job['skip_reasons']['zip_add_failed'] + (int) $append_results['failed'] ) : (int) $append_results['failed'];
+            if ( ! empty( $append_results['failed_samples'] ) && count( $job['diagnostic_samples'] ) < 20 ) {
+                foreach ( $append_results['failed_samples'] as $sample ) {
+                    if ( count( $job['diagnostic_samples'] ) >= 20 ) {
+                        break;
+                    }
+                    $job['diagnostic_samples'][] = [
+                        'type'   => 'zip_add_failed',
+                        'path'   => $sample['path'] ?? '',
+                        'target' => $sample['target'] ?? '',
+                        'error'  => $sample['status'] ?? '',
+                    ];
+                }
+            }
+        }
+
+        // If fallback ran, persist pack_method and include diagnostic info.
+        if ( isset( $append_results['fallback'] ) && is_array( $append_results['fallback'] ) ) {
+            $job['pack_method'] = 'pclzip';
+            $job['skip_reasons']['fallback_to_pclzip'] = isset( $job['skip_reasons']['fallback_to_pclzip'] ) ? ( (int) $job['skip_reasons']['fallback_to_pclzip'] + 1 ) : 1;
+            backup_lite_log( 'warning', 'Fallback to PclZip executed for failed ZipArchive entries.', [
+                'job_id' => $job['id'] ?? '',
+                'failed' => $append_results['failed'] ?? 0,
+                'fallback' => $append_results['fallback'],
+            ] );
+        }
+
         $job['pointer']         = $index;
-        $job['processed_files'] = min( $index, $total );
+        $job['processed_files'] = min( (int) $job['added_files'], $total );
 
         $total_bytes = isset( $job['total_bytes'] ) ? (int) $job['total_bytes'] : 0;
         $current     = isset( $job['processed_bytes'] ) ? (int) $job['processed_bytes'] : 0;
+        $delta_bytes = isset( $append_results['added_bytes'] ) ? (int) $append_results['added_bytes'] : 0;
         $job['processed_bytes'] = min(
             max( $total_bytes, 1 ),
-            max( $current, $current + (int) $bytes )
+            max( $current, $current + $delta_bytes )
         );
         $job['status']  = 'running';
         $job['stage']   = 'packing';
         $job['message'] = __( 'Backup running…', 'museder-restoreone' );
 
         if ( $job['pointer'] >= $total ) {
+            // Completion guard: if we reached the end pointer but did not actually pack most files,
+            // fail the job to prevent a "fake success" archive.
+            $added_files   = isset( $job['added_files'] ) ? (int) $job['added_files'] : 0;
+            $skipped_files = isset( $job['skipped_files'] ) ? (int) $job['skipped_files'] : 0;
+            $min_ratio     = 0.80;
+
+            if ( $total >= 1000 && $added_files < (int) round( $total * $min_ratio ) ) {
+                backup_lite_log( 'error', 'Backup packing finished with too many skipped/blocked files. Marking job failed to avoid incomplete archive.', [
+                    'job_id'        => $job['id'] ?? '',
+                    'total_files'   => $total,
+                    'added_files'   => $added_files,
+                    'skipped_files' => $skipped_files,
+                    'skip_reasons'  => $job['skip_reasons'] ?? [],
+                    'samples'       => $job['diagnostic_samples'] ?? [],
+                    'pack_method'   => $job['pack_method'] ?? '',
+                ] );
+
+                $job['status']  = 'failed';
+                $job['stage']   = 'failed';
+                $job['message'] = __( 'Backup failed: too many files could not be read or added to the archive on this host. Please check logs for details.', 'museder-restoreone' );
+                if ( isset( $job['needs_finalize'] ) ) {
+                    unset( $job['needs_finalize'] );
+                }
+                return $job;
+            }
+
             // Defer finalize until after ZipArchive::close() in the job processor.
             $job['processed_files'] = isset( $job['total_files'] ) ? (int) $job['total_files'] : $job['processed_files'];
             $job['processed_bytes'] = isset( $job['total_bytes'] ) ? (int) $job['total_bytes'] : $job['processed_bytes'];
@@ -1374,6 +1721,15 @@ class Backup_Lite_Backup {
      * @param ZipArchive $zip          Optional ZipArchive instance to reuse (for performance optimization).
      *                                 If not provided, a new instance will be created and closed.
      */
+    /**
+     * Append files to ZIP archive and return detailed results.
+     *
+     * @param string     $archive_path Path to ZIP archive.
+     * @param array      $files        Array of file entries with 'path', 'target', and 'size' keys.
+     * @param ZipArchive $zip          Optional ZipArchive instance to reuse.
+     * @param array      $options      Backup options.
+     * @return array{attempted:int,added:int,failed:int,added_bytes:int,failed_samples:array<int,array<string,string>>,failed_entries:array<int,array<string,mixed>>}
+     */
     private static function append_files_to_zip( $archive_path, array $files, $zip = null, array $options = [] ) {
         $should_close = false;
         
@@ -1388,6 +1744,14 @@ class Backup_Lite_Backup {
 
         $created_dirs = [];
         $large_file_threshold = 10485760; // 10MB
+        $results = [
+            'attempted'       => 0,
+            'added'           => 0,
+            'failed'          => 0,
+            'added_bytes'     => 0,
+            'failed_samples'  => [],
+            'failed_entries'  => [],
+        ];
 
         foreach ( $files as $file ) {
             $path   = $file['path'];
@@ -1411,16 +1775,27 @@ class Backup_Lite_Backup {
                 continue;
             }
 
-            // Add file to archive
+            $results['attempted']++;
+
+            // Add file to archive (do NOT throw here; caller may fallback to PclZip).
             $added = $zip->addFile( $path, $target );
             if ( false === $added ) {
+                $results['failed']++;
                 $status = method_exists( $zip, 'getStatusString' ) ? $zip->getStatusString() : '';
-                backup_lite_log( 'error', 'ZipArchive failed to add file.', [
-                    'path'   => $path,
-                    'target' => $target,
-                    'status' => $status,
-                ] );
-                throw new RuntimeException( esc_html__( 'Failed to add a file to the backup archive. Please check logs and try again.', 'museder-restoreone' ) );
+                $results['failed_entries'][] = $file;
+                if ( count( $results['failed_samples'] ) < 10 ) {
+                    $results['failed_samples'][] = [
+                        'path'   => (string) $path,
+                        'target' => (string) $target,
+                        'status' => (string) $status,
+                    ];
+                }
+                continue;
+            }
+
+            $results['added']++;
+            if ( $file_size > 0 ) {
+                $results['added_bytes'] += $file_size;
             }
 
             // Compression strategy mirrors add_directory_to_zip().
@@ -1446,6 +1821,82 @@ class Backup_Lite_Backup {
         if ( $should_close ) {
             $zip->close();
         }
+
+        return $results;
+    }
+
+    /**
+     * Append files to ZIP using PclZip (fallback for hosts where ZipArchive fails).
+     *
+     * @param string $archive_path Archive path.
+     * @param array  $files        File entries with path/target/size.
+     * @return array{attempted:int,added:int,failed:int,added_bytes:int,failed_samples:array<int,array<string,string>>}
+     */
+    private static function append_files_to_pclzip( $archive_path, array $files ) {
+        self::optimize_runtime_environment();
+
+        if ( ! class_exists( 'PclZip' ) ) {
+            require_once ABSPATH . 'wp-admin/includes/class-pclzip.php';
+        }
+
+        $results = [
+            'attempted'      => 0,
+            'added'          => 0,
+            'failed'         => 0,
+            'added_bytes'    => 0,
+            'failed_samples' => [],
+        ];
+
+        $manifest = [];
+        foreach ( $files as $file ) {
+            $path = isset( $file['path'] ) ? (string) $file['path'] : '';
+            $target = isset( $file['target'] ) ? (string) $file['target'] : '';
+            if ( '' === $path || '' === $target ) {
+                continue;
+            }
+            if ( ! @file_exists( $path ) || ! @is_readable( $path ) ) {
+                $results['failed']++;
+                if ( count( $results['failed_samples'] ) < 10 ) {
+                    $results['failed_samples'][] = [
+                        'path'   => $path,
+                        'target' => $target,
+                        'status' => 'missing_or_unreadable',
+                    ];
+                }
+                continue;
+            }
+            $results['attempted']++;
+            $manifest[] = [
+                PCLZIP_ATT_FILE_NAME          => $path,
+                PCLZIP_ATT_FILE_NEW_FULL_NAME => ltrim( $target, '/' ),
+            ];
+        }
+
+        if ( empty( $manifest ) ) {
+            return $results;
+        }
+
+        $archive = new PclZip( $archive_path );
+        $result  = $archive->add( $manifest );
+        if ( 0 === $result ) {
+            $results['failed'] += count( $manifest );
+            $results['failed_samples'][] = [
+                'path'   => '',
+                'target' => '',
+                'status' => $archive->errorInfo( true ),
+            ];
+            return $results;
+        }
+
+        // PclZip does not provide per-file success info; assume all added if add() returns >0.
+        $results['added'] = count( $manifest );
+        foreach ( $files as $file ) {
+            if ( isset( $file['size'] ) && (int) $file['size'] > 0 ) {
+                $results['added_bytes'] += (int) $file['size'];
+            }
+        }
+
+        return $results;
     }
 
     /**
@@ -1455,15 +1906,13 @@ class Backup_Lite_Backup {
      * @return array
      */
     private static function finalize_async_job( array $job ) {
-        // Safety: never mark a job completed if it hasn't actually reached the end of its manifest.
+        // Safety: never mark a job completed if it hasn't actually packed the majority of its manifest.
         $total_files     = isset( $job['total_files'] ) ? (int) $job['total_files'] : 0;
-        $pointer         = isset( $job['pointer'] ) ? (int) $job['pointer'] : 0;
         $processed_files = isset( $job['processed_files'] ) ? (int) $job['processed_files'] : 0;
 
-        if ( $total_files > 0 && max( $pointer, $processed_files ) < $total_files ) {
+        if ( $total_files > 0 && $processed_files < $total_files ) {
             backup_lite_log( 'warning', 'Finalize requested before job finished packing. Continuing backup instead of completing.', [
                 'total_files'     => $total_files,
-                'pointer'         => $pointer,
                 'processed_files' => $processed_files,
             ] );
 
