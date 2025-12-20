@@ -4,7 +4,7 @@ Tags: backup, migration, restore, site-backup, database-backup
 Requires at least: 5.8
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 2.7.102
+Stable tag: 2.7.103
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -47,6 +47,9 @@ For full changelog history, please see docs/changelog-archive.md in the plugin f
 
 = 2.7.102 =
 * Fix: Prevent “fake success” backups by validating manifest integrity and added files/bytes at finalize-after-close; incomplete archives now fail with clear diagnostics.
+
+= 2.7.103 =
+* Fix: Detect and fail on truncated/invalid manifest files during packing; log JSON decode errors and manifest file size for diagnostics.
 
 = 2.7.93 =
 * Fix: Backups page polling no longer returns 400 on some hosts (action compatibility); cancel button is shown and works reliably during backup jobs.

@@ -1358,9 +1358,31 @@ class Backup_Lite_Backup {
         }
 
         $manifest = self::load_manifest_for_job( $job );
-        $total    = isset( $job['total_files'] ) ? (int) $job['total_files'] : count( $manifest );
+        $manifest_count = is_array( $manifest ) ? count( $manifest ) : 0;
+        $total    = isset( $job['total_files'] ) ? (int) $job['total_files'] : $manifest_count;
         $pointer  = isset( $job['pointer'] ) ? (int) $job['pointer'] : 0;
         $pointer  = max( 0, min( $pointer, $total ) );
+
+        // Guard against truncated/partial manifest files.
+        // If total_files suggests a large site but the manifest file contains far fewer entries,
+        // fail fast to avoid "success" archives missing most content (e.g., uploads).
+        if ( $total >= 1000 && $manifest_count > 0 && $manifest_count < (int) round( $total * 0.90 ) ) {
+            backup_lite_log( 'error', 'Backup manifest appears truncated; refusing to continue packing.', [
+                'job_id'         => $job['id'] ?? '',
+                'total_files'    => $total,
+                'manifest_count' => $manifest_count,
+                'pointer'        => $pointer,
+                'manifest_file'  => $job['manifest_file'] ?? '',
+            ] );
+
+            $job['status']  = 'failed';
+            $job['stage']   = 'failed';
+            $job['message'] = __( 'Backup failed: file list could not be fully prepared on this host. Please check logs for details.', 'museder-restoreone' );
+            if ( isset( $job['needs_finalize'] ) ) {
+                unset( $job['needs_finalize'] );
+            }
+            return $job;
+        }
 
         // Initialize diagnostic counters (persisted in job state).
         if ( ! isset( $job['attempted_files'] ) ) {
@@ -1996,9 +2018,24 @@ class Backup_Lite_Backup {
         // Using native file APIs on local backup directory; paths are sanitized and constrained.
         // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
         $contents = file_get_contents( $path );
+        if ( false === $contents ) {
+            backup_lite_log( 'error', 'Failed to read backup manifest file.', [
+                'manifest_file' => $path,
+            ] );
+            return [];
+        }
+
         $decoded  = json_decode( $contents, true );
 
         if ( ! is_array( $decoded ) ) {
+            $json_error = function_exists( 'json_last_error_msg' ) ? json_last_error_msg() : 'Unknown JSON error';
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.filesystem_operations_filesize
+            $manifest_size = @filesize( $path );
+            backup_lite_log( 'error', 'Backup manifest JSON decode failed (truncated or invalid).', [
+                'manifest_file' => $path,
+                'json_error'    => $json_error,
+                'file_size'     => $manifest_size,
+            ] );
             $decoded = [];
         }
 
