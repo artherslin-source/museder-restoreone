@@ -54,6 +54,26 @@ class Backup_Lite_Chunk_V2 {
 
         register_rest_route(
             'backup-lite/v2',
+            '/status',
+            [
+                'methods'             => WP_REST_Server::READABLE,
+                'callback'            => [ __CLASS__, 'status' ],
+                'permission_callback' => [ __CLASS__, 'permission_check' ],
+            ]
+        );
+
+        register_rest_route(
+            'backup-lite/v2',
+            '/finalize',
+            [
+                'methods'             => WP_REST_Server::CREATABLE,
+                'callback'            => [ __CLASS__, 'route_finalize' ],
+                'permission_callback' => [ __CLASS__, 'permission_check' ],
+            ]
+        );
+
+        register_rest_route(
+            'backup-lite/v2',
             '/abort',
             [
                 'methods'             => WP_REST_Server::CREATABLE,
@@ -61,6 +81,81 @@ class Backup_Lite_Chunk_V2 {
                 'permission_callback' => [ __CLASS__, 'permission_check' ],
             ]
         );
+    }
+
+    public static function status( WP_REST_Request $request ) {
+        self::prepare_request_environment();
+        $headers    = self::normalize_headers( $request );
+        $upload_id  = self::pull_value( $headers, $request, [ 'x-backup-lite-upload-id', 'x-upload-id' ], [ 'upload_id' ] );
+        $file_sha1  = self::pull_value( $headers, $request, [ 'x-file-sha1' ], [ 'file_sha1' ] );
+        $upload_id  = $upload_id ? sanitize_text_field( $upload_id ) : '';
+        $file_sha1  = $file_sha1 ? strtolower( sanitize_text_field( $file_sha1 ) ) : '';
+
+        if ( ! $upload_id || ! $file_sha1 ) {
+            return self::rest_error( 'missing_params', esc_html__( 'Missing upload identifier or checksum.', 'museder-restoreone' ), 400 );
+        }
+
+        $manifest = self::load_manifest( $upload_id );
+        if ( ! $manifest ) {
+            return self::rest_error( 'manifest_missing', esc_html__( 'Upload session expired or missing.', 'museder-restoreone' ), 409 );
+        }
+
+        if ( ! hash_equals( (string) $manifest['file_sha1'], $file_sha1 ) ) {
+            return self::rest_error( 'file_sha1_mismatch', esc_html__( 'File SHA1 mismatch.', 'museder-restoreone' ), 409 );
+        }
+
+        $received = isset( $manifest['received'] ) && is_array( $manifest['received'] ) ? array_map( 'absint', $manifest['received'] ) : [];
+        $received = array_values( array_unique( $received ) );
+        sort( $received );
+
+        $total_chunks = isset( $manifest['total_chunks'] ) ? (int) $manifest['total_chunks'] : 0;
+        $chunk_size   = isset( $manifest['chunk_size'] ) ? (int) $manifest['chunk_size'] : 0;
+        $filesize     = isset( $manifest['filesize'] ) ? (int) $manifest['filesize'] : 0;
+
+        // Find next missing index (resumable upload).
+        $set = array_fill( 0, max( 0, $total_chunks ), false );
+        foreach ( $received as $idx ) {
+            if ( $idx >= 0 && $idx < $total_chunks ) {
+                $set[ $idx ] = true;
+            }
+        }
+
+        $next_missing = null;
+        for ( $i = 0; $i < $total_chunks; $i++ ) {
+            if ( empty( $set[ $i ] ) ) {
+                $next_missing = $i;
+                break;
+            }
+        }
+
+        // Compute uploaded bytes (sum existing chunk file sizes; cheap + accurate).
+        $uploaded_bytes = 0;
+        $chunks_dir = self::get_chunks_dir( $upload_id );
+        if ( $chunks_dir && is_dir( $chunks_dir ) ) {
+            foreach ( $received as $idx ) {
+                $p = trailingslashit( $chunks_dir ) . sprintf( 'chunk_%06d.bin', $idx );
+                if ( file_exists( $p ) ) {
+                    $uploaded_bytes += (int) filesize( $p );
+                }
+            }
+        }
+        if ( $filesize > 0 ) {
+            $uploaded_bytes = min( $filesize, $uploaded_bytes );
+        }
+
+        $progress = $total_chunks > 0 ? ( count( $received ) / $total_chunks ) * 100 : 0;
+
+        return self::rest_success( [
+            'upload_id'      => $upload_id,
+            'filename'       => isset( $manifest['filename'] ) ? $manifest['filename'] : '',
+            'filesize'       => $filesize,
+            'chunk_size'     => $chunk_size,
+            'total_chunks'   => $total_chunks,
+            'received'       => $received,
+            'next_missing'   => $next_missing,
+            'uploaded_bytes' => $uploaded_bytes,
+            'progress'       => round( $progress, 2 ),
+        ] );
     }
 
     public static function prepare( WP_REST_Request $request ) {
@@ -180,6 +275,25 @@ class Backup_Lite_Chunk_V2 {
 
         $tmp_path   = trailingslashit( $chunks_dir ) . sprintf( 'chunk_%06d.bin.part', $chunk_index );
         $final_path = trailingslashit( $chunks_dir ) . sprintf( 'chunk_%06d.bin', $chunk_index );
+
+        // Resume optimization: if the chunk is already present and matches SHA1, skip re-upload.
+        if ( file_exists( $final_path ) ) {
+            $existing_sha1 = sha1_file( $final_path );
+            if ( $existing_sha1 && hash_equals( $chunk_sha1, strtolower( $existing_sha1 ) ) ) {
+                if ( ! in_array( $chunk_index, $manifest['received'], true ) ) {
+                    $manifest['received'][] = $chunk_index;
+                    sort( $manifest['received'] );
+                    self::save_manifest( $upload_id, $manifest );
+                }
+                $progress = count( $manifest['received'] ) / max( 1, (int) $manifest['total_chunks'] ) * 100;
+                return self::rest_success( [
+                    'chunk'          => $chunk_index,
+                    'progress'       => round( $progress, 2 ),
+                    'uploaded_bytes' => min( $manifest['filesize'], ( ( $chunk_index + 1 ) * $manifest['chunk_size'] ) ),
+                    'skipped'        => true,
+                ] );
+            }
+        }
 
         $input = self::get_input_stream( $request );
         if ( ! $input ) {
@@ -396,6 +510,29 @@ class Backup_Lite_Chunk_V2 {
             ], 409 );
         }
 
+        $manifest = self::load_manifest( $upload_id );
+        if ( ! $manifest ) {
+            return new WP_REST_Response( [
+                'ok'      => false,
+                'code'    => 'manifest_missing',
+                // @plugin-check: escaped
+                'message' => esc_html__( 'Upload session expired or missing.', 'museder-restoreone' ),
+            ], 409 );
+        }
+
+        if ( ! hash_equals( (string) $manifest['file_sha1'], $client_sha1 ) ) {
+            return new WP_REST_Response( [
+                'ok'      => false,
+                'code'    => 'file_sha1_mismatch',
+                // @plugin-check: escaped
+                'message' => esc_html__( 'File SHA1 mismatch.', 'museder-restoreone' ),
+            ], 409 );
+        }
+
+        $expected_chunks = isset( $manifest['total_chunks'] ) ? (int) $manifest['total_chunks'] : 0;
+        $chunk_size      = isset( $manifest['chunk_size'] ) ? (int) $manifest['chunk_size'] : 0;
+        $expected_size   = isset( $manifest['filesize'] ) ? (int) $manifest['filesize'] : 0;
+
         $chunks = glob( trailingslashit( $chunks_dir ) . '*.bin' );
         if ( empty( $chunks ) ) {
             return new WP_REST_Response( [
@@ -403,6 +540,24 @@ class Backup_Lite_Chunk_V2 {
                 'code'    => 'missing_chunks',
                 // @plugin-check: escaped
                 'message' => esc_html__( 'No chunk data available.', 'museder-restoreone' ),
+            ], 409 );
+        }
+
+        // Ensure all expected chunks exist.
+        $missing = [];
+        for ( $i = 0; $i < $expected_chunks; $i++ ) {
+            $p = trailingslashit( $chunks_dir ) . sprintf( 'chunk_%06d.bin', $i );
+            if ( ! file_exists( $p ) ) {
+                $missing[] = $i;
+            }
+        }
+        if ( ! empty( $missing ) ) {
+            return new WP_REST_Response( [
+                'ok'      => false,
+                'code'    => 'missing_chunks',
+                // @plugin-check: escaped
+                'message' => esc_html__( 'Some chunks are missing. Please resume upload.', 'museder-restoreone' ),
+                'missing' => $missing,
             ], 409 );
         }
 
@@ -415,9 +570,22 @@ class Backup_Lite_Chunk_V2 {
         ] );
 
         $final_path = trailingslashit( $upload_dir ) . self::FINAL_FILENAME;
-        $hash_ctx   = hash_init( 'sha1' );
+
+        // Make finalize resumable: append if final exists, otherwise create.
+        $current_size = file_exists( $final_path ) ? (int) filesize( $final_path ) : 0;
+        if ( $expected_size > 0 && $current_size > $expected_size ) {
+            if ( function_exists( 'wp_delete_file' ) ) {
+                wp_delete_file( $final_path );
+            } else {
+                if ( file_exists( $final_path ) ) {
+                    @unlink( $final_path );
+                }
+            }
+            $current_size = 0;
+        }
+
         // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for final file assembly, path from plugin-controlled directory
-        $fh         = fopen( $final_path, 'wb' );
+        $fh = fopen( $final_path, ( $current_size > 0 ? 'ab' : 'wb' ) );
 
         if ( ! $fh ) {
             return new WP_REST_Response( [
@@ -428,7 +596,12 @@ class Backup_Lite_Chunk_V2 {
             ], 500 );
         }
 
-        foreach ( $chunks as $chunk_path ) {
+        // Resume offsets.
+        $start_chunk = ( $chunk_size > 0 ) ? (int) floor( $current_size / $chunk_size ) : 0;
+        $in_chunk_offset = ( $chunk_size > 0 ) ? (int) ( $current_size % $chunk_size ) : 0;
+
+        for ( $i = $start_chunk; $i < $expected_chunks; $i++ ) {
+            $chunk_path = trailingslashit( $chunks_dir ) . sprintf( 'chunk_%06d.bin', $i );
             // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for reading chunk files, path from plugin-controlled directory
             $chunk_handle = fopen( $chunk_path, 'rb' );
             if ( ! $chunk_handle ) {
@@ -440,6 +613,13 @@ class Backup_Lite_Chunk_V2 {
                     // @plugin-check: escaped
                     'message' => esc_html__( 'Unable to open chunk during finalize.', 'museder-restoreone' ),
                 ], 500 );
+            }
+
+            // Skip already-written part of the current chunk.
+            if ( $in_chunk_offset > 0 ) {
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_read_fseek -- streaming skip
+                @fseek( $chunk_handle, $in_chunk_offset, SEEK_SET );
+                $in_chunk_offset = 0;
             }
 
             while ( ! feof( $chunk_handle ) ) {
@@ -465,7 +645,6 @@ class Backup_Lite_Chunk_V2 {
 
                 // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing merged archive
                 fwrite( $fh, $buffer );
-                hash_update( $hash_ctx, $buffer );
             }
 
             // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen
@@ -474,6 +653,41 @@ class Backup_Lite_Chunk_V2 {
 
         // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen
         fclose( $fh );
+
+        // Verify size + SHA1 (streaming) after (re)assembly.
+        if ( $expected_size > 0 && (int) filesize( $final_path ) !== $expected_size ) {
+            return new WP_REST_Response( [
+                'ok'      => false,
+                'code'    => 'size_mismatch',
+                // @plugin-check: escaped
+                'message' => esc_html__( 'Merged archive size mismatch.', 'museder-restoreone' ),
+            ], 409 );
+        }
+
+        $hash_ctx = hash_init( 'sha1' );
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for streaming hash, path from plugin-controlled directory
+        $rfh = fopen( $final_path, 'rb' );
+        if ( ! $rfh ) {
+            return new WP_REST_Response( [
+                'ok'      => false,
+                'code'    => 'finalize_open_failed',
+                // @plugin-check: escaped
+                'message' => esc_html__( 'Unable to read merged archive for verification.', 'museder-restoreone' ),
+            ], 500 );
+        }
+        while ( ! feof( $rfh ) ) {
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread
+            $buf = fread( $rfh, self::STREAM_CHUNK );
+            if ( $buf === false ) {
+                break;
+            }
+            if ( $buf === '' ) {
+                continue;
+            }
+            hash_update( $hash_ctx, $buf );
+        }
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+        fclose( $rfh );
 
         $server_sha1 = hash_final( $hash_ctx );
 
@@ -850,24 +1064,3 @@ class Backup_Lite_Chunk_V2 {
 if ( ! class_exists( 'Backup_Lite_Chunk_Handler_V2', false ) ) {
     class_alias( 'Backup_Lite_Chunk_V2', 'Backup_Lite_Chunk_Handler_V2' );
 }
-
-// --- Register REST API routes for Backup Lite V2 ---
-add_action( 'rest_api_init', function () {
-    register_rest_route( 'backup-lite/v2', '/prepare', [
-        'methods'             => WP_REST_Server::CREATABLE,
-        'callback'            => [ 'Backup_Lite_Chunk_V2', 'prepare' ],
-        'permission_callback' => [ 'Backup_Lite_Chunk_V2', 'permission_check' ],
-    ] );
-
-    register_rest_route( 'backup-lite/v2', '/chunk', [
-        'methods'             => WP_REST_Server::CREATABLE,
-        'callback'            => [ 'Backup_Lite_Chunk_V2', 'upload_chunk' ],
-        'permission_callback' => [ 'Backup_Lite_Chunk_V2', 'permission_check' ],
-    ] );
-
-    register_rest_route( 'backup-lite/v2', '/finalize', [
-        'methods'             => WP_REST_Server::CREATABLE,
-        'callback'            => [ 'Backup_Lite_Chunk_V2', 'route_finalize' ],
-        'permission_callback' => [ 'Backup_Lite_Chunk_V2', 'permission_check' ],
-    ] );
-} );

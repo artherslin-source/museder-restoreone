@@ -831,49 +831,28 @@ class Backup_Lite_Chunk_Handler {
                 $restore_options['search_replace'] = $options['search_replace'];
             }
 
-            $restore = ( defined( 'BACKUP_LITE_TEST_SKIP_RESTORE' ) && BACKUP_LITE_TEST_SKIP_RESTORE )
-                ? [ 'success' => true, 'message' => esc_html__( 'Restore skipped in test mode.', 'museder-restoreone' ) ] // @plugin-check: escaped
-                : Backup_Lite_Restore::restore_site( $final_path, $restore_options );
-
-            if ( empty( $restore['success'] ) ) {
-                backup_lite_log( 'error', 'restore_failed', [
-                    'upload_id'      => $upload_id,
-                    'archive'        => $final_path,
-                    'restore_code'   => isset( $restore['code'] ) ? $restore['code'] : '',
-                    'zip_error_code' => isset( $restore['zip_error_code'] ) ? $restore['zip_error_code'] : null,
-                ] );
-
-                $error_code = isset( $restore['code'] ) ? $restore['code'] : 'restore_failed';
-                $error_key  = ( 'zip_open_failed' === $error_code ) ? 'zip_open_failed' : $error_code;
-
-                $restore_message = isset( $restore['message'] ) ? sanitize_text_field( $restore['message'] ) : '';
-                if ( empty( $restore_message ) ) {
-                    $restore_message = esc_html__( 'Restore failed after merging backup.', 'museder-restoreone' );
+            if ( defined( 'BACKUP_LITE_TEST_SKIP_RESTORE' ) && BACKUP_LITE_TEST_SKIP_RESTORE ) {
+                $restore_job_id = '';
+                $restore_message = esc_html__( 'Restore skipped in test mode.', 'museder-restoreone' );
                 } else {
-                    $restore_message = esc_html( $restore_message );
-                }
-                // @plugin-check: escaped
-                throw new Backup_Lite_Chunk_Exception(
-                    $error_code,
-                    $restore_message,
-                    [
-                        'stage'          => 'restore',
-                        'error'          => $error_key,
-                        'zip_error_code' => isset( $restore['zip_error_code'] ) ? $restore['zip_error_code'] : null,
-                        'restore_log'    => isset( $restore['log'] ) ? $restore['log'] : '',
-                    ],
-                    200
-                );
+                // AI1WM-style: queue restore as a resumable Restore_Service job (cron + checkpoints).
+                $archive_name = basename( $final_path );
+                $prepared     = Backup_Lite_Restore_Service::prepare( 'upload', $archive_name, '' );
+                $restore_job_id = isset( $prepared['job_id'] ) ? (string) $prepared['job_id'] : '';
+                Backup_Lite_Restore_Service::validate( $restore_job_id );
+                $started = Backup_Lite_Restore_Service::execute( $restore_job_id, $restore_options );
+                $restore_message = isset( $started['message'] ) ? (string) $started['message'] : __( 'Restore started in the background.', 'museder-restoreone' );
             }
 
             $response = [
-                'message'        => isset( $restore['message'] ) ? $restore['message'] : esc_html__( 'Restore completed successfully.', 'museder-restoreone' ), // @plugin-check: escaped
+                'message'        => $restore_message, // @plugin-check: escaped
                 'sha1'           => $server_sha1,
                 'archive'        => basename( $final_path ),
                 'downloadUrl'    => backup_lite_get_download_url( $final_path ),
                 'client_sha1'    => $client_sha1,
                 'token_status'   => 'valid',
                 'zip_error_code' => $zip_error_code,
+                'job_id'         => $restore_job_id,
             ];
 
             if ( isset( $verification['entries'] ) ) {

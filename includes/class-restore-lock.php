@@ -26,6 +26,29 @@ class Backup_Lite_Restore_Lock {
         return true;
     }
 
+    /**
+     * Refreshes the lock TTL for a long-running restore job.
+     *
+     * @param string $job_id
+     * @return bool
+     */
+    public static function refresh( $job_id ) {
+        $lock = self::current_lock();
+        if ( empty( $lock['job_id'] ) || $lock['job_id'] !== $job_id ) {
+            return false;
+        }
+
+        $payload = [
+            'job_id'      => $job_id,
+            'acquired_at' => isset( $lock['acquired_at'] ) ? $lock['acquired_at'] : current_time( 'timestamp' ),
+        ];
+
+        set_site_transient( self::TRANSIENT_KEY, $payload, self::LOCK_TIMEOUT );
+        update_option( self::OPTION_KEY, $payload, false );
+
+        return true;
+    }
+
     public static function release() {
         delete_site_transient( self::TRANSIENT_KEY );
         delete_option( self::OPTION_KEY );

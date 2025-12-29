@@ -7,6 +7,18 @@ class Backup_Lite_Restore_Service {
 
     const JOB_META_EXTENSION = '.json';
     const REPORT_TYPE_DRYRUN = 'dryrun';
+    const CRON_HOOK_PROCESS  = 'backup_lite_restore_service_process_job';
+    const CRON_HOOK_BG_CLEANUP = 'backup_lite_restore_service_background_cleanup';
+    const DEFAULT_SLICE_SECONDS = 10;
+    const ACTIVE_JOB_OPTION = 'backup_lite_restore_service_active_job_id';
+    const ZIP_WP_CONTENT_PREFIX = 'wp-content/';
+    const WPRESS_DB_FILES = [ 'database.sql' ];
+    const WPRESS_FILES_EXCLUDE = [ 'database.sql', 'package.json', 'multisite.json', 'blogs.json' ];
+
+    public static function init() {
+        add_action( self::CRON_HOOK_PROCESS, [ __CLASS__, 'cron_process_job' ], 10, 1 );
+        add_action( self::CRON_HOOK_BG_CLEANUP, [ __CLASS__, 'cron_background_cleanup' ], 10, 1 );
+    }
 
     /**
      * Prepare a restore job by validating input and recording metadata.
@@ -19,7 +31,8 @@ class Backup_Lite_Restore_Service {
      */
     public static function prepare( $source, $file, $sha1 = '' ) {
         $source = strtolower( (string) $source );
-        if ( ! in_array( $source, [ 'upload', 'existing' ], true ) ) {
+        // Note: legacy flows may pass 'remote' (remote download stored into backups dir).
+        if ( ! in_array( $source, [ 'upload', 'existing', 'remote' ], true ) ) {
             throw new InvalidArgumentException( esc_html__( 'Invalid restore source.', 'museder-restoreone' ) );
         }
 
@@ -105,6 +118,15 @@ class Backup_Lite_Restore_Service {
 
         $metadata = self::extract_archive_metadata( $job_id, $meta['file'] );
 
+        // AI1WM encryption detection (package.json fields).
+        $encrypted = ! empty( $metadata['Encrypted'] ) && ! empty( $metadata['EncryptedSignature'] );
+        $encryption_error = null;
+        if ( $encrypted ) {
+            if ( ! Backup_Lite_Wpress_Crypto::can_decrypt() ) {
+                $encryption_error = __( 'This server cannot decrypt encrypted backups (OpenSSL missing).', 'museder-restoreone' );
+            }
+        }
+
         $checksum_value = sha1_file( $meta['file'] );
         if ( empty( $meta['sha1'] ) ) {
             $meta['sha1'] = $checksum_value;
@@ -134,6 +156,11 @@ class Backup_Lite_Restore_Service {
                 'migrateMode' => ( $backup_domain !== $domain ),
             ],
             'dbScan'   => self::summarise_database_structure( $metadata ),
+            'encryption' => [
+                'encrypted' => (bool) $encrypted,
+                'supported' => $encrypted ? Backup_Lite_Wpress_Crypto::can_decrypt() : true,
+                'error'     => $encryption_error,
+            ],
         ];
 
         $meta['validation'] = $result;
@@ -213,166 +240,1227 @@ class Backup_Lite_Restore_Service {
         }
 
         try {
+            $pre_backup = [];
+            $do_pre_backup = ! empty( $options['auto_backup'] );
+            if ( $do_pre_backup ) {
+                // Allow longer execution time for the synchronous pre-backup snapshot on large sites.
+                // phpcs:ignore WordPress.PHP.NoSetTimeLimit
+                if ( function_exists( 'set_time_limit' ) ) {
+                    // @phpcs:disable Squiz.PHP.DiscouragedFunctions.Discouraged
+                    @set_time_limit( 600 );
+                    // @phpcs:enable Squiz.PHP.DiscouragedFunctions.Discouraged
+                }
+
+                $t0 = microtime( true );
+                backup_lite_log( 'info', 'Restore pre-backup snapshot started.', [ 'job_id' => $job_id ] );
+        try {
             $pre_backup = self::create_pre_backup();
-            $meta['pre_backup'] = $pre_backup;
-            $meta['stage']      = 'restore-files';
-            $meta['progress']   = 82;
-            $meta['message']    = __( 'Extracting archive and preparing files…', 'museder-restoreone' );
+                } catch ( Exception $e ) {
+                    $elapsed = microtime( true ) - $t0;
+                    backup_lite_log(
+                        'error',
+                        'Restore pre-backup snapshot failed.',
+                        [
+                            'job_id'   => $job_id,
+                            'elapsed'  => round( $elapsed, 3 ),
+                            'error'    => sanitize_text_field( $e->getMessage() ),
+                        ]
+                    );
+                    // Surface a clear, actionable message to the user. The restore can be retried without a snapshot.
+                    throw new RuntimeException(
+                        esc_html__(
+                            'Pre-restore backup failed. Uncheck "Backup current site before restore" and try again, or check logs for details.',
+                            'museder-restoreone'
+                        )
+                    );
+                }
+
+                $elapsed = microtime( true ) - $t0;
+                backup_lite_log( 'info', 'Restore pre-backup snapshot finished.', [ 'job_id' => $job_id, 'elapsed' => round( $elapsed, 3 ) ] );
+            }
+
+            $file_path = isset( $meta['file'] ) ? $meta['file'] : '';
+            $ext       = strtolower( pathinfo( $file_path, PATHINFO_EXTENSION ) );
+
+            $meta['options']     = $options;
+            $meta['pre_backup']  = $pre_backup;
+            $meta['engine']      = in_array( $ext, [ 'wpress', 'zip' ], true ) ? $ext : 'zip';
+            if ( empty( $meta['started_at'] ) ) {
+                $meta['started_at'] = time();
+            }
+            $meta['stage']       = 'restore-extract-db';
+            $meta['progress']    = 70;
+            $meta['message']     = __( 'Restore queued. Preparing to extract database…', 'museder-restoreone' );
+            $meta['updated_at']  = current_time( 'mysql' );
+            $meta['completed']   = false;
+            $meta['cancel_requested'] = false;
+            $meta['last_tick']   = 0;
+
+            // Initialize checkpoints (offsets) for slicing/resume.
+            $meta['checkpoints'] = isset( $meta['checkpoints'] ) && is_array( $meta['checkpoints'] ) ? $meta['checkpoints'] : [];
+            $meta['checkpoints'] = wp_parse_args(
+                $meta['checkpoints'],
+                [
+                    'wpress_archive_offset' => 0,
+                    'wpress_file_offset'    => 0,
+                    'wpress_processed_bytes'=> 0,
+                    'files_phase'           => 0,
+                    'db_offset'             => 0,
+                    'db_query_buffer'       => '',
+                    // Search-replace (AI1WM-like, resumable).
+                    'sr_tables'             => [],
+                    'sr_table_index'        => 0,
+                    'sr_pk_last'            => null,
+                    'sr_row_offset'         => 0,
+                    'sr_scanned_rows'       => 0,
+                    'sr_updated_rows'       => 0,
+                    'sr_table_cache'        => [],
+                ]
+            );
+
             self::write_job_meta( $job_id, $meta );
 
-            // Check if this is an All-in-One WP Migration backup and convert it if needed
-            $file_to_extract = $meta['file'];
-            $ext = strtolower( pathinfo( $file_to_extract, PATHINFO_EXTENSION ) );
-            
-            if ( 'wpress' === $ext || ( 'zip' === $ext && file_exists( $file_to_extract ) ) ) {
-                require_once plugin_dir_path( __FILE__ ) . 'class-ai1wm-converter.php';
-                
-                try {
-                    if ( class_exists( 'Backup_Lite_AI1WM_Converter' ) && Backup_Lite_AI1WM_Converter::is_ai1wm_backup( $file_to_extract ) ) {
-                        backup_lite_log( 'info', 'Detected All-in-One WP Migration backup in restore service, converting to Museder RestoreOne format.', [
-                            'job_id' => $job_id,
-                            'file' => basename( $file_to_extract ),
-                        ] );
-                        
-                        $convert_result = Backup_Lite_AI1WM_Converter::convert( $file_to_extract );
-                        
-                        if ( ! empty( $convert_result['success'] ) && ! empty( $convert_result['file'] ) ) {
-                            // Use helper to get absolute path - handles both full paths and filenames
-                            $converted_file = backup_lite_get_backup_path( $convert_result['file'] );
-                            
-                            if ( $converted_file ) {
-                                // Use converted file for extraction
-                                $file_to_extract = $converted_file;
-                                $meta['file'] = $file_to_extract;
-                                $meta['file_name'] = basename( $file_to_extract );
-                                backup_lite_log( 'info', 'Successfully converted All-in-One backup in restore service.', [
-                                    'job_id' => $job_id,
-                                    'converted_file' => basename( $file_to_extract ),
-                                    'converted_path' => $file_to_extract,
-                                ] );
-                            } else {
-                                backup_lite_log( 'warning', 'Converted file not found or unreadable, using original file.', [
-                                    'job_id' => $job_id,
-                                    'converted_file' => $convert_result['file'],
-                                    'original_file' => basename( $file_to_extract ),
-                                ] );
-                            }
-                        } else {
-                            // Conversion failed or not needed (e.g., .wpress files don't need conversion)
-                            $log_level = ( isset( $convert_result['error'] ) && 'wpress_no_conversion_needed' === $convert_result['error'] ) ? 'info' : 'warning';
-                            backup_lite_log( $log_level, 'All-in-One conversion not performed in restore service, will attempt direct extraction.', [
-                                'job_id' => $job_id,
-                                'error' => isset( $convert_result['error'] ) ? $convert_result['error'] : 'unknown',
-                                'message' => isset( $convert_result['message'] ) ? $convert_result['message'] : '',
-                            ] );
-                        }
-                    }
+            // Restore History: record running entry (upsert by job_id).
+            if ( function_exists( 'backup_lite_upsert_restore_history' ) ) {
+                $started = isset( $meta['started_at'] ) ? (int) $meta['started_at'] : time();
+                $file_for_history = isset( $meta['file'] ) ? basename( (string) $meta['file'] ) : '';
+                backup_lite_upsert_restore_history(
+                    [
+                        'job_id'                  => $job_id,
+                        'timestamp_utc'           => $started,
+                        'date'                    => gmdate( 'Y-m-d H:i:s', $started ),
+                        'file'                    => $file_for_history,
+                        'result'                  => 'running',
+                        'restore_started_at'      => $started,
+                        'restore_completed_at'    => 0,
+                        'restore_duration_seconds'=> 0,
+                        'log'                     => '',
+                    ]
+                );
+            }
+
+            // Track as active restore job (for UI bootstrap / polling recovery).
+            update_option( self::ACTIVE_JOB_OPTION, $job_id, false );
+
+            // Schedule background processing (time-sliced).
+            // De-duplicate any existing scheduled ticks for this job id.
+            if ( function_exists( 'wp_clear_scheduled_hook' ) ) {
+                wp_clear_scheduled_hook( self::CRON_HOOK_PROCESS, [ $job_id ] );
+            }
+            wp_schedule_single_event( time(), self::CRON_HOOK_PROCESS, [ $job_id ] );
+            self::spawn_cron();
+
+            return [
+                'ok'                 => true,
+                'message'            => __( 'Restore started. You can monitor progress on this page.', 'museder-restoreone' ),
+                'rollback_available' => ! empty( $pre_backup ) && ! empty( $pre_backup['file'] ),
+            ];
+        } catch ( Exception $e ) {
+            backup_lite_log( 'error', 'Restore execution start failed.', [ 'job_id' => $job_id, 'error' => $e->getMessage() ] );
+            // Best-effort clear active job pointer if we fail to start.
+            $active = (string) get_option( self::ACTIVE_JOB_OPTION, '' );
+            if ( $active === $job_id ) {
+                delete_option( self::ACTIVE_JOB_OPTION );
+            }
+            Backup_Lite_Restore_Lock::release();
+            throw $e;
+        }
+    }
+
+    public static function cron_process_job( $job_id ) {
+        self::process_job_slice( $job_id, self::DEFAULT_SLICE_SECONDS, true, 'cron' );
+    }
+
+    /**
+     * Process a single time slice of a restore job.
+     *
+     * This is used by WP-Cron and can also be used by admin-ajax "tick" to keep progress moving
+     * in environments where cron/loopback is unreliable.
+     *
+     * @param string $job_id
+     * @param int    $slice_seconds
+     * @param bool   $reschedule
+     * @param string $source cron|ajax
+     *
+     * @return array{ok:bool,meta:array,reason?:string}
+     */
+    public static function process_job_slice( $job_id, $slice_seconds = 10, $reschedule = false, $source = 'cron' ) {
+        $job_id = (string) $job_id;
+        $slice  = max( 1, (int) $slice_seconds );
+
+        $lock_fp = null;
+        try {
+            $lock_fp = self::acquire_job_run_lock( $job_id );
+            if ( ! $lock_fp ) {
+                return [ 'ok' => false, 'meta' => [], 'reason' => 'busy' ];
+            }
+
+            $meta = self::get_job_meta( $job_id );
+
+            if ( ! empty( $meta['completed'] ) ) {
+                // Clear active job pointer when job is finished.
+                $active = (string) get_option( self::ACTIVE_JOB_OPTION, '' );
+                if ( $active === $job_id ) {
+                    delete_option( self::ACTIVE_JOB_OPTION );
+                }
+                return [ 'ok' => true, 'meta' => $meta ];
+            }
+
+            // Cooperative cancel: stop the pipeline as soon as cancel is requested.
+            if ( ! empty( $meta['cancel_requested'] ) || ( isset( $meta['stage'] ) && 'cancelled' === $meta['stage'] ) ) {
+                $meta['stage']      = 'cancelled';
+                $meta['progress']   = 100;
+                $meta['message']    = __( 'Restore cancelled.', 'museder-restoreone' );
+                $meta['completed']  = true;
+                $meta['updated_at'] = current_time( 'mysql' );
+                self::write_job_meta( $job_id, $meta );
+                Backup_Lite_Restore_Lock::release();
+
+                // Restore History: mark cancelled.
+                if ( function_exists( 'backup_lite_upsert_restore_history' ) ) {
+                    $completed_at = time();
+                    $started_at = isset( $meta['started_at'] ) ? (int) $meta['started_at'] : 0;
+                    $duration = ( $started_at > 0 ) ? max( 0, $completed_at - $started_at ) : 0;
+                    backup_lite_upsert_restore_history(
+                        [
+                            'job_id'                  => $job_id,
+                            'timestamp_utc'           => $completed_at,
+                            'date'                    => gmdate( 'Y-m-d H:i:s', $completed_at ),
+                            'file'                    => isset( $meta['file'] ) ? basename( (string) $meta['file'] ) : '',
+                            'result'                  => 'cancelled',
+                            'restore_started_at'      => $started_at,
+                            'restore_completed_at'    => $completed_at,
+                            'restore_duration_seconds'=> $duration,
+                        ]
+                    );
+                }
+
+                $active = (string) get_option( self::ACTIVE_JOB_OPTION, '' );
+                if ( $active === $job_id ) {
+                    delete_option( self::ACTIVE_JOB_OPTION );
+                }
+                return [ 'ok' => true, 'meta' => $meta ];
+            }
+
+            // Ensure lock belongs to this job. If not, do not process.
+            if ( Backup_Lite_Restore_Lock::is_locked() && ! self::is_current_lock( $job_id ) ) {
+                return [ 'ok' => false, 'meta' => $meta, 'reason' => 'locked_by_other' ];
+            }
+
+            // Keep lock alive while processing.
+            Backup_Lite_Restore_Lock::refresh( $job_id );
+
+            $meta['last_tick']  = time();
+            $meta['updated_at'] = current_time( 'mysql' );
+            $meta['tick_source'] = $source; // safe string for debugging only
+            self::write_job_meta( $job_id, $meta );
+
+            switch ( $meta['stage'] ) {
+                case 'restore-extract-db':
+                    self::stage_extract_database( $job_id, $meta, $slice );
+                    break;
+                case 'restore-db':
+                    self::stage_import_database( $job_id, $meta, $slice );
+                    break;
+                case 'prefix-migrate':
+                    self::stage_migrate_db_prefix( $job_id, $meta, $slice );
+                    break;
+                case 'restore-files':
+                    self::stage_restore_files( $job_id, $meta, $slice );
+                    break;
+                case 'search-replace':
+                    self::stage_search_replace_sliced( $job_id, $meta, $slice );
+                    break;
+                case 'cleanup':
+                    self::stage_cleanup_and_finish( $job_id, $meta, $slice );
+                    break;
+                default:
+                    // Unknown stage -> fail safely.
+                    throw new RuntimeException( esc_html__( 'Restore job is in an unknown stage.', 'museder-restoreone' ) );
+            }
+
+            // Re-schedule if not done (cron only).
+            if ( $reschedule ) {
+                $meta_after = self::get_job_meta( $job_id );
+                if ( empty( $meta_after['completed'] ) && ! wp_next_scheduled( self::CRON_HOOK_PROCESS, [ $job_id ] ) ) {
+                    wp_schedule_single_event( time() + 1, self::CRON_HOOK_PROCESS, [ $job_id ] );
+                    self::spawn_cron();
+                }
+                return [ 'ok' => true, 'meta' => $meta_after ];
+            }
+
+            return [ 'ok' => true, 'meta' => self::get_job_meta( $job_id ) ];
                 } catch ( Exception $e ) {
-                    // Log conversion error but continue with original file
-                    backup_lite_log( 'warning', 'Exception during All-in-One conversion in restore service, continuing with original file.', [
-                        'job_id' => $job_id,
-                        'error' => $e->getMessage(),
-                    ] );
+            backup_lite_log( 'error', 'Restore job slice failed.', [ 'job_id' => $job_id, 'source' => $source, 'error' => $e->getMessage() ] );
+            try {
+                $meta = self::get_job_meta( $job_id );
+                $meta['stage']      = 'failed';
+                $meta['progress']   = 100;
+                $meta['message']    = $e->getMessage();
+                $meta['completed']  = true;
+                $meta['updated_at'] = current_time( 'mysql' );
+                self::write_job_meta( $job_id, $meta );
+            } catch ( Exception $inner ) {
+                // Ignore.
+            }
+
+            // Restore History: mark failed.
+            if ( function_exists( 'backup_lite_upsert_restore_history' ) ) {
+                try {
+                    $meta2 = self::get_job_meta( $job_id );
+                    $completed_at = time();
+                    $started_at = isset( $meta2['started_at'] ) ? (int) $meta2['started_at'] : 0;
+                    $duration = ( $started_at > 0 ) ? max( 0, $completed_at - $started_at ) : 0;
+                    backup_lite_upsert_restore_history(
+                        [
+                            'job_id'                  => $job_id,
+                            'timestamp_utc'           => $completed_at,
+                            'date'                    => gmdate( 'Y-m-d H:i:s', $completed_at ),
+                            'file'                    => isset( $meta2['file'] ) ? basename( (string) $meta2['file'] ) : '',
+                            'result'                  => 'failed',
+                            'restore_started_at'      => $started_at,
+                            'restore_completed_at'    => $completed_at,
+                            'restore_duration_seconds'=> $duration,
+                            'message'                 => sanitize_text_field( $e->getMessage() ),
+                        ]
+                    );
+                } catch ( Exception $inner2 ) {
+                    // Ignore.
+                }
+            }
+            // Clear active job pointer on failure.
+            $active = (string) get_option( self::ACTIVE_JOB_OPTION, '' );
+            if ( $active === $job_id ) {
+                delete_option( self::ACTIVE_JOB_OPTION );
+            }
+            Backup_Lite_Restore_Lock::release();
+            return [ 'ok' => false, 'meta' => [], 'reason' => 'failed' ];
+        } finally {
+            self::release_job_run_lock( $lock_fp );
+        }
+    }
+
+    /**
+     * Acquire a per-job execution lock to prevent concurrent cron/tick processors.
+     *
+     * @param string $job_id
+     * @return resource|false
+     */
+    protected static function acquire_job_run_lock( $job_id ) {
+        $tmp = self::ensure_job_tmp_directory( $job_id );
+        $path = trailingslashit( $tmp ) . 'run.lock';
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- lock file for concurrency control
+        $fp = fopen( $path, 'c+' );
+        if ( ! $fp ) {
+            return false;
+        }
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_flock -- required for concurrency control
+        $ok = flock( $fp, LOCK_EX | LOCK_NB );
+        if ( ! $ok ) {
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+            fclose( $fp );
+            return false;
+        }
+        return $fp;
+    }
+
+    /**
+     * Release job run lock.
+     *
+     * @param resource|false $fp
+     * @return void
+     */
+    protected static function release_job_run_lock( $fp ) {
+        if ( ! $fp ) {
+            return;
+        }
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_flock -- release lock
+        @flock( $fp, LOCK_UN );
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+        fclose( $fp );
+    }
+
+    /**
+     * Cancel an in-progress restore job (best-effort).
+     *
+     * @param string $job_id
+     * @return array
+     */
+    public static function cancel( $job_id ) {
+        $meta = self::get_job_meta( $job_id );
+
+        if ( ! empty( $meta['completed'] ) ) {
+            return [ 'ok' => true, 'message' => __( 'Restore job already completed.', 'museder-restoreone' ) ];
+        }
+
+        // Cooperative cancel: mark request; the cron loop will finalize quickly and safely.
+        $meta['cancel_requested'] = true;
+        $meta['stage']            = 'cancelled';
+        $meta['progress']         = 100;
+        $meta['message']          = __( 'Restore cancelled.', 'museder-restoreone' );
+        $meta['completed']        = true;
+        $meta['updated_at'] = current_time( 'mysql' );
+        self::write_job_meta( $job_id, $meta );
+
+        // Clear active job pointer.
+        $active = (string) get_option( self::ACTIVE_JOB_OPTION, '' );
+        if ( $active === $job_id ) {
+            delete_option( self::ACTIVE_JOB_OPTION );
+        }
+
+        // Best-effort cleanup.
+        try {
+            $tmp = trailingslashit( backup_lite_get_temp_dir() ) . $job_id;
+            if ( file_exists( $tmp ) ) {
+                backup_lite_delete_directory( $tmp );
+            }
+        } catch ( Exception $e ) {
+            // Ignore.
+        }
+
+        Backup_Lite_Restore_Lock::release();
+
+        return [ 'ok' => true, 'message' => __( 'Restore cancelled.', 'museder-restoreone' ) ];
+    }
+
+    /**
+     * Return active restore job id (if any).
+     *
+     * @return string
+     */
+    public static function get_active_job_id() {
+        return (string) get_option( self::ACTIVE_JOB_OPTION, '' );
+    }
+
+    protected static function spawn_cron() {
+        if ( ! function_exists( 'spawn_cron' ) ) {
+            require_once ABSPATH . 'wp-includes/cron.php';
+        }
+        if ( function_exists( 'spawn_cron' ) ) {
+            spawn_cron();
+        }
+    }
+
+    protected static function stage_extract_database( $job_id, array $meta, $slice_seconds ) {
+        $file_path = isset( $meta['file'] ) ? $meta['file'] : '';
+        if ( empty( $file_path ) || ! file_exists( $file_path ) ) {
+            throw new RuntimeException( esc_html__( 'Restore source file missing.', 'museder-restoreone' ) );
+        }
+
+        $tmp_dir = self::ensure_job_tmp_directory( $job_id );
+        $db_dir  = trailingslashit( $tmp_dir ) . 'db';
+        backup_lite_ensure_directory( $db_dir );
+
+        $engine = isset( $meta['engine'] ) ? $meta['engine'] : 'zip';
+        if ( 'wpress' === $engine ) {
+            $cp = isset( $meta['checkpoints'] ) && is_array( $meta['checkpoints'] ) ? $meta['checkpoints'] : [];
+            $archive_offset = isset( $cp['wpress_archive_offset'] ) ? (int) $cp['wpress_archive_offset'] : 0;
+            $file_offset    = isset( $cp['wpress_file_offset'] ) ? (int) $cp['wpress_file_offset'] : 0;
+            $processed       = isset( $cp['wpress_processed_bytes'] ) ? (int) $cp['wpress_processed_bytes'] : 0;
+
+            $extractor = new Backup_Lite_Wpress_Extractor( $file_path );
+            if ( ! empty( $meta['options']['decryption_password'] ) ) {
+                $extractor->set_decryption_password( (string) $meta['options']['decryption_password'] );
+            }
+
+            $ok = $extractor->extract_filtered_sliced(
+                $db_dir,
+                self::WPRESS_DB_FILES,
+                [],
+                [],
+                $archive_offset,
+                $file_offset,
+                $processed,
+                (int) $slice_seconds
+            );
+            $extractor->close();
+
+            $meta['checkpoints']['wpress_archive_offset']  = $archive_offset;
+            $meta['checkpoints']['wpress_file_offset']     = $file_offset;
+            $meta['checkpoints']['wpress_processed_bytes'] = $processed;
+            $meta['sql_file'] = trailingslashit( $db_dir ) . 'database.sql';
+            $meta['progress'] = 75;
+            $meta['message']  = __( 'Extracting database…', 'museder-restoreone' );
+            $meta['updated_at'] = current_time( 'mysql' );
+            self::write_job_meta( $job_id, $meta );
+
+            if ( $ok && file_exists( $meta['sql_file'] ) ) {
+            $meta['stage']    = 'restore-db';
+                $meta['progress'] = 80;
+                $meta['message']  = __( 'Preparing database import…', 'museder-restoreone' );
+                $meta['updated_at'] = current_time( 'mysql' );
+            self::write_job_meta( $job_id, $meta );
+            }
+        } else {
+            // zip: do a minimal extraction of database.sql into job tmp folder
+            $sql_path = trailingslashit( $db_dir ) . 'database.sql';
+            if ( ! file_exists( $sql_path ) ) {
+                self::extract_zip_entry_to_path( $file_path, 'database.sql', $sql_path );
+            }
+            if ( ! file_exists( $sql_path ) ) {
+                throw new RuntimeException( esc_html__( 'database.sql not found in archive.', 'museder-restoreone' ) );
+            }
+
+            $meta['sql_file']   = $sql_path;
+            $meta['stage']      = 'restore-db';
+            $meta['progress']   = 80;
+            $meta['message']    = __( 'Preparing database import…', 'museder-restoreone' );
+            $meta['updated_at'] = current_time( 'mysql' );
+            self::write_job_meta( $job_id, $meta );
+        }
+    }
+
+    protected static function stage_import_database( $job_id, array $meta, $slice_seconds ) {
+        $sql_file = isset( $meta['sql_file'] ) ? $meta['sql_file'] : '';
+        if ( empty( $sql_file ) || ! file_exists( $sql_file ) ) {
+            throw new RuntimeException( esc_html__( 'Database file missing for import.', 'museder-restoreone' ) );
+        }
+
+        $cp = isset( $meta['checkpoints'] ) && is_array( $meta['checkpoints'] ) ? $meta['checkpoints'] : [];
+        $db_offset       = isset( $cp['db_offset'] ) ? (int) $cp['db_offset'] : 0;
+        $db_query_buffer = isset( $cp['db_query_buffer'] ) ? (string) $cp['db_query_buffer'] : '';
+
+        // Multisite subsite->single heuristic: if we're restoring into a single site and the SQL tables
+        // use a wp_{blogid}_ prefix, rewrite that prefix to the current $wpdb->prefix.
+        $rewrite_from = '';
+        $rewrite_to   = '';
+        if ( empty( $cp['ms_source_prefix'] ) && 0 === $db_offset ) {
+            $cp['ms_source_prefix'] = self::detect_multisite_blog_prefix_from_sql( $sql_file );
+        }
+
+        // Subsite -> single: rewrite to current prefix.
+        if ( function_exists( 'is_multisite' ) && ! is_multisite() ) {
+            if ( empty( $cp['ms_source_prefix'] ) && 0 === $db_offset ) {
+                $cp['ms_source_prefix'] = self::detect_multisite_blog_prefix_from_sql( $sql_file );
+            }
+            if ( ! empty( $cp['ms_source_prefix'] ) ) {
+                global $wpdb;
+                $rewrite_from = (string) $cp['ms_source_prefix'];
+                $rewrite_to   = (string) $wpdb->prefix;
+            }
+        }
+
+        // Subsite -> multisite: if target blog id is provided, rewrite to that blog prefix.
+        if ( function_exists( 'is_multisite' ) && is_multisite() && ! empty( $cp['ms_source_prefix'] ) ) {
+            $target_blog_id = 0;
+            if ( ! empty( $meta['options']['target_blog_id'] ) ) {
+                $target_blog_id = absint( $meta['options']['target_blog_id'] );
+            }
+            if ( $target_blog_id > 0 ) {
+                global $wpdb;
+                $rewrite_from = (string) $cp['ms_source_prefix'];
+                $rewrite_to   = (string) $wpdb->get_blog_prefix( $target_blog_id );
+            }
+        }
+
+        // General prefix mismatch handling (single-site to single-site, etc.).
+        // If the SQL dump uses a different prefix (e.g., qvj4_) than this site (e.g., ysjb_),
+        // rewrite table identifiers during import so the restored tables match the target site.
+        if ( '' === $rewrite_from && '' === $rewrite_to ) {
+            global $wpdb;
+            $target_prefix = (string) $wpdb->prefix;
+
+            // Prefer Step 1 detection passed via options (from restore handler).
+            if ( empty( $cp['db_source_prefix'] ) && ! empty( $meta['options']['db_source_prefix'] ) ) {
+                $maybe = sanitize_text_field( (string) $meta['options']['db_source_prefix'] );
+                if ( '' !== $maybe ) {
+                    $cp['db_source_prefix'] = $maybe;
+                }
+            }
+            if ( empty( $cp['db_source_prefix'] ) && 0 === $db_offset ) {
+                $cp['db_source_prefix'] = self::detect_table_prefix_from_sql( $sql_file );
+            }
+
+            if ( ! empty( $cp['db_source_prefix'] ) && $cp['db_source_prefix'] !== $target_prefix ) {
+                $rewrite_from = (string) $cp['db_source_prefix'];
+                $rewrite_to   = $target_prefix;
+            }
+        }
+
+        $result = Backup_Lite_Restore::import_database_sliced( $sql_file, $db_offset, $db_query_buffer, (int) $slice_seconds, $rewrite_from, $rewrite_to );
+
+        // Observability: record last statement type and whether we split large INSERTs (no SQL content logged).
+        if ( is_array( $result ) && ! empty( $result['import'] ) && is_array( $result['import'] ) ) {
+            $stmt = isset( $result['import']['stmt'] ) ? sanitize_text_field( (string) $result['import']['stmt'] ) : '';
+            $split = ! empty( $result['import']['split'] );
+            $b_done = isset( $result['import']['batches_done'] ) ? absint( $result['import']['batches_done'] ) : 0;
+            $b_total = isset( $result['import']['batches_total'] ) ? absint( $result['import']['batches_total'] ) : 0;
+
+            $meta['checkpoints']['db_last_stmt'] = $stmt;
+            $meta['checkpoints']['db_split'] = $split;
+            $meta['checkpoints']['db_split_batches_done'] = $b_done;
+            $meta['checkpoints']['db_split_batches_total'] = $b_total;
+
+            if ( function_exists( 'backup_lite_log' ) && ( $stmt || $split ) ) {
+                backup_lite_log( 'info', 'DB import progress.', [
+                    'job_id'        => $job_id,
+                    'stmt'          => $stmt,
+                    'split'         => $split,
+                    'batches_done'  => $b_done,
+                    'batches_total' => $b_total,
+                ] );
+            }
+        }
+
+        $meta['checkpoints']['db_offset']       = $db_offset;
+        $meta['checkpoints']['db_query_buffer'] = $db_query_buffer;
+        if ( ! empty( $cp['ms_source_prefix'] ) ) {
+            $meta['checkpoints']['ms_source_prefix'] = $cp['ms_source_prefix'];
+        }
+        if ( ! empty( $cp['db_source_prefix'] ) ) {
+            $meta['checkpoints']['db_source_prefix'] = $cp['db_source_prefix'];
+        }
+
+        $size = (int) filesize( $sql_file );
+        $pct  = $size > 0 ? min( 100, (int) floor( ( $db_offset / $size ) * 100 ) ) : 0;
+        $meta['progress']   = 80 + (int) floor( $pct * 0.10 ); // 80-90
+        // Add a short, safe hint to the UI (no SQL content) to reduce the “stuck at 89%” ambiguity.
+        $hint = '';
+        if ( ! empty( $meta['checkpoints']['db_split'] ) ) {
+            $done = isset( $meta['checkpoints']['db_split_batches_done'] ) ? absint( $meta['checkpoints']['db_split_batches_done'] ) : 0;
+            $total = isset( $meta['checkpoints']['db_split_batches_total'] ) ? absint( $meta['checkpoints']['db_split_batches_total'] ) : 0;
+            $hint = ( $total > 0 )
+                ? sprintf( 'INSERT %1$d/%2$d', $done, $total )
+                : 'INSERT';
+        } elseif ( ! empty( $meta['checkpoints']['db_last_stmt'] ) ) {
+            $hint = (string) $meta['checkpoints']['db_last_stmt'];
+        }
+        $meta['message']    = $hint
+            ? sprintf( __( 'Importing database… (%s)', 'museder-restoreone' ), $hint )
+            : __( 'Importing database…', 'museder-restoreone' );
+        $meta['updated_at'] = current_time( 'mysql' );
+            self::write_job_meta( $job_id, $meta );
+
+        if ( ! empty( $result['completed'] ) ) {
+            // If we rewrote table prefixes during import, we must also migrate prefix-dependent keys/values
+            // inside options/usermeta (e.g., qvj4_user_roles, qvj4_capabilities).
+            if ( $rewrite_from && $rewrite_to && $rewrite_from !== $rewrite_to ) {
+                $meta['checkpoints']['prefix_migrate'] = [
+                    'from'  => (string) $rewrite_from,
+                    'to'    => (string) $rewrite_to,
+                    'phase' => 'options_keys',
+                    'stats' => [
+                        'options_keys'   => 0,
+                        'usermeta_keys'  => 0,
+                        'options_values' => 0,
+                        'usermeta_values'=> 0,
+                    ],
+                ];
+                $meta['stage']      = 'prefix-migrate';
+                $meta['progress']   = 90;
+                $meta['message']    = __( 'Fixing database prefix references…', 'museder-restoreone' );
+                $meta['updated_at'] = current_time( 'mysql' );
+                self::write_job_meta( $job_id, $meta );
+            } else {
+                $meta['stage']      = 'restore-files';
+                $meta['progress']   = 90;
+                $meta['message']    = __( 'Restoring files…', 'museder-restoreone' );
+                $meta['updated_at'] = current_time( 'mysql' );
+                self::write_job_meta( $job_id, $meta );
+            }
+        }
+    }
+
+    /**
+     * After importing SQL with table-prefix rewrite, migrate prefix-dependent keys/values inside the restored DB.
+     *
+     * This fixes common WP fields like:
+     * - wp_options.option_name: {prefix}_user_roles
+     * - wp_usermeta.meta_key:  {prefix}_capabilities, {prefix}_user_level
+     *
+     * @param string $job_id
+     * @param array  $meta
+     * @param int    $slice_seconds
+     * @return void
+     */
+    protected static function stage_migrate_db_prefix( $job_id, array $meta, $slice_seconds ) {
+        global $wpdb;
+
+        $cp = isset( $meta['checkpoints'] ) && is_array( $meta['checkpoints'] ) ? $meta['checkpoints'] : [];
+        $pm = isset( $cp['prefix_migrate'] ) && is_array( $cp['prefix_migrate'] ) ? $cp['prefix_migrate'] : [];
+        $from = isset( $pm['from'] ) ? (string) $pm['from'] : '';
+        $to   = isset( $pm['to'] ) ? (string) $pm['to'] : '';
+        $phase = isset( $pm['phase'] ) ? (string) $pm['phase'] : 'options_keys';
+        $stats = isset( $pm['stats'] ) && is_array( $pm['stats'] ) ? $pm['stats'] : [];
+
+        if ( '' === $from || '' === $to || $from === $to ) {
+            // Nothing to migrate.
+            $meta['stage']      = 'restore-files';
+            $meta['progress']   = 90;
+            $meta['message']    = __( 'Restoring files…', 'museder-restoreone' );
+            $meta['updated_at'] = current_time( 'mysql' );
+            self::write_job_meta( $job_id, $meta );
+            return;
+        }
+
+        $start = microtime( true );
+        $slice_seconds = max( 1, (int) $slice_seconds );
+
+        $options_table  = $wpdb->prefix . 'options';
+        $usermeta_table = $wpdb->prefix . 'usermeta';
+
+        $from_len = strlen( $from );
+        $safe_value_replace = ( strlen( $from ) === strlen( $to ) );
+
+        $limit_keys   = 500;
+        $limit_values = 200;
+
+        while ( ( microtime( true ) - $start ) < $slice_seconds ) {
+            if ( 'options_keys' === $phase ) {
+                $like = $wpdb->esc_like( $from ) . '%';
+                $start_pos = (int) $from_len + 1; // MySQL SUBSTRING is 1-based.
+                // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+                $sql = $wpdb->prepare(
+                    "UPDATE {$options_table} SET option_name = CONCAT(%s, SUBSTRING(option_name, %d)) WHERE option_name LIKE %s LIMIT %d",
+                    $to,
+                    $start_pos,
+                    $like,
+                    $limit_keys
+                );
+                $affected = (int) $wpdb->query( $sql );
+                // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+                $stats['options_keys'] = isset( $stats['options_keys'] ) ? (int) $stats['options_keys'] + max( 0, $affected ) : max( 0, $affected );
+                if ( $affected <= 0 ) {
+                    $phase = 'usermeta_keys';
+                }
+            } elseif ( 'usermeta_keys' === $phase ) {
+                $like = $wpdb->esc_like( $from ) . '%';
+                $start_pos = (int) $from_len + 1;
+                // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+                $sql = $wpdb->prepare(
+                    "UPDATE {$usermeta_table} SET meta_key = CONCAT(%s, SUBSTRING(meta_key, %d)) WHERE meta_key LIKE %s LIMIT %d",
+                    $to,
+                    $start_pos,
+                    $like,
+                    $limit_keys
+                );
+                $affected = (int) $wpdb->query( $sql );
+                // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+                $stats['usermeta_keys'] = isset( $stats['usermeta_keys'] ) ? (int) $stats['usermeta_keys'] + max( 0, $affected ) : max( 0, $affected );
+                if ( $affected <= 0 ) {
+                    $phase = $safe_value_replace ? 'options_values' : 'finish';
+                }
+            } elseif ( 'options_values' === $phase ) {
+                $like = '%' . $wpdb->esc_like( $from ) . '%';
+                // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+                $sql = $wpdb->prepare(
+                    "UPDATE {$options_table} SET option_value = REPLACE(option_value, %s, %s) WHERE option_value LIKE %s LIMIT %d",
+                    $from,
+                    $to,
+                    $like,
+                    $limit_values
+                );
+                $affected = (int) $wpdb->query( $sql );
+                // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+                $stats['options_values'] = isset( $stats['options_values'] ) ? (int) $stats['options_values'] + max( 0, $affected ) : max( 0, $affected );
+                if ( $affected <= 0 ) {
+                    $phase = 'usermeta_values';
+                }
+            } elseif ( 'usermeta_values' === $phase ) {
+                $like = '%' . $wpdb->esc_like( $from ) . '%';
+                // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+                $sql = $wpdb->prepare(
+                    "UPDATE {$usermeta_table} SET meta_value = REPLACE(meta_value, %s, %s) WHERE meta_value LIKE %s LIMIT %d",
+                    $from,
+                    $to,
+                    $like,
+                    $limit_values
+                );
+                $affected = (int) $wpdb->query( $sql );
+                // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+                $stats['usermeta_values'] = isset( $stats['usermeta_values'] ) ? (int) $stats['usermeta_values'] + max( 0, $affected ) : max( 0, $affected );
+                if ( $affected <= 0 ) {
+                    $phase = 'finish';
+                }
+            } else {
+                // finish
+                break;
+            }
+
+            // Update job meta for UI visibility.
+            $meta['progress']   = 90;
+            $meta['message']    = __( 'Fixing database prefix references…', 'museder-restoreone' );
+            $meta['updated_at'] = current_time( 'mysql' );
+            $cp['prefix_migrate'] = [
+                'from'  => $from,
+                'to'    => $to,
+                'phase' => $phase,
+                'stats' => $stats,
+            ];
+            $meta['checkpoints'] = $cp;
+            self::write_job_meta( $job_id, $meta );
+
+            if ( 'finish' === $phase ) {
+                break;
+            }
+        }
+
+        if ( 'finish' === $phase ) {
+            backup_lite_log( 'info', 'DB prefix migration completed.', [
+                'job_id' => $job_id,
+                'from'   => $from,
+                'to'     => $to,
+                'stats'  => $stats,
+                'value_replace' => (bool) $safe_value_replace,
+            ] );
+
+            $meta['stage']      = 'restore-files';
+            $meta['progress']   = 90;
+            $meta['message']    = __( 'Restoring files…', 'museder-restoreone' );
+            $meta['updated_at'] = current_time( 'mysql' );
+            $meta['checkpoints'] = $cp;
+            self::write_job_meta( $job_id, $meta );
+        }
+    }
+
+    protected static function stage_restore_files( $job_id, array $meta, $slice_seconds ) {
+        $file_path = isset( $meta['file'] ) ? $meta['file'] : '';
+        if ( empty( $file_path ) || ! file_exists( $file_path ) ) {
+            throw new RuntimeException( esc_html__( 'Restore source file missing.', 'museder-restoreone' ) );
+        }
+
+        $engine = isset( $meta['engine'] ) ? $meta['engine'] : 'zip';
+
+        if ( 'wpress' === $engine ) {
+            $protect_self = (bool) apply_filters( 'backup_lite_restore_protect_self', true );
+            $self_exclude = $protect_self ? [ 'plugins/museder-restoreone', 'wp-content/plugins/museder-restoreone' ] : [];
+            $phases = [
+                [ 'base' => WP_CONTENT_DIR, 'include' => [ 'uploads', 'plugins', 'themes', 'mu-plugins' ] ],
+                [ 'base' => dirname( WP_CONTENT_DIR ), 'include' => [ 'wp-content' ] ],
+            ];
+
+            $cp = isset( $meta['checkpoints'] ) && is_array( $meta['checkpoints'] ) ? $meta['checkpoints'] : [];
+            $phase_idx     = isset( $cp['files_phase'] ) ? (int) $cp['files_phase'] : 0;
+            $archive_offset = isset( $cp['wpress_archive_offset'] ) ? (int) $cp['wpress_archive_offset'] : 0;
+            $file_offset    = isset( $cp['wpress_file_offset'] ) ? (int) $cp['wpress_file_offset'] : 0;
+            $processed       = isset( $cp['wpress_processed_bytes'] ) ? (int) $cp['wpress_processed_bytes'] : 0;
+
+            if ( $phase_idx >= count( $phases ) ) {
+            $meta['stage']      = 'search-replace';
+                $meta['progress']   = 96;
+                $meta['message']    = __( 'Preparing URL replacement…', 'museder-restoreone' );
+                $meta['updated_at'] = current_time( 'mysql' );
+            self::write_job_meta( $job_id, $meta );
+                return;
+            }
+
+            $extractor = new Backup_Lite_Wpress_Extractor( $file_path );
+            if ( ! empty( $meta['options']['decryption_password'] ) ) {
+                $extractor->set_decryption_password( (string) $meta['options']['decryption_password'] );
+            }
+
+            $phase = $phases[ $phase_idx ];
+            $ok    = $extractor->extract_filtered_sliced(
+                $phase['base'],
+                $phase['include'],
+                array_merge( self::WPRESS_FILES_EXCLUDE, $self_exclude ),
+                [],
+                $archive_offset,
+                $file_offset,
+                $processed,
+                (int) $slice_seconds
+            );
+            $extractor->close();
+
+            $meta['checkpoints']['wpress_archive_offset']  = $archive_offset;
+            $meta['checkpoints']['wpress_file_offset']     = $file_offset;
+            $meta['checkpoints']['wpress_processed_bytes'] = $processed;
+
+            if ( $ok ) {
+                $meta['checkpoints']['files_phase'] = $phase_idx + 1;
+                // Reset offsets for next phase.
+                $meta['checkpoints']['wpress_archive_offset'] = 0;
+                $meta['checkpoints']['wpress_file_offset']    = 0;
+            }
+
+            // Progress mapping: 90–96 for files stage.
+            $phase_count = max( 1, count( $phases ) );
+            $base = 90 + (int) floor( ( $phase_idx / $phase_count ) * 6 );
+            $meta['progress']   = min( 96, $base + ( $ok ? 3 : 1 ) );
+            $meta['message']    = __( 'Restoring files…', 'museder-restoreone' );
+            $meta['updated_at'] = current_time( 'mysql' );
+            self::write_job_meta( $job_id, $meta );
+
+            if ( $ok && ( $phase_idx + 1 ) >= count( $phases ) ) {
+                $meta['stage']      = 'search-replace';
+                $meta['progress']   = 96;
+                $meta['message']    = __( 'Preparing URL replacement…', 'museder-restoreone' );
+                $meta['updated_at'] = current_time( 'mysql' );
+                self::write_job_meta( $job_id, $meta );
+            }
+        } else {
+            // ZIP restore: extract wp-content/ into site wp-content (streamed per entry, sliced).
+            $cp = isset( $meta['checkpoints'] ) && is_array( $meta['checkpoints'] ) ? $meta['checkpoints'] : [];
+            $zip_index  = isset( $cp['zip_index'] ) ? (int) $cp['zip_index'] : 0;
+            $zip_offset = isset( $cp['zip_entry_offset'] ) ? (int) $cp['zip_entry_offset'] : 0;
+            $zip_total  = isset( $cp['zip_total_entries'] ) ? (int) $cp['zip_total_entries'] : 0;
+            $skipped_self_total = isset( $cp['zip_skipped_self'] ) ? (int) $cp['zip_skipped_self'] : 0;
+
+            if ( $zip_total <= 0 && class_exists( 'ZipArchive' ) ) {
+                $zip = new ZipArchive();
+                if ( true === $zip->open( $file_path ) ) {
+                    $zip_total = (int) $zip->numFiles;
+                    $zip->close();
+                    $meta['checkpoints']['zip_total_entries'] = $zip_total;
                 }
             }
 
-            // Log extraction attempt
-            backup_lite_log( 'info', 'Starting archive extraction.', [
-                'job_id' => $job_id,
-                'file' => basename( $file_to_extract ),
-                'file_size' => file_exists( $file_to_extract ) ? size_format( filesize( $file_to_extract ), 2 ) : 'unknown',
-            ] );
+            $result = self::extract_zip_prefix_sliced( $file_path, self::ZIP_WP_CONTENT_PREFIX, dirname( WP_CONTENT_DIR ), $zip_index, $zip_offset, (int) $slice_seconds );
+            $meta['checkpoints']['zip_index']        = $zip_index;
+            $meta['checkpoints']['zip_entry_offset'] = $zip_offset;
+            if ( is_array( $result ) && isset( $result['skipped_self'] ) ) {
+                $skipped_self_total += (int) $result['skipped_self'];
+                $meta['checkpoints']['zip_skipped_self'] = $skipped_self_total;
+                if ( (int) $result['skipped_self'] > 0 && function_exists( 'backup_lite_log' ) ) {
+                    backup_lite_log( 'info', 'Restore files: self-protect skipped plugin files.', [
+                        'skipped' => (int) $result['skipped_self'],
+                        'total'   => (int) $skipped_self_total,
+                        'prefix'  => 'wp-content/plugins/museder-restoreone/',
+                    ] );
+                }
+            }
+            $pct = ( $zip_total > 0 ) ? min( 1.0, max( 0.0, $zip_index / $zip_total ) ) : 0.0;
+            $meta['progress']   = min( 96, 90 + (int) floor( $pct * 6 ) );
+            $meta['message']    = __( 'Restoring files…', 'museder-restoreone' );
+            $meta['updated_at'] = current_time( 'mysql' );
+            self::write_job_meta( $job_id, $meta );
 
-            try {
-                $extracted = self::extract_for_restore( $job_id, $file_to_extract );
-                backup_lite_log( 'info', 'Archive extraction completed successfully.', [
-                    'job_id' => $job_id,
-                    'extract_dir' => $extracted,
-                ] );
-            } catch ( Exception $extract_exception ) {
-                // Log detailed extraction error
-                backup_lite_log( 'error', 'Archive extraction failed.', [
-                    'job_id' => $job_id,
-                    'file' => basename( $file_to_extract ),
-                    'error' => $extract_exception->getMessage(),
-                    'file_exists' => file_exists( $file_to_extract ),
-                    'file_readable' => file_exists( $file_to_extract ) ? is_readable( $file_to_extract ) : false,
-                    'file_size' => file_exists( $file_to_extract ) ? filesize( $file_to_extract ) : 0,
-                ] );
-                // Re-throw with enhanced message
-                throw new RuntimeException( sprintf(
-                    /* translators: 1: Original error message, 2: File name */
-                    esc_html__( 'Failed to extract backup archive: %1$s. File: %2$s. Please check the logs for details.', 'museder-restoreone' ),
-                    $extract_exception->getMessage(),
-                    basename( $file_to_extract )
-                ) );
+            if ( ! empty( $result['completed'] ) ) {
+                // Multisite target mapping: move extracted sites/{source} -> sites/{target} if requested.
+                if ( function_exists( 'is_multisite' ) && is_multisite() && ! empty( $meta['options']['target_blog_id'] ) ) {
+                    self::remap_multisite_uploads_to_target_blog_if_present( $meta['options']['target_blog_id'] );
+                }
+
+                // If this looks like a multisite subsite export (wp-content/uploads/sites/{id}),
+                // flatten it into uploads/ for single-site restore.
+                if ( function_exists( 'is_multisite' ) && ! is_multisite() ) {
+                    self::flatten_multisite_uploads_if_present();
+                }
+
+                $meta['stage']      = 'search-replace';
+                $meta['progress']   = 96;
+                $meta['message']    = __( 'Preparing URL replacement…', 'museder-restoreone' );
+                $meta['updated_at'] = current_time( 'mysql' );
+                self::write_job_meta( $job_id, $meta );
+            }
+        }
+    }
+
+    /**
+     * Best-effort detect multisite blog prefix from SQL file.
+     *
+     * Returns something like "wp_2_" (including trailing underscore), or '' if not detected.
+     */
+    protected static function detect_multisite_blog_prefix_from_sql( $sql_file ) {
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- reading local SQL file in job temp dir
+        $fh = fopen( $sql_file, 'rb' );
+        if ( ! $fh ) {
+            return '';
+        }
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread
+        $head = fread( $fh, 1024 * 1024 ); // 1MB
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+        fclose( $fh );
+
+        if ( ! is_string( $head ) || $head === '' ) {
+            return '';
+        }
+
+        if ( preg_match( '/CREATE TABLE IF NOT EXISTS\\s+`([^`]+)`/i', $head, $m ) ) {
+            $table = $m[1];
+            if ( preg_match( '/^([A-Za-z0-9_]+_\\d+_)options$/', $table, $m2 ) ) {
+                return $m2[1];
+            }
+        }
+
+        return '';
+    }
+
+    /**
+     * Best-effort detect the table prefix used by a SQL dump.
+     *
+     * Returns something like "qvj4_" or "wp_2_" (including trailing underscore), or '' if not detected.
+     *
+     * @param string $sql_file
+     * @return string
+     */
+    protected static function detect_table_prefix_from_sql( $sql_file ) {
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- reading local SQL file in job temp dir
+        $fh = fopen( $sql_file, 'rb' );
+        if ( ! $fh ) {
+            return '';
+        }
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread
+        $head = fread( $fh, 1024 * 1024 ); // 1MB
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+        fclose( $fh );
+
+        if ( ! is_string( $head ) || '' === $head ) {
+            return '';
+        }
+
+        // Prefer options table since it exists in all WP sites.
+        if ( preg_match( '/`([A-Za-z0-9_]+_options)`/i', $head, $m ) ) {
+            $table = (string) $m[1];
+            if ( preg_match( '/^([A-Za-z0-9_]+_)options$/', $table, $m2 ) ) {
+                return (string) $m2[1];
+            }
+        }
+
+        // Fallback: infer from first referenced table statement if it ends with options.
+        if ( preg_match( '/\\b(?:CREATE TABLE|DROP TABLE IF EXISTS|INSERT INTO)\\s+`([^`]+)`/i', $head, $m ) ) {
+            $table = (string) $m[1];
+            if ( preg_match( '/^([A-Za-z0-9_]+_)options$/', $table, $m2 ) ) {
+                return (string) $m2[1];
+            }
+        }
+
+        return '';
+    }
+
+    /**
+     * If a ZIP restore produced wp-content/uploads/sites/{id}/..., move it to wp-content/uploads/.
+     * This is a helper for multisite subsite->single restores.
+     */
+    protected static function flatten_multisite_uploads_if_present() {
+        $sites_dir = wp_normalize_path( trailingslashit( WP_CONTENT_DIR ) . 'uploads/sites' );
+        if ( ! is_dir( $sites_dir ) ) {
+            return;
+        }
+
+        $entries = glob( trailingslashit( $sites_dir ) . '*', GLOB_ONLYDIR );
+        if ( empty( $entries ) ) {
+            return;
+        }
+
+        // Pick the first sites/{id} directory found.
+        $source = wp_normalize_path( $entries[0] );
+        $dest   = wp_normalize_path( trailingslashit( WP_CONTENT_DIR ) . 'uploads' );
+        if ( ! is_dir( $dest ) ) {
+            wp_mkdir_p( $dest );
+        }
+
+        $it = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator( $source, FilesystemIterator::SKIP_DOTS ),
+            RecursiveIteratorIterator::SELF_FIRST
+        );
+        foreach ( $it as $item ) {
+            $rel = $it->getSubPathName();
+            $target = wp_normalize_path( trailingslashit( $dest ) . $rel );
+            if ( $item->isDir() ) {
+                wp_mkdir_p( $target );
+            } else {
+                wp_mkdir_p( dirname( $target ) );
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_copy -- restore file operation, path is within wp-content/uploads
+                @copy( $item->getPathname(), $target );
+            }
+        }
+    }
+
+    protected static function remap_multisite_uploads_to_target_blog_if_present( $target_blog_id ) {
+        $target_blog_id = absint( $target_blog_id );
+        if ( $target_blog_id <= 0 ) {
+            return;
+        }
+
+        $sites_dir = wp_normalize_path( trailingslashit( WP_CONTENT_DIR ) . 'uploads/sites' );
+        if ( ! is_dir( $sites_dir ) ) {
+            return;
+        }
+
+        $entries = glob( trailingslashit( $sites_dir ) . '*', GLOB_ONLYDIR );
+        if ( empty( $entries ) ) {
+            return;
+        }
+
+        // Best-effort: pick the first extracted blog id dir and rename/merge into target.
+        $source = wp_normalize_path( $entries[0] );
+        $dest   = wp_normalize_path( trailingslashit( $sites_dir ) . $target_blog_id );
+        if ( $source === $dest ) {
+            return;
+        }
+
+        wp_mkdir_p( $dest );
+
+        $it = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator( $source, FilesystemIterator::SKIP_DOTS ),
+            RecursiveIteratorIterator::SELF_FIRST
+        );
+        foreach ( $it as $item ) {
+            $rel = $it->getSubPathName();
+            $target = wp_normalize_path( trailingslashit( $dest ) . $rel );
+            if ( $item->isDir() ) {
+                wp_mkdir_p( $target );
+            } else {
+                wp_mkdir_p( dirname( $target ) );
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_copy -- restore file operation, path is within wp-content/uploads
+                @copy( $item->getPathname(), $target );
+            }
+        }
+    }
+
+    protected static function stage_cleanup_and_finish( $job_id, array $meta, $slice_seconds ) {
+        $start = microtime( true );
+        $slice_seconds = (int) $slice_seconds;
+
+        // Checkpoints container.
+        $cp = isset( $meta['checkpoints'] ) && is_array( $meta['checkpoints'] ) ? $meta['checkpoints'] : [];
+        $cleanup = isset( $cp['cleanup'] ) && is_array( $cp['cleanup'] ) ? $cp['cleanup'] : [];
+        if ( empty( $cleanup['step'] ) ) {
+            $cleanup['step'] = 'flush_cache';
+        }
+
+        // Optional: background non-critical cleanup to avoid UI sitting at 99% on huge sites.
+        // Default is false; enable via filter in custom integration.
+        $background_cleanup = (bool) apply_filters( 'backup_lite_restore_background_cleanup', false, $job_id, $meta );
+        if ( $background_cleanup && empty( $cleanup['bg_scheduled'] ) ) {
+            $cleanup['bg_scheduled'] = 1;
+            $cleanup['bg_scheduled_at'] = time();
+            // De-duplicate before scheduling.
+            if ( function_exists( 'wp_clear_scheduled_hook' ) ) {
+                wp_clear_scheduled_hook( self::CRON_HOOK_BG_CLEANUP, [ $job_id ] );
+            }
+            wp_schedule_single_event( time() + 5, self::CRON_HOOK_BG_CLEANUP, [ $job_id ] );
+        }
+
+        $safe_mode_entered = ! empty( $cleanup['safe_mode_entered'] );
+
+        while ( true ) {
+            $elapsed = microtime( true ) - $start;
+            if ( $slice_seconds > 0 && $elapsed > $slice_seconds ) {
+                break;
             }
 
-            $meta['stage']    = 'restore-db';
-            $meta['progress'] = 90;
-            $meta['message']  = __( 'Importing database…', 'museder-restoreone' );
-            self::write_job_meta( $job_id, $meta );
-
-            // Log database restore start
-            $old_siteurl = get_option( 'siteurl' );
-            $old_home = get_option( 'home' );
-            backup_lite_log( 'info', 'Starting database import.', [
-                'job_id' => $job_id,
-                'old_siteurl' => $old_siteurl,
-                'old_home' => $old_home,
-            ] );
-
-            self::import_database_from_extract( $extracted, $meta );
-
-            // Log database restore completion
-            $new_siteurl = get_option( 'siteurl' );
-            $new_home = get_option( 'home' );
-            backup_lite_log( 'info', 'Database import completed.', [
-                'job_id' => $job_id,
-                'new_siteurl' => $new_siteurl,
-                'new_home' => $new_home,
-                'siteurl_changed' => ( $old_siteurl !== $new_siteurl ),
-                'home_changed' => ( $old_home !== $new_home ),
-            ] );
-
-            $meta['stage']    = 'restore-files-final';
-            $meta['message']  = __( 'Copying wp-content files…', 'museder-restoreone' );
-            $meta['progress'] = 95;
-            self::write_job_meta( $job_id, $meta );
-
-            self::copy_files_from_extract( $extracted );
-
-            $meta['stage']      = 'search-replace';
-            $meta['message']    = __( 'Applying URL search & replace…', 'museder-restoreone' );
-            $meta['progress']   = 97;
-            self::write_job_meta( $job_id, $meta );
-
-            self::apply_search_replace( $meta, $options );
-
-            $meta['stage']      = 'cleanup';
-            $meta['message']    = __( 'Finalising restore and cleaning up…', 'museder-restoreone' );
+            switch ( (string) $cleanup['step'] ) {
+                case 'flush_cache':
             $meta['progress']   = 99;
+                    $meta['message']    = __( 'Finalising restore… (clearing cache)', 'museder-restoreone' );
+                    $meta['updated_at'] = current_time( 'mysql' );
             self::write_job_meta( $job_id, $meta );
 
-            self::cleanup_job_tmp( $job_id, $extracted );
+                    if ( function_exists( 'wp_cache_flush' ) ) {
+                        wp_cache_flush();
+                    }
+                    $cleanup['step'] = $background_cleanup ? 'fix_urls' : 'delete_transients';
+                    $cleanup['transients_last_id'] = 0;
+                    $cleanup['transients_batches'] = 0;
+                    $cleanup['transients_deleted_total'] = 0;
+                    break;
 
-            // Clear caches and refresh permalinks after restore
-            self::post_restore_cleanup();
+                case 'delete_transients':
+                    // Delete transients in small batches to avoid long locks/timeouts near 99%.
+                    $result = self::delete_transients_sliced( $cleanup, 2500, $slice_seconds, $start );
+                    $cleanup['transients_batches'] = isset( $cleanup['transients_batches'] ) ? (int) $cleanup['transients_batches'] : 0;
+                    $cleanup['transients_deleted_total'] = isset( $cleanup['transients_deleted_total'] ) ? (int) $cleanup['transients_deleted_total'] : 0;
 
-            // Enter safe mode after restore to prevent plugin conflicts
+                    if ( ! empty( $result['done'] ) ) {
+                        $cleanup['step'] = 'flush_rewrite';
+                    }
+
+                    $meta['progress']   = 99;
+                    $meta['message']    = sprintf(
+                        /* translators: 1: batch number, 2: deleted total */
+                        __( 'Finalising restore… (clearing transients, batch %1$d, deleted %2$d)', 'museder-restoreone' ),
+                        max( 1, (int) $cleanup['transients_batches'] ),
+                        (int) $cleanup['transients_deleted_total']
+                    );
+                    $meta['updated_at'] = current_time( 'mysql' );
+                    $cp['cleanup'] = $cleanup;
+                    $meta['checkpoints'] = $cp;
+                    self::write_job_meta( $job_id, $meta );
+                    break;
+
+                case 'flush_rewrite':
+                    $meta['progress']   = 99;
+                    $meta['message']    = __( 'Finalising restore… (flushing permalinks)', 'museder-restoreone' );
+                    $meta['updated_at'] = current_time( 'mysql' );
+                    self::write_job_meta( $job_id, $meta );
+
+                    if ( function_exists( 'flush_rewrite_rules' ) ) {
+                        flush_rewrite_rules( false );
+                    }
+                    $cleanup['step'] = 'clear_alloptions_cache';
+                    break;
+
+                case 'clear_alloptions_cache':
+                    $meta['progress']   = 99;
+                    $meta['message']    = __( 'Finalising restore… (clearing options cache)', 'museder-restoreone' );
+                    $meta['updated_at'] = current_time( 'mysql' );
+                    self::write_job_meta( $job_id, $meta );
+
+                    if ( function_exists( 'wp_cache_delete' ) ) {
+                        wp_cache_delete( 'alloptions', 'options' );
+                    }
+                    $cleanup['step'] = 'fix_urls';
+                    break;
+
+                case 'fix_urls':
+                    $meta['progress']   = 99;
+                    $meta['message']    = __( 'Finalising restore… (validating site URLs)', 'museder-restoreone' );
+                    $meta['updated_at'] = current_time( 'mysql' );
+                    self::write_job_meta( $job_id, $meta );
+
+                    self::ensure_site_urls_match_current_host();
+                    $cleanup['step'] = 'restore_plugin_status';
+                    break;
+
+                case 'restore_plugin_status':
+                    $meta['progress']   = 99;
+                    $meta['message']    = __( 'Finalising restore… (restoring plugin status)', 'museder-restoreone' );
+                    $meta['updated_at'] = current_time( 'mysql' );
+                    self::write_job_meta( $job_id, $meta );
+
+                    self::restore_plugin_status();
+                    $cleanup['step'] = 'enter_safe_mode';
+                    break;
+
+                case 'enter_safe_mode':
+                    $meta['progress']   = 99;
+                    $meta['message']    = __( 'Finalising restore… (entering safe mode)', 'museder-restoreone' );
+                    $meta['updated_at'] = current_time( 'mysql' );
+                    self::write_job_meta( $job_id, $meta );
+
             $safe_mode_entered = false;
             try {
                 Backup_Lite_Restore::enter_safe_mode_after_import();
                 $safe_mode_entered = true;
-                backup_lite_log( 'info', 'Safe mode activated after restore.', [ 'job_id' => $job_id ] );
             } catch ( Exception $e ) {
                 backup_lite_log( 'warning', 'Failed to enter safe mode after restore.', [
                     'job_id' => $job_id,
                     'error' => $e->getMessage(),
                 ] );
             }
+                    $cleanup['safe_mode_entered'] = $safe_mode_entered ? 1 : 0;
+                    $cleanup['step'] = 'cleanup_tmp';
+                    break;
 
-            // Prepare metadata for hooks
+                case 'cleanup_tmp':
+                    $meta['progress']   = 99;
+                    $meta['message']    = __( 'Finalising restore… (cleaning temp files)', 'museder-restoreone' );
+                    $meta['updated_at'] = current_time( 'mysql' );
+                    self::write_job_meta( $job_id, $meta );
+
+                    try {
+                        $tmp = trailingslashit( backup_lite_get_temp_dir() ) . $job_id;
+                        if ( file_exists( $tmp ) ) {
+                            backup_lite_delete_directory( $tmp );
+                        }
+                    } catch ( Exception $e ) {
+                        // Ignore.
+                    }
+                    $cleanup['step'] = 'do_actions';
+                    break;
+
+                case 'do_actions':
+                    $meta['progress']   = 99;
+                    $meta['message']    = __( 'Finalising restore… (notifying hooks)', 'museder-restoreone' );
+                    $meta['updated_at'] = current_time( 'mysql' );
+                    self::write_job_meta( $job_id, $meta );
+
             $restore_meta = [
                 'job_id' => $job_id,
                 'file' => isset( $meta['file'] ) ? $meta['file'] : '',
@@ -380,47 +1468,338 @@ class Backup_Lite_Restore_Service {
                 'source' => isset( $meta['source'] ) ? $meta['source'] : '',
                 'siteurl_old' => isset( $meta['validation']['domain']['backup'] ) ? $meta['validation']['domain']['backup'] : '',
                 'siteurl_new' => isset( $meta['validation']['domain']['current'] ) ? $meta['validation']['domain']['current'] : home_url(),
-                'safe_mode' => $safe_mode_entered,
+                        'safe_mode' => (bool) $safe_mode_entered,
                 'completed_at' => current_time( 'mysql' ),
             ];
-
-            // Fire hook after restore completion (before marking as done)
-            try {
                 do_action( 'backup_lite_after_restore', $restore_meta );
                 if ( $safe_mode_entered ) {
                     do_action( 'backup_lite_after_restore_safe_mode', $restore_meta );
                 }
-            } catch ( Exception $hook_exception ) {
-                // Log hook errors but don't fail the restore
-                backup_lite_log( 'warning', 'Error in restore completion hook.', [
-                    'job_id' => $job_id,
-                    'error' => $hook_exception->getMessage(),
-                ] );
-            }
+                    $cleanup['step'] = 'finish';
+                    break;
 
+                case 'finish':
+                    $cp['cleanup'] = $cleanup;
+                    $meta['checkpoints'] = $cp;
             $meta['stage']      = 'done';
             $meta['progress']   = 100;
-            $meta['message']    = __( 'Restore completed successfully.', 'museder-restoreone' );
+                    $meta['message']    = $background_cleanup
+                        ? __( 'Restore completed successfully. Background cleanup queued.', 'museder-restoreone' )
+                        : __( 'Restore completed successfully.', 'museder-restoreone' );
             $meta['completed']  = true;
             $meta['updated_at'] = current_time( 'mysql' );
             self::write_job_meta( $job_id, $meta );
 
-            backup_lite_log( 'info', 'Restore job executed successfully.', [
-                'job_id' => $job_id,
-                'safe_mode' => $safe_mode_entered,
-            ] );
+                    // Restore History: mark success.
+                    if ( function_exists( 'backup_lite_upsert_restore_history' ) ) {
+                        $completed_at = time();
+                        $started_at = isset( $meta['started_at'] ) ? (int) $meta['started_at'] : 0;
+                        $duration = ( $started_at > 0 ) ? max( 0, $completed_at - $started_at ) : 0;
+                        backup_lite_upsert_restore_history(
+                            [
+                                'job_id'                  => $job_id,
+                                'timestamp_utc'           => $completed_at,
+                                'date'                    => gmdate( 'Y-m-d H:i:s', $completed_at ),
+                                'file'                    => isset( $meta['file'] ) ? basename( (string) $meta['file'] ) : '',
+                                'result'                  => 'success',
+                                'restore_started_at'      => $started_at,
+                                'restore_completed_at'    => $completed_at,
+                                'restore_duration_seconds'=> $duration,
+                            ]
+                        );
+                    }
 
-            return [
-                'ok'                  => true,
-                'message'             => __( 'Restore completed successfully.', 'museder-restoreone' ),
-                'rollback_available'  => ! empty( $pre_backup['file'] ),
-            ];
-        } catch ( Exception $e ) {
-            backup_lite_log( 'error', 'Restore execution failed.', [ 'job_id' => $job_id, 'error' => $e->getMessage() ] );
-            throw $e;
-        } finally {
             Backup_Lite_Restore_Lock::release();
+
+                    $active = (string) get_option( self::ACTIVE_JOB_OPTION, '' );
+                    if ( $active === $job_id ) {
+                        delete_option( self::ACTIVE_JOB_OPTION );
+                    }
+                    return;
+
+                default:
+                    $cleanup['step'] = 'flush_cache';
+                    break;
+            }
+
+            // Persist checkpoints after each step.
+            $cp['cleanup'] = $cleanup;
+            $meta['checkpoints'] = $cp;
+            $meta['progress'] = 99;
+            $meta['updated_at'] = current_time( 'mysql' );
+            self::write_job_meta( $job_id, $meta );
         }
+
+        // Not finished within slice: keep stage as cleanup and persist current step.
+        $cp['cleanup'] = $cleanup;
+        $meta['checkpoints'] = $cp;
+        $meta['progress'] = 99;
+        $meta['updated_at'] = current_time( 'mysql' );
+        if ( empty( $meta['message'] ) ) {
+            $meta['message'] = __( 'Finalising restore…', 'museder-restoreone' );
+        }
+        self::write_job_meta( $job_id, $meta );
+    }
+
+    /**
+     * Background cleanup job (non-critical) to avoid blocking the UI at 99% on huge sites.
+     * Default is not enabled; scheduled only when filter backup_lite_restore_background_cleanup returns true.
+     */
+    public static function cron_background_cleanup( $job_id ) {
+        try {
+            $meta = self::get_job_meta( $job_id );
+            $cp = isset( $meta['checkpoints'] ) && is_array( $meta['checkpoints'] ) ? $meta['checkpoints'] : [];
+            $cleanup = isset( $cp['cleanup'] ) && is_array( $cp['cleanup'] ) ? $cp['cleanup'] : [];
+            if ( empty( $cleanup['bg_scheduled'] ) ) {
+                return;
+            }
+            $start = microtime( true );
+            // Best-effort: clear transients in background (batch loop within ~20s).
+            while ( ( microtime( true ) - $start ) < 20 ) {
+                $res = self::delete_transients_sliced( $cleanup, 5000, 20, $start );
+                if ( ! empty( $res['done'] ) ) {
+                    break;
+                }
+            }
+            // Flush rewrite rules after background transient cleanup.
+            if ( function_exists( 'flush_rewrite_rules' ) ) {
+                flush_rewrite_rules( false );
+            }
+            $cp['cleanup'] = $cleanup;
+            $meta['checkpoints'] = $cp;
+            self::write_job_meta( $job_id, $meta );
+            backup_lite_log( 'info', 'Restore background cleanup completed.', [ 'job_id' => $job_id ] );
+        } catch ( Exception $e ) {
+            backup_lite_log( 'warning', 'Restore background cleanup failed.', [ 'job_id' => $job_id, 'error' => $e->getMessage() ] );
+        }
+    }
+
+    /**
+     * Ensure siteurl/home match current host (best-effort safety net).
+     */
+    protected static function ensure_site_urls_match_current_host() {
+        $protocol = is_ssl() ? 'https' : 'http';
+        $host     = isset( $_SERVER['HTTP_HOST'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_HOST'] ) ) : '';
+        if ( empty( $host ) ) {
+            return;
+        }
+        $expected_site_url = $protocol . '://' . $host;
+        $expected_home_url = $expected_site_url;
+        $current_site_url = get_option( 'siteurl' );
+        $current_home_url = get_option( 'home' );
+        if ( rtrim( (string) $current_site_url, '/' ) !== rtrim( (string) $expected_site_url, '/' ) ) {
+            update_option( 'siteurl', $expected_site_url );
+            backup_lite_log( 'info', 'Updated siteurl option after restore.', [ 'old' => $current_site_url, 'new' => $expected_site_url ] );
+        }
+        if ( rtrim( (string) $current_home_url, '/' ) !== rtrim( (string) $expected_home_url, '/' ) ) {
+            update_option( 'home', $expected_home_url );
+            backup_lite_log( 'info', 'Updated home option after restore.', [ 'old' => $current_home_url, 'new' => $expected_home_url ] );
+        }
+    }
+
+    /**
+     * Delete transients in small batches, tracking progress in $cleanup checkpoint state.
+     *
+     * @param array $cleanup Cleanup checkpoint state (by reference).
+     * @param int   $limit   Max rows per batch.
+     * @param int   $slice_seconds Slice budget.
+     * @param float $slice_start Start time (microtime true) for the current slice.
+     * @return array{done:bool,deleted:int}
+     */
+    protected static function delete_transients_sliced( array &$cleanup, $limit, $slice_seconds, $slice_start ) {
+        global $wpdb;
+        $limit = max( 100, (int) $limit );
+        $last_id = isset( $cleanup['transients_last_id'] ) ? (int) $cleanup['transients_last_id'] : 0;
+        $cleanup['transients_batches'] = isset( $cleanup['transients_batches'] ) ? (int) $cleanup['transients_batches'] : 0;
+        $cleanup['transients_deleted_total'] = isset( $cleanup['transients_deleted_total'] ) ? (int) $cleanup['transients_deleted_total'] : 0;
+
+        // Use escaped underscore so LIKE matches literal "_transient_" prefixes.
+        $like1 = '\\_transient_%';
+        $like2 = '\\_site_transient_%';
+
+        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+        $ids = $wpdb->get_col(
+            $wpdb->prepare(
+                "SELECT option_id FROM {$wpdb->options} WHERE option_id > %d AND (option_name LIKE %s OR option_name LIKE %s) ORDER BY option_id ASC LIMIT %d",
+                $last_id,
+                $like1,
+                $like2,
+                $limit
+            )
+        );
+        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+        if ( empty( $ids ) || ! is_array( $ids ) ) {
+            return [ 'done' => true, 'deleted' => 0 ];
+        }
+
+        $ids = array_values( array_filter( array_map( 'absint', $ids ) ) );
+        if ( empty( $ids ) ) {
+            return [ 'done' => true, 'deleted' => 0 ];
+        }
+        $cleanup['transients_last_id'] = max( $ids );
+        $cleanup['transients_batches']++;
+
+        $in = implode( ',', $ids );
+        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery
+        $deleted = $wpdb->query( "DELETE FROM {$wpdb->options} WHERE option_id IN ({$in})" ); // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- safe: IDs are absint'ed, table from $wpdb
+        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery
+        $deleted = is_numeric( $deleted ) ? (int) $deleted : 0;
+        $cleanup['transients_deleted_total'] += max( 0, $deleted );
+
+        // Respect slice budget.
+        if ( $slice_seconds > 0 && ( microtime( true ) - (float) $slice_start ) > $slice_seconds ) {
+            return [ 'done' => false, 'deleted' => $deleted ];
+        }
+
+        return [ 'done' => false, 'deleted' => $deleted ];
+    }
+
+    protected static function extract_zip_entry_to_path( $zip_path, $entry_name, $dest_path ) {
+        if ( ! class_exists( 'ZipArchive' ) ) {
+            throw new RuntimeException( esc_html__( 'ZipArchive is not available on this server.', 'museder-restoreone' ) );
+        }
+
+        $zip = new ZipArchive();
+        if ( true !== $zip->open( $zip_path ) ) {
+            throw new RuntimeException( esc_html__( 'Unable to open ZIP archive.', 'museder-restoreone' ) );
+        }
+
+        $stream = $zip->getStream( $entry_name );
+        if ( ! $stream ) {
+            $zip->close();
+            return;
+        }
+
+        backup_lite_ensure_directory( dirname( $dest_path ) );
+
+        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_read_fopen, WordPress.WP.AlternativeFunctions.file_system_read_fwrite, WordPress.WP.AlternativeFunctions.file_system_read_fread
+        $out = fopen( $dest_path, 'wb' );
+        if ( $out ) {
+            while ( ! feof( $stream ) ) {
+                $buf = fread( $stream, 1024 * 1024 );
+                if ( $buf === false ) {
+                    break;
+                }
+                fwrite( $out, $buf );
+            }
+            fclose( $out );
+        }
+        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_read_fopen, WordPress.WP.AlternativeFunctions.file_system_read_fwrite, WordPress.WP.AlternativeFunctions.file_system_read_fread
+
+        fclose( $stream );
+        $zip->close();
+    }
+
+    protected static function extract_zip_prefix_sliced( $zip_path, $prefix, $dest_base, &$entry_index, &$entry_offset, $slice_seconds ) {
+        if ( ! class_exists( 'ZipArchive' ) ) {
+            throw new RuntimeException( esc_html__( 'ZipArchive is not available on this server.', 'museder-restoreone' ) );
+        }
+
+        $start = microtime( true );
+        $zip   = new ZipArchive();
+        if ( true !== $zip->open( $zip_path ) ) {
+            throw new RuntimeException( esc_html__( 'Unable to open ZIP archive.', 'museder-restoreone' ) );
+        }
+
+        $count = $zip->numFiles;
+        $prefix = (string) $prefix;
+
+        // Allow sites to disable self-protection if they truly need to restore the plugin itself.
+        // Default: true (protect this plugin from being overwritten mid-restore).
+        $protect_self = (bool) apply_filters( 'backup_lite_restore_protect_self', true );
+        $self_prefix  = 'wp-content/plugins/museder-restoreone/';
+        $skipped_self = 0;
+
+        for ( $i = $entry_index; $i < $count; $i++ ) {
+            $name = $zip->getNameIndex( $i );
+            if ( $name === false ) {
+                continue;
+            }
+            if ( strpos( $name, $prefix ) !== 0 ) {
+                continue;
+            }
+            // Protect the currently-running plugin from being overwritten mid-restore.
+            // This prevents admin-ajax actions from disappearing (returning "0") and stalling the UI/processor.
+            if ( $protect_self && strpos( $name, $self_prefix ) === 0 ) {
+                $skipped_self++;
+                continue;
+            }
+            if ( substr( $name, -1 ) === '/' ) {
+                continue;
+            }
+            if ( backup_lite_safe_path_join( $dest_base, $name ) === false ) {
+                continue;
+            }
+
+            $target = backup_lite_safe_path_join( $dest_base, $name );
+            if ( ! $target ) {
+                continue;
+            }
+
+            $in = $zip->getStream( $name );
+            if ( ! $in ) {
+                continue;
+            }
+
+            backup_lite_ensure_directory( dirname( $target ) );
+
+            // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_read_fopen, WordPress.WP.AlternativeFunctions.file_system_read_fread, WordPress.WP.AlternativeFunctions.file_system_read_fwrite
+            $out = fopen( $target, ( $entry_offset > 0 ? 'ab' : 'wb' ) );
+            if ( $out ) {
+                // Skip bytes if resuming the same entry.
+                $to_skip = (int) $entry_offset;
+                while ( $to_skip > 0 && ! feof( $in ) ) {
+                    $skip_chunk = $to_skip > 65536 ? 65536 : $to_skip;
+                    $buf = fread( $in, $skip_chunk );
+                    if ( $buf === false || $buf === '' ) {
+                        break;
+                    }
+                    $to_skip -= strlen( $buf );
+                }
+
+                $written_this_entry = 0;
+                while ( ! feof( $in ) ) {
+                    $buf = fread( $in, 512000 );
+                    if ( $buf === false ) {
+                        break;
+                    }
+                    if ( $buf === '' ) {
+                        break;
+                    }
+                    $w = fwrite( $out, $buf );
+                    if ( $w === false ) {
+                        break;
+                    }
+                    $written_this_entry += $w;
+                    $entry_offset += $w;
+
+                    if ( $slice_seconds > 0 && ( microtime( true ) - $start ) > $slice_seconds ) {
+                        fclose( $out );
+                        fclose( $in );
+                        $zip->close();
+                        $entry_index = $i;
+                        return [ 'completed' => false, 'skipped_self' => $skipped_self ];
+                    }
+                }
+                fclose( $out );
+            }
+            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_read_fopen, WordPress.WP.AlternativeFunctions.file_system_read_fread, WordPress.WP.AlternativeFunctions.file_system_read_fwrite
+
+            fclose( $in );
+
+            // Move to next entry.
+            $entry_offset = 0;
+            $entry_index  = $i + 1;
+
+            if ( $slice_seconds > 0 && ( microtime( true ) - $start ) > $slice_seconds ) {
+                $zip->close();
+                return [ 'completed' => false, 'skipped_self' => $skipped_self ];
+            }
+        }
+
+        $zip->close();
+        return [ 'completed' => true, 'skipped_self' => $skipped_self ];
     }
 
     /**
@@ -464,7 +1843,335 @@ class Backup_Lite_Restore_Service {
             throw $e;
         } finally {
             Backup_Lite_Restore_Lock::release();
+            // Clear active job pointer after rollback completes.
+            $active = (string) get_option( self::ACTIVE_JOB_OPTION, '' );
+            if ( $active === $job_id ) {
+                delete_option( self::ACTIVE_JOB_OPTION );
+            }
         }
+    }
+
+    /**
+     * Time-sliced, resumable search-replace stage (AI1WM-like).
+     *
+     * @param string $job_id
+     * @param array  $meta
+     * @param int    $slice_seconds
+     */
+    protected static function stage_search_replace_sliced( $job_id, array $meta, $slice_seconds ) {
+        $meta['progress']   = 96;
+        $meta['message']    = __( 'Applying URL search & replace…', 'museder-restoreone' );
+        $meta['updated_at'] = current_time( 'mysql' );
+        self::write_job_meta( $job_id, $meta );
+
+        // Only run when migrating domains.
+        if ( empty( $meta['validation']['domain']['migrateMode'] ) ) {
+            $meta['stage']      = 'cleanup';
+            $meta['progress']   = 99;
+            $meta['message']    = __( 'Finalising restore and cleaning up…', 'museder-restoreone' );
+            $meta['updated_at'] = current_time( 'mysql' );
+            self::write_job_meta( $job_id, $meta );
+            return;
+        }
+
+        // Build URL replacement pairs.
+        $pairs = self::build_url_replacement_pairs( $meta );
+        if ( empty( $pairs ) ) {
+            $meta['stage']      = 'cleanup';
+            $meta['progress']   = 99;
+            $meta['message']    = __( 'Finalising restore and cleaning up…', 'museder-restoreone' );
+            $meta['updated_at'] = current_time( 'mysql' );
+            self::write_job_meta( $job_id, $meta );
+            return;
+        }
+
+        $cp = isset( $meta['checkpoints'] ) && is_array( $meta['checkpoints'] ) ? $meta['checkpoints'] : [];
+        $result = self::run_search_replace_sliced( $pairs, $cp, (int) $slice_seconds );
+        $meta['checkpoints'] = $cp;
+
+        // Progress mapping: 96–99 for search-replace, based on table index.
+        $total = ! empty( $cp['sr_tables'] ) && is_array( $cp['sr_tables'] ) ? count( $cp['sr_tables'] ) : 0;
+        $idx   = isset( $cp['sr_table_index'] ) ? (int) $cp['sr_table_index'] : 0;
+        $pct   = ( $total > 0 ) ? min( 1.0, max( 0.0, $idx / $total ) ) : 0.0;
+        $meta['progress']   = 96 + (int) floor( $pct * 3 ); // 96..99 (exclusive of 99 for completion)
+        $scanned = isset( $cp['sr_scanned_rows'] ) ? (int) $cp['sr_scanned_rows'] : 0;
+        $updated = isset( $cp['sr_updated_rows'] ) ? (int) $cp['sr_updated_rows'] : 0;
+        $meta['message']    = sprintf(
+            /* translators: 1: current table index, 2: total tables, 3: scanned rows, 4: updated rows */
+            __( 'Applying URL search & replace… (%1$d/%2$d tables, scanned %3$d, updated %4$d)', 'museder-restoreone' ),
+            min( $idx + 1, max( 1, $total ) ),
+            max( 1, $total ),
+            $scanned,
+            $updated
+        );
+        $meta['updated_at'] = current_time( 'mysql' );
+        self::write_job_meta( $job_id, $meta );
+
+        if ( ! empty( $result['completed'] ) ) {
+            $meta['stage']      = 'cleanup';
+            $meta['progress']   = 99;
+            $meta['message']    = __( 'Finalising restore and cleaning up…', 'museder-restoreone' );
+            $meta['updated_at'] = current_time( 'mysql' );
+            self::write_job_meta( $job_id, $meta );
+        }
+    }
+
+    /**
+     * Sliced implementation of run_search_replace(). Updates checkpoints in $cp.
+     *
+     * @param array $pairs
+     * @param array $cp
+     * @param int   $timeout_seconds
+     * @return array{completed:bool,scanned:int,updated:int}
+     */
+    protected static function run_search_replace_sliced( array $pairs, array &$cp, $timeout_seconds = 10 ) {
+        global $wpdb;
+
+        $start = microtime( true );
+
+        if ( ! isset( $cp['sr_tables'] ) || ! is_array( $cp['sr_tables'] ) || empty( $cp['sr_tables'] ) ) {
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+            $tables = $wpdb->get_col( 'SHOW TABLES' );
+            // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+            $cp['sr_tables'] = is_array( $tables ) ? array_values( $tables ) : [];
+            $cp['sr_table_index']  = 0;
+            $cp['sr_pk_last']      = null;
+            $cp['sr_row_offset']   = 0;
+            $cp['sr_scanned_rows'] = 0;
+            $cp['sr_updated_rows'] = 0;
+            $cp['sr_table_cache']  = [];
+        }
+
+        $tables = isset( $cp['sr_tables'] ) && is_array( $cp['sr_tables'] ) ? $cp['sr_tables'] : [];
+        $idx    = isset( $cp['sr_table_index'] ) ? (int) $cp['sr_table_index'] : 0;
+
+        $scanned = 0;
+        $updated = 0;
+
+        if ( $idx >= count( $tables ) ) {
+            return [ 'completed' => true, 'scanned' => 0, 'updated' => 0 ];
+        }
+
+        $batch_size = 50;
+
+        while ( $timeout_seconds <= 0 || ( microtime( true ) - $start ) < $timeout_seconds ) {
+            if ( $idx >= count( $tables ) ) {
+                $cp['sr_table_index'] = $idx;
+                return [ 'completed' => true, 'scanned' => $scanned, 'updated' => $updated ];
+            }
+
+            $table = (string) $tables[ $idx ];
+            $safe_table = preg_replace( '/[^A-Za-z0-9_]/', '', $table );
+            if ( '' === $safe_table ) {
+                $idx++;
+                $cp['sr_table_index'] = $idx;
+                $cp['sr_pk_last'] = null;
+                $cp['sr_row_offset'] = 0;
+                continue;
+            }
+
+            // Cache per-table metadata: pk + text columns.
+            if ( empty( $cp['sr_table_cache'][ $safe_table ] ) || ! is_array( $cp['sr_table_cache'][ $safe_table ] ) ) {
+                // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+                $columns = $wpdb->get_results( "SHOW COLUMNS FROM `{$safe_table}`", ARRAY_A );
+                // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+                if ( empty( $columns ) ) {
+                    $idx++;
+                    $cp['sr_table_index'] = $idx;
+                    $cp['sr_pk_last'] = null;
+                    $cp['sr_row_offset'] = 0;
+                    continue;
+                }
+
+                $targets = [];
+                foreach ( $columns as $col ) {
+                    $type = isset( $col['Type'] ) ? strtolower( (string) $col['Type'] ) : '';
+                    $field = isset( $col['Field'] ) ? (string) $col['Field'] : '';
+                    if ( '' === $field ) {
+                        continue;
+                    }
+                    // Include common text-like types.
+                    if (
+                        false !== strpos( $type, 'text' )
+                        || 0 === strpos( $type, 'varchar' )
+                        || 0 === strpos( $type, 'char' )
+                    ) {
+                        $targets[] = $field;
+                    }
+                }
+
+                // Detect primary key column (first column with Key=PRI from SHOW COLUMNS).
+                $pk = '';
+                $pk_type = '';
+                foreach ( $columns as $col ) {
+                    $key = isset( $col['Key'] ) ? (string) $col['Key'] : '';
+                    if ( 'PRI' === $key && ! empty( $col['Field'] ) ) {
+                        $pk = (string) $col['Field'];
+                        $pk_type = isset( $col['Type'] ) ? strtolower( (string) $col['Type'] ) : '';
+                        break;
+                    }
+                }
+
+                $cp['sr_table_cache'][ $safe_table ] = [
+                    'pk'      => $pk,
+                    'pk_type' => $pk_type,
+                    'targets' => $targets,
+                ];
+            }
+
+            $cache = $cp['sr_table_cache'][ $safe_table ];
+            $pk    = isset( $cache['pk'] ) ? (string) $cache['pk'] : '';
+            $pk_type = isset( $cache['pk_type'] ) ? strtolower( (string) $cache['pk_type'] ) : '';
+            $targets = isset( $cache['targets'] ) && is_array( $cache['targets'] ) ? $cache['targets'] : [];
+
+            if ( empty( $targets ) ) {
+                // No text fields to update.
+                $idx++;
+                $cp['sr_table_index'] = $idx;
+                $cp['sr_pk_last'] = null;
+                $cp['sr_row_offset'] = 0;
+                continue;
+            }
+
+            // Build SELECT query.
+            $select_cols = $targets;
+            if ( $pk ) {
+                array_unshift( $select_cols, $pk );
+                $select_cols = array_values( array_unique( $select_cols ) );
+            }
+            $select_sql_cols = [];
+            foreach ( $select_cols as $c ) {
+                $safe_c = preg_replace( '/[^A-Za-z0-9_]/', '', (string) $c );
+                if ( '' !== $safe_c ) {
+                    $select_sql_cols[] = '`' . $safe_c . '`';
+                }
+            }
+            if ( empty( $select_sql_cols ) ) {
+                $idx++;
+                $cp['sr_table_index'] = $idx;
+                $cp['sr_pk_last'] = null;
+                $cp['sr_row_offset'] = 0;
+                continue;
+            }
+
+            $rows = [];
+            if ( $pk ) {
+                $last = $cp['sr_pk_last'];
+                $pk_is_numeric = ( $pk_type !== '' ) && preg_match( '/^(tinyint|smallint|mediumint|int|bigint)/i', $pk_type );
+
+                if ( null !== $last && '' !== $last ) {
+                    // Avoid lexicographical issues on numeric PKs by using integer comparison.
+                    if ( $pk_is_numeric ) {
+                        $last_int = (int) $last;
+                        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+                        $rows = $wpdb->get_results(
+                            $wpdb->prepare(
+                                "SELECT " . implode( ',', $select_sql_cols ) . " FROM `{$safe_table}` WHERE `{$pk}` > %d ORDER BY `{$pk}` ASC LIMIT %d",
+                                $last_int,
+                                (int) $batch_size
+                            ),
+                            ARRAY_A
+                        );
+                        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+                    } else {
+                        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+                        $rows = $wpdb->get_results(
+                            $wpdb->prepare(
+                                "SELECT " . implode( ',', $select_sql_cols ) . " FROM `{$safe_table}` WHERE `{$pk}` > %s ORDER BY `{$pk}` ASC LIMIT %d",
+                                (string) $last,
+                                (int) $batch_size
+                            ),
+                            ARRAY_A
+                        );
+                        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+                    }
+                } else {
+                    // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+                    $rows = $wpdb->get_results(
+                        $wpdb->prepare(
+                            "SELECT " . implode( ',', $select_sql_cols ) . " FROM `{$safe_table}` ORDER BY `{$pk}` ASC LIMIT %d",
+                            (int) $batch_size
+                        ),
+                        ARRAY_A
+                    );
+                    // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+                }
+            } else {
+                $offset = isset( $cp['sr_row_offset'] ) ? (int) $cp['sr_row_offset'] : 0;
+                // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+                $rows = $wpdb->get_results(
+                    $wpdb->prepare(
+                        "SELECT " . implode( ',', $select_sql_cols ) . " FROM `{$safe_table}` LIMIT %d OFFSET %d",
+                        (int) $batch_size,
+                        (int) $offset
+                    ),
+                    ARRAY_A
+                );
+                // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+            }
+
+            if ( empty( $rows ) ) {
+                // Finished this table.
+                $idx++;
+                $cp['sr_table_index'] = $idx;
+                $cp['sr_pk_last'] = null;
+                $cp['sr_row_offset'] = 0;
+                continue;
+            }
+
+            foreach ( $rows as $row ) {
+                $scanned++;
+                $cp['sr_scanned_rows'] = isset( $cp['sr_scanned_rows'] ) ? (int) $cp['sr_scanned_rows'] + 1 : 1;
+
+                $update_data = [];
+                foreach ( $targets as $field ) {
+                    if ( ! array_key_exists( $field, $row ) ) {
+                        continue;
+                    }
+                    $original = $row[ $field ];
+                    $maybe = self::serialized_replace_recursive( $pairs, $original );
+                    if ( $maybe !== $original ) {
+                        $update_data[ $field ] = $maybe;
+                    }
+                }
+
+                if ( ! empty( $update_data ) ) {
+                    // Use PK when available; otherwise fall back to first column (best-effort, matches previous behavior).
+                    $where_key = $pk ? $pk : array_key_first( $row );
+                    if ( $where_key && array_key_exists( $where_key, $row ) ) {
+                        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+                        $wpdb->update( $safe_table, $update_data, [ $where_key => $row[ $where_key ] ] );
+                        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+                        $updated++;
+                        $cp['sr_updated_rows'] = isset( $cp['sr_updated_rows'] ) ? (int) $cp['sr_updated_rows'] + 1 : 1;
+                    }
+                }
+
+                if ( $pk && array_key_exists( $pk, $row ) ) {
+                    $cp['sr_pk_last'] = $row[ $pk ];
+                } else {
+                    $cp['sr_row_offset'] = isset( $cp['sr_row_offset'] ) ? (int) $cp['sr_row_offset'] + 1 : 1;
+                }
+
+                if ( $timeout_seconds > 0 && ( microtime( true ) - $start ) > $timeout_seconds ) {
+                    break;
+                }
+            }
+
+            // Stop if out of time.
+            if ( $timeout_seconds > 0 && ( microtime( true ) - $start ) > $timeout_seconds ) {
+                break;
+            }
+        }
+
+        $cp['sr_table_index'] = $idx;
+
+        return [
+            'completed' => ( $idx >= count( $tables ) ),
+            'scanned'   => $scanned,
+            'updated'   => $updated,
+        ];
     }
 
     /**
@@ -485,6 +2192,11 @@ class Backup_Lite_Restore_Service {
             'completed'=> ! empty( $meta['completed'] ),
             'job_id'   => $job_id,
             'rollback_available' => ! empty( $meta['pre_backup']['file'] ),
+            // Safe timing signals for frontend polling/timers (no sensitive paths).
+            'last_tick' => isset( $meta['last_tick'] ) ? (int) $meta['last_tick'] : 0,
+            'started_at' => isset( $meta['started_at'] ) ? (int) $meta['started_at'] : 0,
+            'created_at' => isset( $meta['created_at'] ) ? (string) $meta['created_at'] : '',
+            'updated_at' => isset( $meta['updated_at'] ) ? (string) $meta['updated_at'] : '',
         ];
     }
 
@@ -577,10 +2289,39 @@ class Backup_Lite_Restore_Service {
     }
 
     protected static function create_pre_backup() {
+        // Creating a full site snapshot can take a long time on large sites.
+        // phpcs:ignore WordPress.PHP.NoSetTimeLimit
+        if ( function_exists( 'set_time_limit' ) ) {
+            // @phpcs:disable Squiz.PHP.DiscouragedFunctions.Discouraged
+            @set_time_limit( 600 );
+            // @phpcs:enable Squiz.PHP.DiscouragedFunctions.Discouraged
+        }
+
+        $t0 = microtime( true );
+        backup_lite_log( 'info', 'Pre-restore backup snapshot: backup_site() started.' );
         $result = Backup_Lite_Backup::backup_site();
+        $elapsed = microtime( true ) - $t0;
+
         if ( empty( $result['success'] ) || empty( $result['file'] ) ) {
+            backup_lite_log(
+                'error',
+                'Pre-restore backup snapshot: backup_site() failed.',
+                [
+                    'elapsed' => round( $elapsed, 3 ),
+                    'result'  => is_array( $result ) ? wp_json_encode( $result ) : sanitize_text_field( (string) $result ),
+                ]
+            );
             throw new RuntimeException( esc_html__( 'Failed to create pre-restore backup snapshot.', 'museder-restoreone' ) );
         }
+
+        backup_lite_log(
+            'info',
+            'Pre-restore backup snapshot: backup_site() finished.',
+            [
+                'elapsed' => round( $elapsed, 3 ),
+                'file'    => isset( $result['file'] ) ? sanitize_text_field( (string) $result['file'] ) : '',
+            ]
+        );
 
         return [
             'file'       => $result['file'],
@@ -598,6 +2339,30 @@ class Backup_Lite_Restore_Service {
             return is_array( $decoded ) ? $decoded : [];
         }
 
+        $ext = strtolower( pathinfo( $file_path, PATHINFO_EXTENSION ) );
+
+        // WPRESS / AI1WM: read package.json for encryption + basic metadata (best-effort).
+        if ( 'wpress' === $ext ) {
+            $pkg_path = trailingslashit( $extract_dir ) . 'package.json';
+            if ( ! file_exists( $pkg_path ) ) {
+                $archive_offset = 0;
+                $file_offset    = 0;
+                $processed       = 0;
+                $extractor = new Backup_Lite_Wpress_Extractor( $file_path );
+                // Extract package.json only (never encrypted in AI1WM).
+                $extractor->extract_filtered_sliced( $extract_dir, [ 'package.json' ], [], [], $archive_offset, $file_offset, $processed, 30 );
+                $extractor->close();
+            }
+
+            if ( file_exists( $pkg_path ) ) {
+                $decoded = json_decode( file_get_contents( $pkg_path ), true );
+                return is_array( $decoded ) ? $decoded : [];
+            }
+
+            return [];
+        }
+
+        // ZIP (RestoreOne backups): read backup-lite-meta.json inside archive.
         $archive = new ZipArchive();
         if ( true === $archive->open( $file_path ) ) {
             $index = $archive->locateName( 'backup-lite-meta.json', ZipArchive::FL_NOCASE | ZipArchive::FL_NODIR );
@@ -1075,14 +2840,29 @@ class Backup_Lite_Restore_Service {
             return $value;
         }
 
+        // For safety, do not attempt to traverse/modify objects in serialized structures.
+        // Objects may represent class instances; altering them can be unsafe.
         if ( is_object( $value ) ) {
-            foreach ( $value as $key => $item ) {
-                $value->$key = self::serialized_replace_recursive( $pairs, $item );
-            }
             return $value;
         }
 
         if ( is_string( $value ) ) {
+            // AI1WM-style: if the string itself is serialized, safely unserialize, replace recursively,
+            // then re-serialize so string lengths remain valid.
+            if ( self::looks_like_serialized( $value ) ) {
+                $un = self::safe_unserialize_no_objects( $value );
+                if ( $un['ok'] ) {
+                    if ( is_object( $un['value'] ) ) {
+                        // Do not modify serialized objects.
+                        return $value;
+                    }
+                    $new = self::serialized_replace_recursive( $pairs, $un['value'] );
+                    // Re-serialize to preserve length fields.
+                    return serialize( $new );
+                }
+                // If it looks serialized but fails to unserialize, treat as plain text (best-effort).
+            }
+
             foreach ( $pairs as $pair ) {
                 if ( empty( $pair['search'] ) ) {
                     continue;
@@ -1093,6 +2873,64 @@ class Backup_Lite_Restore_Service {
         }
 
         return $value;
+    }
+
+    /**
+     * Lightweight heuristic to detect serialized PHP values.
+     *
+     * @param string $value
+     * @return bool
+     */
+    protected static function looks_like_serialized( $value ) {
+        $value = trim( (string) $value );
+        if ( '' === $value ) {
+            return false;
+        }
+        // Common serialized prefixes.
+        $first = $value[0];
+        if ( ! in_array( $first, [ 'a', 's', 'i', 'b', 'd', 'O', 'C', 'N' ], true ) ) {
+            return false;
+        }
+        // Must contain a ':' early, and end with ';' or '}'.
+        if ( false === strpos( $value, ':' ) ) {
+            return false;
+        }
+        $last = substr( $value, -1 );
+        return ( ';' === $last || '}' === $last );
+    }
+
+    /**
+     * Safely unserialize without allowing objects/classes, without using @ suppression.
+     *
+     * @param string $value
+     * @return array{ok:bool,value:mixed}
+     */
+    protected static function safe_unserialize_no_objects( $value ) {
+        $value = (string) $value;
+
+        if ( '' === $value ) {
+            return [ 'ok' => false, 'value' => null ];
+        }
+
+        $prev = set_error_handler(
+            static function () {
+                throw new RuntimeException( 'unserialize_warning' );
+            }
+        );
+
+        try {
+            $result = unserialize( $value, [ 'allowed_classes' => false ] );
+            restore_error_handler();
+            return [ 'ok' => true, 'value' => $result ];
+        } catch ( Throwable $e ) {
+            // Ensure handler is restored even on failure.
+            if ( is_callable( $prev ) ) {
+                restore_error_handler();
+            } else {
+                restore_error_handler();
+            }
+            return [ 'ok' => false, 'value' => null ];
+        }
     }
 
     protected static function cleanup_job_tmp( $job_id, $extract_dir ) {

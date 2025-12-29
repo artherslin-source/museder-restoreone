@@ -310,6 +310,505 @@ class Backup_Lite_Restore {
         return $result;
     }
 
+    /**
+     * Time-sliced database import with resume offset + buffered partial query.
+     *
+     * @param string $sql_file
+     * @param int    $offset          Byte offset in file (updated by reference)
+     * @param string $query_buffer    Partial query buffer (updated by reference)
+     * @param int    $timeout_seconds
+     *
+     * @return array{success:bool,completed:bool}
+     */
+    public static function import_database_sliced( $sql_file, &$offset, &$query_buffer, $timeout_seconds = 10, $rewrite_from_prefix = '', $rewrite_to_prefix = '' ) {
+        global $wpdb;
+
+        if ( ! file_exists( $sql_file ) || ! is_readable( $sql_file ) ) {
+            throw new RuntimeException( esc_html__( 'SQL file is not readable.', 'museder-restoreone' ) );
+        }
+
+        $start = microtime( true );
+
+        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen
+        $handle = fopen( $sql_file, 'rb' );
+        if ( ! $handle ) {
+            throw new RuntimeException( esc_html__( 'Unable to open SQL file for reading.', 'museder-restoreone' ) );
+        }
+        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen
+
+        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_read_fseek
+        if ( is_int( $offset ) && $offset > 0 ) {
+            $seek = fseek( $handle, $offset, SEEK_SET );
+            if ( 0 !== $seek ) {
+                // If seeking fails (e.g., non-seekable stream), fall back to start.
+                $offset = 0;
+            }
+        }
+        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_read_fseek
+
+        $query = is_string( $query_buffer ) ? $query_buffer : '';
+        $completed = false;
+
+        $tune_state  = self::apply_import_session_tuning();
+        $tx_started  = false;
+        $tx_rolled_back = false;
+        $split_info = [
+            'split'        => false,
+            'batches_done' => 0,
+            'batches_total'=> 0,
+            'stmt'         => '',
+        ];
+
+        try {
+            // Disable autocommit and start transaction for better performance
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+            $wpdb->query( 'SET autocommit = 0' );
+            $wpdb->query( 'START TRANSACTION' );
+            // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+            $tx_started = true;
+
+            // If we have a complete buffered statement from a previous slice, execute it first.
+            if ( is_string( $query ) && '' !== trim( $query ) && ';' === substr( rtrim( $query ), -1 ) ) {
+                $prepared = trim( $query );
+                $prepared = self::maybe_rewrite_sql_prefix( $prepared, $rewrite_from_prefix, $rewrite_to_prefix );
+                self::exec_import_sql_statement( $prepared, $split_info, $timeout_seconds, $start );
+                $query = '';
+            }
+
+            // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_read_fgets, WordPress.WP.AlternativeFunctions.file_system_read_ftell
+            while ( false !== ( $line = fgets( $handle ) ) ) {
+                $trimmed = trim( $line );
+                if ( '' === $trimmed || 0 === strpos( $trimmed, '--' ) || 0 === strpos( $trimmed, '/*' ) ) {
+                    $offset = (int) ftell( $handle );
+                    if ( $timeout_seconds > 0 && ( microtime( true ) - $start ) > $timeout_seconds ) {
+                        break;
+                    }
+                    continue;
+                }
+
+                $query .= $line;
+                $offset = (int) ftell( $handle );
+
+                if ( ';' === substr( rtrim( $line ), -1 ) ) {
+                    $prepared = trim( $query );
+                    if ( $prepared !== '' ) {
+                        $prepared = self::maybe_rewrite_sql_prefix( $prepared, $rewrite_from_prefix, $rewrite_to_prefix );
+                        self::exec_import_sql_statement( $prepared, $split_info, $timeout_seconds, $start );
+
+                        // If we paused due to time budget during split INSERT, keep remaining statement in buffer and stop reading.
+                        if ( ! empty( $split_info['paused'] ) && ! empty( $split_info['remaining_sql'] ) ) {
+                            $query = (string) $split_info['remaining_sql'];
+                            break;
+                        }
+                    }
+                    $query = '';
+                }
+
+                if ( $timeout_seconds > 0 && ( microtime( true ) - $start ) > $timeout_seconds ) {
+                    break;
+                }
+            }
+            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_read_fgets, WordPress.WP.AlternativeFunctions.file_system_read_ftell
+
+            if ( feof( $handle ) ) {
+                $completed = true;
+            }
+
+            // Commit transaction chunk
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+            $wpdb->query( 'COMMIT' );
+            $wpdb->query( 'SET autocommit = 1' );
+            // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+            $tx_started = false;
+
+            $query_buffer = $query;
+
+            return [
+                'success'   => true,
+                'completed' => $completed,
+                'import'    => [
+                    'stmt'          => (string) $split_info['stmt'],
+                    'split'         => (bool) $split_info['split'],
+                    'batches_done'  => (int) $split_info['batches_done'],
+                    'batches_total' => (int) $split_info['batches_total'],
+                ],
+            ];
+        } finally {
+            // Best-effort rollback if an exception escaped while a transaction is active.
+            if ( $tx_started && ! $tx_rolled_back ) {
+                try {
+                    // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+                    $wpdb->query( 'ROLLBACK' );
+                    $wpdb->query( 'SET autocommit = 1' );
+                    // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+                } catch ( Exception $inner ) {
+                    // Ignore.
+                }
+            }
+
+            self::restore_import_session_tuning( $tune_state );
+
+            // Ensure file handle is closed even if we threw.
+            // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+            fclose( $handle );
+            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+        }
+    }
+
+    /**
+     * Rewrite multisite blog table prefix in SQL statements, best-effort.
+     *
+     * @param string $prepared
+     * @param string $rewrite_from_prefix
+     * @param string $rewrite_to_prefix
+     * @return string
+     */
+    private static function maybe_rewrite_sql_prefix( $prepared, $rewrite_from_prefix, $rewrite_to_prefix ) {
+        $prepared = (string) $prepared;
+        if ( $rewrite_from_prefix && $rewrite_to_prefix && $rewrite_from_prefix !== $rewrite_to_prefix ) {
+            $head = ltrim( $prepared );
+            if (
+                0 === stripos( $head, 'CREATE TABLE' )
+                || 0 === stripos( $head, 'DROP TABLE' )
+                || 0 === stripos( $head, 'INSERT INTO' )
+                || 0 === stripos( $head, 'ALTER TABLE' )
+                || 0 === stripos( $head, 'LOCK TABLES' )
+                || 0 === stripos( $head, 'UNLOCK TABLES' )
+            ) {
+                $prepared = str_replace( '`' . $rewrite_from_prefix, '`' . $rewrite_to_prefix, $prepared );
+            }
+        }
+        return $prepared;
+    }
+
+    /**
+     * Execute a single SQL statement during import.
+     *
+     * For very large multi-values INSERT statements, this will split into smaller batches to avoid
+     * long-running single queries that can be killed by timeouts on shared hosting.
+     *
+     * @param string $prepared
+     * @param array  $split_info Updated by reference.
+     * @param int    $timeout_seconds
+     * @param float  $start
+     * @return void
+     */
+    private static function exec_import_sql_statement( $prepared, array &$split_info, $timeout_seconds, $start ) {
+        global $wpdb;
+
+        $prepared = (string) $prepared;
+        $head = ltrim( $prepared );
+        $split_info['stmt'] = '';
+        $split_info['paused'] = false;
+        $split_info['remaining_sql'] = '';
+
+        if ( 0 === stripos( $head, 'INSERT INTO' ) ) {
+            $split_info['stmt'] = 'INSERT';
+        } elseif ( 0 === stripos( $head, 'LOCK TABLES' ) ) {
+            $split_info['stmt'] = 'LOCK';
+        } elseif ( 0 === stripos( $head, 'UNLOCK TABLES' ) ) {
+            $split_info['stmt'] = 'UNLOCK';
+        } elseif ( 0 === stripos( $head, 'ALTER TABLE' ) ) {
+            $split_info['stmt'] = 'ALTER';
+        } elseif ( 0 === stripos( $head, 'CREATE TABLE' ) ) {
+            $split_info['stmt'] = 'CREATE';
+        } elseif ( 0 === stripos( $head, 'DROP TABLE' ) ) {
+            $split_info['stmt'] = 'DROP';
+        }
+
+        // IMPORTANT: Skip LOCK/UNLOCK TABLES statements.
+        // These statements can affect the current MySQL connection session used by $wpdb and break
+        // WordPress internal writes (e.g., update_option('cron') used for rescheduling restore slices),
+        // causing the restore pipeline to stall.
+        if ( 0 === stripos( $head, 'LOCK TABLES' ) || 0 === stripos( $head, 'UNLOCK TABLES' ) ) {
+            if ( function_exists( 'backup_lite_log' ) ) {
+                backup_lite_log( 'info', 'DB import: skipped LOCK/UNLOCK TABLES statement.', [ 'stmt' => $split_info['stmt'] ] );
+            }
+            return;
+        }
+
+        // Split huge multi-row INSERT statements (heuristic).
+        $max_insert_bytes = 1024 * 1024; // 1MB statement size threshold
+        $max_batch_tuples = 100;         // tuples per batch
+        $max_batch_bytes  = 512 * 1024;  // 512KB per batch (approx)
+
+        if (
+            0 === stripos( $head, 'INSERT INTO' )
+            && strlen( $prepared ) >= $max_insert_bytes
+            && false !== stripos( $prepared, 'VALUES' )
+        ) {
+            $parsed = self::parse_multi_values_insert( $prepared );
+            if ( $parsed && ! empty( $parsed['prefix'] ) && ! empty( $parsed['tuples'] ) && count( $parsed['tuples'] ) > 1 ) {
+                $split_info['split'] = true;
+                $split_info['batches_total'] = (int) ceil( count( $parsed['tuples'] ) / $max_batch_tuples );
+                $split_info['batches_done']  = 0;
+
+                $tuples = $parsed['tuples'];
+                $prefix = $parsed['prefix'];
+
+                $i = 0;
+                $count = count( $tuples );
+                while ( $i < $count ) {
+                    // Time budget check between batches.
+                    if ( $timeout_seconds > 0 && ( microtime( true ) - $start ) > $timeout_seconds ) {
+                        $remaining = array_slice( $tuples, $i );
+                        $split_info['paused'] = true;
+                        $split_info['remaining_sql'] = $prefix . implode( ',', $remaining ) . ';';
+                        break;
+                    }
+
+                    $batch = [];
+                    $batch_bytes = 0;
+                    while ( $i < $count && count( $batch ) < $max_batch_tuples ) {
+                        $tuple = $tuples[ $i ];
+                        $tuple_len = strlen( $tuple );
+                        if ( ! empty( $batch ) && ( $batch_bytes + $tuple_len ) > $max_batch_bytes ) {
+                            break;
+                        }
+                        $batch[] = $tuple;
+                        $batch_bytes += $tuple_len;
+                        $i++;
+                    }
+                    if ( empty( $batch ) ) {
+                        // Fallback: avoid infinite loop; execute one tuple as-is.
+                        $batch[] = $tuples[ $i ];
+                        $i++;
+                    }
+
+                    $sql = $prefix . implode( ',', $batch ) . ';';
+                    // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange, PluginCheck.Security.DirectDB.UnescapedDBParameter
+                    $wpdb->flush();
+                    $result = $wpdb->query( $sql ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- SQL from trusted backup file
+                    // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange, PluginCheck.Security.DirectDB.UnescapedDBParameter
+
+                    if ( false === $result ) {
+                        $error = $wpdb->last_error ?: 'unknown error';
+                        throw new RuntimeException( $error );
+                    }
+                    $split_info['batches_done']++;
+                }
+
+                if ( function_exists( 'backup_lite_log' ) ) {
+                    backup_lite_log( 'info', 'DB import: split large INSERT.', [
+                        'batches_done'  => (int) $split_info['batches_done'],
+                        'batches_total' => (int) $split_info['batches_total'],
+                        'paused'        => ! empty( $split_info['paused'] ),
+                    ] );
+                }
+                return;
+            }
+        }
+
+        // Default execution path (single statement).
+        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange, PluginCheck.Security.DirectDB.UnescapedDBParameter
+        $wpdb->flush();
+        $result = $wpdb->query( $prepared ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- SQL from trusted backup file
+        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange, PluginCheck.Security.DirectDB.UnescapedDBParameter
+
+        if ( false === $result ) {
+            $error = $wpdb->last_error ?: 'unknown error';
+            throw new RuntimeException( $error );
+        }
+    }
+
+    /**
+     * Parse a multi-values INSERT statement into prefix + tuple list.
+     *
+     * Returns false if the statement doesn't match expected format.
+     *
+     * @param string $sql
+     * @return array{prefix:string,tuples:array<int,string>}|false
+     */
+    private static function parse_multi_values_insert( $sql ) {
+        $sql = (string) $sql;
+        $pos_values = stripos( $sql, 'VALUES' );
+        if ( false === $pos_values ) {
+            return false;
+        }
+        $pos_paren = strpos( $sql, '(', $pos_values );
+        if ( false === $pos_paren ) {
+            return false;
+        }
+
+        $prefix = substr( $sql, 0, $pos_paren );
+        $len = strlen( $sql );
+        $tuples = [];
+        $in_string = false;
+        $escape = false;
+        $depth = 0;
+        $start = -1;
+
+        for ( $i = $pos_paren; $i < $len; $i++ ) {
+            $ch = $sql[ $i ];
+
+            if ( $in_string ) {
+                if ( $escape ) {
+                    $escape = false;
+                } elseif ( '\\' === $ch ) {
+                    $escape = true;
+                } elseif ( '\'' === $ch ) {
+                    // Handle doubled single-quote escape ('') used by MySQL.
+                    if ( ( $i + 1 ) < $len && '\'' === $sql[ $i + 1 ] ) {
+                        $i++;
+                    } else {
+                        $in_string = false;
+                    }
+                }
+                continue;
+            }
+
+            if ( '\'' === $ch ) {
+                $in_string = true;
+                continue;
+            }
+
+            if ( '(' === $ch ) {
+                if ( 0 === $depth ) {
+                    $start = $i;
+                }
+                $depth++;
+                continue;
+            }
+
+            if ( ')' === $ch ) {
+                $depth--;
+                if ( 0 === $depth && $start >= 0 ) {
+                    $tuples[] = substr( $sql, $start, ( $i - $start + 1 ) );
+                    $start = -1;
+                }
+                continue;
+            }
+        }
+
+        if ( empty( $tuples ) ) {
+            return false;
+        }
+
+        return [
+            'prefix' => $prefix,
+            'tuples' => $tuples,
+        ];
+    }
+
+    /**
+     * Apply best-effort MySQL session tuning to speed up large SQL imports.
+     *
+     * Note: This modifies ONLY the current DB connection session and is restored after the slice completes.
+     * This keeps behaviour compliant with WordPress expectations and avoids leaking settings into other queries.
+     *
+     * @return array{applied:bool,orig_fk:int|null,orig_uq:int|null,orig_charset:string|null,orig_collation:string|null}
+     */
+    private static function apply_import_session_tuning() {
+        global $wpdb;
+
+        $state = [
+            'applied'        => false,
+            'orig_fk'        => null,
+            'orig_uq'        => null,
+            'orig_charset'   => null,
+            'orig_collation' => null,
+        ];
+
+        // Read original session values (best-effort). These are server-provided values, not user input.
+        try {
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+            $row = $wpdb->get_row(
+                'SELECT @@FOREIGN_KEY_CHECKS AS fk, @@UNIQUE_CHECKS AS uq, @@character_set_client AS csc, @@collation_connection AS coll',
+                ARRAY_A
+            );
+            // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+            if ( is_array( $row ) ) {
+                $state['orig_fk'] = isset( $row['fk'] ) ? (int) $row['fk'] : null;
+                $state['orig_uq'] = isset( $row['uq'] ) ? (int) $row['uq'] : null;
+                $state['orig_charset'] = isset( $row['csc'] ) ? (string) $row['csc'] : null;
+                $state['orig_collation'] = isset( $row['coll'] ) ? (string) $row['coll'] : null;
+            }
+        } catch ( Exception $e ) {
+            // Ignore: best-effort only.
+        }
+
+        // Apply tuning (A option): disable FK/unique checks and ensure UTF8MB4 connection charset.
+        try {
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+            $wpdb->query( 'SET FOREIGN_KEY_CHECKS = 0' );
+            $wpdb->query( 'SET UNIQUE_CHECKS = 0' );
+            $wpdb->query( "SET NAMES utf8mb4" ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- constant statement, no user input
+            // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+            $state['applied'] = true;
+            if ( function_exists( 'backup_lite_log' ) ) {
+                backup_lite_log( 'info', 'DB import session tuning applied.', [ 'fk' => 0, 'uq' => 0, 'names' => 'utf8mb4' ] );
+            }
+        } catch ( Exception $e ) {
+            if ( function_exists( 'backup_lite_log' ) ) {
+                // @plugin-check: sanitized - log only
+                backup_lite_log( 'warning', 'DB import session tuning apply failed; continuing without tuning.', [
+                    'error' => sanitize_text_field( $e->getMessage() ),
+                ] );
+            }
+        }
+
+        return $state;
+    }
+
+    /**
+     * Restore MySQL session tuning applied by apply_import_session_tuning().
+     *
+     * @param array $state
+     * @return void
+     */
+    private static function restore_import_session_tuning( $state ) {
+        global $wpdb;
+
+        if ( ! is_array( $state ) || empty( $state['applied'] ) ) {
+            return;
+        }
+
+        // Validate charset/collation tokens (defensive; these come from server vars).
+        $charset = isset( $state['orig_charset'] ) ? (string) $state['orig_charset'] : '';
+        $collation = isset( $state['orig_collation'] ) ? (string) $state['orig_collation'] : '';
+        if ( $charset && ! preg_match( '/^[A-Za-z0-9_]+$/', $charset ) ) {
+            $charset = '';
+        }
+        if ( $collation && ! preg_match( '/^[A-Za-z0-9_]+$/', $collation ) ) {
+            $collation = '';
+        }
+
+        try {
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+            if ( null !== $state['orig_fk'] ) {
+                $wpdb->query( 'SET FOREIGN_KEY_CHECKS = ' . ( (int) $state['orig_fk'] ? '1' : '0' ) ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- int only, not user input
+            }
+            if ( null !== $state['orig_uq'] ) {
+                $wpdb->query( 'SET UNIQUE_CHECKS = ' . ( (int) $state['orig_uq'] ? '1' : '0' ) ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- int only, not user input
+            }
+            if ( $charset ) {
+                if ( $collation ) {
+                    $wpdb->query( "SET NAMES {$charset} COLLATE {$collation}" ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- validated tokens from server vars
+                } else {
+                    $wpdb->query( "SET NAMES {$charset}" ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- validated token from server vars
+                }
+            }
+            // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+            if ( function_exists( 'backup_lite_log' ) ) {
+                backup_lite_log( 'info', 'DB import session tuning restored.', [
+                    'fk' => $state['orig_fk'],
+                    'uq' => $state['orig_uq'],
+                    'names' => $charset ? $charset : null,
+                ] );
+            }
+        } catch ( Exception $e ) {
+            if ( function_exists( 'backup_lite_log' ) ) {
+                // @plugin-check: sanitized - log only
+                backup_lite_log( 'warning', 'DB import session tuning restore failed (ignored).', [
+                    'error' => sanitize_text_field( $e->getMessage() ),
+                ] );
+            }
+        }
+    }
+
     private static function prepare_sql_for_import( $sql_file ) {
         $default = [
             'path'      => $sql_file,
@@ -1948,10 +2447,9 @@ class Backup_Lite_Restore {
         $plugin_file = plugin_basename( dirname( dirname( __FILE__ ) ) . '/museder-restoreone.php' );
         $essential_plugins = [];
         
-        // Always keep this plugin active
-        if ( in_array( $plugin_file, $active_plugins, true ) ) {
-            $essential_plugins[] = $plugin_file;
-        }
+        // Always keep this plugin active (even if the restored database did not list it as active).
+        // This ensures admins can access RestoreOne UI to exit safe mode and continue recovery.
+        $essential_plugins[] = $plugin_file;
         
         // Set active_plugins to only essential plugins
         update_option( 'active_plugins', $essential_plugins, false );

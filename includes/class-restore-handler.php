@@ -15,6 +15,7 @@ class Backup_Lite_Restore_Handler {
         add_action( 'wp_ajax_backup_lite_restore_enqueue', [ __CLASS__, 'enqueue_restore_job' ] );
         add_action( 'wp_ajax_backup_lite_restore_job_status', [ __CLASS__, 'job_status' ] );
         add_action( 'wp_ajax_backup_lite_restore_job_cancel', [ __CLASS__, 'job_cancel' ] );
+        add_action( 'wp_ajax_backup_lite_restore_tick', [ __CLASS__, 'restore_tick' ] );
         add_action( 'wp_ajax_backup_lite_restore_confirm', [ __CLASS__, 'confirm' ] );
         add_action( 'wp_ajax_backup_lite_restore_cancel', [ __CLASS__, 'cancel_restore' ] );
         add_action( 'wp_ajax_backup_lite_trigger_restore_job', [ __CLASS__, 'trigger_restore_job' ] );
@@ -22,7 +23,168 @@ class Backup_Lite_Restore_Handler {
         add_action( 'wp_ajax_backup_lite_restore_chunk_upload', [ __CLASS__, 'chunk_upload' ] );
         add_action( 'wp_ajax_backup_lite_restore_chunk_finalize', [ __CLASS__, 'chunk_finalize' ] );
         add_action( 'wp_ajax_backup_lite_restore_chunk_abort', [ __CLASS__, 'chunk_abort' ] );
+        add_action( 'wp_ajax_backup_lite_restore_chunk_status', [ __CLASS__, 'chunk_status' ] );
+        add_action( 'wp_ajax_backup_lite_restore_env_caps', [ __CLASS__, 'env_caps' ] );
         add_action( 'wp_ajax_backup_lite_exit_safe_mode', [ __CLASS__, 'exit_safe_mode' ] );
+        add_action( 'wp_ajax_backup_lite_restore_force_unlock', [ __CLASS__, 'force_unlock' ] );
+    }
+
+    /**
+     * Force unlock a stuck restore lock/active job pointer (admin-only).
+     * This is a manual escape hatch for cases where restore crashed or the lock persisted after failure.
+     *
+     * @wp_ajax backup_lite_restore_force_unlock
+     */
+    public static function force_unlock() {
+        self::ensure_permission();
+        Backup_Lite_UI::verify_ajax_request();
+        // Additional nonce verification for plugin-check.
+        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
+
+        $active_job_id = class_exists( 'Backup_Lite_Restore_Service' ) ? Backup_Lite_Restore_Service::get_active_job_id() : '';
+        $lock = class_exists( 'Backup_Lite_Restore_Lock' ) ? Backup_Lite_Restore_Lock::current_lock() : null;
+        $lock_job_id = ( is_array( $lock ) && ! empty( $lock['job_id'] ) ) ? (string) $lock['job_id'] : '';
+
+        // Optional hard-force mode: allow bypassing the running-job safety check.
+        // This should only be used when the admin is certain the restore is stuck.
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified above
+        $force_value = isset( $_POST['force'] ) ? sanitize_text_field( wp_unslash( $_POST['force'] ) ) : '';
+        // phpcs:enable WordPress.Security.NonceVerification.Missing
+        $hard_force = ( 'true' === strtolower( $force_value ) || '1' === $force_value || 'yes' === strtolower( $force_value ) );
+
+        // If the lock (or active pointer) maps to a truly running job, refuse to unlock (safety).
+        $candidates = array_values(
+            array_filter(
+                array_unique(
+                    array_map(
+                        'sanitize_text_field',
+                        [ (string) $active_job_id, (string) $lock_job_id ]
+                    )
+                )
+            )
+        );
+
+        if ( ! $hard_force ) {
+            foreach ( $candidates as $job_id ) {
+                try {
+                    $st = Backup_Lite_Restore_Service::status( $job_id );
+                    $completed = is_array( $st ) && ! empty( $st['completed'] );
+                    $stage = is_array( $st ) && isset( $st['stage'] ) ? (string) $st['stage'] : '';
+                    if ( ! $completed && ! in_array( $stage, [ 'done', 'failed', 'cancelled' ], true ) ) {
+                        wp_send_json_error(
+                            [
+                                // @plugin-check: escaped
+                                'message' => esc_html__( 'Cannot force unlock: a restore job is still running. Please wait or cancel it first.', 'museder-restoreone' ),
+                                'job_id'  => $job_id,
+                                'stage'   => $stage,
+                            ],
+                            409
+                        );
+                    }
+                } catch ( Exception $e ) {
+                    // If status lookup fails, treat as stale and allow unlock.
+                }
+            }
+        }
+
+        // Perform cleanup (best-effort).
+        $cleared = [
+            'lock_job_id'   => $lock_job_id,
+            'active_job_id' => $active_job_id,
+            'hard_force'    => $hard_force,
+            'cleared_lock'  => false,
+            'cleared_active'=> false,
+            'cleared_state' => false,
+        ];
+
+        if ( class_exists( 'Backup_Lite_Restore_Lock' ) ) {
+            Backup_Lite_Restore_Lock::release();
+            $cleared['cleared_lock'] = true;
+        }
+
+        if ( class_exists( 'Backup_Lite_Restore_Service' ) ) {
+            delete_option( Backup_Lite_Restore_Service::ACTIVE_JOB_OPTION );
+            $cleared['cleared_active'] = true;
+        }
+
+        // Clear restore handler pointer for polling recovery.
+        $state = self::get_state();
+        if ( is_array( $state ) && ! empty( $state ) ) {
+            if ( isset( $state['restore_service_job_id'] ) ) {
+                unset( $state['restore_service_job_id'] );
+                self::set_state( $state );
+                $cleared['cleared_state'] = true;
+            }
+        }
+
+        backup_lite_log( 'warning', 'Force unlock invoked for restore.', $cleared );
+
+        wp_send_json_success(
+            [
+                // @plugin-check: escaped
+                'message' => esc_html__( 'Restore lock cleared. You can start the restore again.', 'museder-restoreone' ),
+                'cleared' => $cleared,
+            ]
+        );
+    }
+
+    /**
+     * Return safe environment capability limits for client-side upload tuning.
+     *
+     * @wp_ajax backup_lite_restore_env_caps
+     */
+    public static function env_caps() {
+        self::ensure_permission();
+        Backup_Lite_UI::verify_ajax_request();
+
+        // Additional nonce verification for plugin-check.
+        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
+
+        // Only expose minimal, non-sensitive values needed for upload tuning.
+        $upload_max = (string) ini_get( 'upload_max_filesize' );
+        $post_max   = (string) ini_get( 'post_max_size' );
+        $memory     = (string) ini_get( 'memory_limit' );
+        $max_exec   = (int) ini_get( 'max_execution_time' );
+        $max_input  = (int) ini_get( 'max_input_time' );
+
+        // wp_convert_hr_to_bytes exists in WP core and handles shorthand like "128M".
+        $upload_max_bytes = function_exists( 'wp_convert_hr_to_bytes' ) ? (int) wp_convert_hr_to_bytes( $upload_max ) : 0;
+        $post_max_bytes   = function_exists( 'wp_convert_hr_to_bytes' ) ? (int) wp_convert_hr_to_bytes( $post_max ) : 0;
+        $memory_bytes     = function_exists( 'wp_convert_hr_to_bytes' ) ? (int) wp_convert_hr_to_bytes( $memory ) : 0;
+
+        // Detect basic capabilities that may affect restore analysis.
+        $can_finfo = function_exists( 'finfo_open' );
+        $has_zip   = class_exists( 'ZipArchive' );
+
+        // Verify temp chunk root is writable (plugin-controlled path).
+        $chunk_root = self::chunk_root_dir();
+        $chunk_root_ok = ( $chunk_root && is_dir( $chunk_root ) && is_writable( $chunk_root ) );
+
+        wp_send_json_success(
+            [
+                'limits' => [
+                    'upload_max_filesize' => [
+                        'raw'   => $upload_max,
+                        'bytes' => max( 0, $upload_max_bytes ),
+                    ],
+                    'post_max_size' => [
+                        'raw'   => $post_max,
+                        'bytes' => max( 0, $post_max_bytes ),
+                    ],
+                    'memory_limit' => [
+                        'raw'   => $memory,
+                        'bytes' => max( 0, $memory_bytes ),
+                    ],
+                    'max_execution_time' => max( 0, $max_exec ),
+                    'max_input_time'     => max( 0, $max_input ),
+                ],
+                'caps' => [
+                    'can_finfo'         => (bool) $can_finfo,
+                    'has_ziparchive'    => (bool) $has_zip,
+                    'chunk_root_writable' => (bool) $chunk_root_ok,
+                ],
+            ]
+        );
     }
 
     public static function upload() {
@@ -472,44 +634,44 @@ class Backup_Lite_Restore_Handler {
         self::ensure_permission();
         Backup_Lite_UI::verify_ajax_request();
 
-        // Check for active jobs, but also clean up any stale jobs that should be considered finished
-        $active_job = Backup_Lite_Restore_Jobs::has_active_job();
-        if ( $active_job ) {
-            // Double-check: if the job has been running for more than 6 hours, consider it stale
-            $job_age = 0;
-            if ( ! empty( $active_job['started_at'] ) ) {
-                $started = strtotime( $active_job['started_at'] );
-                if ( $started ) {
-                    $job_age = time() - $started;
-                }
-            } elseif ( ! empty( $active_job['created_at'] ) ) {
-                $created = strtotime( $active_job['created_at'] );
-                if ( $created ) {
-                    $job_age = time() - $created;
+        // Preflight: clear stale restore state so users are not blocked by crashed/aborted jobs.
+        self::cleanup_stale_restore_state();
+
+        // If a restore lock is held (and not cleared as stale), treat it as an active restore and block early
+        // with a clear 409 instead of letting execute() throw and become a 500.
+        if ( class_exists( 'Backup_Lite_Restore_Lock' ) ) {
+            $lock = Backup_Lite_Restore_Lock::current_lock();
+            if ( is_array( $lock ) && ! empty( $lock['job_id'] ) ) {
+                $lock_job_id = sanitize_text_field( (string) $lock['job_id'] );
+                if ( $lock_job_id ) {
+                    try {
+                        $st = class_exists( 'Backup_Lite_Restore_Service' ) ? Backup_Lite_Restore_Service::status( $lock_job_id ) : null;
+                        $completed = is_array( $st ) && ! empty( $st['completed'] );
+                        $stage = is_array( $st ) && isset( $st['stage'] ) ? (string) $st['stage'] : '';
+                        if ( ! $completed && ! in_array( $stage, [ 'done', 'failed', 'cancelled' ], true ) ) {
+                            wp_send_json_error(
+                                // @plugin-check: escaped
+                                [ 'message' => esc_html__( 'Another restore is already in progress. Please wait for it to finish.', 'museder-restoreone' ) ],
+                                409
+                            );
+                        }
+                    } catch ( Exception $e ) {
+                        // If status lookup fails, cleanup_stale_restore_state() should have handled stale locks.
+                        // Fall through and continue.
+                    }
                 }
             }
-            
-            // If job is stale (older than 6 hours), mark it as failed and allow new job
-            if ( $job_age > ( 6 * HOUR_IN_SECONDS ) ) {
-                backup_lite_log( 'warning', 'Stale restore job detected, marking as failed', [
-                    'job_id' => $active_job['id'],
-                    'age_seconds' => $job_age,
-                    'status' => $active_job['status'],
-                ] );
-                Backup_Lite_Restore_Jobs::update_job( $active_job['id'], [
-                    'status' => 'failed',
-                    'finished_at' => current_time( 'mysql' ),
-                    // @plugin-check: escaped
-                    'message' => esc_html__( 'Restore job timed out and was marked as failed.', 'museder-restoreone' ),
-                ] );
-            } else {
-                // Job is still active, return conflict
+        }
+
+        // AI1WM-style: use Restore_Service as the single restore engine.
+        // Prevent starting a new job while another is active.
+        $active_job_id = class_exists( 'Backup_Lite_Restore_Service' ) ? Backup_Lite_Restore_Service::get_active_job_id() : '';
+        if ( ! empty( $active_job_id ) ) {
                 wp_send_json_error(
                     // @plugin-check: escaped
                     [ 'message' => esc_html__( 'Another restore is already in progress. Please wait for it to finish.', 'museder-restoreone' ) ],
                     409
                 );
-            }
         }
 
         $state = self::get_state();
@@ -519,36 +681,198 @@ class Backup_Lite_Restore_Handler {
         }
 
         $options         = self::parse_options();
+        // Pass along the detected DB prefix info (Step 1) so Restore_Service can avoid prefix mismatch restores.
+        $extra = ( isset( $state['extra'] ) && is_array( $state['extra'] ) ) ? $state['extra'] : [];
+        if ( isset( $extra['db_prefix_source'] ) && is_string( $extra['db_prefix_source'] ) && '' !== $extra['db_prefix_source'] ) {
+            $options['db_source_prefix'] = sanitize_text_field( $extra['db_prefix_source'] );
+        }
+        if ( isset( $extra['db_prefix_target'] ) && is_string( $extra['db_prefix_target'] ) && '' !== $extra['db_prefix_target'] ) {
+            $options['db_target_prefix'] = sanitize_text_field( $extra['db_prefix_target'] );
+        }
         $state['options'] = $options;
         self::set_state( $state );
 
-        self::update_progress( 5, __( 'Restore job queued. Waiting to start…', 'museder-restoreone' ), false );
+        // If the user opted into a pre-restore snapshot, this request can be long-running on large sites.
+        // Best-effort extend the time limit for this synchronous enqueue phase.
+        if ( ! empty( $options['auto_backup'] ) ) {
+            // phpcs:ignore WordPress.PHP.NoSetTimeLimit
+            if ( function_exists( 'set_time_limit' ) ) {
+                // @phpcs:disable Squiz.PHP.DiscouragedFunctions.Discouraged
+                @set_time_limit( 600 );
+                // @phpcs:enable Squiz.PHP.DiscouragedFunctions.Discouraged
+            }
+        }
 
         // Get file size for progress estimation
-        $file_path = isset( $state['file'] ) ? $state['file'] : '';
+        $file_path = isset( $state['file'] ) ? (string) $state['file'] : '';
         $file_size = 0;
-        if ( $file_path && file_exists( $file_path ) ) {
-            $file_size = filesize( $file_path );
+        if ( $file_path ) {
+            $abs = backup_lite_get_backup_path( $file_path );
+            if ( $abs && file_exists( $abs ) ) {
+                $file_size = filesize( $abs );
+            }
         } elseif ( isset( $state['size'] ) ) {
             $file_size = (float) $state['size'];
         }
 
-        $job = Backup_Lite_Restore_Jobs::enqueue(
-            [
-                'state'   => $state,
-                'options' => $options,
-                'user_id' => get_current_user_id(),
-            ]
-        );
+        // Start Restore_Service job (prepare -> validate -> execute).
+        $job_id = '';
+        try {
+            $source = isset( $state['source'] ) ? (string) $state['source'] : 'existing';
+            if ( 'remote' === $source ) {
+                $source = 'upload';
+            }
+            $file_name = isset( $state['file'] ) ? (string) $state['file'] : '';
+            $sha1      = isset( $state['sha1'] ) ? (string) $state['sha1'] : '';
+
+            $prepared = Backup_Lite_Restore_Service::prepare( $source, $file_name, $sha1 );
+            $job_id   = isset( $prepared['job_id'] ) ? (string) $prepared['job_id'] : '';
+            if ( '' === $job_id ) {
+                throw new RuntimeException( esc_html__( 'Unable to create restore job.', 'museder-restoreone' ) );
+            }
+
+            // Persist job id in state for polling recovery (nonce expiry / refresh).
+            $state['restore_service_job_id'] = $job_id;
+            self::set_state( $state );
+
+            // Record a user-scoped pointer so wp-admin can show an unattended notice.
+            if ( function_exists( 'get_current_user_id' ) ) {
+                $uid = (int) get_current_user_id();
+                if ( $uid > 0 ) {
+                    update_user_meta( $uid, 'backup_lite_restore_notice_job_id', $job_id );
+                    update_user_meta( $uid, 'backup_lite_restore_notice_dismissed', 0 );
+                }
+            }
+
+            Backup_Lite_Restore_Service::validate( $job_id );
+            $exec = Backup_Lite_Restore_Service::execute( $job_id, $options );
+            // status() can throw if job metadata is missing/corrupted; treat as a failure but cleanup pointers.
+            $status = Backup_Lite_Restore_Service::status( $job_id );
 
         wp_send_json_success(
             [
-                'job'      => Backup_Lite_Restore_Jobs::prepare_job_response( $job ),
-                'progress' => self::format_progress(),
-                'history'  => self::history_for_js( 10 ),
-                'file_size' => $file_size, // Pass file size to frontend for progress estimation
-            ]
-        );
+                    'job'       => self::map_restore_service_status_to_job( $job_id, $status ),
+                    'progress'  => self::format_progress( 10, __( 'Restore started. Monitoring progress…', 'museder-restoreone' ), false ),
+                    'history'   => self::history_for_js( 10 ),
+                    'file_size' => $file_size,
+                    'exec'      => $exec,
+                ]
+            );
+        } catch ( Exception $e ) {
+            backup_lite_log( 'error', 'restore_service_enqueue_failed', [
+                'error' => sanitize_text_field( $e->getMessage() ),
+            ] );
+
+            // Best-effort cleanup: if we partially started a job, don't leave stale pointers/locks behind.
+            if ( ! empty( $job_id ) ) {
+                try {
+                    if ( class_exists( 'Backup_Lite_Restore_Service' ) ) {
+                        $active = Backup_Lite_Restore_Service::get_active_job_id();
+                        if ( $active === $job_id ) {
+                            delete_option( Backup_Lite_Restore_Service::ACTIVE_JOB_OPTION );
+                        }
+                    }
+                } catch ( Exception $inner ) {
+                    // Ignore.
+                }
+                try {
+                    if ( class_exists( 'Backup_Lite_Restore_Lock' ) ) {
+                        $lock = Backup_Lite_Restore_Lock::current_lock();
+                        if ( empty( $lock['job_id'] ) || $lock['job_id'] === $job_id ) {
+                            Backup_Lite_Restore_Lock::release();
+                        }
+                    }
+                } catch ( Exception $inner ) {
+                    // Ignore.
+                }
+            }
+
+            // Prefer a safe, actionable message for common validation/runtime failures.
+            $message = esc_html__( 'Failed to start restore job. Please check logs for details.', 'museder-restoreone' );
+            if ( $e instanceof RuntimeException || $e instanceof InvalidArgumentException ) {
+                $maybe = sanitize_text_field( (string) $e->getMessage() );
+                if ( '' !== $maybe ) {
+                    $message = $maybe;
+                }
+            }
+            wp_send_json_error(
+                [
+                    // @plugin-check: escaped
+                    'message' => $message,
+                ],
+                500
+            );
+        }
+    }
+
+    /**
+     * Best-effort cleanup of stale restore state (active job pointer / lock) so users can start a new restore.
+     * Only removes state when the referenced job metadata is missing/corrupted, or the job is already completed.
+     */
+    private static function cleanup_stale_restore_state() {
+        if ( ! class_exists( 'Backup_Lite_Restore_Service' ) ) {
+            return;
+        }
+
+        $active_job_id = Backup_Lite_Restore_Service::get_active_job_id();
+        $lock = class_exists( 'Backup_Lite_Restore_Lock' ) ? Backup_Lite_Restore_Lock::current_lock() : null;
+        $lock_job_id = ( is_array( $lock ) && ! empty( $lock['job_id'] ) ) ? (string) $lock['job_id'] : '';
+
+        // Helper: determine if a job id points to an active (running) job.
+        $is_active_job_running = static function( $job_id ) {
+            try {
+                $st = Backup_Lite_Restore_Service::status( $job_id );
+                $stage = isset( $st['stage'] ) ? (string) $st['stage'] : '';
+                $completed = ! empty( $st['completed'] );
+                if ( $completed ) {
+                    return false;
+                }
+                // Treat common terminal stages as not running even if completed flag is missing.
+                if ( in_array( $stage, [ 'done', 'failed', 'cancelled' ], true ) ) {
+                    return false;
+                }
+                return true;
+            } catch ( Exception $e ) {
+                // Missing/corrupted meta => stale.
+                return false;
+            }
+        };
+
+        // If we have an active job pointer but it is stale, clear it (and matching lock if present).
+        if ( ! empty( $active_job_id ) && ! $is_active_job_running( $active_job_id ) ) {
+            backup_lite_log( 'warning', 'Detected stale active restore job pointer; clearing.', [
+                'active_job_id' => $active_job_id,
+                'lock_job_id'   => $lock_job_id,
+            ] );
+
+            delete_option( Backup_Lite_Restore_Service::ACTIVE_JOB_OPTION );
+
+            if ( $lock_job_id && $lock_job_id === $active_job_id && class_exists( 'Backup_Lite_Restore_Lock' ) ) {
+                Backup_Lite_Restore_Lock::release();
+            }
+
+            // Re-fetch lock after potential release.
+            $lock = class_exists( 'Backup_Lite_Restore_Lock' ) ? Backup_Lite_Restore_Lock::current_lock() : null;
+            $lock_job_id = ( is_array( $lock ) && ! empty( $lock['job_id'] ) ) ? (string) $lock['job_id'] : '';
+        }
+
+        // If lock exists but no active job pointer, validate lock job id; release if stale/completed.
+        if ( empty( $active_job_id ) && ! empty( $lock_job_id ) ) {
+            if ( ! $is_active_job_running( $lock_job_id ) ) {
+                backup_lite_log( 'warning', 'Detected stale restore lock; releasing.', [
+                    'lock_job_id' => $lock_job_id,
+                ] );
+                if ( class_exists( 'Backup_Lite_Restore_Lock' ) ) {
+                    Backup_Lite_Restore_Lock::release();
+                }
+            } else {
+                // A job is running but pointer is missing; keep lock intact and prevent new restore.
+                // Restore page will show \"another restore is already in progress\" based on lock/option checks.
+                backup_lite_log( 'info', 'Restore lock is held by an active job; not clearing.', [
+                    'lock_job_id' => $lock_job_id,
+                ] );
+            }
+        }
     }
 
     public static function job_status() {
@@ -584,14 +908,11 @@ class Backup_Lite_Restore_Handler {
                     'message' => esc_html__( 'Your session has expired. Refreshing security token…', 'museder-restoreone' ),
                 ], 403 );
             }
-            // If job_id is empty, try to get the latest active job or return history only
-            // This helps when frontend loses track of job_id but restore might have completed
-            $active_job = Backup_Lite_Restore_Jobs::has_active_job();
-            if ( $active_job && isset( $active_job['id'] ) ) {
-                $job_id = $active_job['id'];
-                backup_lite_log( 'info', 'job_status_no_job_id_using_active', [ 'job_id' => $job_id ] );
+            // No job id: fall back to Restore_Service active job id or return history only.
+            $active_job_id = class_exists( 'Backup_Lite_Restore_Service' ) ? Backup_Lite_Restore_Service::get_active_job_id() : '';
+            if ( ! empty( $active_job_id ) ) {
+                $job_id = sanitize_text_field( (string) $active_job_id );
             } else {
-                // No active job and no job_id provided - return history only so frontend can check completion
                 wp_send_json_success( [
                     'job'     => null,
                     'history' => self::history_for_js( 10 ),
@@ -602,9 +923,28 @@ class Backup_Lite_Restore_Handler {
             }
         }
 
-        $job = Backup_Lite_Restore_Jobs::get_job( $job_id );
-        if ( ! $job ) {
-            // If job not found but nonce is invalid, return nonce error first
+        // If no job_id was provided, try to recover from restore state (Restore_Service job id).
+        if ( empty( $job_id ) ) {
+            $state = self::get_state();
+            if ( ! empty( $state['restore_service_job_id'] ) ) {
+                $job_id = sanitize_text_field( (string) $state['restore_service_job_id'] );
+            }
+        }
+
+        if ( empty( $job_id ) ) {
+            wp_send_json_success( [
+                'job'     => null,
+                'history' => self::history_for_js( 10 ),
+                // @plugin-check: escaped
+                'message' => esc_html__( 'No active restore job found. Check history for recent restores.', 'museder-restoreone' ),
+            ] );
+            return;
+        }
+
+        try {
+            $status = Backup_Lite_Restore_Service::status( $job_id );
+            $job    = self::map_restore_service_status_to_job( $job_id, $status );
+        } catch ( Exception $e ) {
             if ( ! $nonce_valid ) {
                 wp_send_json_error( [
                     'code'    => 'invalid_nonce',
@@ -612,8 +952,6 @@ class Backup_Lite_Restore_Handler {
                     'message' => esc_html__( 'Your session has expired. Refreshing security token…', 'museder-restoreone' ),
                 ], 403 );
             }
-            // Job not found - return HTTP 200 with history so frontend can check completion status
-            // This prevents 404 errors that break frontend polling logic
             wp_send_json_success( [
                 'job'     => null,
                 'history' => self::history_for_js( 10 ),
@@ -623,13 +961,12 @@ class Backup_Lite_Restore_Handler {
             return;
         }
 
-        // If nonce is invalid but we have a valid job, still return the job status
-        // This allows the frontend to continue monitoring even if nonce expires
+        // If nonce is invalid but we have a valid job, still return the job status.
         if ( ! $nonce_valid ) {
             // Return success but include a flag to indicate nonce should be refreshed
             wp_send_json_success(
                 [
-                    'job'     => Backup_Lite_Restore_Jobs::prepare_job_response( $job ),
+                    'job'     => $job,
                     'history' => self::history_for_js( 10 ),
                     'nonce_expired' => true, // Flag to trigger nonce refresh on frontend
                 ]
@@ -639,7 +976,7 @@ class Backup_Lite_Restore_Handler {
 
         wp_send_json_success(
             [
-                'job'     => Backup_Lite_Restore_Jobs::prepare_job_response( $job ),
+                'job'     => $job,
                 'history' => self::history_for_js( 10 ),
             ]
         );
@@ -660,46 +997,122 @@ class Backup_Lite_Restore_Handler {
             wp_send_json_error( [ 'message' => esc_html__( 'Job identifier is required.', 'museder-restoreone' ) ], 400 );
         }
 
-        $job = Backup_Lite_Restore_Jobs::get_job( $job_id );
-        if ( ! $job ) {
-            // @plugin-check: escaped
-            wp_send_json_error( [ 'message' => esc_html__( 'Restore job not found.', 'museder-restoreone' ) ], 404 );
-        }
-
-        // Only trigger if job is still pending
-        if ( $job['status'] !== 'pending' ) {
-            wp_send_json_success( [
-                // @plugin-check: escaped
-                'message' => esc_html__( 'Job is already running or completed.', 'museder-restoreone' ),
-                'job'     => Backup_Lite_Restore_Jobs::prepare_job_response( $job ),
-            ] );
-        }
-
-        // Manually trigger the job execution
-        // This is a fallback if WordPress Cron doesn't run immediately
-        if ( ! wp_next_scheduled( Backup_Lite_Restore_Jobs::CRON_HOOK, [ $job_id ] ) ) {
-            // Re-schedule if it was missed
-            wp_schedule_single_event( time(), Backup_Lite_Restore_Jobs::CRON_HOOK, [ $job_id ] );
-        }
-
-        // Try to spawn cron immediately
-        Backup_Lite_Restore_Jobs::spawn_cron();
-
-        // Also try to execute directly if possible (non-blocking)
-        // This ensures the job starts even if cron is disabled
+        // Restore_Service jobs are scheduled immediately in execute(). Trigger WP-Cron as a best-effort nudge.
         if ( ! defined( 'DISABLE_WP_CRON' ) || ! DISABLE_WP_CRON ) {
-            // Trigger via HTTP request to avoid blocking
             $cron_url = site_url( 'wp-cron.php?doing_wp_cron' );
-            wp_remote_post( $cron_url, [
+            wp_remote_post(
+                $cron_url,
+                [
                 'timeout'  => 0.01,
                 'blocking' => false,
-            ] );
+                ]
+            );
+        }
+            wp_send_json_success( [
+            'message' => __( 'Restore job triggered.', 'museder-restoreone' ),
+        ] );
+    }
+
+    /**
+     * Push the restore job forward by executing a single time slice via admin-ajax.
+     *
+     * This is a fallback for environments where WP-Cron loopback is unreliable.
+     *
+     * @wp_ajax backup_lite_restore_tick
+     */
+    public static function restore_tick() {
+        self::ensure_permission();
+        Backup_Lite_UI::verify_ajax_request();
+        // Additional nonce verification for plugin-check
+        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
+
+        // Nonce verified above
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
+        $job_id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
+        $slice  = isset( $_POST['slice'] ) ? absint( wp_unslash( $_POST['slice'] ) ) : 0;
+        // phpcs:enable WordPress.Security.NonceVerification.Missing
+
+        if ( empty( $job_id ) ) {
+            // @plugin-check: escaped
+            wp_send_json_error( [ 'message' => esc_html__( 'Job identifier is required.', 'museder-restoreone' ) ], 400 );
         }
 
-        wp_send_json_success( [
-            'message' => __( 'Restore job triggered.', 'museder-restoreone' ),
-            'job'     => Backup_Lite_Restore_Jobs::prepare_job_response( $job ),
-        ] );
+        if ( ! class_exists( 'Backup_Lite_Restore_Service' ) ) {
+            wp_send_json_error( [ 'message' => esc_html__( 'Restore service is not available.', 'museder-restoreone' ) ], 500 );
+        }
+
+        $slice = ( $slice > 0 ) ? min( 15, max( 3, $slice ) ) : 8;
+
+        try {
+            $meta = Backup_Lite_Restore_Service::get_job_meta( $job_id );
+            if ( ! empty( $meta['completed'] ) ) {
+                wp_send_json_success(
+                    [
+                        'job' => Backup_Lite_Restore_Service::status( $job_id ),
+                    ]
+                );
+            }
+
+            // Ensure lock belongs to this job (or acquire if no lock exists).
+            if ( class_exists( 'Backup_Lite_Restore_Lock' ) ) {
+                $lock = Backup_Lite_Restore_Lock::current_lock();
+                if ( $lock && isset( $lock['job_id'] ) && (string) $lock['job_id'] !== $job_id ) {
+                    wp_send_json_error(
+                        [
+                            // @plugin-check: escaped
+                            'message' => esc_html__( 'Cannot tick: another restore job is currently running.', 'museder-restoreone' ),
+                            'job_id'  => (string) $lock['job_id'],
+                        ],
+                        409
+                    );
+                }
+                if ( ! $lock ) {
+                    $acquired = Backup_Lite_Restore_Lock::acquire( $job_id );
+                    if ( ! $acquired ) {
+                        wp_send_json_error(
+                            [
+                                // @plugin-check: escaped
+                                'message' => esc_html__( 'Cannot tick: restore lock is busy. Please try again.', 'museder-restoreone' ),
+                            ],
+                            409
+                        );
+                    }
+                }
+                Backup_Lite_Restore_Lock::refresh( $job_id );
+            }
+
+            // Best-effort: ensure active job pointer is set for this job.
+            $active = (string) get_option( Backup_Lite_Restore_Service::ACTIVE_JOB_OPTION, '' );
+            if ( '' === $active ) {
+                update_option( Backup_Lite_Restore_Service::ACTIVE_JOB_OPTION, $job_id, false );
+            }
+
+            $result = Backup_Lite_Restore_Service::process_job_slice( $job_id, $slice, false, 'ajax' );
+            if ( empty( $result['ok'] ) && ! empty( $result['reason'] ) && 'busy' === $result['reason'] ) {
+                wp_send_json_error(
+                    [
+                        // @plugin-check: escaped
+                        'message' => esc_html__( 'Restore is busy. Please wait a moment and try again.', 'museder-restoreone' ),
+                    ],
+                    409
+                );
+            }
+
+            wp_send_json_success(
+                [
+                    'job' => Backup_Lite_Restore_Service::status( $job_id ),
+                ]
+            );
+        } catch ( Exception $e ) {
+            backup_lite_log( 'error', 'Restore tick failed.', [ 'job_id' => $job_id, 'error' => $e->getMessage() ] );
+            wp_send_json_error(
+                [
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Restore tick failed. Please check logs.', 'museder-restoreone' ),
+                ],
+                500
+            );
+        }
     }
 
     public static function job_cancel() {
@@ -724,14 +1137,7 @@ class Backup_Lite_Restore_Handler {
         }
 
         try {
-            $job = Backup_Lite_Restore_Jobs::get_job( $job_id );
-            if ( ! $job ) {
-                // @plugin-check: escaped
-            wp_send_json_error( [ 'message' => esc_html__( 'Restore job not found.', 'museder-restoreone' ) ], 404 );
-                return;
-            }
-
-            Backup_Lite_Restore_Jobs::request_cancel( $job_id );
+            Backup_Lite_Restore_Service::cancel( $job_id );
             
             // Cleanup state, but don't let errors break the response
             try {
@@ -744,7 +1150,12 @@ class Backup_Lite_Restore_Handler {
                 [
                     // @plugin-check: escaped
                     'message' => esc_html__( 'Cancellation requested. You can safely close this page.', 'museder-restoreone' ),
-                    'job'     => Backup_Lite_Restore_Jobs::prepare_job_response( Backup_Lite_Restore_Jobs::get_job( $job_id ) ),
+                    'job'     => [
+                        'id'       => $job_id,
+                        'status'   => 'cancelled',
+                        'progress' => 100,
+                        'message'  => esc_html__( 'Restore cancelled.', 'museder-restoreone' ),
+                    ],
                 ]
             );
         } catch ( Exception $e ) {
@@ -774,13 +1185,19 @@ class Backup_Lite_Restore_Handler {
         try {
             $job_id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
         // phpcs:enable WordPress.Security.NonceVerification.Missing
-            if ( $job_id ) {
-                Backup_Lite_Restore_Jobs::request_cancel( $job_id );
-            } else {
-                $active = Backup_Lite_Restore_Jobs::has_active_job();
-                if ( $active ) {
-                    Backup_Lite_Restore_Jobs::request_cancel( $active['id'] );
+            if ( empty( $job_id ) ) {
+                $state = self::get_state();
+                if ( ! empty( $state['restore_service_job_id'] ) ) {
+                    $job_id = sanitize_text_field( (string) $state['restore_service_job_id'] );
                 }
+            }
+
+            if ( empty( $job_id ) && class_exists( 'Backup_Lite_Restore_Service' ) ) {
+                $job_id = sanitize_text_field( (string) Backup_Lite_Restore_Service::get_active_job_id() );
+            }
+
+            if ( $job_id ) {
+                Backup_Lite_Restore_Service::cancel( $job_id );
             }
 
             // Cleanup state, but don't let errors break the response
@@ -803,299 +1220,13 @@ class Backup_Lite_Restore_Handler {
     }
 
     public static function run_job( $job_id, $job ) {
-        $state   = isset( $job['state'] ) ? $job['state'] : [];
-        $options = isset( $job['options'] ) ? $job['options'] : [];
-
-        if ( empty( $state ) || empty( $state['file'] ) ) {
+        // Legacy restore-jobs runner is disabled (clean break). The only supported restore engine
+        // is Backup_Lite_Restore_Service (resumable, time-sliced pipeline).
             return [
                 'success' => false,
-                'message' => __( 'Restore file is missing. Please reselect the backup and try again.', 'museder-restoreone' ),
-                'error'   => 'missing_state',
-            ];
-        }
-
-        self::set_state( $state );
-
-        // Initialize history entry with UTC timestamp
-        $timestamp_utc = time(); // Always use UTC timestamp (time() returns UTC Unix timestamp)
-        $restore_started_at = $timestamp_utc; // Record restore start time (UTC timestamp)
-        
-        $history_entry = isset( $job['history'] ) && is_array( $job['history'] ) ? $job['history'] : [];
-
-        // Ensure required fields exist (job enqueue may have created 'history' without timing fields).
-        if ( empty( $history_entry['file'] ) ) {
-            $history_entry['file'] = isset( $state['filename'] ) ? $state['filename'] : basename( $state['file'] );
-        }
-        if ( empty( $history_entry['result'] ) ) {
-            $history_entry['result'] = 'pending';
-        }
-        if ( ! isset( $history_entry['log'] ) ) {
-            $history_entry['log'] = '';
-        }
-
-        // Start timestamp for duration calculation (UTC).
-        if ( ! isset( $history_entry['restore_started_at'] ) || ! is_numeric( $history_entry['restore_started_at'] ) || (int) $history_entry['restore_started_at'] <= 0 ) {
-            $history_entry['restore_started_at'] = $restore_started_at;
-        }
-
-        // Also store a canonical UTC timestamp for this restore entry (used for date display).
-        if ( ! isset( $history_entry['timestamp_utc'] ) || ! is_numeric( $history_entry['timestamp_utc'] ) || (int) $history_entry['timestamp_utc'] <= 0 ) {
-            $history_entry['timestamp_utc'] = $timestamp_utc;
-        }
-        if ( empty( $history_entry['date'] ) ) {
-            // Keep 'date' field for backward compatibility (formatted UTC datetime string)
-            $history_entry['date'] = gmdate( 'Y-m-d H:i:s', (int) $history_entry['timestamp_utc'] );
-        }
-
-        $suspend_cache_state = null;
-
-        try {
-            ignore_user_abort( true );
-            // Allow longer execution time for large backup/restore jobs when possible.
-            // phpcs:ignore WordPress.PHP.NoSetTimeLimit
-            if ( function_exists( 'set_time_limit' ) ) {
-                // Long-running backup/restore job: attempt to raise time limit for CLI/cron.
-                // @phpcs:disable Squiz.PHP.DiscouragedFunctions.Discouraged
-                if ( function_exists( 'set_time_limit' ) ) {
-                    @set_time_limit( 0 );
-                }
-                // @phpcs:enable Squiz.PHP.DiscouragedFunctions.Discouraged
-            }
-
-            if ( function_exists( 'wp_raise_memory_limit' ) ) {
-                wp_raise_memory_limit( 'admin' );
-            }
-
-            if ( function_exists( 'wp_suspend_cache_invalidation' ) ) {
-                $suspend_cache_state = wp_suspend_cache_invalidation( true );
-            }
-
-                // @plugin-check: escaped
-                self::report_job_progress( $job_id, 10, esc_html__( 'Preparing restore environment…', 'museder-restoreone' ) );
-
-            if ( self::job_should_abort( $job_id ) ) {
-                return self::handle_job_cancelled( $job_id, $history_entry );
-            }
-
-            if ( ! empty( $options['auto_backup'] ) ) {
-                // @plugin-check: escaped
-                self::report_job_progress( $job_id, 20, esc_html__( 'Creating safety backup…', 'museder-restoreone' ) );
-                $backup = Backup_Lite_Backup::backup_site();
-                if ( empty( $backup['success'] ) ) {
-                    $history_entry['result'] = 'failed';
-                    $history_entry['log']    = isset( $backup['log'] ) ? basename( $backup['log'] ) : '';
-                    // @plugin-check: escaped
-                    self::report_job_progress( $job_id, 0, esc_html__( 'Pre-restore backup failed. Restore aborted.', 'museder-restoreone' ), true, 'failed' );
-                    throw new RuntimeException( esc_html__( 'Pre-restore backup failed. Restore aborted.', 'museder-restoreone' ) );
-                }
-            }
-
-            self::report_job_progress( $job_id, 45, __( 'Extracting backup archive…', 'museder-restoreone' ) );
-
-            if ( self::job_should_abort( $job_id ) ) {
-                return self::handle_job_cancelled( $job_id, $history_entry );
-            }
-
-            // Resolve file path from filename stored in state
-            $file = isset( $state['file'] ) ? $state['file'] : '';
-            $archive_path = backup_lite_get_backup_path( $file );
-            
-            // Verify archive file exists and is readable before restore
-            if ( ! $archive_path ) {
-                backup_lite_log( 'error', 'Restore archive not readable.', array(
-                    'file_input' => $file,
-                    'state_file' => isset( $state['file'] ) ? $state['file'] : '',
-                ) );
-                
-                // Update timestamp_utc to current UTC time when restore fails
-                $restore_completed_at = time();
-                $restore_duration_seconds = 0;
-                if ( isset( $history_entry['restore_started_at'] ) && is_numeric( $history_entry['restore_started_at'] ) ) {
-                    $restore_duration_seconds = $restore_completed_at - (int) $history_entry['restore_started_at'];
-                }
-                $history_entry['timestamp_utc'] = $restore_completed_at;
-                $history_entry['date'] = gmdate( 'Y-m-d H:i:s', $history_entry['timestamp_utc'] );
-                $history_entry['result'] = 'failed';
-                $history_entry['message'] = esc_html__( 'Backup file not found or unreadable.', 'museder-restoreone' );
-                $history_entry['restore_completed_at'] = $restore_completed_at;
-                $history_entry['restore_duration_seconds'] = $restore_duration_seconds;
-                backup_lite_append_restore_history( $history_entry );
-                self::report_job_progress( $job_id, 100, $history_entry['message'], true, 'failed' );
-                return [
-                    'success' => false,
-                    'message' => $history_entry['message'],
-                    'error'   => 'archive_not_readable',
-                ];
-            }
-            
-            // Pass progress callback to restore_site for detailed progress updates
-            // Wrap in try-catch to handle any exceptions during restore
-            try {
-                $restore = Backup_Lite_Restore::restore_site( $archive_path, $options, function( $percent, $message ) use ( $job_id ) {
-                    // Map restore progress (0-100) to job progress (45-95)
-                    // Reserve 45-95 for restore operations, 95-100 for final cleanup
-                    $mapped_percent = 45 + ( $percent * 0.5 ); // 45% to 95%
-                    self::report_job_progress( $job_id, $mapped_percent, $message );
-                } );
-            } catch ( Throwable $restore_exception ) {
-                // If restore_site throws an exception, log it but check if restore actually completed
-                backup_lite_log( 'error', 'restore_site_exception', [
-                    'message' => $restore_exception->getMessage(),
-                    'trace'   => $restore_exception->getTraceAsString(),
-                ] );
-                
-                // Check if database and files were actually restored despite the exception
-                // This can happen if PclZip throws an exception after successful extraction
-                $restore = [
-                    'success' => false,
-                    'message' => $restore_exception->getMessage(),
-                    'error'   => $restore_exception->getMessage(),
-                ];
-            }
-
-            if ( self::job_should_abort( $job_id ) ) {
-                return self::handle_job_cancelled( $job_id, $history_entry );
-            }
-
-            // Check restore result - ensure we have a valid result array
-            if ( ! is_array( $restore ) ) {
-                backup_lite_log( 'error', 'Restore returned invalid result', [ 'job_id' => $job_id, 'restore_type' => gettype( $restore ) ] );
-                $restore = [
-                    'success' => false,
-                    'message' => __( 'Restore failed with invalid result.', 'museder-restoreone' ),
-                ];
-            }
-
-            // Calculate restore duration
-            $restore_completed_at = time();
-            $restore_duration_seconds = 0;
-            if ( isset( $history_entry['restore_started_at'] ) && is_numeric( $history_entry['restore_started_at'] ) ) {
-                $restore_duration_seconds = $restore_completed_at - (int) $history_entry['restore_started_at'];
-            }
-            $history_entry['restore_completed_at'] = $restore_completed_at;
-            $history_entry['restore_duration_seconds'] = $restore_duration_seconds;
-
-            if ( ! empty( $restore['success'] ) ) {
-                self::report_job_progress( $job_id, 95, __( 'Finalizing restore…', 'museder-restoreone' ) );
-                
-                // Restore plugin activation status from backup
-                self::restore_plugin_status();
-                
-                // Explicitly set status to success when reporting 100% completion
-                // This ensures the frontend can detect completion immediately
-                backup_lite_log( 'info', 'Restore completed successfully, setting job status to success', [ 
-                    'job_id' => $job_id,
-                    'duration_seconds' => $restore_duration_seconds,
-                ] );
-                self::report_job_progress( $job_id, 100, __( 'Restore completed successfully.', 'museder-restoreone' ), true, 'success' );
-                // Update timestamp_utc to current UTC time when restore completes
-                $history_entry['timestamp_utc'] = $restore_completed_at;
-                $history_entry['date'] = gmdate( 'Y-m-d H:i:s', $history_entry['timestamp_utc'] );
-                $history_entry['result'] = 'success';
-            } else {
-                $message = isset( $restore['message'] ) ? $restore['message'] : __( 'Restore failed.', 'museder-restoreone' );
-                $error_code = isset( $restore['code'] ) ? $restore['code'] : 'unknown_error';
-                
-                // Enhance error message for common failure scenarios
-                if ( isset( $restore['code'] ) ) {
-                    switch ( $restore['code'] ) {
-                        case 'zip_extract_exception':
-                        case 'zip_open_failed':
-                            $message = __( 'Unable to extract backup archive. The archive file may be corrupted or in an unsupported format. Please check the logs for details.', 'museder-restoreone' );
-                            break;
-                        case 'sql_not_found':
-                            $message = __( 'Database file not found in backup archive. The backup may be incomplete.', 'museder-restoreone' );
-                            break;
-                        case 'database_error':
-                            $message = __( 'Database import failed. Please check the error log for details.', 'museder-restoreone' );
-                            break;
-                    }
-                }
-                
-                backup_lite_log( 'error', 'Restore failed, setting job status to failed', [ 
-                    'job_id' => $job_id, 
-                    'message' => $message,
-                    'error_code' => $error_code,
-                    'restore_result' => $restore,
-                    'duration_seconds' => $restore_duration_seconds,
-                ] );
-                
-                // Update history entry with error message
-                // Update timestamp_utc to current UTC time when restore fails
-                $history_entry['timestamp_utc'] = $restore_completed_at;
-                $history_entry['date'] = gmdate( 'Y-m-d H:i:s', $history_entry['timestamp_utc'] );
-                $history_entry['result'] = 'failed';
-                $history_entry['message'] = $message;
-                
-                // Explicitly set job status to failed when reporting progress
-                // This ensures the frontend can detect failure immediately
-                self::report_job_progress( $job_id, 100, $message, true, 'failed' );
-            }
-
-            if ( isset( $restore['log'] ) ) {
-                $history_entry['log'] = basename( $restore['log'] );
-            }
-
-            backup_lite_append_restore_history( $history_entry );
-
-            $final_state = self::get_state();
-            if ( ! empty( $final_state ) ) {
-                $final_state['completed'] = true;
-                self::set_state( $final_state );
-            }
-
-            return [
-                'success'     => ! empty( $restore['success'] ),
-                'message'     => isset( $restore['message'] ) ? $restore['message'] : '',
-                'log'         => isset( $restore['log'] ) ? basename( $restore['log'] ) : '',
-                'history_log' => isset( $history_entry['log'] ) ? $history_entry['log'] : '',
-            ];
-        } catch ( Throwable $e ) {
-            $message = __( 'Restore failed because the server interrupted the request. Please review the error log and try again.', 'museder-restoreone' );
-
-            if ( false !== stripos( $e->getMessage(), 'mailpoet' ) ) {
-                $message = __( 'Restore was interrupted by MailPoet. Please resolve the MailPoet database error or temporarily disable it before retrying.', 'museder-restoreone' );
-            }
-
-            backup_lite_log(
-                'error',
-                'restore_unhandled_exception',
-                [
-                    'message' => $e->getMessage(),
-                    'trace'   => $e->getTraceAsString(),
-                ]
-            );
-
-            // Calculate restore duration for exception case
-            $restore_completed_at = time();
-            $restore_duration_seconds = 0;
-            if ( isset( $history_entry['restore_started_at'] ) && is_numeric( $history_entry['restore_started_at'] ) ) {
-                $restore_duration_seconds = $restore_completed_at - (int) $history_entry['restore_started_at'];
-            }
-            // Update timestamp_utc to current UTC time when restore fails
-            $history_entry['timestamp_utc'] = $restore_completed_at;
-            $history_entry['date'] = gmdate( 'Y-m-d H:i:s', $history_entry['timestamp_utc'] );
-            $history_entry['result'] = 'failed';
-            $history_entry['message'] = $message;
-            $history_entry['restore_completed_at'] = $restore_completed_at;
-            $history_entry['restore_duration_seconds'] = $restore_duration_seconds;
-            backup_lite_append_restore_history( $history_entry );
-
-            // Explicitly set job status to failed when reporting progress
-            // This ensures the frontend can detect failure immediately
-            self::report_job_progress( $job_id, 100, $message, true, 'failed' );
-
-            return [
-                'success'     => false,
-                'message'     => $message,
-                'error'       => $e->getMessage(),
-                'history_log' => isset( $history_entry['log'] ) ? $history_entry['log'] : '',
-            ];
-        } finally {
-            if ( function_exists( 'wp_suspend_cache_invalidation' ) && null !== $suspend_cache_state ) {
-                wp_suspend_cache_invalidation( (bool) $suspend_cache_state );
-            }
-        }
+            'message' => __( 'Legacy restore jobs are disabled. Please start restore from Restore Center.', 'museder-restoreone' ),
+            'error'   => 'legacy_restore_jobs_disabled',
+        ];
     }
 
     private static function parse_options() {
@@ -1191,6 +1322,23 @@ class Backup_Lite_Restore_Handler {
             wp_send_json_error( [ 'message' => esc_html__( 'Unable to create chunk session directory.', 'museder-restoreone' ) ], 500 );
         }
 
+        // Create a unique final destination file in the backups directory up-front, so chunks can be written
+        // directly into it (no per-chunk files, no merge pass).
+        $backup_dir = backup_lite_get_backup_dir();
+        $final_name = wp_unique_filename( $backup_dir, $filename );
+        $final_path = trailingslashit( $backup_dir ) . $final_name;
+
+        // Touch/create the destination file to validate permissions early.
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- restore upload stream requires direct fopen, path is plugin-controlled backups dir
+        $touch = fopen( $final_path, 'wb' );
+        if ( ! $touch ) {
+            self::delete_chunk_session( $session_id );
+            // @plugin-check: escaped
+            wp_send_json_error( [ 'message' => esc_html__( 'Unable to create destination file for upload.', 'museder-restoreone' ) ], 500 );
+        }
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen
+        fclose( $touch );
+
         $meta = [
             'session_id'   => $session_id,
             'filename'     => $filename,
@@ -1198,6 +1346,9 @@ class Backup_Lite_Restore_Handler {
             'chunk_size'   => $chunk_size,
             'total_chunks' => $total_chunks,
             'created'      => time(),
+            'final_name'   => $final_name,
+            'final_path'   => $final_path,
+            'received'     => [],
         ];
 
         if ( false === file_put_contents( self::chunk_meta_path( $session_id ), wp_json_encode( $meta ), LOCK_EX ) ) {
@@ -1237,6 +1388,11 @@ class Backup_Lite_Restore_Handler {
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'Chunk session not found.', 'museder-restoreone' ) ], 404 );
         }
+        $total_chunks = isset( $meta['total_chunks'] ) ? (int) $meta['total_chunks'] : 0;
+        if ( $total_chunks > 0 && $index >= $total_chunks ) {
+            // @plugin-check: escaped
+            wp_send_json_error( [ 'message' => esc_html__( 'Invalid chunk index.', 'museder-restoreone' ) ], 400 );
+        }
 
         // 此方法是透過 verify_ajax_request() 間接呼叫，該函式已完成 nonce 驗證與權限檢查。
         // 因此此處存取 $_FILES 僅使用已驗證過的請求資料。
@@ -1247,23 +1403,21 @@ class Backup_Lite_Restore_Handler {
         }
         // phpcs:enable WordPress.Security.NonceVerification.Missing
 
-        $chunk_dir = self::chunk_session_dir( $session_id );
-        if ( ! file_exists( $chunk_dir ) && ! wp_mkdir_p( $chunk_dir ) ) {
+        // Direct-write mode: write chunk bytes into the final destination file at a known offset.
+        $final_path = isset( $meta['final_path'] ) ? (string) $meta['final_path'] : '';
+        $chunk_size = isset( $meta['chunk_size'] ) ? (int) $meta['chunk_size'] : 0;
+        if ( empty( $final_path ) || $chunk_size <= 0 ) {
             // @plugin-check: escaped
-            wp_send_json_error( [ 'message' => esc_html__( 'Unable to access chunk directory.', 'museder-restoreone' ) ], 500 );
+            wp_send_json_error( [ 'message' => esc_html__( 'Chunk session metadata is invalid.', 'museder-restoreone' ) ], 500 );
         }
-
-        // @plugin-check: allowed - required for chunked backup upload, path and filename sanitized
-        // $chunk_dir is from plugin-controlled temp directory, $index is validated integer
-        $chunk_path = trailingslashit( $chunk_dir ) . sprintf( 'chunk-%06d.part', $index );
         
         // 已用 isset() + is_uploaded_file() 驗證。這裡只會把 tmp_name 當作伺服器端暫存檔路徑使用，不會輸出到前端。
         // phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
         $tmp_name = $_FILES['chunk']['tmp_name'];
         // phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
 
-        // Use stream_copy_to_stream instead of move_uploaded_file to avoid WordPress Plugin Check warning
-        // $chunk_path is from plugin-controlled temp directory, $tmp_name is verified via is_uploaded_file() check
+        // Use stream_copy_to_stream instead of move_uploaded_file to avoid WordPress Plugin Check warning.
+        // $final_path is in plugin-controlled backups dir, $tmp_name is verified via is_uploaded_file().
         if ( empty( $tmp_name ) ) {
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'Unable to store uploaded chunk.', 'museder-restoreone' ) ], 500 );
@@ -1271,8 +1425,8 @@ class Backup_Lite_Restore_Handler {
 
         // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- direct fopen is required for large backup streaming, paths are validated by our helper.
         $input  = fopen( $tmp_name, 'rb' );
-        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- direct fopen is required for large backup streaming, paths are validated by our helper.
-        $output = fopen( $chunk_path, 'wb' );
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- direct fopen is required for large backup streaming, destination is plugin-controlled backups dir
+        $output = fopen( $final_path, 'c+b' );
         if ( ! $input || ! $output ) {
             if ( $input ) {
                 // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen.
@@ -1285,7 +1439,30 @@ class Backup_Lite_Restore_Handler {
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'Unable to store uploaded chunk.', 'museder-restoreone' ) ], 500 );
         }
+
+        // Lock the output file while writing this chunk (prevents concurrent writes from interleaving).
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_flock -- required for coordinating concurrent chunk writes
+        @flock( $output, LOCK_EX );
+
+        $offset = (int) $index * (int) $chunk_size;
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fseek -- required for random access chunk writes
+        $seek_ok = ( false !== fseek( $output, $offset, SEEK_SET ) );
+        if ( ! $seek_ok ) {
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_flock -- release lock
+            @flock( $output, LOCK_UN );
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen.
+            fclose( $input );
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen.
+            fclose( $output );
+            // @plugin-check: escaped
+            wp_send_json_error( [ 'message' => esc_html__( 'Unable to write uploaded chunk at the correct offset.', 'museder-restoreone' ) ], 500 );
+        }
+
         $copied = stream_copy_to_stream( $input, $output );
+        fflush( $output );
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_flock -- release lock
+        @flock( $output, LOCK_UN );
+
         // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen.
         fclose( $input );
         // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen.
@@ -1296,9 +1473,12 @@ class Backup_Lite_Restore_Handler {
             wp_send_json_error( [ 'message' => esc_html__( 'Unable to store uploaded chunk.', 'museder-restoreone' ) ], 500 );
         }
 
+        // Mark chunk as received in meta (resumable upload + finalize validation).
+        self::mark_chunk_received( $session_id, $index );
+
         wp_send_json_success( [
             'chunk' => $index,
-            'total' => (int) $meta['total_chunks'],
+            'total' => $total_chunks,
         ] );
     }
 
@@ -1321,50 +1501,46 @@ class Backup_Lite_Restore_Handler {
 
         $chunk_dir    = self::chunk_session_dir( $session_id );
         $total_chunks = (int) $meta['total_chunks'];
-
-        $chunks = [];
-        for ( $i = 0; $i < $total_chunks; $i++ ) {
-            $chunk_path = trailingslashit( $chunk_dir ) . sprintf( 'chunk-%06d.part', $i );
-            if ( ! file_exists( $chunk_path ) ) {
+        $final_path = isset( $meta['final_path'] ) ? (string) $meta['final_path'] : '';
+        if ( empty( $final_path ) ) {
                 self::delete_chunk_session( $session_id );
                 // @plugin-check: escaped
-                wp_send_json_error( [ 'message' => esc_html__( 'Uploaded chunks incomplete. Please retry.', 'museder-restoreone' ) ], 409 );
-            }
-            $chunks[] = $chunk_path;
+            wp_send_json_error( [ 'message' => esc_html__( 'Chunk session metadata is invalid.', 'museder-restoreone' ) ], 500 );
         }
 
-        $backup_dir = backup_lite_get_backup_dir();
-        $final_name = wp_unique_filename( $backup_dir, $meta['filename'] );
-        $final_path = trailingslashit( $backup_dir ) . $final_name;
+        // Validate received chunks from meta instead of scanning per-chunk files.
+        $received = isset( $meta['received'] ) && is_array( $meta['received'] ) ? array_map( 'absint', $meta['received'] ) : [];
+        $received = array_values( array_unique( $received ) );
+        sort( $received );
 
-        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for creating merged archive, path from plugin-controlled directory
-        $output = fopen( $final_path, 'wb' );
-        if ( ! $output ) {
+        $missing = [];
+        for ( $i = 0; $i < $total_chunks; $i++ ) {
+            if ( ! in_array( $i, $received, true ) ) {
+                $missing[] = $i;
+                if ( count( $missing ) > 10 ) {
+                    break;
+                }
+            }
+        }
+        if ( ! empty( $missing ) ) {
             self::delete_chunk_session( $session_id );
             // @plugin-check: escaped
-            wp_send_json_error( [ 'message' => esc_html__( 'Unable to create merged archive.', 'museder-restoreone' ) ], 500 );
+            wp_send_json_error( [ 'message' => esc_html__( 'Uploaded chunks incomplete. Please retry.', 'museder-restoreone' ) ], 409 );
         }
 
-        foreach ( $chunks as $chunk_path ) {
-            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for reading chunk files, path from plugin-controlled directory
-            $input = fopen( $chunk_path, 'rb' );
-            if ( ! $input ) {
-                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen
-                fclose( $output );
+        // Best-effort verify final size matches expected.
+        $expected_size = isset( $meta['filesize'] ) ? (int) $meta['filesize'] : 0;
+        if ( $expected_size > 0 && file_exists( $final_path ) ) {
+            $actual_size = (int) filesize( $final_path );
+            if ( $actual_size !== $expected_size ) {
                 self::delete_chunk_session( $session_id );
                 // @plugin-check: escaped
-                wp_send_json_error( [ 'message' => esc_html__( 'Unable to read uploaded chunk.', 'museder-restoreone' ) ], 500 );
+                wp_send_json_error( [ 'message' => esc_html__( 'Merged backup file size mismatch. Please retry.', 'museder-restoreone' ) ], 409 );
             }
-            stream_copy_to_stream( $input, $output );
-            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen
-            fclose( $input );
         }
 
-        fflush( $output );
-        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen
-        fclose( $output );
-
-        self::delete_chunk_session( $session_id );
+        // Cleanup only the session folder; preserve the final uploaded file.
+        self::delete_chunk_session( $session_id, true );
 
         // Optimize runtime environment before preparing session
         self::optimize_runtime_environment();
@@ -1410,6 +1586,42 @@ class Backup_Lite_Restore_Handler {
         wp_send_json_success();
     }
 
+    /**
+     * Return current chunk session status for resumable uploads.
+     *
+     * @wp_ajax backup_lite_restore_chunk_status
+     */
+    public static function chunk_status() {
+        self::ensure_permission();
+        Backup_Lite_UI::verify_ajax_request();
+
+        $session_id = isset( $_POST['session_id'] ) ? sanitize_text_field( wp_unslash( $_POST['session_id'] ) ) : '';
+        if ( ! $session_id ) {
+            // @plugin-check: escaped
+            wp_send_json_error( [ 'message' => esc_html__( 'Missing chunk session identifier.', 'museder-restoreone' ) ], 400 );
+        }
+
+        $meta = self::load_chunk_meta( $session_id );
+        if ( ! $meta ) {
+            // @plugin-check: escaped
+            wp_send_json_error( [ 'message' => esc_html__( 'Chunk session not found.', 'museder-restoreone' ) ], 404 );
+        }
+
+        $received = isset( $meta['received'] ) && is_array( $meta['received'] ) ? array_map( 'absint', $meta['received'] ) : [];
+        $received = array_values( array_unique( $received ) );
+        sort( $received );
+
+        wp_send_json_success(
+            [
+                'session_id'   => $session_id,
+                'total_chunks' => isset( $meta['total_chunks'] ) ? (int) $meta['total_chunks'] : 0,
+                'chunk_size'   => isset( $meta['chunk_size'] ) ? (int) $meta['chunk_size'] : 0,
+                'filesize'     => isset( $meta['filesize'] ) ? (int) $meta['filesize'] : 0,
+                'received'     => $received,
+            ]
+        );
+    }
+
     private static function chunk_root_dir() {
         $root = backup_lite_get_storage_root();
         $dir  = trailingslashit( $root['path'] ) . 'restore-chunks';
@@ -1438,11 +1650,66 @@ class Backup_Lite_Restore_Handler {
         return is_array( $meta ) ? $meta : null;
     }
 
-    private static function delete_chunk_session( $session_id ) {
+    private static function delete_chunk_session( $session_id, $preserve_final_file = false ) {
+        // Best-effort cleanup of the final destination file on abort/incomplete sessions.
+        if ( ! $preserve_final_file ) {
+            $meta = self::load_chunk_meta( $session_id );
+            $final_path = ( $meta && isset( $meta['final_path'] ) ) ? (string) $meta['final_path'] : '';
+            if ( $final_path && file_exists( $final_path ) && is_file( $final_path ) ) {
+                // phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
+                if ( function_exists( 'wp_delete_file' ) ) {
+                    wp_delete_file( $final_path );
+                } else {
+                    // @phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink
+                    @unlink( $final_path );
+                }
+                // phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
+            }
+        }
+
         $dir = self::chunk_session_dir( $session_id );
         if ( file_exists( $dir ) ) {
             backup_lite_delete_directory( $dir );
         }
+    }
+
+    /**
+     * Mark a chunk index as received in meta.json using a file lock (safe for concurrent uploads).
+     */
+    private static function mark_chunk_received( $session_id, $index ) {
+        $path = self::chunk_meta_path( $session_id );
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for locking+atomic update
+        $fp = fopen( $path, 'c+' );
+        if ( ! $fp ) {
+            return;
+        }
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_flock -- required for coordinating concurrent updates
+        @flock( $fp, LOCK_EX );
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fseek -- required for reading from start
+        fseek( $fp, 0 );
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- required for reading JSON metadata
+        $raw = stream_get_contents( $fp );
+        $meta = json_decode( (string) $raw, true );
+        if ( ! is_array( $meta ) ) {
+            $meta = [];
+        }
+        $received = isset( $meta['received'] ) && is_array( $meta['received'] ) ? array_map( 'absint', $meta['received'] ) : [];
+        $received[] = (int) $index;
+        $received = array_values( array_unique( $received ) );
+        sort( $received );
+        $meta['received'] = $received;
+        $encoded = wp_json_encode( $meta );
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_ftruncate -- required for atomic update
+        ftruncate( $fp, 0 );
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fseek -- required for writing from start
+        fseek( $fp, 0 );
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for atomic update
+        fwrite( $fp, $encoded );
+        fflush( $fp );
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_flock -- release lock
+        @flock( $fp, LOCK_UN );
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- cleanup
+        fclose( $fp );
     }
 
     public static function prepare_session( $file_path, $source, $extra = [] ) {
@@ -1469,6 +1736,12 @@ class Backup_Lite_Restore_Handler {
             ] );
         }
 
+        // Best-effort detect the database table prefix used inside the backup.
+        // This helps diagnose/avoid "files restored but content missing" cases caused by prefix mismatch.
+        $db_prefix_source = self::detect_db_prefix_from_archive( $file_path );
+        global $wpdb;
+        $db_prefix_target = isset( $wpdb->prefix ) ? (string) $wpdb->prefix : '';
+
         // Store only filename in state, not full path
         // Full path will be resolved when needed using backup_lite_get_backup_path()
         $file_name = basename( $file_path );
@@ -1481,7 +1754,13 @@ class Backup_Lite_Restore_Handler {
             'size'      => (float) $size,
             'sha1'      => $sha1,
             'created'   => current_time( 'mysql' ),
-            'extra'     => $extra,
+            'extra'     => array_merge(
+                is_array( $extra ) ? $extra : [],
+                [
+                    'db_prefix_source' => (string) $db_prefix_source,
+                    'db_prefix_target' => (string) $db_prefix_target,
+                ]
+            ),
             'progress'  => self::format_progress( 10, __( 'File ready. Review summary before restoring.', 'museder-restoreone' ), true ),
             'completed' => false,
         ];
@@ -1739,6 +2018,10 @@ class Backup_Lite_Restore_Handler {
             $sha1 = sha1_file( $path );
         }
 
+        $extra = ( isset( $state['extra'] ) && is_array( $state['extra'] ) ) ? $state['extra'] : [];
+        $db_prefix_source = isset( $extra['db_prefix_source'] ) ? (string) $extra['db_prefix_source'] : '';
+        $db_prefix_target = isset( $extra['db_prefix_target'] ) ? (string) $extra['db_prefix_target'] : '';
+
         return [
             'name'    => isset( $state['filename'] ) ? $state['filename'] : ( $file_name ? basename( $file_name ) : '' ),
             'size'    => size_format( $size, 2 ),
@@ -1746,7 +2029,93 @@ class Backup_Lite_Restore_Handler {
             'sha1'    => $sha1,
             'source'  => isset( $state['source'] ) ? $state['source'] : '',
             'created' => isset( $state['created'] ) ? $state['created'] : '',
+            'db_prefix_source' => $db_prefix_source,
+            'db_prefix_target' => $db_prefix_target,
         ];
+    }
+
+    /**
+     * Best-effort detect the table prefix used in a backup's database.sql.
+     *
+     * Returns something like "qvj4_" or "wp_2_" (including trailing underscore), or '' if unknown.
+     *
+     * @param string $file_path Absolute path to backup archive.
+     * @return string
+     */
+    private static function detect_db_prefix_from_archive( $file_path ) {
+        $file_path = wp_normalize_path( (string) $file_path );
+        if ( '' === $file_path || ! file_exists( $file_path ) || ! is_readable( $file_path ) ) {
+            return '';
+        }
+
+        $ext = strtolower( pathinfo( $file_path, PATHINFO_EXTENSION ) );
+        if ( 'zip' !== $ext ) {
+            // WPRESS detection is handled later during restore-db extraction (best-effort).
+            return '';
+        }
+
+        if ( ! class_exists( 'ZipArchive' ) ) {
+            return '';
+        }
+
+        $zip = new ZipArchive();
+        $ok  = $zip->open( $file_path );
+        $ok_code = defined( 'ZipArchive::ER_OK' ) ? ZipArchive::ER_OK : 0;
+        if ( true !== $ok && $ok_code !== $ok ) {
+            return '';
+        }
+
+        $entry_name = '';
+        for ( $i = 0; $i < (int) $zip->numFiles; $i++ ) {
+            $name = (string) $zip->getNameIndex( $i );
+            if ( '' === $name ) {
+                continue;
+            }
+            if ( 'database.sql' === strtolower( basename( $name ) ) ) {
+                $entry_name = $name;
+                break;
+            }
+        }
+
+        if ( '' === $entry_name ) {
+            $zip->close();
+            return '';
+        }
+
+        $stream = $zip->getStream( $entry_name );
+        if ( ! $stream ) {
+            $zip->close();
+            return '';
+        }
+
+        // Read only the head for prefix detection.
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- reading from ZipArchive stream
+        $head = fread( $stream, 1024 * 1024 ); // 1MB
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- closing ZipArchive stream
+        fclose( $stream );
+        $zip->close();
+
+        if ( ! is_string( $head ) || '' === $head ) {
+            return '';
+        }
+
+        // Prefer options table since it exists in all WP sites.
+        if ( preg_match( '/`([A-Za-z0-9_]+_options)`/i', $head, $m ) ) {
+            $table = (string) $m[1];
+            if ( preg_match( '/^([A-Za-z0-9_]+_)options$/', $table, $m2 ) ) {
+                return (string) $m2[1];
+            }
+        }
+
+        // Fallback: pick the first referenced table and infer prefix if it ends with options.
+        if ( preg_match( '/\\b(?:CREATE TABLE|DROP TABLE IF EXISTS|INSERT INTO)\\s+`([^`]+)`/i', $head, $m ) ) {
+            $table = (string) $m[1];
+            if ( preg_match( '/^([A-Za-z0-9_]+_)options$/', $table, $m2 ) ) {
+                return (string) $m2[1];
+            }
+        }
+
+        return '';
     }
 
     private static function report_job_progress( $job_id, $percent, $message, $done = false, $status = null ) {
@@ -1774,12 +2143,12 @@ class Backup_Lite_Restore_Handler {
             ] );
         }
         
-        Backup_Lite_Restore_Jobs::update_job_progress( $job_id, $percent, $message, $status );
         self::update_progress( $percent, $message, $done );
     }
 
     private static function job_should_abort( $job_id ) {
-        return Backup_Lite_Restore_Jobs::is_cancel_requested( $job_id );
+        // Restore_Service cancellation is cooperative via meta stage; legacy cancel flag is not used.
+        return false;
     }
 
     private static function handle_job_cancelled( $job_id, array $history_entry ) {
@@ -1797,7 +2166,6 @@ class Backup_Lite_Restore_Handler {
         $history_entry['restore_duration_seconds']  = $restore_duration_seconds;
         backup_lite_append_restore_history( $history_entry );
         self::report_job_progress( $job_id, 100, __( 'Restore cancelled.', 'museder-restoreone' ), true );
-        Backup_Lite_Restore_Jobs::finalize_cancel( $job_id );
         self::cleanup_state_after_cancel();
 
         return [
@@ -1805,6 +2173,45 @@ class Backup_Lite_Restore_Handler {
             'status'      => 'cancelled',
             'message'     => __( 'Restore cancelled.', 'museder-restoreone' ),
             'history_log' => isset( $history_entry['log'] ) ? $history_entry['log'] : '',
+        ];
+    }
+
+    /**
+     * Map Restore_Service status to the legacy job object shape used by admin.js.
+     *
+     * @param string $job_id
+     * @param array  $status
+     * @return array
+     */
+    private static function map_restore_service_status_to_job( $job_id, array $status ) {
+        $stage     = isset( $status['stage'] ) ? (string) $status['stage'] : '';
+        $completed = ! empty( $status['completed'] );
+        $progress  = isset( $status['progress'] ) ? (float) $status['progress'] : 0;
+        $message   = isset( $status['message'] ) ? (string) $status['message'] : '';
+        $last_tick = isset( $status['last_tick'] ) ? (int) $status['last_tick'] : 0;
+        $started_at = isset( $status['started_at'] ) ? (int) $status['started_at'] : 0;
+        $updated_at = isset( $status['updated_at'] ) ? (string) $status['updated_at'] : '';
+
+        $job_status = 'running';
+        if ( $completed ) {
+            if ( 'done' === $stage || 'rollback-done' === $stage ) {
+                $job_status = 'success';
+            } elseif ( 'cancelled' === $stage ) {
+                $job_status = 'cancelled';
+            } else {
+                $job_status = 'failed';
+            }
+        }
+
+        return [
+            'id'       => $job_id,
+            'status'   => $job_status,
+            'progress' => $progress,
+            'message'  => $message,
+            'stage'    => $stage,
+            'last_tick' => $last_tick,
+            'started_at_raw' => $started_at,
+            'updated_at' => $updated_at,
         ];
     }
 
