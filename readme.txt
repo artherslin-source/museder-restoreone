@@ -4,7 +4,7 @@ Tags: backup, migration, restore, site-backup, database-backup
 Requires at least: 5.8
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 2.7.104
+Stable tag: 2.7.126
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -13,6 +13,32 @@ A lightweight WordPress backup & restore plugin focused on compatibility, single
 == Changelog ==
 
 For full changelog history, please see docs/changelog-archive.md in the plugin folder.
+
+= 2.7.111 =
+* Fix: Exclude `wp-content/updraft/` by default to prevent “backup of backups” inflating totals and causing misleading archive sizes.
+* Improve: Stronger post-close archive verification (ZIP entry count + manifest sampling for uploads/themes). If verification fails, automatically repack once with PclZip.
+* Fix: Manifest totals no longer count >2GB files that cannot be packed.
+
+= 2.7.110 =
+* Fix: Backup finalize could loop forever when a small number of files were skipped during packing (large sites); skipped files are now counted correctly and logged with reasons.
+* Improve: Backup verify now reports ZipArchive open errors explicitly and adapts required structure checks for subsite exports and no-db backups.
+
+= 2.7.109 =
+* Maintenance release: AI1WM-Pro-style large-site hardening (backup manifest streaming + embedded metadata + serialized-safe restore), plus progress/verify stability improvements.
+
+= 2.7.108 =
+* Release: Packaging + version bump.
+
+= 2.7.107 =
+* Change: Full-site backups now use the WordPress site root (ABSPATH) as the ZIP root, including wp-admin, wp-includes, wp-content and root files (wp-config.php, etc.).
+* Improve: Archive verification now checks core roots (wp-admin/wp-includes/wp-content) and key root files before marking success.
+
+= 2.7.106 =
+* Fix: Add post-close ZIP verification (manifest sampling) and automatic one-time repack with PclZip when the archive is missing wp-content content.
+
+= 2.7.105 =
+* Fix: Prevent \"fake success\" backups when job totals leak placeholder values; totals are repaired from the manifest and integrity guards run before finalize.
+* Improve: Add diagnostic logs for end-of-packing integrity checks and finalize snapshots to speed up host-specific troubleshooting.
 
 = 2.7.94 =
 * Fix: Backups now include wp-content/uploads correctly on hosts where directory roots differ; prevents incomplete backups and progress jumping.

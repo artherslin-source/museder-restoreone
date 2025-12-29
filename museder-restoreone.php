@@ -3,7 +3,7 @@
 Plugin Name: Museder RestoreOne
 Plugin URI: https://museder.com/restoreone
 Description: Museder RestoreOne is a simple backup & restore plugin for WordPress.
-Version: 2.7.104
+Version: 2.7.126
 Requires at least: 5.8
 Tested up to: 6.9
 Requires PHP: 7.4
@@ -17,9 +17,9 @@ Domain Path: /languages
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-define( 'BACKUP_LITE_VERSION', '2.7.104' );
+define( 'BACKUP_LITE_VERSION', '2.7.126' );
 // Build identifier for debugging host-side opcode caching issues.
-define( 'BACKUP_LITE_BUILD_ID', '2.7.104-1' );
+define( 'BACKUP_LITE_BUILD_ID', '2.7.126-1' );
 define( 'BACKUP_LITE_PATH', plugin_dir_path( __FILE__ ) );
 define( 'BACKUP_LITE_URL', plugin_dir_url( __FILE__ ) );
 
@@ -29,7 +29,6 @@ require_once BACKUP_LITE_PATH . 'includes/class-upload-secret.php';
 require_once BACKUP_LITE_PATH . 'includes/class-backup.php';
 require_once BACKUP_LITE_PATH . 'includes/class-backup-jobs.php';
 require_once BACKUP_LITE_PATH . 'includes/class-restore.php';
-require_once BACKUP_LITE_PATH . 'includes/class-restore-jobs.php';
 require_once BACKUP_LITE_PATH . 'includes/class-ui.php';
 require_once BACKUP_LITE_PATH . 'includes/class-restore-handler.php';
 require_once BACKUP_LITE_PATH . 'includes/class-restore-service.php';
@@ -44,6 +43,12 @@ require_once BACKUP_LITE_PATH . 'includes/class-settings.php';
 require_once BACKUP_LITE_PATH . 'includes/class-chunk-handler.php';
 require_once BACKUP_LITE_PATH . 'includes/class-chunk-handler-v2.php';
 require_once BACKUP_LITE_PATH . 'includes/class-estimate-size.php';
+
+// WPRESS engine (AI1WM-compatible archive reader; local-only, no external services).
+require_once BACKUP_LITE_PATH . 'includes/wpress/class-wpress-exception.php';
+require_once BACKUP_LITE_PATH . 'includes/wpress/class-wpress-crypto.php';
+require_once BACKUP_LITE_PATH . 'includes/wpress/class-wpress-archiver.php';
+require_once BACKUP_LITE_PATH . 'includes/wpress/class-wpress-extractor.php';
 
 // AI Free scaffolding (no external network calls; Pro provider is not loaded here).
 require_once BACKUP_LITE_PATH . 'includes/ai/interface-ai-provider.php';
@@ -167,9 +172,9 @@ function backup_lite_bootstrap() {
     Backup_Lite_Upload_Secret::init();
     Backup_Lite_UI::init();
     Backup_Lite_Backup_Jobs::init();
-    Backup_Lite_Restore_Jobs::init();
     Backup_Lite_Restore_Handler::init();
     Backup_Lite_Restore_Controller::init();
+    Backup_Lite_Restore_Service::init();
     Backup_Lite_Schedule_Handler::init();
     Backup_Lite_Log_Handler::init();
     Backup_Lite_Dashboard::init();
@@ -237,6 +242,11 @@ function backup_lite_bootstrap() {
 
     if ( ! wp_next_scheduled( 'backup_lite_cleanup_cron' ) ) {
         wp_schedule_event( time(), 'daily', 'backup_lite_cleanup_cron' );
+    }
+
+    // Cleanup: legacy restore-jobs cron hook (deprecated, Restore_Service is the only restore engine now).
+    if ( function_exists( 'wp_clear_scheduled_hook' ) ) {
+        wp_clear_scheduled_hook( 'backup_lite_run_restore_job' );
     }
 }
 
@@ -353,7 +363,15 @@ function backup_lite_render_restore_page() {
     $museder_restoreone_summary = Backup_Lite_Restore_Handler::current_summary();
     $museder_restoreone_progress = Backup_Lite_Restore_Handler::current_progress();
     $museder_restoreone_history  = Backup_Lite_Restore_Handler::history_for_js( 10 );
-    $museder_restoreone_active_job = Backup_Lite_Restore_Jobs::has_active_job();
+    $museder_restoreone_active_job_id = class_exists( 'Backup_Lite_Restore_Service' ) ? Backup_Lite_Restore_Service::get_active_job_id() : '';
+    $museder_restoreone_active_job = null;
+    if ( ! empty( $museder_restoreone_active_job_id ) ) {
+        try {
+            $museder_restoreone_active_job = Backup_Lite_Restore_Service::status( $museder_restoreone_active_job_id );
+        } catch ( Exception $e ) {
+            $museder_restoreone_active_job = null;
+        }
+    }
 
     $museder_restoreone_backups = array_map(
         function ( $item ) {
@@ -398,7 +416,7 @@ function backup_lite_render_restore_page() {
             'summary' => $museder_restoreone_summary,
             'progress'=> $museder_restoreone_progress,
             'history' => $museder_restoreone_history,
-            'job'     => $museder_restoreone_active_job ? Backup_Lite_Restore_Jobs::prepare_job_response( $museder_restoreone_active_job ) : null,
+            'job'     => $museder_restoreone_active_job ? array_merge( [ 'id' => $museder_restoreone_active_job_id ], $museder_restoreone_active_job ) : null,
             'labels'  => [
                 'noBackups'    => __( 'No backups available.', 'museder-restoreone' ),
                 'noValidation' => __( 'Validation results will appear here once the job is prepared.', 'museder-restoreone' ),

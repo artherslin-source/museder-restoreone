@@ -2,7 +2,7 @@
 # 创建 Museder RestoreOne 插件打包文件
 
 PLUGIN_NAME="museder-restoreone"
-VERSION="$(php -r '$c=file_get_contents("museder-restoreone.php"); if(preg_match("/^Version:\\s*(.+)$/m",$c,$m)) { echo trim($m[1]); }')"
+VERSION="$(php -r '$c=file_get_contents("museder-restoreone.php"); if(preg_match("/^\\s*Version:\\s*(.+)$/m",$c,$m)) { echo trim($m[1]); }')"
 PACKAGE_NAME="${PLUGIN_NAME}-${VERSION}.zip"
 TEMP_DIR=$(mktemp -d)
 PLUGIN_DIR="${TEMP_DIR}/${PLUGIN_NAME}"
@@ -23,11 +23,6 @@ cp museder-restoreone.php "${PLUGIN_DIR}/"
 cp readme.txt "${PLUGIN_DIR}/"
 cp download-handler.php "${PLUGIN_DIR}/"
 cp upload-handler.php "${PLUGIN_DIR}/"
-
-# 排除不需要的目录
-if [ -d "dist" ]; then
-    cp -r dist "${PLUGIN_DIR}/" 2>/dev/null || true
-fi
 
 # 排除的文件和目录
 exclude_items=(
