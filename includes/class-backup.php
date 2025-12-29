@@ -5,6 +5,8 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 class Backup_Lite_Backup {
 
     const CHUNK_SIZE = 500;
+    // AI1WM-like: time-slice long preparing operations (DB export / manifest scan) to avoid timeouts.
+    const PREP_SLICE_SECONDS = 2;
     /**
      * Cached list of internal directories/files that must never be included in a backup archive.
      *
@@ -39,6 +41,14 @@ class Backup_Lite_Backup {
      * @var string
      */
     private static $runtime_backup_mode = 'balanced';
+
+    /**
+     * Runtime inclusions (job-scoped): include-only prefixes. When non-empty, only these
+     * normalized absolute prefixes (with trailing slash) are eligible for backup.
+     *
+     * @var array<string>
+     */
+    private static $runtime_include_prefixes = [];
 
     /**
      * Create a complete site backup containing database, meta and wp-content.
@@ -100,7 +110,7 @@ class Backup_Lite_Backup {
             'method'  => backup_lite_can_use_ziparchive() ? 'ZipArchive' : 'PclZip',
         ] );
 
-        if ( ! self::generate_database_dump( $sql_path ) ) {
+        if ( ! self::generate_database_dump( $sql_path, $options ) ) {
             backup_lite_log( 'error', 'Failed to generate database dump.', [ 'path' => $sql_path ] );
             backup_lite_delete_directory( $temp_dir );
 
@@ -141,7 +151,7 @@ class Backup_Lite_Backup {
             }
         }
 
-        $directories = self::get_directory_map();
+        $directories = self::get_directory_map( is_array( $options ) ? $options : [] );
 
         $success = self::with_runtime_exclusions(
             $options,
@@ -227,14 +237,51 @@ class Backup_Lite_Backup {
     /**
      * Generate database dump to destination path.
      */
-    private static function generate_database_dump( $filepath ) {
+    private static function generate_database_dump( $filepath, $options = [] ) {
+        // Multisite subsite-only export: default to exporting only the selected blog tables (+ users/usermeta).
+        if ( function_exists( 'is_multisite' ) && is_multisite() && ! empty( $options['multisite_blog_id'] ) && empty( $options['include_db_tables'] ) ) {
+            global $wpdb;
+            $blog_id = absint( $options['multisite_blog_id'] );
+            if ( $blog_id > 0 && method_exists( $wpdb, 'get_blog_prefix' ) ) {
+                $blog_prefix = $wpdb->get_blog_prefix( $blog_id );
+                $blog_prefix = preg_replace( '/[^A-Za-z0-9_]/', '', (string) $blog_prefix );
+                $base_prefix = preg_replace( '/[^A-Za-z0-9_]/', '', (string) $wpdb->base_prefix );
+
+                $all = self::get_tables();
+                $include = [];
+                foreach ( $all as $t ) {
+                    $safe = preg_replace( '/[^A-Za-z0-9_]/', '', (string) $t );
+                    if ( $blog_prefix && 0 === strpos( $safe, $blog_prefix ) ) {
+                        $include[] = $safe;
+                    }
+                }
+                // Users are shared across network; include base users/usermeta for subsite->single convenience.
+                if ( $base_prefix ) {
+                    $include[] = $base_prefix . 'users';
+                    $include[] = $base_prefix . 'usermeta';
+                }
+                $include = array_values( array_unique( array_filter( $include ) ) );
+                if ( ! empty( $include ) ) {
+                    $options['include_db_tables'] = $include;
+                }
+            }
+        }
+
+        // Allow scope preset to skip database entirely.
+        if ( ! empty( $options['no_database'] ) ) {
+            $placeholder = "-- Backup Lite: database export skipped by scope preset (no_database)\n";
+            // Using native file APIs on local temp directory; path is plugin-controlled.
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_read_file_put_contents
+            return false !== file_put_contents( $filepath, $placeholder );
+        }
+
         $method = backup_lite_can_use_mysqldump() ? 'mysqldump' : 'php';
 
         backup_lite_log( 'info', 'Database export initiated.', [ 'method' => $method, 'path' => $filepath ] );
 
         $success = backup_lite_can_use_mysqldump()
-            ? self::export_database_with_mysqldump( $filepath )
-            : self::export_database_with_php( $filepath );
+            ? self::export_database_with_mysqldump( $filepath, $options )
+            : self::export_database_with_php( $filepath, $options );
 
         if ( $success && file_exists( $filepath ) ) {
             backup_lite_log( 'info', 'Database export finished.', [ 'path' => $filepath, 'size' => filesize( $filepath ) ] );
@@ -508,10 +555,12 @@ class Backup_Lite_Backup {
             }
 
             $relative = ltrim( substr( $file_path, strlen( $normalized_source ) ), '/' );
-            $entry    = $target . '/' . $relative;
+            $entry    = self::compose_target_path( (string) $target, (string) $relative );
 
             if ( $file->isDir() ) {
-                $zip->addEmptyDir( $entry );
+                if ( '' !== $entry ) {
+                    $zip->addEmptyDir( $entry );
+                }
             } else {
                 // Skip extremely large files (>2GB) to prevent issues
                 $size = $file->getSize();
@@ -525,6 +574,10 @@ class Backup_Lite_Backup {
                     continue;
                 }
                 
+                if ( '' === $entry ) {
+                    continue;
+                }
+
                 $zip->addFile( $file_path, $entry );
                 
                 // Compression strategy:
@@ -542,43 +595,46 @@ class Backup_Lite_Backup {
     }
 
     /**
-     * Get directory map with optimized priority order.
-     * Important directories (themes, plugins, uploads) are processed first.
+     * Get directory map for backup.
+     *
+     * For full-site backups, the ZIP root should represent the WordPress site root.
+     * We therefore map ABSPATH to the ZIP root (empty target) so the archive contains:
+     * - wp-admin/
+     * - wp-includes/
+     * - wp-content/
+     * - wp-config.php, index.php, etc. (if present under ABSPATH)
+     *
+     * If WP_CONTENT_DIR is outside ABSPATH (non-standard), we include it separately as wp-content/.
      *
      * @return array<string, string> Map of target => source directory paths.
      */
-    private static function get_directory_map() {
-        // Priority order: most important directories first
-        // This allows important content to be backed up first, improving perceived performance
-        $priority_dirs = [
-            'themes'     => WP_CONTENT_DIR . '/themes',
-            'plugins'    => WP_CONTENT_DIR . '/plugins',
-            'uploads'    => WP_CONTENT_DIR . '/uploads',
-        ];
-
-        $other_dirs = [
-            'mu-plugins' => WP_CONTENT_DIR . '/mu-plugins',
-            'languages'  => WP_CONTENT_DIR . '/languages',
-        ];
-
+    private static function get_directory_map( array $options = [] ) {
         $map = [];
 
-        // Add priority directories first
-        foreach ( $priority_dirs as $target => $path ) {
-            if ( is_dir( $path ) ) {
-                $map[ $target ] = $path;
+        // Multisite subsite-only export: pack wp-content only (faster + smaller), rely on include prefixes.
+        if ( function_exists( 'is_multisite' ) && is_multisite() && ! empty( $options['multisite_blog_id'] ) ) {
+            $wp_content = defined( 'WP_CONTENT_DIR' ) ? (string) WP_CONTENT_DIR : '';
+            $wp_content = wp_normalize_path( rtrim( $wp_content, '/\\' ) );
+            if ( '' !== $wp_content && is_dir( $wp_content ) ) {
+                $map['wp-content'] = $wp_content;
             }
+            return $map;
         }
 
-        // Add wp-content root if it exists and has content
-        if ( is_dir( WP_CONTENT_DIR ) ) {
-            $map['wp-content'] = WP_CONTENT_DIR;
+        $root = defined( 'ABSPATH' ) ? (string) ABSPATH : '';
+        $root = wp_normalize_path( rtrim( $root, '/\\' ) );
+        if ( '' !== $root && is_dir( $root ) ) {
+            // Empty target means "ZIP root".
+            $map[''] = $root;
         }
 
-        // Add other directories
-        foreach ( $other_dirs as $target => $path ) {
-            if ( is_dir( $path ) ) {
-                $map[ $target ] = $path;
+        // If wp-content is outside ABSPATH, include it explicitly.
+        $wp_content = defined( 'WP_CONTENT_DIR' ) ? (string) WP_CONTENT_DIR : '';
+        $wp_content = wp_normalize_path( rtrim( $wp_content, '/\\' ) );
+        if ( '' !== $wp_content && is_dir( $wp_content ) ) {
+            $root_prefix = '' !== $root ? trailingslashit( $root ) : '';
+            if ( '' === $root_prefix || 0 !== strpos( $wp_content, $root_prefix ) ) {
+                $map['wp-content'] = $wp_content;
             }
         }
 
@@ -622,6 +678,7 @@ class Backup_Lite_Backup {
         $meta_path = trailingslashit( $temp_dir ) . 'meta.json';
 
         $manifest_file = trailingslashit( backup_lite_get_jobs_dir() ) . sanitize_file_name( $job_id ) . '-manifest.json';
+        $manifest_ndjson_file = trailingslashit( backup_lite_get_jobs_dir() ) . sanitize_file_name( $job_id ) . '-manifest.ndjson';
 
         return [
             'archive_path'  => $archive_path,
@@ -630,6 +687,7 @@ class Backup_Lite_Backup {
             'sql_path'      => $sql_path,
             'meta_path'     => $meta_path,
             'manifest_file' => $manifest_file,
+            'manifest_ndjson_file' => $manifest_ndjson_file,
             'options'       => is_array( $options ) ? $options : [],
         ];
     }
@@ -672,7 +730,7 @@ class Backup_Lite_Backup {
         $sql_path     = trailingslashit( $temp_dir ) . 'database.sql';
         $meta_path    = trailingslashit( $temp_dir ) . 'meta.json';
 
-        if ( ! self::generate_database_dump( $sql_path ) ) {
+        if ( ! self::generate_database_dump( $sql_path, $options ) ) {
             backup_lite_delete_directory( $temp_dir );
             throw new RuntimeException( esc_html__( 'Database export failed. Check logs for details.', 'museder-restoreone' ) );
         }
@@ -696,7 +754,7 @@ class Backup_Lite_Backup {
         self::initialize_archive_with_meta( $archive_path, $sql_path, $meta_path );
 
         try {
-            $directories = self::get_directory_map();
+            $directories = self::get_directory_map( is_array( $options ) ? $options : [] );
 
             // Resolve Auto mode (large site detection) before building the full manifest.
             $options = self::resolve_effective_backup_options_for_job( $options, $directories );
@@ -796,10 +854,41 @@ class Backup_Lite_Backup {
 
         if ( 'db' === $step ) {
             $job['message'] = __( 'Preparing database export…', 'museder-restoreone' );
-            if ( ! self::generate_database_dump( $sql_path ) ) {
+            // AI1WM-like: time-slice PHP DB export for large sites; keep mysqldump single-shot.
+            if ( backup_lite_can_use_mysqldump() ) {
+                if ( ! self::generate_database_dump( $sql_path, $options ) ) {
                 throw new RuntimeException( esc_html__( 'Database export failed. Check logs for details.', 'museder-restoreone' ) );
             }
             $job['prep_step'] = 'meta';
+                return $job;
+            }
+
+            $done = self::export_database_with_php_sliced_for_job( $job, $sql_path, $options, self::PREP_SLICE_SECONDS );
+            // Improve progress messaging for huge DBs (table-based, resumable).
+            if ( ! $done && ! empty( $job['db_state'] ) && is_array( $job['db_state'] ) ) {
+                $state = $job['db_state'];
+                $tables_total = isset( $state['tables'] ) && is_array( $state['tables'] ) ? count( $state['tables'] ) : 0;
+                $table_index  = isset( $state['table_index'] ) ? (int) $state['table_index'] : 0;
+                $table_name   = isset( $state['current_table'] ) ? (string) $state['current_table'] : '';
+                $row_offset   = isset( $state['row_offset'] ) ? (int) $state['row_offset'] : 0;
+                $row_count    = isset( $state['row_count'] ) ? (int) $state['row_count'] : 0;
+                if ( '' !== $table_name && $tables_total > 0 ) {
+                    $job['message'] = sprintf(
+                        /* translators: 1: table index, 2: total tables, 3: table name, 4: row offset, 5: row count */
+                        __( 'Preparing database export… (%1$d/%2$d: %3$s, %4$d/%5$d rows)', 'museder-restoreone' ),
+                        min( $table_index + 1, $tables_total ),
+                        $tables_total,
+                        $table_name,
+                        $row_offset,
+                        max( 0, $row_count )
+                    );
+                }
+            }
+            if ( $done ) {
+                $job['prep_step'] = 'meta';
+            } else {
+                $job['prep_step'] = 'db';
+            }
             return $job;
         }
 
@@ -830,55 +919,46 @@ class Backup_Lite_Backup {
         if ( 'manifest' === $step ) {
             $job['message'] = __( 'Building file list…', 'museder-restoreone' );
 
-            $directories = self::get_directory_map();
+            $directories = self::get_directory_map( is_array( $options ) ? $options : [] );
             $options     = self::resolve_effective_backup_options_for_job( $options, $directories );
 
-            $manifest_data = self::with_runtime_exclusions(
+            // AI1WM-like: build manifest in small time slices with resume checkpoints.
+            $job['options']     = $options;
+            $job['directories'] = $directories;
+
+            $ndjson_file = isset( $job['manifest_ndjson_file'] ) ? (string) $job['manifest_ndjson_file'] : '';
+            if ( '' === $ndjson_file ) {
+                $ndjson_file = trailingslashit( backup_lite_get_jobs_dir() ) . sanitize_file_name( (string) ( $job['id'] ?? '' ) ) . '-manifest.ndjson';
+                $job['manifest_ndjson_file'] = $ndjson_file;
+            }
+
+            $done = self::with_runtime_exclusions(
                 $options,
-                function () use ( $directories ) {
-                    return self::get_cached_file_manifest( $directories );
+                function () use ( &$job, $ndjson_file ) {
+                    return self::build_manifest_ndjson_sliced_for_job( $job, $ndjson_file, self::PREP_SLICE_SECONDS );
                 }
             );
-
-            if ( empty( $manifest_data ) || ! isset( $manifest_data['files'] ) ) {
-                throw new RuntimeException( esc_html__( 'File manifest is empty or invalid.', 'museder-restoreone' ) );
-            }
-
-            $encoded = wp_json_encode( $manifest_data['files'], JSON_UNESCAPED_SLASHES );
-            if ( false === $encoded ) {
-                $json_error = function_exists( 'json_last_error_msg' ) ? json_last_error_msg() : 'Unknown JSON error';
-                backup_lite_log( 'error', 'Failed to encode backup manifest to JSON.', [
-                    'json_error' => $json_error,
-                    'file_count' => isset( $manifest_data['count'] ) ? $manifest_data['count'] : 0,
-                ] );
-                throw new RuntimeException( esc_html__( 'Failed to encode backup manifest. The site may have too many files.', 'museder-restoreone' ) );
-            }
-
-            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_read_file_put_contents
-            if ( false === file_put_contents( $manifest_file, $encoded, LOCK_EX ) ) {
-                throw new RuntimeException( esc_html__( 'Unable to write backup manifest.', 'museder-restoreone' ) );
-            }
-
-            $job['options']     = $options;
-            $job['total_files'] = isset( $manifest_data['count'] ) ? max( 1, (int) $manifest_data['count'] ) : 1;
-            $job['total_bytes'] = isset( $manifest_data['bytes'] ) ? max( 1, (int) $manifest_data['bytes'] ) : 1;
-
-            backup_lite_log( 'info', 'Backup job prepared (background preparing stage).', [
+            if ( $done ) {
+                backup_lite_log( 'info', 'Backup job prepared (sliced manifest).', [
                 'job'   => $job['id'] ?? '',
-                'files' => $job['total_files'],
-                'bytes' => $job['total_bytes'],
+                    'files' => isset( $job['total_files'] ) ? (int) $job['total_files'] : 0,
+                    'bytes' => isset( $job['total_bytes'] ) ? (int) $job['total_bytes'] : 0,
                 'backup_mode' => $options['backup_mode_effective'] ?? ( $options['backup_mode'] ?? '' ),
                 'smart_exclude' => $options['backup_smart_exclude_effective'] ?? ( $options['backup_smart_exclude'] ?? '' ),
             ] );
+                $job['prep_step'] = 'selfcheck';
+            } else {
+                $job['prep_step'] = 'manifest';
+            }
 
-            $job['directories'] = $directories;
-            $job['prep_step']   = 'selfcheck';
             return $job;
         }
 
         if ( 'selfcheck' === $step ) {
             $job['message'] = __( 'Checking file access…', 'museder-restoreone' );
-            $directories = isset( $job['directories'] ) && is_array( $job['directories'] ) ? $job['directories'] : self::get_directory_map();
+            $directories = isset( $job['directories'] ) && is_array( $job['directories'] )
+                ? $job['directories']
+                : self::get_directory_map( $options );
             $selfcheck   = self::selfcheck_backup_roots( $archive_path, $directories );
             $job['selfcheck'] = $selfcheck;
 
@@ -899,6 +979,742 @@ class Backup_Lite_Backup {
         // done
         $job['prep_step'] = 'done';
         return $job;
+    }
+
+    /**
+     * Time-sliced PHP database export for async jobs.
+     *
+     * This is used only when mysqldump is not available. It writes to $sql_path incrementally
+     * and stores resume checkpoints inside $job['db_state'].
+     *
+     * @param array  $job             Job state (updated by reference).
+     * @param string $sql_path        Destination SQL file path.
+     * @param array  $options         Backup options.
+     * @param int    $timeout_seconds Slice time budget.
+     * @return bool True if completed.
+     */
+    private static function export_database_with_php_sliced_for_job( array &$job, $sql_path, array $options, $timeout_seconds = 2 ) {
+        global $wpdb;
+
+        $start = microtime( true );
+
+        if ( ! isset( $job['db_state'] ) || ! is_array( $job['db_state'] ) ) {
+            $job['db_state'] = [
+                'started'     => false,
+                'tables'      => [],
+                'table_index' => 0,
+                'row_offset'  => 0,
+                'schema_done' => false,
+            ];
+        }
+
+        $state = $job['db_state'];
+
+        if ( empty( $state['tables'] ) || ! is_array( $state['tables'] ) ) {
+            $state['tables']      = self::get_tables_for_export( $options );
+            $state['table_index'] = 0;
+            $state['row_offset']  = 0;
+            $state['schema_done'] = false;
+        }
+
+        // Create/append SQL file.
+        $mode = ( ! empty( $state['started'] ) && file_exists( $sql_path ) ) ? 'ab' : 'wb';
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for streaming SQL export, path is plugin-controlled
+        $handle = fopen( $sql_path, $mode );
+        if ( ! $handle ) {
+            return false;
+        }
+
+        if ( function_exists( 'stream_set_write_buffer' ) ) {
+            stream_set_write_buffer( $handle, 65536 );
+        }
+
+        if ( empty( $state['started'] ) ) {
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for SQL stream export
+            fwrite( $handle, "SET sql_mode = 'NO_AUTO_VALUE_ON_ZERO';\n" );
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for SQL stream export
+            fwrite( $handle, "SET time_zone = '+00:00';\n\n" );
+            $state['started'] = true;
+        }
+
+        $tables = $state['tables'];
+        $i      = isset( $state['table_index'] ) ? (int) $state['table_index'] : 0;
+        $offset = isset( $state['row_offset'] ) ? (int) $state['row_offset'] : 0;
+        $schema_done = ! empty( $state['schema_done'] );
+
+        while ( $i < count( $tables ) ) {
+            $table = (string) $tables[ $i ];
+            $safe_table = preg_replace( '/[^A-Za-z0-9_]/', '', $table );
+            if ( '' === $safe_table ) {
+                $i++;
+                $offset = 0;
+                $schema_done = false;
+                continue;
+            }
+
+            $state['current_table'] = $safe_table;
+
+            if ( ! $schema_done ) {
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for SQL stream export
+                fwrite( $handle, sprintf( "-- Table structure for table `%s`\n\n", $safe_table ) );
+
+                // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+                $create = $wpdb->get_row( $wpdb->prepare( "SHOW CREATE TABLE `%s`", $safe_table ), ARRAY_N ); // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- safe: table name sanitized from SHOW TABLES result
+                // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+                if ( isset( $create[1] ) ) {
+                    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for SQL stream export
+                    fwrite( $handle, "DROP TABLE IF EXISTS `{$safe_table}`;\n" );
+                    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for SQL stream export
+                    fwrite( $handle, $create[1] . ";\n\n" );
+                }
+                $schema_done = true;
+                $offset = 0;
+            }
+
+            if ( ! isset( $state['row_count'] ) || (int) $state['row_count'] < 0 || (int) $state['table_index'] !== $i ) {
+                // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+                $row_count = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM `%s`", $safe_table ) );
+                // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+                $state['row_count']  = $row_count;
+                $state['table_index'] = $i;
+            } else {
+                $row_count = (int) $state['row_count'];
+            }
+            if ( $row_count <= 0 ) {
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for SQL stream export
+                fwrite( $handle, "\n" );
+                $i++;
+                $offset = 0;
+                $schema_done = false;
+                if ( $timeout_seconds > 0 && ( microtime( true ) - $start ) > $timeout_seconds ) {
+                    break;
+                }
+                continue;
+            }
+
+            if ( 0 === $offset ) {
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for SQL stream export
+                fwrite( $handle, sprintf( "-- Dumping data for table `%s`\n", $safe_table ) );
+            }
+
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+            $rows = $wpdb->get_results(
+                $wpdb->prepare(
+                    "SELECT * FROM `%s` LIMIT %d OFFSET %d",
+                    $safe_table,
+                    (int) self::CHUNK_SIZE,
+                    (int) $offset
+                ),
+                ARRAY_A
+            );
+            // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+            if ( empty( $rows ) ) {
+                // Finished table.
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for SQL stream export
+                fwrite( $handle, "\n" );
+                $i++;
+                $offset = 0;
+                $schema_done = false;
+                if ( $timeout_seconds > 0 && ( microtime( true ) - $start ) > $timeout_seconds ) {
+                    break;
+                }
+                continue;
+            }
+
+            $values = [];
+            foreach ( $rows as $row ) {
+                $escaped = array_map( [ __CLASS__, 'escape_value' ], $row );
+                $values[] = '(' . implode( ',', $escaped ) . ')';
+            }
+
+            if ( ! empty( $values ) ) {
+                $columns = array_map( [ __CLASS__, 'escape_identifier' ], array_keys( $rows[0] ) );
+                $sql = sprintf(
+                    "INSERT INTO `%s` (%s) VALUES\n%s;\n",
+                    $safe_table,
+                    implode( ',', $columns ),
+                    implode( ",\n", $values )
+                );
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for SQL stream export
+                fwrite( $handle, $sql );
+            }
+
+            $offset += (int) self::CHUNK_SIZE;
+
+            if ( $timeout_seconds > 0 && ( microtime( true ) - $start ) > $timeout_seconds ) {
+                break;
+            }
+
+            if ( $offset >= $row_count ) {
+                // Finished table.
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for SQL stream export
+                fwrite( $handle, "\n" );
+                $i++;
+                $offset = 0;
+                $schema_done = false;
+                if ( $timeout_seconds > 0 && ( microtime( true ) - $start ) > $timeout_seconds ) {
+                    break;
+                }
+            }
+        }
+
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required cleanup after fopen
+        fclose( $handle );
+
+        $state['tables']      = $tables;
+        $state['table_index'] = $i;
+        $state['row_offset']  = $offset;
+        $state['schema_done'] = $schema_done;
+        $job['db_state']      = $state;
+
+        return ( $i >= count( $tables ) );
+    }
+
+    /**
+     * Time-sliced manifest builder for async jobs.
+     *
+     * Writes a JSON array incrementally into $manifest_file to avoid long single requests.
+     * Resume state is stored inside $job['manifest_state'].
+     *
+     * @param array  $job
+     * @param string $manifest_file
+     * @param int    $timeout_seconds
+     * @return bool True if completed.
+     */
+    private static function build_manifest_ndjson_sliced_for_job( array &$job, $manifest_file, $timeout_seconds = 2 ) {
+        $start = microtime( true );
+
+        $directories = isset( $job['directories'] ) && is_array( $job['directories'] ) ? $job['directories'] : [];
+        if ( empty( $directories ) ) {
+            return false;
+        }
+
+        if ( ! isset( $job['manifest_state'] ) || ! is_array( $job['manifest_state'] ) ) {
+            $queue = [];
+            foreach ( $directories as $target => $source ) {
+                if ( ! is_string( $source ) || '' === $source || ! is_dir( $source ) ) {
+                    continue;
+                }
+                $root = wp_normalize_path( rtrim( (string) $source, '/\\' ) );
+                $queue[] = [
+                    'target' => (string) $target,
+                    'root'   => $root,
+                    'dir'    => $root,
+                ];
+            }
+
+            $job['manifest_state'] = [
+                'started' => false,
+                'queue'   => $queue,
+                'current' => null,
+                'count'   => 0,
+                'bytes'   => 0,
+            ];
+        }
+
+        $state   = $job['manifest_state'];
+        $queue   = isset( $state['queue'] ) && is_array( $state['queue'] ) ? $state['queue'] : [];
+        $current = isset( $state['current'] ) ? $state['current'] : null;
+
+        $mode = ( ! empty( $state['started'] ) && file_exists( $manifest_file ) ) ? 'ab' : 'wb';
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for streaming manifest write on large sites, file path is plugin-controlled
+        $fh = fopen( $manifest_file, $mode );
+        if ( ! $fh ) {
+            return false;
+        }
+
+        if ( empty( $state['started'] ) ) {
+            $state['started'] = true;
+        }
+
+        $max_file_size = 2147483648; // 2GB (ZipArchive/PclZip safety cap)
+
+        while ( $timeout_seconds <= 0 || ( microtime( true ) - $start ) < $timeout_seconds ) {
+            if ( empty( $current ) ) {
+                $current = array_shift( $queue );
+                if ( empty( $current ) ) {
+                    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- cleanup after fopen
+                    fclose( $fh );
+
+                    $state['queue']   = [];
+                    $state['current'] = null;
+                    $job['manifest_state'] = $state;
+
+                    $job['total_files'] = max( 1, (int) $state['count'] );
+                    $job['total_bytes'] = max( 1, (int) $state['bytes'] );
+                    return true;
+                }
+
+                $dir = isset( $current['dir'] ) ? (string) $current['dir'] : '';
+                if ( '' === $dir || ! is_dir( $dir ) ) {
+                    $current = null;
+                    continue;
+                }
+
+                // Build file list for this directory so we can resume within it.
+                $items = [];
+                try {
+                    $it = new DirectoryIterator( $dir );
+                    foreach ( $it as $item ) {
+                        if ( $item->isDot() ) {
+                            continue;
+                        }
+                        $items[] = $item->getFilename();
+                    }
+                } catch ( Exception $e ) {
+                    $current = null;
+                    continue;
+                }
+
+                $current['items'] = $items;
+                $current['idx']   = 0;
+            }
+
+            $dir    = isset( $current['dir'] ) ? (string) $current['dir'] : '';
+            $root   = isset( $current['root'] ) ? (string) $current['root'] : '';
+            $target = isset( $current['target'] ) ? (string) $current['target'] : '';
+            $items  = isset( $current['items'] ) && is_array( $current['items'] ) ? $current['items'] : [];
+            $idx    = isset( $current['idx'] ) ? (int) $current['idx'] : 0;
+
+            if ( '' === $dir || '' === $root || $idx >= count( $items ) ) {
+                $current = null;
+                continue;
+            }
+
+            $name = (string) $items[ $idx ];
+            $current['idx'] = $idx + 1;
+
+            $path = wp_normalize_path( trailingslashit( $dir ) . $name );
+            if ( self::should_skip_path( $path ) ) {
+                continue;
+            }
+
+            $root_prefix = trailingslashit( wp_normalize_path( $root ) );
+            if ( 0 !== strpos( $path, $root_prefix ) ) {
+                continue;
+            }
+
+            if ( is_dir( $path ) ) {
+                $queue[] = [
+                    'target' => $target,
+                    'root'   => $root,
+                    'dir'    => $path,
+                ];
+                continue;
+            }
+
+            if ( ! is_file( $path ) ) {
+                continue;
+            }
+
+            $rel = ltrim( substr( $path, strlen( rtrim( $root, '/' ) ) ), '/' );
+            if ( '' === $rel ) {
+                continue;
+            }
+
+            $target_path = self::compose_target_path( $target, $rel );
+            if ( '' === $target_path ) {
+                continue;
+            }
+
+            $size = @filesize( $path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_filesize -- manifest build needs file size, path is validated
+            if ( is_numeric( $size ) && (int) $size > $max_file_size ) {
+                // Do not include >2GB files in manifest totals; packing will not be able to include them.
+                // Track as skipped for diagnostics (optional).
+                $state['skipped_too_large'] = isset( $state['skipped_too_large'] ) ? ( (int) $state['skipped_too_large'] + 1 ) : 1;
+                continue;
+            }
+            $entry = [
+                'path'   => $path,
+                'target' => $target_path,
+                'size'   => is_numeric( $size ) ? (int) $size : 0,
+            ];
+            $encoded = wp_json_encode( $entry, JSON_UNESCAPED_SLASHES );
+            if ( false === $encoded ) {
+                continue;
+            }
+
+            // NDJSON: one JSON object per line.
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- streaming manifest write
+            fwrite( $fh, $encoded . "\n" );
+            $state['count'] = isset( $state['count'] ) ? ( (int) $state['count'] + 1 ) : 1;
+            if ( ! empty( $entry['size'] ) ) {
+                $state['bytes'] = isset( $state['bytes'] ) ? ( (int) $state['bytes'] + (int) $entry['size'] ) : (int) $entry['size'];
+            }
+        }
+
+        $state['queue']   = $queue;
+        $state['current'] = $current;
+        $job['manifest_state'] = $state;
+
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- cleanup after fopen
+        fclose( $fh );
+
+        return false;
+    }
+
+    /**
+     * Ensure manifest.ndjson exists for a job. Auto-migrate legacy manifest.json when needed.
+     *
+     * @param array $job
+     * @return array Updated job.
+     */
+    private static function ensure_manifest_ndjson_for_job( array $job ) {
+        $ndjson = isset( $job['manifest_ndjson_file'] ) ? (string) $job['manifest_ndjson_file'] : '';
+        if ( '' !== $ndjson && file_exists( $ndjson ) ) {
+            return $job;
+        }
+
+        $job_id = sanitize_file_name( (string) ( $job['id'] ?? '' ) );
+        if ( '' === $ndjson ) {
+            $ndjson = trailingslashit( backup_lite_get_jobs_dir() ) . $job_id . '-manifest.ndjson';
+            $job['manifest_ndjson_file'] = $ndjson;
+        }
+
+        // Legacy manifest file (JSON array).
+        $legacy = isset( $job['manifest_file'] ) ? (string) $job['manifest_file'] : '';
+        if ( '' === $legacy || ! file_exists( $legacy ) ) {
+            throw new RuntimeException( esc_html__( 'Backup manifest file is missing. Please restart the backup job.', 'museder-restoreone' ) );
+        }
+
+        // One-time migration per job.
+        if ( empty( $job['manifest_migrated'] ) ) {
+            $totals = self::convert_manifest_json_to_ndjson( $legacy, $ndjson );
+            $job['manifest_migrated'] = true;
+            $job['manifest_offset']   = 0;
+
+            if ( isset( $totals['count'] ) ) {
+                $job['total_files'] = max( 1, (int) $totals['count'] );
+            }
+            if ( isset( $totals['bytes'] ) ) {
+                $job['total_bytes'] = max( 1, (int) $totals['bytes'] );
+            }
+        }
+
+        return $job;
+    }
+
+    /**
+     * Convert legacy manifest.json (JSON array) to manifest.ndjson (one JSON object per line).
+     *
+     * This is only used for legacy jobs and is strict: the top-level JSON must be an array and
+     * each element must be an object. Any invalid/corrupt input fails fast with a friendly message.
+     *
+     * The conversion is streaming to avoid high RAM usage on large backups.
+     *
+     * @param string $json_file
+     * @param string $ndjson_file
+     * @return array{count:int,bytes:int}
+     */
+    private static function convert_manifest_json_to_ndjson( $json_file, $ndjson_file ) {
+        $friendly = esc_html__( "This backup's manifest.json is invalid or corrupted. Please create a new backup and try again.", 'museder-restoreone' );
+
+        $fail = static function ( $reason ) use ( $json_file, $friendly ) {
+            if ( function_exists( 'backup_lite_log' ) ) {
+                backup_lite_log( 'error', 'legacy_manifest_invalid', [
+                    'file'   => basename( (string) $json_file ),
+                    'reason' => (string) $reason,
+                ] );
+            }
+            throw new RuntimeException( $friendly );
+        };
+
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for streaming legacy manifest conversion, path is plugin-controlled
+        $in = fopen( $json_file, 'rb' );
+        if ( ! $in ) {
+            $fail( 'open_failed' );
+        }
+
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for streaming NDJSON output, file path is plugin-controlled
+        $out = fopen( $ndjson_file, 'wb' );
+        if ( ! $out ) {
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- cleanup after fopen
+            fclose( $in );
+            $fail( 'output_open_failed' );
+        }
+
+        $count = 0;
+        $bytes = 0;
+
+        // Read helpers (chunked buffer).
+        $buffer = '';
+        $pos    = 0;
+        $eof    = false;
+
+        $read_char = static function () use ( &$in, &$buffer, &$pos, &$eof ) {
+            if ( $eof ) {
+                return null;
+            }
+            if ( $pos >= strlen( $buffer ) ) {
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- required for streaming parse, file path is plugin-controlled
+                $buffer = fread( $in, 65536 );
+                $pos    = 0;
+                if ( false === $buffer || '' === $buffer ) {
+                    $eof = true;
+                    return null;
+                }
+            }
+            return $buffer[ $pos++ ];
+        };
+
+        $peek_char = static function () use ( &$pos, $read_char ) {
+            $c = $read_char();
+            if ( null === $c ) {
+                return null;
+            }
+            $pos--;
+            return $c;
+        };
+
+        $skip_ws = static function () use ( $read_char, $peek_char ) {
+            while ( true ) {
+                $c = $peek_char();
+                if ( null === $c ) {
+                    return null;
+                }
+                if ( ! ctype_space( $c ) ) {
+                    return $c;
+                }
+                $read_char();
+            }
+        };
+
+        try {
+            // Top-level must be an array.
+            $c = $skip_ws();
+            if ( null === $c ) {
+                $fail( 'empty_input' );
+            }
+            if ( '[' !== $c ) {
+                $fail( 'top_level_not_array' );
+            }
+            $read_char(); // consume '['
+
+            // Array loop.
+            while ( true ) {
+                $c = $skip_ws();
+                if ( null === $c ) {
+                    $fail( 'unexpected_eof_in_array' );
+                }
+
+                // Empty array or end.
+                if ( ']' === $c ) {
+                    $read_char(); // consume ']'
+                    break;
+                }
+
+                // Elements must be objects.
+                if ( '{' !== $c ) {
+                    $fail( 'array_element_not_object' );
+                }
+
+                // Read one full object (string/escape aware brace matching).
+                $obj        = '';
+                $depth      = 0;
+                $in_string  = false;
+                $escape     = false;
+
+                while ( true ) {
+                    $ch = $read_char();
+                    if ( null === $ch ) {
+                        $fail( 'unexpected_eof_in_object' );
+                    }
+
+                    $obj .= $ch;
+
+                    if ( $in_string ) {
+                        if ( $escape ) {
+                            $escape = false;
+                            continue;
+                        }
+                        if ( '\\' === $ch ) {
+                            $escape = true;
+                            continue;
+                        }
+                        if ( '"' === $ch ) {
+                            $in_string = false;
+                            continue;
+                        }
+                        continue;
+                    }
+
+                    if ( '"' === $ch ) {
+                        $in_string = true;
+                        continue;
+                    }
+
+                    if ( '{' === $ch ) {
+                        $depth++;
+                        continue;
+                    }
+                    if ( '}' === $ch ) {
+                        $depth--;
+                        if ( 0 === $depth ) {
+                            break;
+                        }
+                        continue;
+                    }
+                }
+
+                $decoded = json_decode( $obj, true );
+                if ( ! is_array( $decoded ) ) {
+                    $fail( 'object_decode_failed' );
+                }
+
+                // Ensure element is an object (associative), not an array/list.
+                $is_list = true;
+                $i = 0;
+                foreach ( $decoded as $k => $_v ) {
+                    if ( $k !== $i ) {
+                        $is_list = false;
+                        break;
+                    }
+                    $i++;
+                }
+                if ( $is_list ) {
+                    $fail( 'array_element_not_object' );
+                }
+
+                $path   = isset( $decoded['path'] ) ? wp_normalize_path( (string) $decoded['path'] ) : '';
+                $target = isset( $decoded['target'] ) ? (string) $decoded['target'] : '';
+                $size   = isset( $decoded['size'] ) ? absint( $decoded['size'] ) : 0;
+                if ( '' === $path || '' === $target ) {
+                    $fail( 'missing_fields' );
+                }
+                $target = preg_replace( '#[^A-Za-z0-9_\\-\\./]#', '', $target );
+                if ( '' === $target ) {
+                    $fail( 'invalid_target' );
+                }
+
+                $line = wp_json_encode(
+                    [
+                        'path'   => $path,
+                        'target' => $target,
+                        'size'   => $size,
+                    ],
+                    JSON_UNESCAPED_SLASHES
+                );
+                if ( false === $line ) {
+                    $fail( 'encode_failed' );
+                }
+
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- streaming NDJSON output
+                fwrite( $out, $line . "\n" );
+
+                $count++;
+                if ( $size > 0 ) {
+                    $bytes += $size;
+                }
+
+                // After an element, expect comma or end bracket.
+                $c = $skip_ws();
+                if ( null === $c ) {
+                    $fail( 'unexpected_eof_after_object' );
+                }
+                if ( ',' === $c ) {
+                    $read_char(); // consume comma and continue
+                    continue;
+                }
+                if ( ']' === $c ) {
+                    $read_char(); // consume end
+                    break;
+                }
+                $fail( 'invalid_delimiter_after_object' );
+            }
+
+            // Trailing non-ws is not allowed.
+            $c = $skip_ws();
+            if ( null !== $c ) {
+                $fail( 'trailing_data' );
+            }
+        } finally {
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- cleanup after fopen
+            fclose( $out );
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- cleanup after fopen
+            fclose( $in );
+        }
+
+        return [
+            'count' => $count,
+            'bytes' => $bytes,
+        ];
+    }
+
+    /**
+     * Read a batch of NDJSON manifest entries starting at a byte offset.
+     *
+     * @param string $file
+     * @param int    $offset
+     * @param int    $max_files
+     * @param int    $max_bytes
+     * @return array{entries:array<int,array{path:string,target:string,size:int}>,offset:int,eof:bool}
+     */
+    private static function read_manifest_ndjson_batch( $file, $offset, $max_files, $max_bytes ) {
+        $entries = [];
+        $bytes   = 0;
+
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for streaming manifest read, file path is plugin-controlled
+        $fh = fopen( $file, 'rb' );
+        if ( ! $fh ) {
+            throw new RuntimeException( esc_html__( 'Unable to read backup manifest for packing. Please restart the backup job.', 'museder-restoreone' ) );
+        }
+
+        $offset = max( 0, (int) $offset );
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fseek -- required for resumable manifest read
+        fseek( $fh, $offset );
+
+        $eof = false;
+        while ( count( $entries ) < $max_files && $bytes < $max_bytes ) {
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fgets -- required for streaming NDJSON read
+            $line = fgets( $fh );
+            if ( false === $line ) {
+                $eof = true;
+                break;
+            }
+
+            $offset = ftell( $fh );
+
+            $line = trim( $line );
+            if ( '' === $line ) {
+                continue;
+            }
+
+            $row = json_decode( $line, true );
+            if ( ! is_array( $row ) ) {
+                continue;
+            }
+
+            $path   = isset( $row['path'] ) ? wp_normalize_path( (string) $row['path'] ) : '';
+            $target = isset( $row['target'] ) ? (string) $row['target'] : '';
+            $size   = isset( $row['size'] ) ? absint( $row['size'] ) : 0;
+
+            if ( '' === $path || '' === $target ) {
+                continue;
+            }
+            $target = preg_replace( '#[^A-Za-z0-9_\\-\\./]#', '', $target );
+            if ( '' === $target ) {
+                continue;
+            }
+
+            $entries[] = [
+                'path'   => $path,
+                'target' => $target,
+                'size'   => $size,
+            ];
+            if ( $size > 0 ) {
+                $bytes += $size;
+            }
+        }
+
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- cleanup after fopen
+        fclose( $fh );
+
+        return [
+            'entries' => $entries,
+            'offset'  => (int) $offset,
+            'eof'     => (bool) $eof,
+        ];
     }
 
     /**
@@ -1347,6 +2163,541 @@ class Backup_Lite_Backup {
      * @param ZipArchive $zip        Optional ZipArchive instance to reuse (for performance optimization).
      * @return array
      */
+    /**
+     * Sum bytes from manifest entries (best-effort).
+     *
+     * @param array<int,array<string,mixed>> $manifest Manifest entries.
+     * @return int
+     */
+    private static function sum_manifest_bytes( array $manifest ): int {
+        $bytes = 0;
+        foreach ( $manifest as $entry ) {
+            if ( ! is_array( $entry ) ) {
+                continue;
+            }
+            if ( isset( $entry['size'] ) ) {
+                $size = (int) $entry['size'];
+                if ( $size > 0 ) {
+                    $bytes += $size;
+                }
+            }
+        }
+        return (int) $bytes;
+    }
+
+    /**
+     * Compose a ZIP target path from a root target and a relative path.
+     *
+     * @param string $target   Target root ('' means site root in the ZIP).
+     * @param string $relative Relative path within the scanned root.
+     * @return string
+     */
+    private static function compose_target_path( string $target, string $relative ): string {
+        $relative = ltrim( $relative, '/' );
+        if ( '' === $relative ) {
+            return '';
+        }
+        if ( '' === $target ) {
+            return $relative;
+        }
+        return rtrim( $target, '/' ) . '/' . $relative;
+    }
+
+    /**
+     * Verify the closed archive contains expected WordPress site root data.
+     *
+     * We require the archive to contain at least one file from each core directory:
+     * - wp-admin/
+     * - wp-includes/
+     * - wp-content/
+     *
+     * And also key root files if they exist in the manifest:
+     * - wp-config.php
+     * - index.php
+     *
+     * This is a post-close guard against hosts where ZipArchive reports success but the archive
+     * ends up missing large portions of data.
+     *
+     * @param array $job Job state.
+     * @return array{ok:bool,missing:int,checked:int,missing_samples:array<int,string>,roots:array<string,array<string,mixed>>,files:array<string,bool>}
+     */
+    private static function verify_archive_contains_wp_content( array $job ): array {
+        $archive_path = isset( $job['archive_path'] ) ? (string) $job['archive_path'] : '';
+        if ( '' === $archive_path || ! file_exists( $archive_path ) ) {
+            return [
+                'ok'              => false,
+                'missing'         => 0,
+                'checked'         => 0,
+                'missing_samples' => [],
+                'roots'           => [],
+            ];
+        }
+
+        // NDJSON mode: avoid loading manifest.json into memory during verify.
+        $ndjson = isset( $job['manifest_ndjson_file'] ) ? (string) $job['manifest_ndjson_file'] : '';
+        if ( '' !== $ndjson && file_exists( $ndjson ) ) {
+            $zip = new ZipArchive();
+            $open_result = $zip->open( $archive_path );
+            if ( true !== $open_result ) {
+                $error_map = [
+                    ZipArchive::ER_EXISTS => 'ER_EXISTS',
+                    ZipArchive::ER_INCONS => 'ER_INCONS',
+                    ZipArchive::ER_INVAL  => 'ER_INVAL',
+                    ZipArchive::ER_MEMORY => 'ER_MEMORY',
+                    ZipArchive::ER_NOENT  => 'ER_NOENT',
+                    ZipArchive::ER_NOZIP  => 'ER_NOZIP',
+                    ZipArchive::ER_OPEN   => 'ER_OPEN',
+                    ZipArchive::ER_READ   => 'ER_READ',
+                    ZipArchive::ER_SEEK   => 'ER_SEEK',
+                ];
+                $error_name = isset( $error_map[ $open_result ] ) ? $error_map[ $open_result ] : 'UNKNOWN';
+
+            return [
+                'ok'              => false,
+                'missing'         => 0,
+                'checked'         => 0,
+                'missing_samples' => [],
+                'roots'           => [],
+                    'error'           => 'ZipArchive open failed: ' . $error_name . ' (' . (string) $open_result . ')',
+                ];
+            }
+
+            $options = isset( $job['options'] ) && is_array( $job['options'] ) ? $job['options'] : [];
+            $is_subsite_export = ( function_exists( 'is_multisite' ) && is_multisite() && ! empty( $options['multisite_blog_id'] ) );
+
+            // Required metadata files (match what we embed + what the restore pipeline expects).
+            $required = [
+                'meta.json',
+                'package.json',
+                'manifest.ndjson',
+            ];
+            if ( empty( $options['no_db'] ) ) {
+                $required[] = 'database.sql';
+            }
+
+            // Structure requirements:
+            // - Full-site export expects WordPress root dirs.
+            // - Subsite-only export packs wp-content only, so don't require wp-admin/wp-includes.
+            if ( $is_subsite_export ) {
+                $required[] = 'wp-content/index.php';
+            } else {
+                $required[] = 'wp-admin/index.php';
+                $required[] = 'wp-includes/version.php';
+                $required[] = 'wp-content/index.php';
+            }
+
+            $missing = 0;
+            $checked = 0;
+            $missing_samples = [];
+
+            foreach ( $required as $file ) {
+                $checked++;
+                if ( false === $zip->locateName( $file ) ) {
+                    $missing++;
+                    if ( count( $missing_samples ) < 12 ) {
+                        $missing_samples[] = $file;
+                    }
+                }
+            }
+
+            // Strong guard: detect hosts where ZipArchive::addFile() returns success but the final ZIP is missing most entries.
+            // Compare ZIP entry count to expected totals and require presence of representative files (uploads/themes) when applicable.
+            $expected_total_files = isset( $job['total_files'] ) ? (int) $job['total_files'] : 0;
+            $zip_num_files        = isset( $zip->numFiles ) ? (int) $zip->numFiles : 0;
+            if ( $expected_total_files > 0 ) {
+                // numFiles includes directories too; we only use it as a "too small" indicator.
+                $min_expected = (int) max( 50, round( $expected_total_files * 0.50 ) );
+                if ( $zip_num_files > 0 && $zip_num_files < $min_expected ) {
+                    $missing++;
+                    if ( count( $missing_samples ) < 12 ) {
+                        $missing_samples[] = 'zip_entry_count_too_small:' . $zip_num_files . '<' . $min_expected;
+                    }
+                }
+            }
+
+            // If this is a full-site export and media/themes were not explicitly excluded, ensure at least one upload/theme file exists.
+            if ( ! $is_subsite_export ) {
+                $require_uploads = empty( $options['no_media'] );
+                $require_themes  = empty( $options['no_themes'] );
+
+                $needles = [];
+                if ( $require_uploads ) {
+                    $needles[] = 'wp-content/uploads/';
+                }
+                if ( $require_themes ) {
+                    $needles[] = 'wp-content/themes/';
+                }
+
+                if ( ! empty( $needles ) ) {
+                    // Stream-scan the job's manifest.ndjson for a small number of candidates per prefix.
+                    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- streaming scan, file path is plugin-controlled
+                    $mf = fopen( $ndjson, 'rb' );
+                    if ( $mf ) {
+                        $found = array_fill_keys( $needles, false );
+                        $tries = 0;
+                        while ( ! feof( $mf ) && $tries < 5000 ) {
+                            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fgets -- streaming scan
+                            $line = fgets( $mf );
+                            if ( false === $line ) {
+                                break;
+                            }
+                            $line = trim( $line );
+                            if ( '' === $line || '[' === $line || ']' === $line ) {
+                                continue;
+                            }
+                            $row = json_decode( $line, true );
+                            if ( ! is_array( $row ) || empty( $row['target'] ) ) {
+                                continue;
+                            }
+                            $target = ltrim( (string) $row['target'], '/' );
+                            foreach ( $needles as $prefix ) {
+                                if ( ! $found[ $prefix ] && 0 === strpos( $target, $prefix ) ) {
+                                    // Require at least one actual file under the prefix (not just the directory entry).
+                                    if ( false === $zip->locateName( $target ) ) {
+                                        $missing++;
+                                        if ( count( $missing_samples ) < 12 ) {
+                                            $missing_samples[] = 'missing_sample:' . $target;
+                                        }
+                                    }
+                                    $found[ $prefix ] = true;
+                                }
+                            }
+                            $tries++;
+                            $all_found = true;
+                            foreach ( $needles as $prefix ) {
+                                if ( empty( $found[ $prefix ] ) ) {
+                                    $all_found = false;
+                                    break;
+                                }
+                            }
+                            if ( $all_found ) {
+                                break;
+                            }
+                        }
+                        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- cleanup after fopen
+                        fclose( $mf );
+                    }
+                }
+            }
+
+            $zip->close();
+
+            return [
+                'ok'              => ( 0 === $missing ),
+                'missing'         => (int) $missing,
+                'checked'         => (int) $checked,
+                'missing_samples' => $missing_samples,
+                'roots'           => [],
+                'files'           => array_fill_keys( $required, true ),
+            ];
+        }
+
+        // Core roots we must have for a full-site backup.
+        $roots = [
+            'wp-admin'    => [
+                'prefix' => 'wp-admin/',
+                'want'   => 0,
+                'have'   => 0,
+                'missing_samples' => [],
+                'checked' => 0,
+            ],
+            'wp-includes' => [
+                'prefix' => 'wp-includes/',
+                'want'   => 0,
+                'have'   => 0,
+                'missing_samples' => [],
+                'checked' => 0,
+            ],
+            'wp-content'  => [
+                'prefix' => 'wp-content/',
+                'want'   => 0,
+                'have'   => 0,
+                'missing_samples' => [],
+                'checked' => 0,
+            ],
+        ];
+
+        $must_files = [
+            'wp-config.php' => false,
+            'index.php'     => false,
+        ];
+
+        // Track whether root files exist in the manifest (so we can enforce locateName).
+        foreach ( $manifest as $entry ) {
+            if ( ! is_array( $entry ) || empty( $entry['target'] ) ) {
+                continue;
+            }
+            $target = ltrim( (string) $entry['target'], '/' );
+            if ( isset( $must_files[ $target ] ) ) {
+                $must_files[ $target ] = true;
+            }
+        }
+
+        // Build sample list: up to N per root, cap total.
+        $per_root_limit = 6;
+        $total_limit    = 30;
+        $samples        = [];
+        $picked_by_root = [];
+
+        // One pass over manifest: count wants per root, and collect up to N samples per root.
+        foreach ( $manifest as $entry ) {
+            if ( ! is_array( $entry ) || empty( $entry['target'] ) ) {
+                continue;
+            }
+            $target = ltrim( (string) $entry['target'], '/' );
+
+            foreach ( $roots as $key => $root_info ) {
+                $prefix = $root_info['prefix'];
+                if ( 0 !== strpos( $target, $prefix ) ) {
+                    continue;
+                }
+
+                $roots[ $key ]['want']++;
+
+                $picked = isset( $picked_by_root[ $key ] ) ? (int) $picked_by_root[ $key ] : 0;
+                if ( $picked < $per_root_limit && count( $samples ) < $total_limit ) {
+                    $samples[] = [
+                        'root'   => $key,
+                        'target' => $target,
+                    ];
+                    $picked_by_root[ $key ] = $picked + 1;
+                }
+            }
+
+            if ( count( $samples ) >= $total_limit ) {
+                // Keep counting wants (above) for remaining entries, but stop collecting samples.
+                continue;
+            }
+        }
+
+        // Always require at least some wp-content coverage when available.
+        if ( empty( $samples ) ) {
+            return [
+                'ok'              => false,
+                'missing'         => 0,
+                'checked'         => 0,
+                'missing_samples' => [],
+                'roots'           => $roots,
+                'files'           => $must_files,
+            ];
+        }
+
+        $zip = new ZipArchive();
+        if ( true !== $zip->open( $archive_path ) ) {
+            return [
+                'ok'              => false,
+                'missing'         => 0,
+                'checked'         => 0,
+                'missing_samples' => [],
+                'roots'           => $roots,
+            ];
+        }
+
+        $missing         = 0;
+        $checked         = 0;
+        $missing_samples = [];
+
+        foreach ( $samples as $sample ) {
+            $target = $sample['target'];
+            $root   = $sample['root'];
+            $checked++;
+            $roots[ $root ]['checked']++;
+
+            $idx = $zip->locateName( $target );
+            if ( false === $idx ) {
+                $missing++;
+                if ( count( $missing_samples ) < 12 ) {
+                    $missing_samples[] = $target;
+                }
+                if ( count( $roots[ $root ]['missing_samples'] ) < 5 ) {
+                    $roots[ $root ]['missing_samples'][] = $target;
+                }
+                continue;
+            }
+
+            $roots[ $root ]['have']++;
+        }
+
+        // Verify root files if present in manifest.
+        $files_ok = [
+            'wp-config.php' => true,
+            'index.php'     => true,
+        ];
+        foreach ( $must_files as $file => $present ) {
+            if ( ! $present ) {
+                continue;
+            }
+            $checked++;
+            $idx = $zip->locateName( $file );
+            if ( false === $idx ) {
+                $missing++;
+                $files_ok[ $file ] = false;
+                if ( count( $missing_samples ) < 12 ) {
+                    $missing_samples[] = $file;
+                }
+            }
+        }
+
+        $zip->close();
+
+        // Determine pass: require at least 1 sample found for each root that has manifest entries.
+        $ok = true;
+        foreach ( $roots as $key => $root_info ) {
+            // Only enforce roots that actually exist in the manifest (want > 0).
+            if ( (int) $root_info['want'] > 0 && (int) $root_info['have'] <= 0 ) {
+                $ok = false;
+                break;
+            }
+        }
+
+        if ( ! $files_ok['wp-config.php'] || ! $files_ok['index.php'] ) {
+            $ok = false;
+        }
+
+        // Also ensure database/meta exist.
+        $zip2 = new ZipArchive();
+        if ( true === $zip2->open( $archive_path ) ) {
+            if ( false === $zip2->locateName( 'database.sql' ) || false === $zip2->locateName( 'meta.json' ) ) {
+                $ok = false;
+            }
+            $zip2->close();
+        } else {
+            $ok = false;
+        }
+
+        return [
+            'ok'              => (bool) $ok,
+            'missing'         => (int) $missing,
+            'checked'         => (int) $checked,
+            'missing_samples' => $missing_samples,
+            'roots'           => $roots,
+            'files'           => $must_files,
+        ];
+    }
+
+    /**
+     * Write a package.json file for a backup job (in job temp dir) and return its absolute path.
+     *
+     * @param array $job
+     * @return string
+     */
+    private static function write_package_json_for_job( array $job ) {
+        $tmp = isset( $job['temp_dir'] ) ? (string) $job['temp_dir'] : '';
+        if ( '' === $tmp || ! is_dir( $tmp ) ) {
+            throw new RuntimeException( esc_html__( 'Backup temp directory is missing. Please restart the backup job.', 'museder-restoreone' ) );
+        }
+
+        $path = trailingslashit( $tmp ) . 'package.json';
+
+        $options = isset( $job['options'] ) && is_array( $job['options'] ) ? $job['options'] : [];
+        $data = [
+            'plugin' => [
+                'name'    => 'museder-restoreone',
+                'version' => defined( 'BACKUP_LITE_VERSION' ) ? BACKUP_LITE_VERSION : '',
+                'build'   => defined( 'BACKUP_LITE_BUILD_ID' ) ? BACKUP_LITE_BUILD_ID : '',
+            ],
+            'generated_at_gmt' => gmdate( 'c' ), // phpcs:ignore WordPress.DateTime.RestrictedFunctions.date_date -- internal backup metadata
+            'format' => [
+                'archive'  => 'zip',
+                'manifest' => 'ndjson',
+                'embedded' => [ 'package.json', 'manifest.ndjson' ],
+            ],
+            'totals' => [
+                'files' => isset( $job['total_files'] ) ? (int) $job['total_files'] : 0,
+                'bytes' => isset( $job['total_bytes'] ) ? (int) $job['total_bytes'] : 0,
+            ],
+            'options' => $options,
+            'site' => [
+                'home_url'     => function_exists( 'home_url' ) ? home_url() : '',
+                'is_multisite' => function_exists( 'is_multisite' ) ? (bool) is_multisite() : false,
+            ],
+        ];
+
+        $encoded = wp_json_encode( $data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES );
+        if ( false === $encoded ) {
+            throw new RuntimeException( esc_html__( 'Unable to encode backup metadata. Please restart the backup job.', 'museder-restoreone' ) );
+        }
+
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_read_file_put_contents -- writing internal metadata file in plugin-controlled temp directory
+        if ( false === file_put_contents( $path, $encoded ) ) {
+            throw new RuntimeException( esc_html__( 'Unable to write backup metadata file. Please check directory permissions.', 'museder-restoreone' ) );
+        }
+
+        return $path;
+    }
+
+    /**
+     * Embed package.json + manifest.ndjson into the archive after it has been closed.
+     *
+     * @param array $job
+     * @return void
+     */
+    private static function embed_metadata_into_archive_after_close( array $job ) {
+        $archive = isset( $job['archive_path'] ) ? (string) $job['archive_path'] : '';
+        if ( '' === $archive || ! file_exists( $archive ) ) {
+            throw new RuntimeException( esc_html__( 'Backup archive is missing. Please restart the backup job.', 'museder-restoreone' ) );
+        }
+
+        $ndjson = isset( $job['manifest_ndjson_file'] ) ? (string) $job['manifest_ndjson_file'] : '';
+        if ( '' === $ndjson || ! file_exists( $ndjson ) ) {
+            throw new RuntimeException( esc_html__( 'Backup manifest is missing. Please restart the backup job.', 'museder-restoreone' ) );
+        }
+
+        $package_path = self::write_package_json_for_job( $job );
+
+        $zip = new ZipArchive();
+        if ( true !== $zip->open( $archive ) ) {
+            throw new RuntimeException( esc_html__( 'Unable to reopen archive for metadata embedding. Please restart the backup job.', 'museder-restoreone' ) );
+        }
+        self::embed_metadata_into_open_zip( $zip, $job, $package_path, $ndjson );
+        $zip->close();
+    }
+
+    /**
+     * Embed backup metadata while the ZipArchive is still open (before close).
+     *
+     * This avoids the expensive "reopen huge ZIP" step during finalize on some hosts.
+     *
+     * @param array      $job Job state.
+     * @param ZipArchive $zip Open ZipArchive instance.
+     * @return void
+     */
+    public static function embed_metadata_into_archive_before_close( array $job, ZipArchive $zip ) {
+        $ndjson = isset( $job['manifest_ndjson_file'] ) ? (string) $job['manifest_ndjson_file'] : '';
+        if ( '' === $ndjson || ! file_exists( $ndjson ) ) {
+            throw new RuntimeException( esc_html__( 'Backup manifest is missing. Please restart the backup job.', 'museder-restoreone' ) );
+        }
+
+        $package_path = self::write_package_json_for_job( $job );
+        self::embed_metadata_into_open_zip( $zip, $job, $package_path, $ndjson );
+    }
+
+    /**
+     * Embed backup metadata files into an already-open ZipArchive instance.
+     *
+     * Used to avoid re-opening very large ZIP files during finalize, which can be slow and lead to timeouts.
+     *
+     * @param ZipArchive $zip          Open ZipArchive instance.
+     * @param array      $job          Job state.
+     * @param string     $package_path Path to temp package.json.
+     * @param string     $ndjson       Path to manifest.ndjson.
+     * @return void
+     */
+    private static function embed_metadata_into_open_zip( ZipArchive $zip, array $job, $package_path, $ndjson ) {
+        if ( '' === (string) $package_path || ! file_exists( (string) $package_path ) ) {
+            throw new RuntimeException( esc_html__( 'Backup metadata file is missing. Please restart the backup job.', 'museder-restoreone' ) );
+        }
+        if ( '' === (string) $ndjson || ! file_exists( (string) $ndjson ) ) {
+            throw new RuntimeException( esc_html__( 'Backup manifest is missing. Please restart the backup job.', 'museder-restoreone' ) );
+        }
+
+        // Ensure these entries exist even if they were added in a prior attempt.
+        $zip->addFile( (string) $package_path, 'package.json' );
+        $zip->addFile( (string) $ndjson, 'manifest.ndjson' );
+        $zip->setCompressionName( 'package.json', ZipArchive::CM_DEFLATE );
+        $zip->setCompressionName( 'manifest.ndjson', ZipArchive::CM_DEFLATE );
+    }
+
     public static function process_job_batch( array $job, $max_files = null, $max_bytes = null, $zip = null ) {
         self::optimize_runtime_environment();
 
@@ -1357,32 +2708,25 @@ class Backup_Lite_Backup {
             $max_bytes = $max_bytes ?? $optimal['max_bytes'];
         }
 
-        $manifest = self::load_manifest_for_job( $job );
-        $manifest_count = is_array( $manifest ) ? count( $manifest ) : 0;
-        $total    = isset( $job['total_files'] ) ? (int) $job['total_files'] : $manifest_count;
-        $pointer  = isset( $job['pointer'] ) ? (int) $job['pointer'] : 0;
-        $pointer  = max( 0, min( $pointer, $total ) );
-
-        // Guard against truncated/partial manifest files.
-        // If total_files suggests a large site but the manifest file contains far fewer entries,
-        // fail fast to avoid "success" archives missing most content (e.g., uploads).
-        if ( $total >= 1000 && $manifest_count > 0 && $manifest_count < (int) round( $total * 0.90 ) ) {
-            backup_lite_log( 'error', 'Backup manifest appears truncated; refusing to continue packing.', [
-                'job_id'         => $job['id'] ?? '',
-                'total_files'    => $total,
-                'manifest_count' => $manifest_count,
-                'pointer'        => $pointer,
-                'manifest_file'  => $job['manifest_file'] ?? '',
-            ] );
-
-            $job['status']  = 'failed';
-            $job['stage']   = 'failed';
-            $job['message'] = __( 'Backup failed: file list could not be fully prepared on this host. Please check logs for details.', 'museder-restoreone' );
-            if ( isset( $job['needs_finalize'] ) ) {
-                unset( $job['needs_finalize'] );
-            }
-            return $job;
+        // Prefer low-memory, streamed manifest for packing.
+        $job = self::ensure_manifest_ndjson_for_job( $job );
+        $ndjson_file = isset( $job['manifest_ndjson_file'] ) ? (string) $job['manifest_ndjson_file'] : '';
+        if ( '' === $ndjson_file || ! file_exists( $ndjson_file ) ) {
+            throw new RuntimeException( esc_html__( 'Backup manifest is missing. Please restart the backup job.', 'museder-restoreone' ) );
         }
+
+        // Totals should be set during preparing (manifest scan) or migration.
+        $total   = isset( $job['total_files'] ) ? (int) $job['total_files'] : 0;
+        $pointer = isset( $job['pointer'] ) ? (int) $job['pointer'] : 0;
+        if ( $total <= 0 ) {
+            $total = 1;
+            $job['total_files'] = 1;
+        }
+        if ( ! isset( $job['total_bytes'] ) || (int) $job['total_bytes'] <= 0 ) {
+                $job['total_bytes'] = 1;
+        }
+
+        $pointer = max( 0, min( $pointer, max( 1, (int) $total ) ) );
 
         // Initialize diagnostic counters (persisted in job state).
         if ( ! isset( $job['attempted_files'] ) ) {
@@ -1407,20 +2751,32 @@ class Backup_Lite_Backup {
             $job['diagnostic_samples'] = [];
         }
 
-        // Guard: if total_files indicates there should be work, but manifest is empty/missing,
-        // do NOT fast-forward to "completed" (would create a partial archive with only meta+DB).
-        if ( $total > 0 && empty( $manifest ) ) {
-            throw new RuntimeException(
-                esc_html__( 'Backup manifest is missing or empty. Please restart the backup job.', 'museder-restoreone' )
-            );
-        }
-
         // If there is nothing to pack (or we've already reached the end), defer finalize until the archive is closed.
         // Guard against "fake success": only allow finalize when we actually packed most files.
         if ( $total <= 0 || $pointer >= $total ) {
             $added_files   = isset( $job['added_files'] ) ? (int) $job['added_files'] : 0;
             $skipped_files = isset( $job['skipped_files'] ) ? (int) $job['skipped_files'] : 0;
             $min_ratio     = 0.95;
+            $total_bytes   = isset( $job['total_bytes'] ) ? (int) $job['total_bytes'] : 0;
+            $added_bytes   = isset( $job['added_bytes'] ) ? (int) $job['added_bytes'] : 0;
+            $min_bytes_ratio = 0.70;
+
+            // If we skipped anything, log a single summary once (helps diagnose 1-file edge cases without failing).
+            if ( $skipped_files > 0 && empty( $job['skip_summary_logged'] ) ) {
+                backup_lite_log( 'warning', 'Backup packing reached end pointer with skipped files.', [
+                    'job_id'        => $job['id'] ?? '',
+                    'total_files'   => $total,
+                    'added_files'   => $added_files,
+                    'skipped_files' => $skipped_files,
+                    'total_bytes'   => $total_bytes,
+                    'added_bytes'   => $added_bytes,
+                    'skipped_bytes' => isset( $job['skipped_bytes'] ) ? (int) $job['skipped_bytes'] : 0,
+                    'skip_reasons'  => $job['skip_reasons'] ?? [],
+                    'samples'       => $job['diagnostic_samples'] ?? [],
+                    'pack_method'   => $job['pack_method'] ?? '',
+                ] );
+                $job['skip_summary_logged'] = true;
+            }
 
             if ( $total >= 1000 && $added_files < (int) round( $total * $min_ratio ) ) {
                 backup_lite_log( 'error', 'Backup packing reached end pointer but too many files were skipped/blocked. Marking job failed to avoid incomplete archive.', [
@@ -1442,11 +2798,43 @@ class Backup_Lite_Backup {
                 return $job;
             }
 
-            $job['processed_files'] = min( $total, max( $added_files, (int) ( $job['processed_files'] ?? 0 ) ) );
+            if ( $total_bytes >= 500 * 1024 * 1024 && $added_bytes < (int) round( $total_bytes * $min_bytes_ratio ) ) {
+                backup_lite_log( 'error', 'Backup packing reached end pointer but too few bytes were added. Marking job failed to avoid incomplete archive.', [
+                    'job_id'       => $job['id'] ?? '',
+                    'total_files'  => $total,
+                    'added_files'  => $added_files,
+                    'total_bytes'  => $total_bytes,
+                    'added_bytes'  => $added_bytes,
+                    'skip_reasons' => $job['skip_reasons'] ?? [],
+                    'samples'      => $job['diagnostic_samples'] ?? [],
+                    'pack_method'  => $job['pack_method'] ?? '',
+                ] );
+
+                $job['status']  = 'failed';
+                $job['stage']   = 'failed';
+                $job['message'] = __( 'Backup failed: too much content could not be added to the archive on this host. Please check logs for details.', 'museder-restoreone' );
+                if ( isset( $job['needs_finalize'] ) ) {
+                    unset( $job['needs_finalize'] );
+                }
+                return $job;
+            }
+
+            // Important: treat skipped files as "processed" so finalize doesn't loop forever on 1 missing/unreadable file.
+            $job['processed_files'] = min(
+                $total,
+                max(
+                    $added_files + $skipped_files,
+                    (int) ( $job['processed_files'] ?? 0 )
+                )
+            );
             $job['status']          = 'running';
             $job['stage']           = 'finalizing';
             $job['message']         = __( 'Finalising backup archive…', 'museder-restoreone' );
             $job['needs_finalize']  = true;
+            // If ZipArchive is already open in the job processor, it can embed metadata before close.
+            if ( $zip instanceof ZipArchive ) {
+                $job['finalize_step'] = 'verify';
+            }
             return $job;
         }
 
@@ -1454,21 +2842,35 @@ class Backup_Lite_Backup {
         $bytes = 0;
         $index = $pointer;
 
-        while ( $index < $total && count( $batch ) < $max_files && $bytes < $max_bytes ) {
-            $entry = $manifest[ $index ] ?? null;
+        $manifest_offset = isset( $job['manifest_offset'] ) ? (int) $job['manifest_offset'] : 0;
+        $batch_result = self::read_manifest_ndjson_batch( $ndjson_file, $manifest_offset, (int) $max_files, (int) $max_bytes );
+        $entries = isset( $batch_result['entries'] ) && is_array( $batch_result['entries'] ) ? $batch_result['entries'] : [];
+        $job['manifest_offset'] = isset( $batch_result['offset'] ) ? (int) $batch_result['offset'] : $manifest_offset;
+        $eof = ! empty( $batch_result['eof'] );
+
+        foreach ( $entries as $entry ) {
             if ( empty( $entry['path'] ) || empty( $entry['target'] ) ) {
+                $job['attempted_files']++;
                 $job['skipped_files']++;
                 $job['skip_reasons']['invalid_entry'] = isset( $job['skip_reasons']['invalid_entry'] ) ? ( (int) $job['skip_reasons']['invalid_entry'] + 1 ) : 1;
-                $index++;
+                if ( count( $job['diagnostic_samples'] ) < 20 ) {
+                    $job['diagnostic_samples'][] = [
+                        'type'  => 'invalid_entry',
+                        'entry' => is_array( $entry ) ? array_intersect_key( $entry, array_flip( [ 'path', 'target', 'size' ] ) ) : (string) $entry,
+                    ];
+                }
                 continue;
             }
 
-            $path = wp_normalize_path( $entry['path'] );
+            $path = wp_normalize_path( (string) $entry['path'] );
             $job['attempted_files']++;
 
             if ( ! @file_exists( $path ) ) {
                 $job['skipped_files']++;
                 $job['skip_reasons']['missing_or_blocked'] = isset( $job['skip_reasons']['missing_or_blocked'] ) ? ( (int) $job['skip_reasons']['missing_or_blocked'] + 1 ) : 1;
+                if ( isset( $entry['size'] ) && (int) $entry['size'] > 0 ) {
+                    $job['skipped_bytes'] += (int) $entry['size'];
+                }
 
                 // Capture a small number of samples with error message for debugging.
                 if ( count( $job['diagnostic_samples'] ) < 20 ) {
@@ -1478,13 +2880,15 @@ class Backup_Lite_Backup {
                         'error' => self::probe_read_error( $path ),
                     ];
                 }
-                $index++;
                 continue;
             }
 
             if ( ! @is_readable( $path ) ) {
                 $job['skipped_files']++;
                 $job['skip_reasons']['unreadable'] = isset( $job['skip_reasons']['unreadable'] ) ? ( (int) $job['skip_reasons']['unreadable'] + 1 ) : 1;
+                if ( isset( $entry['size'] ) && (int) $entry['size'] > 0 ) {
+                    $job['skipped_bytes'] += (int) $entry['size'];
+                }
                 if ( count( $job['diagnostic_samples'] ) < 20 ) {
                     $job['diagnostic_samples'][] = [
                         'type' => 'unreadable',
@@ -1492,7 +2896,6 @@ class Backup_Lite_Backup {
                         'error' => self::probe_read_error( $path ),
                     ];
                 }
-                $index++;
                 continue;
             }
 
@@ -1505,7 +2908,16 @@ class Backup_Lite_Backup {
             if ( $manifest_size > $max_file_size ) {
                 $job['skipped_files']++;
                 $job['skip_reasons']['too_large'] = isset( $job['skip_reasons']['too_large'] ) ? ( (int) $job['skip_reasons']['too_large'] + 1 ) : 1;
-                $index++;
+                if ( $manifest_size > 0 ) {
+                    $job['skipped_bytes'] += $manifest_size;
+                }
+                if ( count( $job['diagnostic_samples'] ) < 20 ) {
+                    $job['diagnostic_samples'][] = [
+                        'type' => 'too_large',
+                        'path' => $path,
+                        'size' => $manifest_size,
+                    ];
+                }
                 continue;
             }
 
@@ -1518,7 +2930,16 @@ class Backup_Lite_Backup {
                 if ( $actual_size > $max_file_size ) {
                     $job['skipped_files']++;
                     $job['skip_reasons']['too_large'] = isset( $job['skip_reasons']['too_large'] ) ? ( (int) $job['skip_reasons']['too_large'] + 1 ) : 1;
-                    $index++;
+                    if ( $actual_size > 0 ) {
+                        $job['skipped_bytes'] += (int) $actual_size;
+                    }
+                    if ( count( $job['diagnostic_samples'] ) < 20 ) {
+                        $job['diagnostic_samples'][] = [
+                            'type' => 'too_large',
+                            'path' => $path,
+                            'size' => (int) $actual_size,
+                        ];
+                    }
                     continue;
                 }
                 $file_size = $actual_size > 0 ? $actual_size : 0;
@@ -1528,7 +2949,11 @@ class Backup_Lite_Backup {
             $entry['size'] = $file_size;
             $batch[]       = $entry;
             $bytes        += $file_size;
-            $index++;
+        }
+        // Advance pointer by entries consumed from manifest (even if some are skipped later).
+        $index = min( $total, $index + count( $entries ) );
+        if ( $eof ) {
+            $index = $total;
         }
 
         $append_results = [
@@ -1551,7 +2976,15 @@ class Backup_Lite_Backup {
                 $job_options,
                 function () use ( $job, $batch, $zip, $job_options, $pack_method ) {
                     if ( 'pclzip' === $pack_method ) {
-                        return self::append_files_to_pclzip( $job['archive_path'], $batch );
+                        $result = self::append_files_to_pclzip( $job['archive_path'], $batch );
+                        // Normalize shape to match ZipArchive results.
+                        if ( ! isset( $result['failed_entries'] ) ) {
+                            $result['failed_entries'] = [];
+                        }
+                        if ( ! isset( $result['attempted'] ) ) {
+                            $result['attempted'] = isset( $result['added'] ) ? (int) $result['added'] : 0;
+                        }
+                        return $result;
                     }
 
                     $result = self::append_files_to_zip( $job['archive_path'], $batch, $zip, $job_options );
@@ -1603,7 +3036,7 @@ class Backup_Lite_Backup {
         }
 
         $job['pointer']         = $index;
-        $job['processed_files'] = min( (int) $job['added_files'], $total );
+        $job['processed_files'] = min( (int) ( ( $job['added_files'] ?? 0 ) + ( $job['skipped_files'] ?? 0 ) ), $total );
 
         $total_bytes = isset( $job['total_bytes'] ) ? (int) $job['total_bytes'] : 0;
         $current     = isset( $job['processed_bytes'] ) ? (int) $job['processed_bytes'] : 0;
@@ -1617,6 +3050,17 @@ class Backup_Lite_Backup {
         $job['message'] = __( 'Backup running…', 'museder-restoreone' );
 
         if ( $job['pointer'] >= $total ) {
+            backup_lite_log( 'info', 'Packing reached end pointer; running integrity guards.', [
+                'job_id' => $job['id'] ?? '',
+                'total_files' => (int) $total,
+                'pointer' => (int) $job['pointer'],
+                'added_files' => isset( $job['added_files'] ) ? (int) $job['added_files'] : 0,
+                'skipped_files' => isset( $job['skipped_files'] ) ? (int) $job['skipped_files'] : 0,
+                'total_bytes' => isset( $job['total_bytes'] ) ? (int) $job['total_bytes'] : 0,
+                'added_bytes' => isset( $job['added_bytes'] ) ? (int) $job['added_bytes'] : 0,
+                'pack_method' => $job['pack_method'] ?? '',
+            ] );
+
             // Completion guard: if we reached the end pointer but did not actually pack most files,
             // fail the job to prevent a "fake success" archive.
             $added_files   = isset( $job['added_files'] ) ? (int) $job['added_files'] : 0;
@@ -1673,6 +3117,10 @@ class Backup_Lite_Backup {
             $job['stage']           = 'finalizing';
             $job['message']         = __( 'Finalising backup archive…', 'museder-restoreone' );
             $job['needs_finalize']  = true;
+            // If ZipArchive is already open in the job processor, it can embed metadata before close.
+            if ( $zip instanceof ZipArchive ) {
+                $job['finalize_step'] = 'verify';
+            }
             return $job;
         }
 
@@ -1686,15 +3134,221 @@ class Backup_Lite_Backup {
      * @return array Finalized job state.
      */
     public static function finalize_async_job_after_close( array $job ) {
+        // Finalize can be heavy on some hosts (ZipArchive metadata + verification).
+        // To prevent repeated timeouts and endless "finalizing" loops, we split finalize into
+        // small resumable steps: embed metadata -> verify -> mark completed.
+        $finalize_step = isset( $job['finalize_step'] ) ? (string) $job['finalize_step'] : '';
+        if ( '' === $finalize_step ) {
+            $finalize_step = 'embed_meta';
+        }
+
+        // Legacy manifest_count is used by a downstream mismatch guard; default to 0 unless loaded.
+        $manifest_count = 0;
+
         $total_files = isset( $job['total_files'] ) ? (int) $job['total_files'] : 0;
         $total_bytes = isset( $job['total_bytes'] ) ? (int) $job['total_bytes'] : 0;
         $added_files = isset( $job['added_files'] ) ? (int) $job['added_files'] : 0;
         $added_bytes = isset( $job['added_bytes'] ) ? (int) $job['added_bytes'] : 0;
 
-        // Verify manifest integrity at finalize time: if manifest_file decodes to fewer entries than expected,
-        // treat as failure (prevents "fake success" when the manifest JSON is truncated/partial).
-        $manifest = self::load_manifest_for_job( $job );
+        // If already cancelled/failed, do not continue finalize work.
+        if ( isset( $job['status'] ) && in_array( $job['status'], [ 'cancelled', 'failed' ], true ) ) {
+            if ( isset( $job['needs_finalize'] ) ) {
+                unset( $job['needs_finalize'] );
+            }
+            if ( isset( $job['finalize_step'] ) ) {
+                unset( $job['finalize_step'] );
+            }
+            return $job;
+        }
+
+        // NDJSON packing: avoid loading entire manifest into memory during finalize.
+        $ndjson = isset( $job['manifest_ndjson_file'] ) ? (string) $job['manifest_ndjson_file'] : '';
+        if ( '' !== $ndjson && file_exists( $ndjson ) ) {
+            $offset = isset( $job['manifest_offset'] ) ? (int) $job['manifest_offset'] : 0;
+            $size   = @filesize( $ndjson ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_filesize -- manifest size check, file path is plugin-controlled
+            if ( is_numeric( $size ) && (int) $size > 0 && $offset > 0 && $offset < (int) $size ) {
+                backup_lite_log( 'error', 'Finalize called before manifest.ndjson was fully consumed.', [
+                    'job_id' => $job['id'] ?? '',
+                    'offset' => $offset,
+                    'size'   => (int) $size,
+                ] );
+                $job['status']  = 'failed';
+                $job['stage']   = 'failed';
+                $job['message'] = __( 'Backup failed: packing did not finish reading the file list. Please restart the backup job.', 'museder-restoreone' );
+                if ( isset( $job['needs_finalize'] ) ) {
+                    unset( $job['needs_finalize'] );
+                }
+                return $job;
+            }
+        } else {
+            // Legacy fallback: verify manifest integrity by loading it (may be memory-heavy on huge sites).
+        $manifest       = self::load_manifest_for_job( $job );
         $manifest_count = is_array( $manifest ) ? count( $manifest ) : 0;
+
+        // Auto-heal totals at finalize time too, in case placeholder values leaked into job state.
+        if ( $total_files <= 1 && $manifest_count > 1 ) {
+            $before = $total_files;
+            $total_files = $manifest_count;
+            $job['total_files'] = $total_files;
+            backup_lite_log( 'warning', 'Repairing total_files from manifest_count during finalize.', [
+                'job_id' => $job['id'] ?? '',
+                'total_files_before' => (int) $before,
+                'manifest_count' => $manifest_count,
+            ] );
+        }
+
+        if ( $total_bytes <= 1 && is_array( $manifest ) && ! empty( $manifest ) ) {
+            $before = $total_bytes;
+            $total_bytes = (int) self::sum_manifest_bytes( $manifest );
+            $total_bytes = max( 1, $total_bytes );
+            $job['total_bytes'] = $total_bytes;
+            backup_lite_log( 'warning', 'Repairing total_bytes from manifest entries during finalize.', [
+                'job_id' => $job['id'] ?? '',
+                'total_bytes_before' => (int) $before,
+                'total_bytes' => (int) $total_bytes,
+            ] );
+            }
+        }
+
+        // Always log a high-level finalize snapshot for diagnostics (helps confirm which guards ran).
+        backup_lite_log( 'info', 'Finalize snapshot (after close).', [
+            'job_id' => $job['id'] ?? '',
+            'total_files' => (int) $total_files,
+            'added_files' => (int) $added_files,
+            'total_bytes' => (int) $total_bytes,
+            'added_bytes' => (int) $added_bytes,
+            'pointer' => isset( $job['pointer'] ) ? (int) $job['pointer'] : 0,
+            'processed_files' => isset( $job['processed_files'] ) ? (int) $job['processed_files'] : 0,
+            'pack_method' => $job['pack_method'] ?? '',
+            'finalize_step' => $finalize_step,
+        ] );
+
+        // Ensure we remain in finalizing until we either complete or fail/repack.
+        $job['status']         = 'running';
+        $job['stage']          = 'finalizing';
+        $job['message']        = __( 'Finalising backup archive…', 'museder-restoreone' );
+        $job['needs_finalize'] = true;
+
+        // Step 1: Embed backup metadata files into the archive (AI1WM-like).
+        // Run this in its own tick to avoid combined packing+embed timeouts.
+        if ( 'embed_meta' === $finalize_step ) {
+            try {
+                self::embed_metadata_into_archive_after_close( $job );
+            } catch ( Exception $e ) {
+                backup_lite_log( 'error', 'Failed to embed backup metadata into archive.', [
+                    'job_id' => $job['id'] ?? '',
+                    'error'  => $e->getMessage(),
+                ] );
+                $job['status']  = 'failed';
+                $job['stage']   = 'failed';
+                $job['message'] = esc_html__( 'Backup failed: unable to write required metadata files into the archive. Please try again.', 'museder-restoreone' );
+                if ( isset( $job['needs_finalize'] ) ) {
+                    unset( $job['needs_finalize'] );
+                }
+                if ( isset( $job['finalize_step'] ) ) {
+                    unset( $job['finalize_step'] );
+                }
+                return $job;
+            }
+
+            $job['finalize_step'] = 'verify';
+            return $job;
+        }
+
+        // Step 2: Post-close verification: ensure the archive actually contains wp-content data.
+        // Run in a separate tick to avoid timeouts.
+        if ( 'verify' === $finalize_step ) {
+        $verify = self::verify_archive_contains_wp_content( $job );
+        backup_lite_log( 'info', 'Archive verify snapshot (after close).', [
+            'job_id'   => $job['id'] ?? '',
+            'ok'       => $verify['ok'],
+            'checked'  => $verify['checked'],
+            'missing'  => $verify['missing'],
+            'samples'  => $verify['missing_samples'],
+            'roots'    => $verify['roots'],
+        ] );
+
+        if ( empty( $verify['ok'] ) ) {
+            // If verification fails, automatically repack once using PclZip for compatibility.
+            if ( empty( $job['repack_attempted'] ) ) {
+                backup_lite_log( 'warning', 'Archive verification failed; scheduling repack with PclZip.', [
+                    'job_id' => $job['id'] ?? '',
+                ] );
+
+                $job['repack_attempted'] = true;
+                $job['pack_method']      = 'pclzip';
+                $job['status']           = 'running';
+                $job['stage']            = 'packing';
+                $job['message']          = __( 'Archive verification failed. Repacking with compatibility mode…', 'museder-restoreone' );
+                $job['pointer']          = 0;
+                    $job['manifest_offset']  = 0;
+                $job['processed_files']  = 0;
+                $job['processed_bytes']  = 0;
+                $job['attempted_files']  = 0;
+                $job['added_files']      = 0;
+                $job['skipped_files']    = 0;
+                $job['added_bytes']      = 0;
+                $job['skipped_bytes']    = 0;
+                $job['skip_reasons']     = [];
+                $job['diagnostic_samples'] = [];
+                    $job['finalize_step']    = 'embed_meta';
+
+                // Remove old archive and re-initialize with DB/meta.
+                $archive_path = isset( $job['archive_path'] ) ? (string) $job['archive_path'] : '';
+                $sql_path     = isset( $job['sql_path'] ) ? (string) $job['sql_path'] : '';
+                $meta_path    = isset( $job['meta_path'] ) ? (string) $job['meta_path'] : '';
+
+                if ( '' !== $archive_path && file_exists( $archive_path ) ) {
+                    if ( function_exists( 'wp_delete_file' ) ) {
+                        wp_delete_file( $archive_path );
+                    } else {
+                        // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- cleanup in plugin-controlled backup directory
+                        @unlink( $archive_path );
+                    }
+                }
+
+                if ( '' !== $archive_path && '' !== $sql_path && '' !== $meta_path && file_exists( $sql_path ) && file_exists( $meta_path ) ) {
+                    self::initialize_archive_with_meta( $archive_path, $sql_path, $meta_path );
+                } else {
+                    $job['status']  = 'failed';
+                    $job['stage']   = 'failed';
+                    $job['message'] = __( 'Backup failed: unable to rebuild archive metadata for repack on this host.', 'museder-restoreone' );
+                        if ( isset( $job['needs_finalize'] ) ) {
+                            unset( $job['needs_finalize'] );
+                        }
+                        if ( isset( $job['finalize_step'] ) ) {
+                            unset( $job['finalize_step'] );
+                        }
+                    return $job;
+                }
+
+                if ( isset( $job['needs_finalize'] ) ) {
+                    unset( $job['needs_finalize'] );
+                }
+
+                return $job;
+            }
+
+            backup_lite_log( 'error', 'Archive verification failed after repack attempt; refusing to mark completed.', [
+                'job_id' => $job['id'] ?? '',
+                'verify' => $verify,
+            ] );
+
+            $job['status']  = 'failed';
+            $job['stage']   = 'failed';
+            $job['message'] = __( 'Backup failed: the archive could not be verified on this host. Please check logs for details.', 'museder-restoreone' );
+            if ( isset( $job['needs_finalize'] ) ) {
+                unset( $job['needs_finalize'] );
+            }
+                if ( isset( $job['finalize_step'] ) ) {
+                    unset( $job['finalize_step'] );
+            }
+            return $job;
+            }
+
+            // Verification passed; proceed to completion guards + mark completed.
+            $job['finalize_step'] = 'done';
+        }
 
         if ( $total_files >= 1000 && $manifest_count > 0 && $manifest_count < (int) round( $total_files * 0.90 ) ) {
             backup_lite_log( 'error', 'Backup manifest mismatch at finalize; refusing to mark job completed.', [
@@ -1759,6 +3413,13 @@ class Backup_Lite_Backup {
                 unset( $job['needs_finalize'] );
             }
             return $job;
+        }
+
+        if ( isset( $job['needs_finalize'] ) ) {
+            unset( $job['needs_finalize'] );
+        }
+        if ( isset( $job['finalize_step'] ) ) {
+            unset( $job['finalize_step'] );
         }
 
         return self::finalize_async_job( $job );
@@ -1967,9 +3628,14 @@ class Backup_Lite_Backup {
                     }
 
                     $file_size = $size !== false ? (int) $size : 0;
+                    $target_path = self::compose_target_path( (string) $target, (string) $relative );
+                    if ( '' === $target_path ) {
+                        continue;
+                    }
+
                     $manifest[] = [
                         'path'   => $file_path,
-                        'target' => $target . '/' . $relative,
+                        'target' => $target_path,
                         'size'   => $file_size,
                     ];
 
@@ -2246,11 +3912,22 @@ class Backup_Lite_Backup {
         // Safety: never mark a job completed if it hasn't actually packed the majority of its manifest.
         $total_files     = isset( $job['total_files'] ) ? (int) $job['total_files'] : 0;
         $processed_files = isset( $job['processed_files'] ) ? (int) $job['processed_files'] : 0;
+        $added_files     = isset( $job['added_files'] ) ? (int) $job['added_files'] : 0;
+        $skipped_files   = isset( $job['skipped_files'] ) ? (int) $job['skipped_files'] : 0;
+        $pointer         = isset( $job['pointer'] ) ? (int) $job['pointer'] : 0;
 
-        if ( $total_files > 0 && $processed_files < $total_files ) {
+        // Effective completion heuristic: treat skipped as processed; pointer is the ultimate source of truth for
+        // how many manifest entries we have consumed.
+        $effective_done = max( $processed_files, $pointer, $added_files + $skipped_files );
+
+        if ( $total_files > 0 && $effective_done < $total_files ) {
             backup_lite_log( 'warning', 'Finalize requested before job finished packing. Continuing backup instead of completing.', [
                 'total_files'     => $total_files,
                 'processed_files' => $processed_files,
+                'added_files'     => $added_files,
+                'skipped_files'   => $skipped_files,
+                'pointer'         => $pointer,
+                'effective_done'  => $effective_done,
             ] );
 
             $job['status']  = 'running';
@@ -2265,7 +3942,12 @@ class Backup_Lite_Backup {
 
         $job['status']          = 'completed';
         $job['stage']           = 'completed';
-        $job['message']         = esc_html__( 'Backup completed successfully.', 'museder-restoreone' );
+        if ( $skipped_files > 0 ) {
+            /* translators: %d: number of files */
+            $job['message'] = sprintf( esc_html__( 'Backup completed with %d file(s) skipped. Check logs for details.', 'museder-restoreone' ), $skipped_files );
+        } else {
+            $job['message'] = esc_html__( 'Backup completed successfully.', 'museder-restoreone' );
+        }
         $job['processed_files'] = isset( $job['total_files'] ) ? (int) $job['total_files'] : $job['processed_files'];
         $job['processed_bytes'] = isset( $job['total_bytes'] ) ? (int) $job['total_bytes'] : $job['processed_bytes'];
 
@@ -2289,6 +3971,8 @@ class Backup_Lite_Backup {
             'archive' => $job['archive_path'],
             'size'    => $size,
             'duration_seconds' => $backup_duration_seconds,
+            'skipped_files' => $skipped_files,
+            'skip_reasons'  => $job['skip_reasons'] ?? [],
         ] );
 
         self::record_backup_event( 'success', [
@@ -2328,7 +4012,7 @@ class Backup_Lite_Backup {
      * @param string $filepath Path to output SQL file.
      * @return bool
      */
-    private static function export_database_with_mysqldump( $filepath ) {
+    private static function export_database_with_mysqldump( $filepath, $options = [] ) {
         // Build optimized mysqldump command
         // --single-transaction: Ensures consistency without locking tables
         // --quick: Processes rows one at a time, reducing memory usage
@@ -2346,13 +4030,29 @@ class Backup_Lite_Backup {
         $host = escapeshellarg( $host_parts[0] );
         $port = isset( $host_parts[1] ) ? ' -P' . escapeshellarg( $host_parts[1] ) : '';
 
+        $tables = self::get_tables_for_export( $options );
+
+        $ignore_args = '';
+        $exclude = self::parse_table_list_option( $options['exclude_db_tables'] ?? [] );
+        foreach ( $exclude as $t ) {
+            $ignore_args .= ' --ignore-table=' . escapeshellarg( DB_NAME . '.' . $t );
+        }
+
+        $table_args = '';
+        if ( ! empty( $tables ) ) {
+            $escaped = array_map( 'escapeshellarg', $tables );
+            $table_args = ' ' . implode( ' ', $escaped );
+        }
+
         $command = sprintf(
-            'mysqldump --single-transaction --quick --lock-tables=false --skip-comments --no-tablespaces -h%s%s -u%s -p%s %s > %s 2>&1',
+            'mysqldump --single-transaction --quick --lock-tables=false --skip-comments --no-tablespaces%s -h%s%s -u%s -p%s %s%s > %s 2>&1',
+            $ignore_args,
             $host,
             $port,
             $db_user,
             $db_pass,
             $db_name,
+            $table_args,
             $filepath_escaped
         );
 
@@ -2371,7 +4071,7 @@ class Backup_Lite_Backup {
         return $success;
     }
 
-    private static function export_database_with_php( $filepath ) {
+    private static function export_database_with_php( $filepath, $options = [] ) {
         global $wpdb;
 
         // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for writing SQL dump file, path validated and sanitized
@@ -2403,7 +4103,7 @@ class Backup_Lite_Backup {
         // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing SQL dump file
         fwrite( $handle, "SET time_zone = '+00:00';\n\n" );
 
-        $tables = self::get_tables();
+        $tables = self::get_tables_for_export( $options );
         if ( empty( $tables ) ) {
             // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen
             fclose( $handle );
@@ -2503,6 +4203,104 @@ class Backup_Lite_Backup {
         return true;
     }
 
+    /**
+     * Parse include/exclude table options from string/array.
+     *
+     * @param mixed $raw
+     * @return array<string>
+     */
+    private static function parse_table_list_option( $raw ) {
+        $items = [];
+        if ( is_array( $raw ) ) {
+            $items = $raw;
+        } elseif ( is_string( $raw ) ) {
+            $items = preg_split( '/[\r\n,]+/', $raw );
+        }
+        if ( empty( $items ) || ! is_array( $items ) ) {
+            return [];
+        }
+        $items = array_map(
+            static function ( $t ) {
+                $t = trim( (string) $t );
+                // Only allow safe table identifiers.
+                $t = preg_replace( '/[^A-Za-z0-9_]/', '', $t );
+                return $t;
+            },
+            $items
+        );
+        $items = array_values( array_unique( array_filter( $items ) ) );
+        return $items;
+    }
+
+    /**
+     * Returns tables for export, honoring include/exclude lists and filters.
+     *
+     * @param array $options
+     * @return array<string>
+     */
+    private static function get_tables_for_export( array $options ) {
+        $tables = self::get_tables();
+        if ( empty( $tables ) ) {
+            return [];
+        }
+
+        $include = self::parse_table_list_option( $options['include_db_tables'] ?? [] );
+        $exclude = self::parse_table_list_option( $options['exclude_db_tables'] ?? [] );
+
+        if ( ! empty( $include ) ) {
+            $set = array_fill_keys( $include, true );
+            $tables = array_values(
+                array_filter(
+                    $tables,
+                    static function ( $t ) use ( $set ) {
+                        $t = preg_replace( '/[^A-Za-z0-9_]/', '', (string) $t );
+                        return isset( $set[ $t ] );
+                    }
+                )
+            );
+        }
+
+        if ( ! empty( $exclude ) ) {
+            $set = array_fill_keys( $exclude, true );
+            $tables = array_values(
+                array_filter(
+                    $tables,
+                    static function ( $t ) use ( $set ) {
+                        $t = preg_replace( '/[^A-Za-z0-9_]/', '', (string) $t );
+                        return ! isset( $set[ $t ] );
+                    }
+                )
+            );
+        }
+
+        /**
+         * Filter tables to export.
+         *
+         * @param array<string> $tables
+         * @param array         $options
+         */
+        $tables = apply_filters( 'backup_lite_export_db_tables', $tables, $options );
+        if ( ! is_array( $tables ) ) {
+            $tables = [];
+        }
+
+        // Final sanitize.
+        $tables = array_values(
+            array_unique(
+                array_filter(
+                    array_map(
+                        static function ( $t ) {
+                            return preg_replace( '/[^A-Za-z0-9_]/', '', (string) $t );
+                        },
+                        $tables
+                    )
+                )
+            )
+        );
+
+        return $tables;
+    }
+
     public static function pclzip_filter_exclusions( $event, &$file ) {
         if ( 'check' === $event && self::should_skip_path( $file['filename'] ) ) {
             return 0;
@@ -2520,6 +4318,7 @@ class Backup_Lite_Backup {
     private static function should_skip_path( $path ) {
         static $skip_basenames = null;
         static $exclusion_cache = [];
+        static $include_hash = null;
 
         // Cache skip basenames
         if ( null === $skip_basenames ) {
@@ -2543,33 +4342,72 @@ class Backup_Lite_Backup {
 
         $normalized = wp_normalize_path( $path );
 
+        // Include-only mode: cache key must incorporate include set, otherwise results will leak across jobs.
+        $current_include_hash = '';
+        if ( ! empty( self::$runtime_include_prefixes ) ) {
+            $current_include_hash = md5( implode( '|', self::$runtime_include_prefixes ) );
+        }
+        if ( $include_hash !== $current_include_hash ) {
+            $include_hash   = $current_include_hash;
+            $exclusion_cache = [];
+        }
+        $cache_key = $include_hash ? ( $include_hash . '|' . $normalized ) : $normalized;
+
         // Quick check: cache lookup
-        if ( isset( $exclusion_cache[ $normalized ] ) ) {
-            return $exclusion_cache[ $normalized ];
+        if ( isset( $exclusion_cache[ $cache_key ] ) ) {
+            return $exclusion_cache[ $cache_key ];
         }
 
         // Quick check: basename (fastest)
         $basename = basename( $normalized );
         if ( in_array( $basename, $skip_basenames, true ) ) {
-            $exclusion_cache[ $normalized ] = true;
+            $exclusion_cache[ $cache_key ] = true;
             return true;
         }
 
         if ( ! empty( self::$runtime_exclude_basenames ) && in_array( $basename, self::$runtime_exclude_basenames, true ) ) {
-            $exclusion_cache[ $normalized ] = true;
+            $exclusion_cache[ $cache_key ] = true;
             return true;
         }
 
+        // Include-only prefixes: if set, everything outside is skipped early.
+        if ( ! empty( self::$runtime_include_prefixes ) ) {
+            $allowed = false;
+            foreach ( self::$runtime_include_prefixes as $inc ) {
+                if ( '' !== $inc && 0 === strpos( $normalized, $inc ) ) {
+                    $allowed = true;
+                    break;
+                }
+            }
+            if ( ! $allowed ) {
+                $exclusion_cache[ $cache_key ] = true;
+                return true;
+            }
+        }
+
         // Quick check: common exclusion patterns (before expensive operations)
+        // Never include our own backup/temp/job artifacts (prevents recursive backups when scanning ABSPATH).
         if ( strpos( $normalized, '/uploads/museder-restoreone' ) !== false ) {
-            $exclusion_cache[ $normalized ] = true;
+            $exclusion_cache[ $cache_key ] = true;
             return true;
+        }
+
+        // Also skip the current backup jobs dir if it is inside site root.
+        if ( function_exists( 'backup_lite_get_jobs_dir' ) ) {
+            $jobs_dir = backup_lite_get_jobs_dir();
+            if ( ! empty( $jobs_dir ) ) {
+                $jobs_dir = wp_normalize_path( trailingslashit( (string) $jobs_dir ) );
+                if ( '' !== $jobs_dir && 0 === strpos( $normalized, $jobs_dir ) ) {
+                    $exclusion_cache[ $cache_key ] = true;
+                    return true;
+                }
+            }
         }
 
         // Check backup files in uploads directory
         if ( strpos( $normalized, '/uploads/' ) !== false && preg_match( '/\.(zip|wpress)$/i', $normalized ) ) {
             if ( strpos( $normalized, '/backups/' ) !== false || strpos( $normalized, '/museder-restoreone' ) !== false ) {
-                $exclusion_cache[ $normalized ] = true;
+                $exclusion_cache[ $cache_key ] = true;
                 return true;
             }
         }
@@ -2578,7 +4416,7 @@ class Backup_Lite_Backup {
         $exclusions = self::get_internal_exclusions();
         foreach ( $exclusions as $excluded ) {
             if ( '' !== $excluded && 0 === strpos( $normalized, $excluded ) ) {
-                $exclusion_cache[ $normalized ] = true;
+                $exclusion_cache[ $cache_key ] = true;
                 return true;
             }
         }
@@ -2586,7 +4424,7 @@ class Backup_Lite_Backup {
         if ( ! empty( self::$runtime_exclude_prefixes ) ) {
             foreach ( self::$runtime_exclude_prefixes as $excluded ) {
                 if ( '' !== $excluded && 0 === strpos( $normalized, $excluded ) ) {
-                    $exclusion_cache[ $normalized ] = true;
+                    $exclusion_cache[ $cache_key ] = true;
                     return true;
                 }
             }
@@ -2595,7 +4433,7 @@ class Backup_Lite_Backup {
         if ( ! empty( self::$runtime_exclude_patterns ) ) {
             foreach ( self::$runtime_exclude_patterns as $pattern ) {
                 if ( '' !== $pattern && strpos( $normalized, $pattern ) !== false ) {
-                    $exclusion_cache[ $normalized ] = true;
+                    $exclusion_cache[ $cache_key ] = true;
                     return true;
                 }
             }
@@ -2603,7 +4441,7 @@ class Backup_Lite_Backup {
 
         // Cache negative result (limit cache size to prevent memory issues)
         if ( count( $exclusion_cache ) < 1000 ) {
-            $exclusion_cache[ $normalized ] = false;
+            $exclusion_cache[ $cache_key ] = false;
         }
 
         return false;
@@ -2683,11 +4521,13 @@ class Backup_Lite_Backup {
         $prev_patterns  = self::$runtime_exclude_patterns;
         $prev_basenames = self::$runtime_exclude_basenames;
         $prev_mode      = self::$runtime_backup_mode;
+        $prev_includes  = self::$runtime_include_prefixes;
 
         $resolved = self::resolve_runtime_exclusions( $options );
         self::$runtime_exclude_prefixes  = $resolved['prefixes'];
         self::$runtime_exclude_patterns  = $resolved['patterns'];
         self::$runtime_exclude_basenames = $resolved['basenames'];
+        self::$runtime_include_prefixes  = self::resolve_runtime_inclusions( $options );
         self::$runtime_backup_mode       = self::resolve_runtime_backup_mode( $options );
 
         try {
@@ -2696,8 +4536,56 @@ class Backup_Lite_Backup {
             self::$runtime_exclude_prefixes  = $prev_prefixes;
             self::$runtime_exclude_patterns  = $prev_patterns;
             self::$runtime_exclude_basenames = $prev_basenames;
+            self::$runtime_include_prefixes  = $prev_includes;
             self::$runtime_backup_mode       = $prev_mode;
         }
+    }
+
+    /**
+     * Resolve runtime include-only prefixes based on options.
+     *
+     * @param array $options Backup options.
+     * @return array<string>
+     */
+    private static function resolve_runtime_inclusions( array $options ) {
+        $prefixes = [];
+
+        if ( function_exists( 'is_multisite' ) && is_multisite() && ! empty( $options['multisite_blog_id'] ) ) {
+            $blog_id = absint( $options['multisite_blog_id'] );
+            if ( $blog_id > 0 ) {
+                // Include only selected subsite uploads + common wp-content components.
+                if ( $blog_id > 1 ) {
+                    $prefixes[] = wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/uploads/sites/' . $blog_id ) );
+                } else {
+                    $prefixes[] = wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/uploads' ) );
+                }
+
+                if ( empty( $options['no_plugins'] ) ) {
+                    $prefixes[] = wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/plugins' ) );
+                }
+                if ( empty( $options['no_themes'] ) ) {
+                    $prefixes[] = wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/themes' ) );
+                }
+                if ( empty( $options['no_muplugins'] ) ) {
+                    $prefixes[] = wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/mu-plugins' ) );
+                }
+                $prefixes[] = wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/languages' ) );
+            }
+        }
+
+        /**
+         * Filter include-only prefixes (advanced).
+         *
+         * @param array<string> $prefixes
+         * @param array         $options
+         */
+        $prefixes = apply_filters( 'backup_lite_backup_scope_include_prefixes', $prefixes, $options );
+        if ( ! is_array( $prefixes ) ) {
+            $prefixes = [];
+        }
+
+        $prefixes = array_values( array_unique( array_filter( array_map( 'wp_normalize_path', $prefixes ) ) ) );
+        return $prefixes;
     }
 
     /**
@@ -2765,6 +4653,31 @@ class Backup_Lite_Backup {
             $patterns  = array_merge( $patterns, $parsed['patterns'] );
             $basenames = array_merge( $basenames, $parsed['basenames'] );
         }
+
+        // Scope presets (AI1WM-like).
+        if ( ! empty( $options['no_media'] ) ) {
+            $prefixes[] = wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/uploads' ) );
+        }
+        if ( ! empty( $options['no_plugins'] ) ) {
+            $prefixes[] = wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/plugins' ) );
+        }
+        if ( ! empty( $options['no_themes'] ) ) {
+            $prefixes[] = wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/themes' ) );
+        }
+        if ( ! empty( $options['no_muplugins'] ) ) {
+            $prefixes[] = wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/mu-plugins' ) );
+        }
+        if ( ! empty( $options['no_cache'] ) ) {
+            $prefixes = array_merge( $prefixes, self::get_smart_exclude_prefixes() );
+        }
+
+        /**
+         * Filter additional scope exclusion prefixes.
+         *
+         * @param array<string> $prefixes
+         * @param array         $options
+         */
+        $prefixes = apply_filters( 'backup_lite_backup_scope_exclude_prefixes', $prefixes, $options );
 
         $prefixes  = array_values( array_unique( array_filter( $prefixes ) ) );
         $patterns  = array_values( array_unique( array_filter( $patterns ) ) );

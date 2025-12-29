@@ -440,6 +440,53 @@ function backup_lite_append_restore_history( $entry ) {
     return false !== file_put_contents( $path, $json, LOCK_EX );
 }
 
+/**
+ * Upsert restore history by job_id (preferred) or append if missing.
+ *
+ * This supports the workflow:
+ * - write an entry when restore starts: result=running
+ * - update same job_id when completed: result=success/failed/cancelled
+ *
+ * @param array $entry
+ * @return bool
+ */
+function backup_lite_upsert_restore_history( $entry ) {
+    if ( empty( $entry ) || ! is_array( $entry ) ) {
+        return false;
+    }
+
+    $job_id = isset( $entry['job_id'] ) ? sanitize_text_field( (string) $entry['job_id'] ) : '';
+    if ( '' === $job_id ) {
+        return backup_lite_append_restore_history( $entry );
+    }
+
+    $history = backup_lite_get_restore_history();
+    $updated = false;
+
+    foreach ( $history as $idx => $row ) {
+        $row_job = isset( $row['job_id'] ) ? (string) $row['job_id'] : '';
+        if ( $row_job === $job_id ) {
+            // Merge: new entry wins.
+            $history[ $idx ] = array_merge( (array) $row, $entry );
+            $updated = true;
+            break;
+        }
+    }
+
+    if ( ! $updated ) {
+        array_unshift( $history, $entry );
+    }
+
+    $history = array_slice( $history, 0, 50 );
+
+    $path = backup_lite_get_restore_history_path();
+    $json = wp_json_encode( $history, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES );
+
+    // Using native file APIs on plugin-controlled storage path.
+    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+    return false !== file_put_contents( $path, $json, LOCK_EX );
+}
+
 function backup_lite_create_temp_dir( $prefix = 'tmp' ) {
     $temp_base = backup_lite_get_temp_dir();
 
@@ -963,6 +1010,18 @@ if ( ! function_exists( 'backup_lite_get_excluded_paths' ) ) {
         
         foreach ( $legacy as $legacy_path ) {
             $normalized = $normalize( $legacy_path, true );
+            if ( $normalized ) {
+                $paths[] = $normalized;
+            }
+        }
+
+        // Exclude other backup plugins' archives to prevent "backup of backups" explosions.
+        // Only exclude when the directory exists to avoid false positives.
+        $other_backup_dirs = [
+            WP_CONTENT_DIR . '/updraft',
+        ];
+        foreach ( $other_backup_dirs as $p ) {
+            $normalized = $normalize( $p, true );
             if ( $normalized ) {
                 $paths[] = $normalized;
             }

@@ -66,11 +66,21 @@ class Backup_Lite_Backup_Jobs {
             'download_url'    => backup_lite_get_download_url( $context['archive_path'] ),
             'temp_dir'        => $context['temp_dir'],
             'manifest_file'   => $context['manifest_file'],
+            'manifest_ndjson_file' => $context['manifest_ndjson_file'] ?? '',
+            // Byte offset into manifest.ndjson for resumable packing.
+            'manifest_offset' => 0,
+            // One-time migration marker for legacy manifest.json -> manifest.ndjson.
+            'manifest_migrated' => false,
             'sql_path'        => $context['sql_path'],
             'meta_path'       => $context['meta_path'],
             'options'         => $context['options'],
             'last_activity'   => time(),
+            // Last cron/AJAX tick timestamp (UTC). Used for debugging and stale detection.
+            'last_tick'       => 0,
             'started_at'      => time(), // Record backup start time (UTC timestamp)
+            // Cancellation is cooperative across cron/AJAX ticks. UI sets cancel_requested; workers must honor it.
+            'cancel_requested' => false,
+            'cancel_requested_at' => 0,
         ];
 
         self::save_job( $job );
@@ -191,13 +201,16 @@ class Backup_Lite_Backup_Jobs {
         try {
             // Mark as processing for frontend/UI (kept true for the whole request; reset to false at the end).
             self::acquire_lock( $job );
+            $job['last_tick'] = time();
 
             // If the job is still in preparing stage, do not force packing yet.
             // Preparing may take time (DB dump/manifest/self-check) and should run in background.
             if ( empty( $job['stage'] ) ) {
                 $job['stage'] = 'preparing';
             }
-            $job['status'] = 'running';
+        // IMPORTANT: Do not force status back to running here.
+        // Cancelled jobs must remain cancelled; in-flight requests should not resurrect them.
+        // Status/stage are managed by the pipeline steps themselves.
             self::save_job( $job );
 
             $limits    = self::resolve_batch_limits( $job, $max_files, $max_bytes );
@@ -236,7 +249,9 @@ class Backup_Lite_Backup_Jobs {
 
         // Open ZipArchive once for the entire time budget loop to reduce I/O overhead
         $zip = null;
-        if ( backup_lite_can_use_ziparchive() && ! empty( $job['archive_path'] ) && file_exists( $job['archive_path'] ) ) {
+        // Only keep ZipArchive open while we are actively packing.
+        // Finalizing should run after close (and may be sliced across multiple cron ticks).
+        if ( isset( $job['stage'] ) && 'packing' === $job['stage'] && backup_lite_can_use_ziparchive() && ! empty( $job['archive_path'] ) && file_exists( $job['archive_path'] ) ) {
             $zip = new ZipArchive();
             if ( true === $zip->open( $job['archive_path'], ZipArchive::CREATE ) ) {
                 backup_lite_log( 'info', 'Opened ZipArchive for time budget loop.', [
@@ -253,11 +268,34 @@ class Backup_Lite_Backup_Jobs {
 
         $job_completed_in_loop = false;
         $job_needs_finalize    = false;
+        $last_cancel_check     = 0.0;
 
             try {
             // Time budget loop: process multiple batches until time limit or job completion
             // Use microtime for more precise timing
             while ( $batch_count < $max_batches ) {
+                // Cooperative cancellation: reload state periodically to detect cancel_requested even if a request is in-flight.
+                // This prevents "cancel" from being overwritten by a long-running request.
+                $now_micro = microtime( true );
+                if ( ( $now_micro - $last_cancel_check ) >= 1.0 ) {
+                    $last_cancel_check = $now_micro;
+                    $fresh = self::load_job( $job_id );
+                    if ( is_array( $fresh ) ) {
+                        $cancel_requested = ! empty( $fresh['cancel_requested'] ) || ( isset( $fresh['status'] ) && 'cancelled' === $fresh['status'] ) || ( isset( $fresh['stage'] ) && 'cancelled' === $fresh['stage'] );
+                        if ( $cancel_requested ) {
+                            // Mark cancelled and stop further work ASAP.
+                            $job['cancel_requested']    = true;
+                            $job['cancel_requested_at'] = isset( $fresh['cancel_requested_at'] ) ? (int) $fresh['cancel_requested_at'] : time();
+                            $job['status']              = 'cancelled';
+                            $job['stage']               = 'cancelled';
+                            $job['message']             = __( 'Backup cancelled by user.', 'museder-restoreone' );
+                            $job_needs_finalize          = false;
+                            $job_completed_in_loop       = true;
+                            break;
+                        }
+                    }
+                }
+
                 // Check if we've exceeded time budget (using microtime for precision)
                 $elapsed = microtime( true ) - $start_microtime;
                 if ( $elapsed >= $time_budget ) {
@@ -312,6 +350,14 @@ class Backup_Lite_Backup_Jobs {
                     }
                 }
 
+                // Finalizing stage: skip packing and run finalize steps (sliced) after ZipArchive close.
+                // Without this, we keep re-entering packing, re-opening ZipArchive, and never make forward progress
+                // when finalize work is heavy (metadata embed/verify).
+                if ( isset( $job['stage'] ) && 'finalizing' === $job['stage'] ) {
+                    $job_needs_finalize = true;
+                    break;
+                }
+
                 // Process one packing batch (reuse ZipArchive if available)
                 $job = Backup_Lite_Backup::process_job_batch( $job, $max_files, $max_bytes, $zip );
                 $batch_count++;
@@ -340,6 +386,26 @@ class Backup_Lite_Backup_Jobs {
             // Close ZipArchive if we opened it (single close point).
             if ( null !== $zip ) {
                 try {
+                    // If packing finished and we still have the ZipArchive open, embed metadata BEFORE close.
+                    // This avoids re-opening a huge ZIP during finalize (slow on many shared hosts).
+                    if ( $job_needs_finalize && isset( $job['status'] ) && 'running' === $job['status'] ) {
+                        try {
+                            if ( class_exists( 'Backup_Lite_Backup' ) ) {
+                                Backup_Lite_Backup::embed_metadata_into_archive_before_close( $job, $zip );
+                                $job['finalize_step'] = 'verify';
+                            }
+                        } catch ( Throwable $embed_throwable ) {
+                            backup_lite_log( 'error', 'Failed to embed backup metadata before closing ZipArchive.', [
+                                'job_id' => $job_id,
+                                'error'  => $embed_throwable->getMessage(),
+                            ] );
+                            $job['status']  = 'failed';
+                            $job['stage']   = 'failed';
+                            $job['message'] = __( 'Unable to finalize backup archive. Please check logs and try again.', 'museder-restoreone' );
+                            $job_needs_finalize = false;
+                        }
+                    }
+
                     $closed = $zip->close();
                     if ( false === $closed ) {
                         throw new RuntimeException( 'ZipArchive::close() returned false.' );
@@ -366,6 +432,19 @@ class Backup_Lite_Backup_Jobs {
                 $zip = null;
             }
 
+            // If job was cancelled during the loop, perform cleanup and stop here.
+            if ( isset( $job['status'] ) && 'cancelled' === $job['status'] ) {
+                self::delete_archive_for_job( $job );
+                self::cleanup_job( $job );
+                self::clear_active_job( $job_id );
+                self::clear_scheduled_job( $job_id );
+                $job['processing']    = false;
+                $job['last_activity'] = time();
+                $job['updated_at']    = current_time( 'mysql' );
+                self::save_job( $job );
+                return $job;
+            }
+
             // If packing finished, finalize AFTER close so filesize/metadata are accurate.
             if ( $job_needs_finalize && ! in_array( $job['status'], [ 'failed', 'cancelled' ], true ) ) {
                 $total_files     = isset( $job['total_files'] ) ? (int) $job['total_files'] : 0;
@@ -386,7 +465,8 @@ class Backup_Lite_Backup_Jobs {
                     $job_needs_finalize = false;
                 } else {
                     $job = Backup_Lite_Backup::finalize_async_job_after_close( $job );
-                    $job_completed_in_loop = true;
+                    // Finalize may be sliced (still "running"); only treat as completed if the job is terminal.
+                    $job_completed_in_loop = isset( $job['status'] ) && in_array( $job['status'], [ 'completed', 'failed', 'cancelled' ], true );
                     $job_needs_finalize = false;
                 }
             }
@@ -481,8 +561,9 @@ class Backup_Lite_Backup_Jobs {
      * @param array  $job    Current job state.
      */
     private static function schedule_next_batch( $job_id, $job ) {
-        // Only schedule if job is in preparing or packing stage
-        if ( ! in_array( $job['stage'], [ 'preparing', 'packing' ], true ) ) {
+        // Only schedule if job is in preparing/packing/finalizing stage
+        // Finalizing may be sliced across multiple ticks (metadata embed/verify).
+        if ( ! in_array( $job['stage'], [ 'preparing', 'packing', 'finalizing' ], true ) ) {
             return;
         }
 
@@ -536,15 +617,35 @@ class Backup_Lite_Backup_Jobs {
             return false;
         }
 
+        backup_lite_log( 'info', 'Backup job cancelled by user.', [
+            'job_id' => $job_id,
+            'stage'  => $job['stage'] ?? '',
+            'status' => $job['status'] ?? '',
+        ] );
+
+        // Mark cancellation intent (for in-flight request detection).
+        $job['cancel_requested']    = true;
+        $job['cancel_requested_at'] = time();
+
         $job['status']  = 'cancelled';
         $job['stage']   = 'cancelled';
         $job['message'] = __( 'Backup cancelled by user.', 'museder-restoreone' );
         $job['processing'] = false;
         self::save_job( $job );
+        self::clear_scheduled_job( $job_id );
+
+        // Best-effort immediate cleanup: only do destructive operations if we can acquire the per-job option lock.
+        // This avoids racing with an in-flight request that is still writing the archive.
+        $token = self::acquire_option_lock( $job_id );
+        if ( ! empty( $token ) ) {
+            try {
         self::delete_archive_for_job( $job );
         self::cleanup_job( $job );
         self::clear_active_job( $job_id );
-        self::clear_scheduled_job( $job_id );
+            } finally {
+                self::release_option_lock( $job_id, $token );
+            }
+        }
 
         return true;
     }
@@ -568,6 +669,19 @@ class Backup_Lite_Backup_Jobs {
                 // phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
                 // Unlinking temporary backup/restore artifact. WP_Filesystem is not practical here.
                 @unlink( $job['manifest_file'] );
+                // phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
+            }
+        }
+
+        if ( ! empty( $job['manifest_ndjson_file'] ) && file_exists( $job['manifest_ndjson_file'] ) ) {
+            // @plugin-check: allowed - required for backup/restore file operations
+            // Path is validated and sanitized before use
+            if ( function_exists( 'wp_delete_file' ) ) {
+                wp_delete_file( $job['manifest_ndjson_file'] );
+            } else {
+                // phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
+                // Unlinking temporary backup/restore artifact. WP_Filesystem is not practical here.
+                @unlink( $job['manifest_ndjson_file'] );
                 // phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
             }
         }
