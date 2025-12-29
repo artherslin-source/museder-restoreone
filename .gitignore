@@ -7,3 +7,6 @@ vendor/
 logs/
 
 museder-restoreone/
+
+# Local docs/artifacts (not part of plugin release)
+WP規範.rtf
