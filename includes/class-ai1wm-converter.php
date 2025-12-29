@@ -141,16 +141,15 @@ class Backup_Lite_AI1WM_Converter {
      * @return array{success:bool, message:string, file?:string, error?:string}
      */
     protected static function convert_wpress( $source_file, $output_file = null ) {
-        // .wpress files are gzip-compressed tar archives
-        // They can be extracted directly using tar command, no conversion needed
-        // This method returns false to indicate no conversion is performed,
-        // but the restore process will handle .wpress extraction directly
+        // .wpress files are AI1WM WPRESS archives (NOT tar.gz).
+        // RestoreOne restores them directly using the local WPRESS extractor engine
+        // (see includes/wpress/*). No conversion is needed.
         
-        backup_lite_log( 'info', 'WPRESS format detected. Direct extraction will be attempted during restore (no conversion needed).', [ 'file' => basename( $source_file ) ] );
+        backup_lite_log( 'info', 'WPRESS format detected. Direct extraction will be handled during restore (no conversion needed).', [ 'file' => basename( $source_file ) ] );
 
         return [
             'success' => false,
-            'message' => __( '.wpress files can be restored directly without conversion. The restore process will extract the file using tar command.', 'museder-restoreone' ),
+            'message' => __( '.wpress files can be restored directly without conversion. The restore process will extract the archive locally.', 'museder-restoreone' ),
             'error'   => 'wpress_no_conversion_needed',
         ];
     }

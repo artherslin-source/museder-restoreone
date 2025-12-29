@@ -163,7 +163,7 @@ converted-backup.zip
 
 ```json
 {
-    "plugin_version": "2.6.126",
+    "plugin_version": "2.7.126",
     "wordpress_version": "unknown",
     "generated_at": "2025-01-XX...",
     "site_url": "https://example.com",
