@@ -299,27 +299,27 @@ if ( $safe_mode_active ) {
             <div style="margin-top: 12px;">
                 <strong><?php esc_html_e( 'Recent reports', 'museder-restoreone' ); ?></strong>
                 <div id="backup-lite-ai-reports-container">
-                    <?php if ( empty( $museder_restoreone_ai_reports ) ) : ?>
-                        <p class="description" id="backup-lite-ai-empty"><?php esc_html_e( 'No AI scan reports yet.', 'museder-restoreone' ); ?></p>
-                    <?php else : ?>
-                        <ul class="backup-lite-list" id="backup-lite-ai-reports">
-                            <?php foreach ( $museder_restoreone_ai_reports as $museder_restoreone_ai_entry ) : ?>
-                                <?php
-                                $museder_restoreone_ai_created = isset( $museder_restoreone_ai_entry['created_at_gmt'] ) ? (string) $museder_restoreone_ai_entry['created_at_gmt'] : '';
-                                $museder_restoreone_ai_summary = isset( $museder_restoreone_ai_entry['report']['summary'] ) ? (string) $museder_restoreone_ai_entry['report']['summary'] : '';
-                                $museder_restoreone_ai_items   = isset( $museder_restoreone_ai_entry['report']['items'] ) && is_array( $museder_restoreone_ai_entry['report']['items'] ) ? $museder_restoreone_ai_entry['report']['items'] : [];
-                                ?>
-                                <li>
+                <?php if ( empty( $museder_restoreone_ai_reports ) ) : ?>
+                    <p class="description" id="backup-lite-ai-empty"><?php esc_html_e( 'No AI scan reports yet.', 'museder-restoreone' ); ?></p>
+                <?php else : ?>
+                    <ul class="backup-lite-list" id="backup-lite-ai-reports">
+                        <?php foreach ( $museder_restoreone_ai_reports as $museder_restoreone_ai_entry ) : ?>
+                            <?php
+                            $museder_restoreone_ai_created = isset( $museder_restoreone_ai_entry['created_at_gmt'] ) ? (string) $museder_restoreone_ai_entry['created_at_gmt'] : '';
+                            $museder_restoreone_ai_summary = isset( $museder_restoreone_ai_entry['report']['summary'] ) ? (string) $museder_restoreone_ai_entry['report']['summary'] : '';
+                            $museder_restoreone_ai_items   = isset( $museder_restoreone_ai_entry['report']['items'] ) && is_array( $museder_restoreone_ai_entry['report']['items'] ) ? $museder_restoreone_ai_entry['report']['items'] : [];
+                            ?>
+                            <li>
                                     <strong><?php echo esc_html( $museder_restoreone_ai_created ? backup_lite_format_local_time( $museder_restoreone_ai_created ) : '' ); ?></strong>
-                                    <?php if ( $museder_restoreone_ai_summary ) : ?>
-                                        <span><?php echo esc_html( $museder_restoreone_ai_summary ); ?></span>
-                                    <?php endif; ?>
-                                    <?php if ( ! empty( $museder_restoreone_ai_items ) ) : ?>
-                                        <details style="margin-top: 6px;">
-                                            <summary><?php esc_html_e( 'View details', 'museder-restoreone' ); ?></summary>
-                                            <ul style="margin: 8px 0 0 18px;">
-                                                <?php foreach ( array_slice( $museder_restoreone_ai_items, 0, 5 ) as $museder_restoreone_ai_item ) : ?>
-                                                    <?php
+                                <?php if ( $museder_restoreone_ai_summary ) : ?>
+                                    <span><?php echo esc_html( $museder_restoreone_ai_summary ); ?></span>
+                                <?php endif; ?>
+                                <?php if ( ! empty( $museder_restoreone_ai_items ) ) : ?>
+                                    <details style="margin-top: 6px;">
+                                        <summary><?php esc_html_e( 'View details', 'museder-restoreone' ); ?></summary>
+                                        <ul style="margin: 8px 0 0 18px;">
+                                            <?php foreach ( array_slice( $museder_restoreone_ai_items, 0, 5 ) as $museder_restoreone_ai_item ) : ?>
+                                                <?php
                                                     $ai_severity = isset( $museder_restoreone_ai_item['severity'] ) ? strtolower( (string) $museder_restoreone_ai_item['severity'] ) : 'info';
                                                     $ai_title    = isset( $museder_restoreone_ai_item['title'] ) ? (string) $museder_restoreone_ai_item['title'] : '';
                                                     $ai_rec      = isset( $museder_restoreone_ai_item['recommendation'] ) ? (string) $museder_restoreone_ai_item['recommendation'] : '';
@@ -332,24 +332,24 @@ if ( $safe_mode_active ) {
                                                         $ai_badge_class = 'pending';
                                                         $ai_badge_label = __( 'Medium', 'museder-restoreone' );
                                                     }
-                                                    ?>
-                                                    <li>
+                                                ?>
+                                                <li>
                                                         <span class="badge <?php echo esc_attr( $ai_badge_class ); ?>"><?php echo esc_html( $ai_badge_label ); ?></span>
                                                         <?php if ( $ai_title ) : ?>
-                                                            <strong><?php echo esc_html( $ai_title ); ?></strong>
+                                                    <strong><?php echo esc_html( $ai_title ); ?></strong>
                                                         <?php endif; ?>
-                                                        <?php if ( $ai_rec ) : ?>
-                                                            <span> — <?php echo esc_html( $ai_rec ); ?></span>
-                                                        <?php endif; ?>
-                                                    </li>
-                                                <?php endforeach; ?>
-                                            </ul>
-                                        </details>
-                                    <?php endif; ?>
-                                </li>
-                            <?php endforeach; ?>
-                        </ul>
-                    <?php endif; ?>
+                                                    <?php if ( $ai_rec ) : ?>
+                                                        <span> — <?php echo esc_html( $ai_rec ); ?></span>
+                                                    <?php endif; ?>
+                                                </li>
+                                            <?php endforeach; ?>
+                                        </ul>
+                                    </details>
+                                <?php endif; ?>
+                            </li>
+                        <?php endforeach; ?>
+                    </ul>
+                <?php endif; ?>
                 </div>
             </div>
 

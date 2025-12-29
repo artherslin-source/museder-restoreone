@@ -15,6 +15,8 @@ class Backup_Lite_UI {
 
     public static function init() {
         add_action( 'admin_enqueue_scripts', [ __CLASS__, 'enqueue_assets' ] );
+        add_action( 'admin_notices', [ __CLASS__, 'render_restore_notice' ] );
+        add_action( 'admin_init', [ __CLASS__, 'handle_restore_notice_dismiss' ] );
 
         add_action( 'wp_ajax_backup_lite_run_backup', [ __CLASS__, 'handle_backup_request' ] );
         add_action( 'wp_ajax_backup_lite_run_restore', [ __CLASS__, 'handle_restore_request' ] );
@@ -31,10 +33,119 @@ class Backup_Lite_UI {
         add_action( 'wp_ajax_backup_lite_cancel_backup_job', [ __CLASS__, 'ajax_cancel_backup_job' ] );
         add_action( 'wp_ajax_backup_lite_get_active_backup_job', [ __CLASS__, 'ajax_get_active_backup_job' ] );
         add_action( 'wp_ajax_backup_lite_refresh_nonce', [ __CLASS__, 'ajax_refresh_nonce' ] );
+        add_action( 'wp_ajax_backup_lite_keep_alive', [ __CLASS__, 'ajax_keep_alive' ] );
 
         add_action( 'admin_post_backup_lite_download_log', [ __CLASS__, 'handle_log_download' ] );
         add_action( 'admin_post_backup_lite_download_backup', [ __CLASS__, 'handle_backup_download' ] );
         add_action( 'admin_post_backup_lite_download_report', [ __CLASS__, 'handle_report_download' ] );
+    }
+
+    /**
+     * Lightweight keep-alive to reduce admin session expiry during long operations.
+     */
+    public static function ajax_keep_alive() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( [ 'message' => esc_html__( 'Permission denied.', 'museder-restoreone' ) ], 403 );
+        }
+        self::verify_ajax_request();
+        check_ajax_referer( self::NONCE, 'nonce' );
+        wp_send_json_success( [ 'ok' => true, 'ts' => time() ] );
+    }
+
+    /**
+     * Render an unattended restore notice for the current admin user.
+     */
+    public static function render_restore_notice() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            return;
+        }
+        if ( ! class_exists( 'Backup_Lite_Restore_Service' ) ) {
+            return;
+        }
+        $uid = function_exists( 'get_current_user_id' ) ? (int) get_current_user_id() : 0;
+        if ( $uid <= 0 ) {
+            return;
+        }
+        $dismissed = (int) get_user_meta( $uid, 'backup_lite_restore_notice_dismissed', true );
+        if ( 1 === $dismissed ) {
+            return;
+        }
+        $job_id = (string) get_user_meta( $uid, 'backup_lite_restore_notice_job_id', true );
+        if ( '' === $job_id ) {
+            return;
+        }
+
+        $status = null;
+        try {
+            $status = Backup_Lite_Restore_Service::status( $job_id );
+        } catch ( Exception $e ) {
+            $status = null;
+        }
+        if ( ! is_array( $status ) ) {
+            return;
+        }
+
+        $stage    = isset( $status['stage'] ) ? (string) $status['stage'] : '';
+        $progress = isset( $status['progress'] ) ? (int) $status['progress'] : 0;
+        $message  = isset( $status['message'] ) ? (string) $status['message'] : '';
+        $completed = ! empty( $status['completed'] );
+
+        $type = 'info';
+        $title = __( 'Restore running in background', 'museder-restoreone' );
+        if ( $completed ) {
+            if ( 'done' === $stage || 'rollback-done' === $stage ) {
+                $type  = 'success';
+                $title = __( 'Restore completed', 'museder-restoreone' );
+            } elseif ( 'cancelled' === $stage ) {
+                $type  = 'warning';
+                $title = __( 'Restore cancelled', 'museder-restoreone' );
+            } else {
+                $type  = 'error';
+                $title = __( 'Restore failed', 'museder-restoreone' );
+            }
+        }
+
+        $dismiss_url = wp_nonce_url(
+            add_query_arg( [ 'backup_lite_dismiss_restore_notice' => 1, 'job_id' => rawurlencode( $job_id ) ], admin_url() ),
+            'backup_lite_dismiss_restore_notice'
+        );
+        $restore_url = admin_url( 'admin.php?page=backup-lite-restore' );
+
+        printf(
+            '<div class="notice notice-%1$s"><p><strong>%2$s</strong> — %3$s</p><p>%4$s</p></div>',
+            esc_attr( $type ),
+            esc_html( $title ),
+            esc_html( sprintf( __( 'Progress: %d%%', 'museder-restoreone' ), $progress ) ),
+            wp_kses_post(
+                sprintf(
+                    /* translators: 1: message, 2: restore url, 3: dismiss url */
+                    __( '%1$s <a href="%2$s">Open Restore page</a> · <a href="%3$s">Dismiss</a>', 'museder-restoreone' ),
+                    $message ? esc_html( $message ) : esc_html__( 'Working…', 'museder-restoreone' ),
+                    esc_url( $restore_url ),
+                    esc_url( $dismiss_url )
+                )
+            )
+        );
+    }
+
+    /**
+     * Handle dismiss action for the restore notice.
+     */
+    public static function handle_restore_notice_dismiss() {
+        if ( ! isset( $_GET['backup_lite_dismiss_restore_notice'] ) ) {
+            return;
+        }
+        if ( ! current_user_can( 'manage_options' ) ) {
+            return;
+        }
+        check_admin_referer( 'backup_lite_dismiss_restore_notice' );
+        $uid = function_exists( 'get_current_user_id' ) ? (int) get_current_user_id() : 0;
+        if ( $uid > 0 ) {
+            update_user_meta( $uid, 'backup_lite_restore_notice_dismissed', 1 );
+        }
+        // Redirect to remove query args.
+        wp_safe_redirect( remove_query_arg( [ 'backup_lite_dismiss_restore_notice', '_wpnonce', 'job_id' ] ) );
+        exit;
     }
 
     public static function enqueue_assets( $hook ) {
@@ -216,6 +327,12 @@ class Backup_Lite_UI {
             'activeJob'      => $active_job,
             'jobPollingInterval' => 2.0, // Default 2 seconds, will be adjusted dynamically based on progress
             'confirmRestore' => __( 'Restoring will overwrite your current site files and database. Continue?', 'museder-restoreone' ),
+            'restoreAutotune' => [
+                // Balanced defaults: allow the client to ramp up but stay within safe bounds.
+                'maxConcurrency' => 4,
+                'maxChunkBytes'  => 16 * 1024 * 1024,
+                'ttlMs'          => 7 * 24 * 60 * 60 * 1000,
+            ],
             'strings'        => [
                 'runningTitle'    => __( 'Processing…', 'museder-restoreone' ),
                 'runningMessage'  => __( 'Please wait while we complete your request.', 'museder-restoreone' ),
@@ -294,6 +411,7 @@ class Backup_Lite_UI {
                 'restoreFailed'         => __( 'Restore Failed', 'museder-restoreone' ),
                 'restoreOverlayMessage' => __( 'Museder RestoreOne has finished restoring your site.', 'museder-restoreone' ),
                 'restoreOverlayConfirm' => __( 'Got it', 'museder-restoreone' ),
+                'restoreTickFallbackActive' => __( 'Cron appears unreliable. Using your browser to push restore progress…', 'museder-restoreone' ),
                 'selectAtLeastOneBackup' => __( 'Please select at least one backup.', 'museder-restoreone' ),
                 /* translators: %s: Number of backups selected. */
                 'downloadingBackups'     => __( 'Downloading %s backup(s)...', 'museder-restoreone' ),
@@ -557,7 +675,18 @@ class Backup_Lite_UI {
                 'message' => esc_html__( 'Unsupported file type for restore.', 'museder-restoreone' ),
             ];
         } else {
-            $response = Backup_Lite_Restore::restore_site( $file_path );
+            // AI1WM-style: queue restore as a resumable Restore_Service job (cron + checkpoints).
+            $file_name = basename( $file_path );
+            $prepared  = Backup_Lite_Restore_Service::prepare( 'upload', $file_name, '' );
+            $job_id    = isset( $prepared['job_id'] ) ? (string) $prepared['job_id'] : '';
+            Backup_Lite_Restore_Service::validate( $job_id );
+            $started = Backup_Lite_Restore_Service::execute( $job_id, [ 'autoBackup' => true ] );
+
+            $response = [
+                'success' => true,
+                'message' => isset( $started['message'] ) ? $started['message'] : __( 'Restore started in background.', 'museder-restoreone' ),
+                'job_id'  => $job_id,
+            ];
         }
 
         if ( ! empty( $response['success'] ) ) {
@@ -611,13 +740,19 @@ class Backup_Lite_UI {
             }
         }
 
-        $response = Backup_Lite_Restore::restore_site( $file_path, $options );
+        // AI1WM-style: queue restore as a resumable Restore_Service job (cron + checkpoints).
+        $prepared = Backup_Lite_Restore_Service::prepare( 'existing', $filename, '' );
+        $job_id   = isset( $prepared['job_id'] ) ? (string) $prepared['job_id'] : '';
+        Backup_Lite_Restore_Service::validate( $job_id );
+        $started = Backup_Lite_Restore_Service::execute( $job_id, $options );
 
-        if ( ! empty( $response['success'] ) ) {
-            wp_send_json_success( $response );
-        }
-
-        wp_send_json_error( $response );
+        wp_send_json_success(
+            [
+                'success' => true,
+                'message' => isset( $started['message'] ) ? $started['message'] : __( 'Restore started in background.', 'museder-restoreone' ),
+                'job_id'  => $job_id,
+            ]
+        );
     }
 
     /**
@@ -1022,6 +1157,63 @@ class Backup_Lite_UI {
         }
         if ( is_string( $custom_excludes ) && '' !== trim( $custom_excludes ) ) {
             $options['backup_custom_excludes'] = $custom_excludes;
+        }
+
+        // Scope presets (AI1WM-like). Optional; Free will honor them if provided.
+        // phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotValidated -- checkbox-like values, normalized by FILTER_VALIDATE_BOOLEAN
+        $bool_keys = [
+            'no_media'     => 'no_media',
+            'no_plugins'   => 'no_plugins',
+            'no_themes'    => 'no_themes',
+            'no_database'  => 'no_database',
+            'no_cache'     => 'no_cache',
+            'no_muplugins' => 'no_muplugins',
+        ];
+        foreach ( $bool_keys as $post_key => $opt_key ) {
+            if ( isset( $_POST[ $post_key ] ) ) {
+                $val = wp_unslash( $_POST[ $post_key ] );
+                $normalized = filter_var( $val, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE );
+                if ( null !== $normalized ) {
+                    $options[ $opt_key ] = (bool) $normalized;
+                }
+            }
+        }
+        // phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotValidated
+
+        // DB include/exclude tables (newline or comma separated).
+        $include_tables = '';
+        if ( isset( $_POST['include_db_tables'] ) ) {
+            $include_tables = wp_unslash( $_POST['include_db_tables'] );
+            if ( is_string( $include_tables ) ) {
+                $include_tables = sanitize_textarea_field( $include_tables );
+            } else {
+                $include_tables = '';
+            }
+        }
+        if ( is_string( $include_tables ) && '' !== trim( $include_tables ) ) {
+            $options['include_db_tables'] = $include_tables;
+        }
+
+        $exclude_tables = '';
+        if ( isset( $_POST['exclude_db_tables'] ) ) {
+            $exclude_tables = wp_unslash( $_POST['exclude_db_tables'] );
+            if ( is_string( $exclude_tables ) ) {
+                $exclude_tables = sanitize_textarea_field( $exclude_tables );
+            } else {
+                $exclude_tables = '';
+            }
+        }
+        if ( is_string( $exclude_tables ) && '' !== trim( $exclude_tables ) ) {
+            $options['exclude_db_tables'] = $exclude_tables;
+        }
+
+        // Multisite (experimental): allow selecting a blog ID for subsite-only export.
+        if ( isset( $_POST['multisite_blog_id'] ) ) {
+            $blog_id_raw = wp_unslash( $_POST['multisite_blog_id'] );
+            $blog_id     = is_numeric( $blog_id_raw ) ? absint( $blog_id_raw ) : 0;
+            if ( $blog_id > 0 ) {
+                $options['multisite_blog_id'] = $blog_id;
+            }
         }
 
         if ( Backup_Lite_Pro::is_pro_active() ) {

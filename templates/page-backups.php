@@ -156,7 +156,7 @@ $settings = class_exists( 'Backup_Lite_Settings' ) ? Backup_Lite_Settings::get_s
                     <?php esc_html_e( 'Optional. Use relative paths like wp-content/cache/ or directory names like node_modules. Avoid excluding important content.', 'museder-restoreone' ); ?>
                 </small>
             </div>
-
+            
             <?php if ( $is_pro ) : ?>
                 <!-- PRO: Backup Label -->
                 <div class="bl-form-control" style="margin-bottom: 16px;">

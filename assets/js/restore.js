@@ -329,9 +329,23 @@
             this.updateStepIndicator('restore');
             this.setJobStatus('執行還原中…');
             this.pollStatus();
+            var decryptionPassword = '';
+            if (this.refs.restoreDecryptionPassword) {
+                decryptionPassword = String(this.refs.restoreDecryptionPassword.value || '');
+            } else {
+                var pwEl = document.getElementById('restoreDecryptionPassword');
+                if (pwEl) {
+                    decryptionPassword = String(pwEl.value || '');
+                }
+            }
+            var targetBlogId = 0;
+            var blogEl = document.getElementById('restoreTargetBlogId');
+            if (blogEl && blogEl.value) {
+                targetBlogId = parseInt(blogEl.value, 10) || 0;
+            }
             this.buildRequest('restore/execute/' + this.state.jobId, {
                 method: 'POST',
-                body: JSON.stringify({ autoBackup: true })
+                body: JSON.stringify({ autoBackup: true, decryption_password: decryptionPassword, target_blog_id: targetBlogId })
             }).then(function (data) {
                 if (!data || data.ok === false) {
                     throw new Error(data && data.message ? data.message : 'Restore failed.');
@@ -495,32 +509,28 @@
             });
         },
         stageIndex: function (stage) {
-            var order = ['idle', 'prepared', 'validated', 'dry-run', 'restore-files', 'restore-db', 'restore-files-final', 'search-replace', 'cleanup', 'done', 'rollback', 'rollback-done'];
-            var index = order.indexOf(stage);
-            if (index === -1) {
-                index = 0;
-            }
-            if (stage === 'done') {
-                return 3;
-            }
-            if (stage === 'rollback-done') {
-                return 5;
-            }
+            stage = String(stage || '');
+
+            // Steps: 0=source, 1=safety, 2=dryrun, 3=restore, 4=rollback, 5=activity
+            if (stage === 'prepared') return 0;
+            if (stage === 'validated') return 1;
+            if (stage === 'dry-run') return 2;
+
             if (stage.indexOf('rollback') !== -1) {
-                return 4;
+                return (stage === 'rollback-done') ? 5 : 4;
             }
-            if (stage.indexOf('restore') !== -1 || stage === 'cleanup') {
+
+            if (
+                stage.indexOf('restore') !== -1
+                || stage === 'search-replace'
+                || stage === 'cleanup'
+                || stage === 'done'
+                || stage === 'failed'
+                || stage === 'cancelled'
+            ) {
                 return 3;
             }
-            if (stage === 'dry-run') {
-                return 2;
-            }
-            if (stage === 'validated') {
-                return 1;
-            }
-            if (stage === 'prepared') {
-                return 0;
-            }
+
             return 0;
         },
         detectStepFromStage: function (stage) {
@@ -530,7 +540,7 @@
             if (stage.indexOf('rollback') !== -1) {
                 return 'rollback';
             }
-            if (stage.indexOf('restore') !== -1 || stage === 'cleanup') {
+            if (stage.indexOf('restore') !== -1 || stage === 'search-replace' || stage === 'cleanup') {
                 return 'restore';
             }
             if (stage === 'dry-run') {
@@ -760,14 +770,22 @@
                     return '安全驗證完成';
                 case 'dry-run':
                     return 'Dry-Run 完成';
+                case 'restore-extract-db':
+                    return '抽取資料庫…';
                 case 'restore-files':
+                    return '還原檔案…';
                 case 'restore-db':
-                case 'restore-files-final':
+                    return '匯入資料庫…';
                 case 'search-replace':
+                    return 'URL 替換…';
                 case 'cleanup':
-                    return '還原進行中…';
+                    return '收尾中…';
                 case 'done':
                     return '還原完成';
+                case 'failed':
+                    return '還原失敗';
+                case 'cancelled':
+                    return '已取消';
                 case 'rollback':
                     return 'Rollback 進行中…';
                 case 'rollback-done':

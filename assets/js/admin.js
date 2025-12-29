@@ -128,7 +128,8 @@ var backupLiteTimer = {
             text: message,
             gravity: 'top',
             position: 'right',
-            backgroundColor: background,
+            // Toastify deprecates backgroundColor; use style.background to avoid console warning.
+            style: { background: background },
             duration: 3000
         }).showToast();
     }
@@ -1739,8 +1740,17 @@ function initRestoreCenter() {
             executeDone: strings.stepExecuteDone || 'Restore finished. Review your site.'
         };
         var SIMPLE_UPLOAD_LIMIT = 10 * 1024 * 1024;
-        var CHUNK_SIZE_BYTES = 2 * 1024 * 1024;
+        // Faster default for large local uploads; caps-based tuning will clamp down if needed.
+        var DEFAULT_CHUNK_SIZE_BYTES = 4 * 1024 * 1024;
+        var DEFAULT_CONCURRENCY = 2;
+        var MAX_CONCURRENCY = 4;
+        var MIN_CHUNK_SIZE_BYTES = 512 * 1024; // 512KB
+        var MAX_CHUNK_SIZE_BYTES = 16 * 1024 * 1024; // 16MB (balanced cap)
         var activeChunkSession = null;
+        var uploadCancelRequested = false;
+        var activeUploadControllers = [];
+        var autotuneConfig = restoreData.autotune || (settings && settings.restoreAutotune ? settings.restoreAutotune : {}) || {};
+        var autotuneStorageTtlMs = (autotuneConfig && autotuneConfig.ttlMs) ? parseInt(autotuneConfig.ttlMs, 10) : (7 * 24 * 60 * 60 * 1000);
         var chunkStrings = {
             preparing: strings.chunkPreparing || 'Preparing upload…',
             uploading: strings.chunkUploading || 'Uploading %1$s of %2$s (%3$s%)…',
@@ -1755,8 +1765,47 @@ function initRestoreCenter() {
         var restoreJobFileSize = 0; // Backup file size in bytes
         var restoreJobEstimatedDuration = 0; // Estimated duration in milliseconds
         var restoreJobReached85Time = null; // Time when progress reached 85%
-        var RESTORE_JOB_POLL_TIMEOUT = 300000; // 5 minutes timeout
+        // Polling should not hard-timeout for long-running restores; use last_tick to detect staleness instead.
+        var RESTORE_JOB_POLL_TIMEOUT = 300000; // legacy (no longer used as hard stop)
+        var RESTORE_JOB_STALE_THRESHOLD = 15 * 60 * 1000; // 15 minutes without last_tick => treat as stalled
+        var restoreJobLastTickMs = 0;
+        var restoreJobLastTickValueSec = 0;
+        var restoreJobTickStaleSinceMs = 0;
+        var restoreTickInFlight = false;
+        var restoreTickLastAttemptMs = 0;
+        var restoreTickFallbackActive = false;
+        // If last_tick doesn't advance for a while, try an admin-ajax tick to push the job forward.
+        var RESTORE_JOB_TICK_PUSH_THRESHOLD = 90 * 1000; // 90 seconds no tick => try push
+        var RESTORE_JOB_TICK_PUSH_COOLDOWN = 15 * 1000; // min interval between pushes
+        var restoreJobLastStatusAtMs = 0;
         var RESTORE_JOB_100_POLL_LIMIT = 60000; // 1 minute after reaching 100%
+        var restoreMonitorPaused = false;
+        var restoreAutoResumeInterval = null;
+        var restoreAutoResumeToastShown = false;
+
+        function pushRestoreJobTick(jobId) {
+            if (!jobId) {
+                return Promise.reject(new Error('missing_job_id'));
+            }
+            if (restoreTickInFlight) {
+                return Promise.resolve(null);
+            }
+            var now = Date.now();
+            if (restoreTickLastAttemptMs && (now - restoreTickLastAttemptMs) < RESTORE_JOB_TICK_PUSH_COOLDOWN) {
+                return Promise.resolve(null);
+            }
+            restoreTickLastAttemptMs = now;
+            restoreTickInFlight = true;
+            var formData = prepareFormData('backup_lite_restore_tick');
+            formData.append('job_id', jobId);
+            formData.append('slice', '8');
+            return ajaxRequest(formData).then(function (json) {
+                restoreTickFallbackActive = true;
+                return getJsonPayload(json) || {};
+            }).finally(function () {
+                restoreTickInFlight = false;
+            });
+        }
 
         function notifyError(payload) {
             if (typeof handleError === 'function') {
@@ -1790,14 +1839,257 @@ function initRestoreCenter() {
             var textNode = node.querySelector('.status-text') || node;
             textNode.textContent = message || '';
         }
-        function ajaxRequest(formData) {
+        function formatDurationMs(ms) {
+            var totalSeconds = Math.max(0, Math.floor(ms / 1000));
+            var hours = Math.floor(totalSeconds / 3600);
+            var minutes = Math.floor((totalSeconds % 3600) / 60);
+            var seconds = totalSeconds % 60;
+            if (hours > 0) {
+                return String(hours) + ':' + String(minutes).padStart(2, '0') + ':' + String(seconds).padStart(2, '0');
+            }
+            return String(minutes) + ':' + String(seconds).padStart(2, '0');
+        }
+        function getStep1TimerKey() {
+            return 'backup_lite_restore_step1_started_at';
+        }
+        function setStep1StartedNow() {
+            try {
+                sessionStorage.setItem(getStep1TimerKey(), String(Date.now()));
+            } catch (e) {}
+        }
+        function clearStep1Started() {
+            try {
+                sessionStorage.removeItem(getStep1TimerKey());
+            } catch (e) {}
+        }
+        function getStep1StartedAt() {
+            try {
+                var raw = sessionStorage.getItem(getStep1TimerKey());
+                var v = raw ? parseInt(raw, 10) : 0;
+                return isNaN(v) ? 0 : v;
+            } catch (e) {
+                return 0;
+            }
+        }
+        function ensureStep1TimerNode() {
+            var node = document.getElementById('bl-step1-timer');
+            if (node) {
+                return node;
+            }
+            var container = document.getElementById('step-upload-status');
+            if (!container) {
+                return null;
+            }
+            node = document.createElement('span');
+            node.id = 'bl-step1-timer';
+            node.style.marginLeft = '10px';
+            node.style.fontSize = '12px';
+            node.style.opacity = '0.85';
+            container.appendChild(node);
+            return node;
+        }
+        function updateStep1TimerDisplay(finalText) {
+            var node = ensureStep1TimerNode();
+            if (!node) {
+                return;
+            }
+            if (finalText) {
+                node.textContent = finalText;
+                return;
+            }
+            var startedAt = getStep1StartedAt();
+            if (!startedAt) {
+                node.textContent = '';
+                return;
+            }
+            node.textContent = '⏱ ' + formatDurationMs(Date.now() - startedAt);
+        }
+        function getStep3TimerKey(jobId) {
+            return 'backup_lite_restore_step3_started_at_' + String(jobId || '');
+        }
+        function setStep3StartedAt(jobId, startedAtMs) {
+            try {
+                sessionStorage.setItem(getStep3TimerKey(jobId), String(startedAtMs));
+            } catch (e) {}
+        }
+        function getStep3StartedAt(jobId) {
+            try {
+                var raw = sessionStorage.getItem(getStep3TimerKey(jobId));
+                var v = raw ? parseInt(raw, 10) : 0;
+                return isNaN(v) ? 0 : v;
+            } catch (e) {
+                return 0;
+            }
+        }
+        function clearStep3StartedAt(jobId) {
+            try {
+                sessionStorage.removeItem(getStep3TimerKey(jobId));
+            } catch (e) {}
+        }
+        function ensureStep3TimerNode() {
+            var node = document.getElementById('bl-step3-timer');
+            if (node) {
+                return node;
+            }
+            var status = document.getElementById('restore-progress-status');
+            if (!status) {
+                return null;
+            }
+            node = document.createElement('div');
+            node.id = 'bl-step3-timer';
+            node.style.marginTop = '6px';
+            node.style.fontSize = '12px';
+            node.style.opacity = '0.85';
+            status.parentNode.insertBefore(node, status.nextSibling);
+            return node;
+        }
+        function updateStep3TimerDisplay(jobId) {
+            var node = ensureStep3TimerNode();
+            if (!node) {
+                return;
+            }
+            if (!jobId) {
+                node.textContent = '';
+                return;
+            }
+            var startedAt = getStep3StartedAt(jobId);
+            if (!startedAt) {
+                node.textContent = '';
+                return;
+            }
+            node.textContent = '⏱ ' + (strings && strings.elapsed ? strings.elapsed : 'Elapsed') + ': ' + formatDurationMs(Date.now() - startedAt);
+        }
+        function sleep(ms) {
+            return new Promise(function (resolve) { setTimeout(resolve, ms); });
+        }
+        function clampInt(value, min, max) {
+            var v = parseInt(value, 10);
+            if (isNaN(v)) {
+                v = min;
+            }
+            return Math.max(min, Math.min(max, v));
+        }
+        function safeHostKey() {
+            try {
+                return (window.location && window.location.host) ? String(window.location.host) : 'unknown';
+            } catch (e) {
+                return 'unknown';
+            }
+        }
+        function getAutotuneKey() {
+            return 'backup_lite_restore_autotune_' + safeHostKey();
+        }
+        function loadAutotune() {
+            try {
+                var raw = window.localStorage ? window.localStorage.getItem(getAutotuneKey()) : '';
+                if (!raw) {
+                    return null;
+                }
+                var data = JSON.parse(raw);
+                if (!data || typeof data !== 'object') {
+                    return null;
+                }
+                if (data.expiresAt && Date.now() > data.expiresAt) {
+                    window.localStorage.removeItem(getAutotuneKey());
+                    return null;
+                }
+                return data.value || null;
+            } catch (e) {
+                return null;
+            }
+        }
+        function saveAutotune(value) {
+            try {
+                if (!window.localStorage) {
+                    return;
+                }
+                var payload = {
+                    expiresAt: Date.now() + autotuneStorageTtlMs,
+                    value: value
+                };
+                window.localStorage.setItem(getAutotuneKey(), JSON.stringify(payload));
+            } catch (e) {}
+        }
+        function classifyUploadError(error) {
+            var status = (error && error.status) ? parseInt(error.status, 10) : 0;
+            var text = (error && error.responseText) ? String(error.responseText) : '';
+            var message = (error && error.message) ? String(error.message) : '';
+            var combined = (message + ' ' + text).toLowerCase();
+            if (status === 413 || combined.indexOf('request entity too large') !== -1 || combined.indexOf('payload too large') !== -1) {
+                return 'too_large';
+            }
+            if (status >= 500 && status <= 599) {
+                return 'server_error';
+            }
+            if (status === 0 && (combined.indexOf('networkerror') !== -1 || combined.indexOf('failed to fetch') !== -1)) {
+                return 'network_error';
+            }
+            if (combined.indexOf('aborted') !== -1) {
+                return 'aborted';
+            }
+            return 'unknown';
+        }
+        function fetchEnvCaps() {
+            var fd = prepareFormData('backup_lite_restore_env_caps');
+            return ajaxRequest(fd).then(function (json) {
+                return getJsonPayload(json) || {};
+            }).catch(function () {
+                return {};
+            });
+        }
+        function computeInitialTuneFromCaps(caps) {
+            var limits = (caps && caps.limits) ? caps.limits : {};
+            var postBytes = limits.post_max_size && limits.post_max_size.bytes ? parseInt(limits.post_max_size.bytes, 10) : 0;
+            var uploadBytes = limits.upload_max_filesize && limits.upload_max_filesize.bytes ? parseInt(limits.upload_max_filesize.bytes, 10) : 0;
+            var hardMax = 0;
+            if (postBytes > 0 && uploadBytes > 0) {
+                hardMax = Math.min(postBytes, uploadBytes);
+            } else {
+                hardMax = Math.max(postBytes, uploadBytes);
+            }
+            // Conservative headroom: keep chunk <= 80% of hardMax (FormData overhead & headers).
+            var desiredMaxChunk = hardMax > 0 ? Math.floor(hardMax * 0.8) : 0;
+            var maxChunk = desiredMaxChunk > 0 ? Math.min(MAX_CHUNK_SIZE_BYTES, desiredMaxChunk) : MAX_CHUNK_SIZE_BYTES;
+            var chunkSize = DEFAULT_CHUNK_SIZE_BYTES;
+            if (maxChunk > 0) {
+                if (maxChunk >= (16 * 1024 * 1024)) {
+                    chunkSize = 16 * 1024 * 1024;
+                } else if (maxChunk >= (8 * 1024 * 1024)) {
+                    chunkSize = 8 * 1024 * 1024;
+                } else if (maxChunk >= (4 * 1024 * 1024)) {
+                    chunkSize = 4 * 1024 * 1024;
+                } else if (maxChunk >= (2 * 1024 * 1024)) {
+                    chunkSize = 2 * 1024 * 1024;
+                } else if (maxChunk >= (1024 * 1024)) {
+                    chunkSize = 1024 * 1024;
+                } else {
+                    chunkSize = MIN_CHUNK_SIZE_BYTES;
+                }
+                chunkSize = clampInt(chunkSize, MIN_CHUNK_SIZE_BYTES, maxChunk);
+            }
+            var concurrency = DEFAULT_CONCURRENCY;
+            concurrency = clampInt(concurrency, 1, MAX_CONCURRENCY);
+            return { chunkSize: chunkSize, concurrency: concurrency, hardMax: hardMax };
+        }
+        function ajaxRequest(formData, options) {
+            var opts = options || {};
             return fetch(ajaxUrl, {
                 method: 'POST',
                 credentials: 'same-origin',
-                body: formData
+                body: formData,
+                signal: opts.signal
             }).then(function (res) {
                 return res.text().then(function (text) {
                     var json = {};
+                    // WordPress AJAX returns "0" when not logged in / action not allowed.
+                    // Treat this as a special case so restore polling does not look like a hard failure.
+                    if (typeof text === 'string' && text.trim() === '0') {
+                        var wpAjaxZero = new Error('WP_AJAX_0');
+                        wpAjaxZero.code = 'wp_ajax_zero';
+                        wpAjaxZero.status = res.status || 400;
+                        wpAjaxZero.responseText = text;
+                        throw wpAjaxZero;
+                    }
                     if (text) {
                         try {
                             json = JSON.parse(text);
@@ -2031,6 +2323,22 @@ function initRestoreCenter() {
                     }
                 }
             }).catch(function (error) {
+                // WordPress AJAX "0" indicates session lost or not authorised (often due to expired login).
+                // Do not mark restore as failed; the server-side job may still be running via cron.
+                if (error && error.code === 'wp_ajax_zero') {
+                    // Pause monitoring but keep jobId/state. Auto-resume after user re-logs in.
+                    pauseRestoreJobMonitor();
+                    // Keep progress UI as-is; only show a clear actionable message.
+                    syncWizard();
+                    updateRestoreCancelState();
+                    if (!restoreAutoResumeToastShown) {
+                        restoreAutoResumeToastShown = true;
+                        showToast('⚠️ ' + (strings.sessionExpired || 'Your login session may have expired. Please re-login in another tab. Monitoring will auto-resume once you are logged in.'), 'warning');
+                    }
+                    console.warn('[Backup Lite] AJAX returned 0 (session/permission issue). Pausing monitor.', { jobId: jobId });
+                    scheduleRestoreAutoResume(jobId);
+                    return;
+                }
                 console.warn('[Backup Lite] History fallback check also failed:', error);
                 // If history check also fails, and we've been polling for a while, don't assume failure
                 // Instead, just reset state and show a message
@@ -2118,6 +2426,10 @@ function initRestoreCenter() {
             stopRestoreJobMonitor();
             restoreInProgress = false;
             restoreCompleted = true;
+            if (restoreMonitor && restoreMonitor.jobId) {
+                clearStep3StartedAt(restoreMonitor.jobId);
+            }
+            updateStep3TimerDisplay(restoreMonitor ? restoreMonitor.jobId : null);
             activeRestoreJobId = null; // Clear active job ID to allow new restore
             if (startButton) {
                 startButton.disabled = false;
@@ -2191,6 +2503,19 @@ function initRestoreCenter() {
             activeRestoreJobId = job.id;
             restoreInProgress = true;
             restoreJobPollStartTime = Date.now();
+            // Step 3 overall timer: prefer backend started_at_raw (seconds) if available.
+            var overallStartedMs = 0;
+            if (job.started_at_raw) {
+                var s = parseInt(job.started_at_raw, 10);
+                if (!isNaN(s) && s > 0) {
+                    overallStartedMs = s * 1000;
+                }
+            }
+            if (!overallStartedMs) {
+                overallStartedMs = Date.now();
+            }
+            setStep3StartedAt(job.id, overallStartedMs);
+            updateStep3TimerDisplay(job.id);
             restoreJobReached100Time = null;
             restoreJobReached85Time = null;
             restoreCompletionShown = false;
@@ -2199,7 +2524,9 @@ function initRestoreCenter() {
             
             // Initialize restore monitor state
             restoreMonitor.jobId = job.id;
-            restoreMonitor.archive = job.archive || restoreData.summary.name || null;
+            // Defensive: restoreData.summary may be null if Step 1 wasn't completed or page state was reset.
+            var summaryName = (restoreData && restoreData.summary && restoreData.summary.name) ? restoreData.summary.name : null;
+            restoreMonitor.archive = job.archive || summaryName || null;
             restoreMonitor.hasFinalResult = false;
             restoreMonitor.lastStatus = 'running';
             
@@ -2256,6 +2583,7 @@ function initRestoreCenter() {
             }
             restoreJobPollTimer = window.setInterval(function () {
                 pollRestoreJob(job.id, false);
+                updateStep3TimerDisplay(job.id);
             }, 5000);
             
             // Keep WordPress session alive during long restore operations
@@ -2289,6 +2617,8 @@ function initRestoreCenter() {
                     window.backupLiteHeartbeatInterval = heartbeatInterval;
                 }
             }
+
+            startRestoreKeepAlive(job.id);
         }
         
         function startSimulatedProgress() {
@@ -2344,7 +2674,18 @@ function initRestoreCenter() {
                 clearInterval(window.backupLiteHeartbeatInterval);
                 window.backupLiteHeartbeatInterval = null;
             }
+            if (window.backupLiteRestoreKeepAliveInterval) {
+                clearInterval(window.backupLiteRestoreKeepAliveInterval);
+                window.backupLiteRestoreKeepAliveInterval = null;
+            }
+            if (restoreAutoResumeInterval) {
+                clearInterval(restoreAutoResumeInterval);
+                restoreAutoResumeInterval = null;
+            }
+            restoreMonitorPaused = false;
+            restoreAutoResumeToastShown = false;
             activeRestoreJobId = null;
+            // Keep timer record for history display if needed; clear only when job finishes/cancels.
             restoreJobPollStartTime = null;
             restoreJobReached100Time = null;
             restoreJobReached85Time = null;
@@ -2354,6 +2695,78 @@ function initRestoreCenter() {
             // Clear stored job info
             window.backupLiteRestoreJobInfo = null;
             // Note: Don't reset restoreMonitor here - it should persist until next restore starts
+        }
+
+        // Pause monitoring without losing job id/state (used when session expires).
+        function pauseRestoreJobMonitor() {
+            if (restoreJobPollTimer) {
+                clearInterval(restoreJobPollTimer);
+                restoreJobPollTimer = null;
+            }
+            if (restoreJobProgressTimer) {
+                clearInterval(restoreJobProgressTimer);
+                restoreJobProgressTimer = null;
+            }
+            if (window.backupLiteHeartbeatInterval) {
+                clearInterval(window.backupLiteHeartbeatInterval);
+                window.backupLiteHeartbeatInterval = null;
+            }
+            if (window.backupLiteRestoreKeepAliveInterval) {
+                clearInterval(window.backupLiteRestoreKeepAliveInterval);
+                window.backupLiteRestoreKeepAliveInterval = null;
+            }
+            restoreMonitorPaused = true;
+        }
+
+        function startRestoreKeepAlive(jobId) {
+            if (window.backupLiteRestoreKeepAliveInterval) {
+                return;
+            }
+            window.backupLiteRestoreKeepAliveInterval = setInterval(function () {
+                if (activeRestoreJobId === jobId && restoreInProgress) {
+                    var ka = prepareFormData('backup_lite_keep_alive');
+                    ajaxRequest(ka).catch(function () {});
+                } else {
+                    clearInterval(window.backupLiteRestoreKeepAliveInterval);
+                    window.backupLiteRestoreKeepAliveInterval = null;
+                }
+            }, 60000);
+        }
+
+        function resumeRestoreJobMonitor(jobId) {
+            if (!jobId) {
+                return;
+            }
+            restoreMonitorPaused = false;
+            restoreAutoResumeToastShown = false;
+            // Restart polling and keep-alive using existing job id.
+            pollRestoreJob(jobId, true);
+            if (restoreJobPollTimer) {
+                clearInterval(restoreJobPollTimer);
+            }
+            restoreJobPollTimer = window.setInterval(function () {
+                pollRestoreJob(jobId, false);
+                updateStep3TimerDisplay(jobId);
+            }, 5000);
+            startRestoreKeepAlive(jobId);
+        }
+
+        function scheduleRestoreAutoResume(jobId) {
+            if (!jobId) {
+                return;
+            }
+            if (restoreAutoResumeInterval) {
+                return;
+            }
+            restoreAutoResumeInterval = setInterval(function () {
+                refreshAjaxNonce().then(function () {
+                    if (restoreAutoResumeInterval) {
+                        clearInterval(restoreAutoResumeInterval);
+                        restoreAutoResumeInterval = null;
+                    }
+                    resumeRestoreJobMonitor(jobId);
+                }).catch(function () {});
+            }, 10000);
         }
         function pollRestoreJob(jobId, silent) {
             if (!jobId) {
@@ -2370,21 +2783,20 @@ function initRestoreCenter() {
                 return;
             }
             
-            // Check for timeout
-            if (restoreJobPollStartTime && (Date.now() - restoreJobPollStartTime) > RESTORE_JOB_POLL_TIMEOUT) {
+            // Do NOT hard-timeout long restores. Only stop if we have no updates for a long time.
+            var nowMs = Date.now();
+            var lastSignalMs = Math.max(restoreJobLastTickMs || 0, restoreJobLastStatusAtMs || 0);
+            if (lastSignalMs && (nowMs - lastSignalMs) > RESTORE_JOB_STALE_THRESHOLD) {
+                // Stale: stop polling but don't mark as failed. User can check logs or refresh later.
                 stopRestoreJobMonitor();
                 restoreInProgress = false;
-                restoreCompleted = false;
-                backupLiteRestoreFailureShown = false; // Reset failure flag when restarting
-                restoreMonitor.hasFinalResult = false; // Reset for next attempt
-                restoreMonitor.lastStatus = null;
                 if (startButton) {
                     startButton.disabled = false;
                 }
                 syncWizard();
                 updateRestoreCancelState();
-                // Don't show error modal on timeout - just log and let user check manually
-                console.warn('[Backup Lite] Restore job polling timed out', { jobId });
+                console.warn('[Backup Lite] Restore job polling stale (no updates)', { jobId, lastSignalMs: lastSignalMs });
+                showToast('⚠️ ' + (strings.errorGeneric || 'No progress updates received. Please refresh later or check logs.'), 'warning');
                 return;
             }
             
@@ -2398,6 +2810,7 @@ function initRestoreCenter() {
                 
                 var payload = getJsonPayload(json) || {};
                 var job = payload.job || payload;
+                restoreJobLastStatusAtMs = Date.now();
                 
                 // Check if nonce expired flag is set
                 if (payload.nonce_expired) {
@@ -2465,6 +2878,35 @@ function initRestoreCenter() {
                 
                 var progress = job.progress || 0;
                 var status = job.status || '';
+                if (job.last_tick) {
+                    var tickSeconds = parseInt(job.last_tick, 10);
+                    if (!isNaN(tickSeconds) && tickSeconds > 0) {
+                        restoreJobLastTickMs = tickSeconds * 1000;
+                        // Track whether last_tick is advancing; if not, try a tick push after threshold.
+                        if (restoreJobLastTickValueSec && tickSeconds <= restoreJobLastTickValueSec) {
+                            if (!restoreJobTickStaleSinceMs) {
+                                restoreJobTickStaleSinceMs = Date.now();
+                            }
+                        } else {
+                            restoreJobLastTickValueSec = tickSeconds;
+                            restoreJobTickStaleSinceMs = 0;
+                        }
+                    }
+                }
+                updateStep3TimerDisplay(jobId);
+
+                // If we are running but last_tick isn't moving, try to push a slice via admin-ajax.
+                if (
+                    status === 'running'
+                    && restoreJobTickStaleSinceMs
+                    && (Date.now() - restoreJobTickStaleSinceMs) > RESTORE_JOB_TICK_PUSH_THRESHOLD
+                ) {
+                    pushRestoreJobTick(jobId).catch(function (err) {
+                        // Best-effort only; polling continues.
+                        console.warn('[Backup Lite] Restore tick push failed:', err);
+                    });
+                    // Avoid repeated pushes; next attempt governed by cooldown.
+                }
                 
                 // If job is still pending after 10 seconds, try to trigger it again
                 // Only trigger if job is not already failed, cancelled, or completed
@@ -2890,6 +3332,20 @@ function initRestoreCenter() {
                     showToast(strings.restoreCancelSuccess || 'Restore cancelled.', 'warning');
                 }
             }).catch(function (error) {
+                // WordPress AJAX "0" indicates session lost or not authorised (often due to expired login).
+                // Pause monitoring but keep jobId/state. Auto-resume after user re-logs in.
+                if (error && error.code === 'wp_ajax_zero') {
+                    pauseRestoreJobMonitor();
+                    syncWizard();
+                    updateRestoreCancelState();
+                    if (!restoreAutoResumeToastShown) {
+                        restoreAutoResumeToastShown = true;
+                        showToast('⚠️ ' + (strings.sessionExpired || 'Your login session may have expired. Please re-login in another tab. Monitoring will auto-resume once you are logged in.'), 'warning');
+                    }
+                    console.warn('[Backup Lite] AJAX returned 0 (session/permission issue). Pausing monitor.', { jobId: jobId });
+                    scheduleRestoreAutoResume(jobId);
+                    return;
+                }
                 // Handle nonce expiration (invalid_nonce or 400/403/404 errors)
                 var isNonceError = false;
                 
@@ -3201,12 +3657,46 @@ function initRestoreCenter() {
             });
         }
         function runChunkUpload(file) {
-            var totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE_BYTES));
+            uploadCancelRequested = false;
+            activeUploadControllers = [];
+            var uploadStats = {
+                startedAt: Date.now(),
+                uploadedChunks: 0,
+                uploadedBytes: 0
+            };
+
+            function clearControllers() {
+                activeUploadControllers = activeUploadControllers.filter(function (c) { return !!c; });
+            }
+            function abortAllControllers() {
+                if (!activeUploadControllers || !activeUploadControllers.length) {
+                    return;
+                }
+                activeUploadControllers.forEach(function (controller) {
+                    try {
+                        if (controller && typeof controller.abort === 'function') {
+                            controller.abort();
+                        }
+                    } catch (e) {}
+                });
+                activeUploadControllers = [];
+            }
+            function queryChunkStatus(sessionId) {
+                var fd = prepareFormData('backup_lite_restore_chunk_status');
+                fd.append('session_id', sessionId);
+                return ajaxRequest(fd).then(function (json) {
+                    return getJsonPayload(json) || {};
+                }).catch(function () {
+                    return { received: [] };
+                });
+            }
+            function startChunkSession(chunkSize) {
+                var totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
             updateUploadStatus(chunkStrings.preparing);
             var prepareForm = prepareFormData('backup_lite_restore_chunk_prepare');
             prepareForm.append('filename', file.name);
             prepareForm.append('filesize', file.size);
-            prepareForm.append('chunk_size', CHUNK_SIZE_BYTES);
+                prepareForm.append('chunk_size', chunkSize);
             prepareForm.append('total_chunks', totalChunks);
             return ajaxRequest(prepareForm).then(function (json) {
                 var payload = getJsonPayload(json) || {};
@@ -3214,33 +3704,183 @@ function initRestoreCenter() {
                 if (!sessionId) {
                     throw new Error(strings.errorGeneric || 'Unable to start chunk upload.');
                 }
-                activeChunkSession = sessionId;
-                updateRestoreCancelState();
-                var sequence = Promise.resolve();
-                for (var index = 0; index < totalChunks; index++) {
-                    (function (chunkIndex) {
-                        sequence = sequence.then(function () {
-                            var start = chunkIndex * CHUNK_SIZE_BYTES;
-                            var end = Math.min(start + CHUNK_SIZE_BYTES, file.size);
+                    return { sessionId: sessionId, totalChunks: totalChunks };
+                });
+            }
+            function uploadOneChunk(sessionId, chunkIndex, chunkSize, totalChunks, retryLeft, attempt) {
+                if (uploadCancelRequested) {
+                    var cancelled = new Error('Upload cancelled.');
+                    cancelled.code = 'cancelled';
+                    throw cancelled;
+                }
+                var start = chunkIndex * chunkSize;
+                var end = Math.min(start + chunkSize, file.size);
                             var chunkBlob = file.slice(start, end);
-                            var percent = Math.min(100, Math.round(((chunkIndex + 1) / totalChunks) * 100));
-                            updateUploadStatus(formatString(chunkStrings.uploading, [chunkIndex + 1, totalChunks, percent]));
                             var uploadForm = prepareFormData('backup_lite_restore_chunk_upload');
                             uploadForm.append('session_id', sessionId);
                             uploadForm.append('chunk_index', chunkIndex);
                             uploadForm.append('chunk', chunkBlob, file.name + '.part');
-                            return ajaxRequest(uploadForm);
-                        });
-                    })(index);
+
+                var controller = null;
+                if (typeof AbortController !== 'undefined') {
+                    controller = new AbortController();
+                    activeUploadControllers.push(controller);
                 }
-                return sequence.then(function () {
+                clearControllers();
+
+                return ajaxRequest(uploadForm, { signal: controller ? controller.signal : undefined }).then(function (res) {
+                    uploadStats.uploadedChunks++;
+                    uploadStats.uploadedBytes += Math.max(0, end - start);
+                    return res;
+                }).catch(function (error) {
+                    // Nonce issues: try refresh once.
+                    if (error && parseInt(error.status, 10) === 403) {
+                        return refreshAjaxNonce().then(function () {
+                            var retryForm = prepareFormData('backup_lite_restore_chunk_upload');
+                            retryForm.append('session_id', sessionId);
+                            retryForm.append('chunk_index', chunkIndex);
+                            retryForm.append('chunk', chunkBlob, file.name + '.part');
+                            return ajaxRequest(retryForm, { signal: controller ? controller.signal : undefined }).then(function (res2) {
+                                uploadStats.uploadedChunks++;
+                                uploadStats.uploadedBytes += Math.max(0, end - start);
+                                return res2;
+                            });
+                        });
+                    }
+                    throw error;
+                }).catch(function (error) {
+                    var kind = classifyUploadError(error);
+                    if (kind === 'aborted' || kind === 'cancelled') {
+                        throw error;
+                    }
+                    if (kind === 'too_large') {
+                        var tooLarge = new Error('Chunk too large');
+                        tooLarge.code = 'too_large';
+                        tooLarge.original = error;
+                        throw tooLarge;
+                    }
+                    if (retryLeft <= 0) {
+                        throw error;
+                    }
+                    var backoff = Math.min(8000, 500 * Math.pow(2, attempt || 0));
+                    return sleep(backoff).then(function () {
+                        return uploadOneChunk(sessionId, chunkIndex, chunkSize, totalChunks, retryLeft - 1, (attempt || 0) + 1);
+                    });
+                });
+            }
+            function buildMissingList(totalChunks, received) {
+                var got = {};
+                (received || []).forEach(function (idx) {
+                    got[parseInt(idx, 10)] = true;
+                });
+                var missing = [];
+                for (var i = 0; i < totalChunks; i++) {
+                    if (!got[i]) {
+                        missing.push(i);
+                    }
+                }
+                return missing;
+            }
+            function uploadMissingConcurrent(sessionId, chunkSize, totalChunks, received, concurrency) {
+                var missing = buildMissingList(totalChunks, received);
+                var uploadedCount = (received && received.length) ? received.length : 0;
+                var pointer = 0;
+                concurrency = clampInt(concurrency, 1, MAX_CONCURRENCY);
+
+                function updateProgressDisplayLocal() {
+                    var percent = Math.min(99, Math.round((uploadedCount / totalChunks) * 100));
+                    var elapsedSec = Math.max(0.001, (Date.now() - uploadStats.startedAt) / 1000);
+                    var mbps = (uploadStats.uploadedBytes / (1024 * 1024)) / elapsedSec;
+                    var speedText = isFinite(mbps) && mbps > 0 ? (' · ' + mbps.toFixed(1) + ' MB/s') : '';
+                    updateUploadStatus(formatString(chunkStrings.uploading, [uploadedCount, totalChunks, percent]) + speedText);
+                }
+                updateProgressDisplayLocal();
+
+                function worker() {
+                    if (uploadCancelRequested) {
+                        return Promise.resolve();
+                    }
+                    if (pointer >= missing.length) {
+                        return Promise.resolve();
+                    }
+                    var idx = missing[pointer++];
+                    return uploadOneChunk(sessionId, idx, chunkSize, totalChunks, 4, 0).then(function () {
+                        uploadedCount++;
+                        updateProgressDisplayLocal();
+                        return worker();
+                    });
+                }
+
+                var workers = [];
+                for (var w = 0; w < concurrency; w++) {
+                    workers.push(worker());
+                }
+                return Promise.all(workers).then(function () {
+                    return { uploadedCount: uploadedCount };
+                });
+            }
+            function finalizeSession(sessionId) {
                     updateUploadStatus(chunkStrings.merging);
                     var finalizeForm = prepareFormData('backup_lite_restore_chunk_finalize');
                     finalizeForm.append('session_id', sessionId);
-                    return ajaxRequest(finalizeForm).then(function (finalizeJson) {
+                return ajaxRequest(finalizeForm);
+            }
+
+            // Hybrid + balanced: load saved tune, otherwise compute from server caps.
+            var saved = loadAutotune();
+            var initialTune = saved ? {
+                chunkSize: clampInt(saved.chunkSize || DEFAULT_CHUNK_SIZE_BYTES, MIN_CHUNK_SIZE_BYTES, MAX_CHUNK_SIZE_BYTES),
+                concurrency: clampInt(saved.concurrency || DEFAULT_CONCURRENCY, 1, MAX_CONCURRENCY)
+            } : null;
+
+            var tune = { chunkSize: DEFAULT_CHUNK_SIZE_BYTES, concurrency: DEFAULT_CONCURRENCY };
+            var capsSnapshot = null;
+
+            return fetchEnvCaps().then(function (caps) {
+                capsSnapshot = caps;
+                var fromCaps = computeInitialTuneFromCaps(caps);
+                tune.chunkSize = initialTune ? initialTune.chunkSize : fromCaps.chunkSize;
+                tune.concurrency = initialTune ? initialTune.concurrency : fromCaps.concurrency;
+                // Large local uploads: start more aggressively, then fall back automatically on errors.
+                if (file && file.size && file.size > (200 * 1024 * 1024)) { // > 200MB
+                    tune.concurrency = clampInt(Math.max(tune.concurrency, 3), 1, MAX_CONCURRENCY);
+                    // Prefer at least 4MB chunks if allowed.
+                    if (tune.chunkSize < (4 * 1024 * 1024) && MAX_CHUNK_SIZE_BYTES >= (4 * 1024 * 1024)) {
+                        tune.chunkSize = clampInt(4 * 1024 * 1024, MIN_CHUNK_SIZE_BYTES, MAX_CHUNK_SIZE_BYTES);
+                    }
+                }
+                // Allow overriding max concurrency via localized config.
+                if (autotuneConfig && autotuneConfig.maxConcurrency) {
+                    MAX_CONCURRENCY = clampInt(autotuneConfig.maxConcurrency, 1, 6);
+                    tune.concurrency = clampInt(tune.concurrency, 1, MAX_CONCURRENCY);
+                }
+                if (autotuneConfig && autotuneConfig.maxChunkBytes) {
+                    MAX_CHUNK_SIZE_BYTES = clampInt(autotuneConfig.maxChunkBytes, MIN_CHUNK_SIZE_BYTES, 64 * 1024 * 1024);
+                    tune.chunkSize = clampInt(tune.chunkSize, MIN_CHUNK_SIZE_BYTES, MAX_CHUNK_SIZE_BYTES);
+                }
+                return tune;
+            }).then(function () {
+                // Attempt upload; on 413 we restart with smaller chunk size.
+                var attempt = 0;
+
+                function runAttempt() {
+                    attempt++;
+                    return startChunkSession(tune.chunkSize).then(function (session) {
+                        var sessionId = session.sessionId;
+                        var totalChunks = session.totalChunks;
+                        activeChunkSession = sessionId;
+                        updateRestoreCancelState();
+
+                        return queryChunkStatus(sessionId).then(function (status) {
+                            var received = status && Array.isArray(status.received) ? status.received : [];
+                            return uploadMissingConcurrent(sessionId, tune.chunkSize, totalChunks, received, tune.concurrency).then(function () {
+                                return finalizeSession(sessionId).then(function (finalizeJson) {
                         activeChunkSession = null;
                         updateRestoreCancelState();
+                                    // Save successful tune (balanced).
+                                    saveAutotune({ chunkSize: tune.chunkSize, concurrency: tune.concurrency });
                         handleSummaryResponse(finalizeJson);
+                                });
                     });
                 });
             }).catch(function (error) {
@@ -3249,6 +3889,38 @@ function initRestoreCenter() {
                     activeChunkSession = null;
                     updateRestoreCancelState();
                 }
+                        abortAllControllers();
+
+                        if (uploadCancelRequested) {
+                            throw error;
+                        }
+
+                        // Too large: reduce chunk and retry (up to 3 attempts).
+                        if (error && error.code === 'too_large' && attempt < 4) {
+                            tune.chunkSize = Math.max(MIN_CHUNK_SIZE_BYTES, Math.floor(tune.chunkSize / 2));
+                            console.warn('[Backup Lite] Chunk too large, reducing chunk size and retrying', { chunkSize: tune.chunkSize });
+                            return runAttempt();
+                        }
+
+                        // Server/network errors: reduce concurrency and retry once if possible.
+                        var kind = classifyUploadError(error);
+                        if ((kind === 'server_error' || kind === 'network_error') && attempt < 3) {
+                            tune.concurrency = Math.max(1, tune.concurrency - 1);
+                            console.warn('[Backup Lite] Upload error, reducing concurrency and retrying', { concurrency: tune.concurrency, kind: kind });
+                            return runAttempt();
+                        }
+                        throw error;
+                    });
+                }
+
+                return runAttempt();
+            }).catch(function (error) {
+                if (activeChunkSession) {
+                    abortChunkSession(activeChunkSession);
+                    activeChunkSession = null;
+                    updateRestoreCancelState();
+                }
+                abortAllControllers();
                 throw error;
             });
         }
@@ -3259,6 +3931,17 @@ function initRestoreCenter() {
             }
 
             restoreCancelBtn.disabled = true;
+            uploadCancelRequested = true;
+            if (activeUploadControllers && activeUploadControllers.length) {
+                activeUploadControllers.forEach(function (controller) {
+                    try {
+                        if (controller && typeof controller.abort === 'function') {
+                            controller.abort();
+                        }
+                    } catch (e) {}
+                });
+                activeUploadControllers = [];
+            }
 
             if (activeChunkSession) {
                 abortChunkSession(activeChunkSession);
@@ -3293,6 +3976,10 @@ function initRestoreCenter() {
                 reviewCompleted = false;
                 restoreInProgress = false;
                 restoreCompletionShown = false;
+                if (activeRestoreJobId) {
+                    clearStep3StartedAt(activeRestoreJobId);
+                }
+                updateStep3TimerDisplay(activeRestoreJobId);
                 if (startButton) {
                     startButton.disabled = false;
                 }
@@ -3616,7 +4303,13 @@ function initRestoreCenter() {
                     // done=true but progress < 100% - show the message but not completion text
                     progressStatus.textContent = safeMessage || strings.awaitingRestore || 'Awaiting restore.';
                 } else if (safeMessage) {
+                    // Add a non-intrusive hint if we're actively using browser-driven ticks.
+                    if (restoreTickFallbackActive && restoreInProgress) {
+                        var hint = strings.restoreTickFallbackActive || 'Cron appears unreliable. Using your browser to push restore progress…';
+                        progressStatus.textContent = safeMessage + ' ' + hint;
+                    } else {
                     progressStatus.textContent = safeMessage;
+                    }
                 } else {
                     progressStatus.textContent = strings.awaitingRestore || 'Awaiting restore.';
                 }
@@ -3825,6 +4518,9 @@ function initRestoreCenter() {
             if (summary.source) {
                 html += '<p><strong>' + (strings.sourceLabel || 'Source:') + '</strong> ' + summary.source + '</p>';
             }
+            if (summary.db_prefix_source && summary.db_prefix_target) {
+                html += '<p><strong>' + (strings.dbPrefixLabel || 'DB Prefix (backup → target):') + '</strong> <code>' + summary.db_prefix_source + '</code> → <code>' + summary.db_prefix_target + '</code></p>';
+            }
             summaryContainer.innerHTML = html;
         }
 
@@ -3882,10 +4578,14 @@ function initRestoreCenter() {
                 }
                 syncWizard();
                 notifyError(payload);
+                clearStep1Started();
+                updateStep1TimerDisplay('');
                 return;
             }
             if (payload.summary) {
                 renderSummary(payload.summary);
+                // Keep JS state in sync for same-page flow (prevents requiring hard reload to enable Step 3).
+                restoreData.summary = payload.summary;
             }
             if (payload.progress) {
                 // When step 1 completes, we should NOT set done=true for the progress
@@ -3897,7 +4597,9 @@ function initRestoreCenter() {
             isAnalyzing = false;
             analysisError = false;
             hasAnalyzed = true;
-            reviewCompleted = false;
+            // Auto-complete Step 2 by default so Step 3 can start immediately.
+            // Users can still adjust options before clicking Start Restore.
+            reviewCompleted = true;
             // Step 1 completion should NEVER set restoreCompleted to true
             // restoreCompleted should only be true after Step 3 (restore execution) completes
             restoreCompleted = false;
@@ -3909,6 +4611,12 @@ function initRestoreCenter() {
             restoreCompletionShown = false;
             syncWizard();
             updateRestoreCancelState();
+            // Step 1 timer: finalize and display duration.
+            var step1Started = getStep1StartedAt();
+            if (step1Started) {
+                updateStep1TimerDisplay('⏱ ' + formatDurationMs(Date.now() - step1Started));
+                clearStep1Started();
+            }
         }
         
         // Expose handleSummaryResponse to window.BackupLiteUI for chunk-upload-v2.js
@@ -4096,6 +4804,8 @@ function initRestoreCenter() {
                 restoreInProgress = false;
                 syncWizard();
                 updateRestoreCancelState();
+                setStep1StartedNow();
+                updateStep1TimerDisplay();
                 runLocalUpload(file).then(function () {
                     uploadButton.disabled = false;
                 }).catch(function (error) {
@@ -4109,6 +4819,8 @@ function initRestoreCenter() {
                     updateRestoreCancelState();
                     var message = error && error.message ? error.message : (strings.errorGeneric || 'Upload failed. Please try again.');
                     notifyError({ message: message });
+                    clearStep1Started();
+                    updateStep1TimerDisplay('');
                 });
             });
         }
@@ -4131,6 +4843,8 @@ function initRestoreCenter() {
                 reviewCompleted = false;
                 syncWizard();
                 updateRestoreCancelState();
+                setStep1StartedNow();
+                updateStep1TimerDisplay();
                 ajaxRequest(formData).then(function (json) {
                     existingButton.disabled = false;
                     handleSummaryResponse(json);
@@ -4143,6 +4857,8 @@ function initRestoreCenter() {
                     syncWizard();
                     updateRestoreCancelState();
                     notifyError({ message: (error && error.message) ? error.message : (strings.errorGeneric || 'Request failed. Please try again.') });
+                    clearStep1Started();
+                    updateStep1TimerDisplay('');
                 });
             });
         }
@@ -4165,6 +4881,8 @@ function initRestoreCenter() {
                 reviewCompleted = false;
                 syncWizard();
                 updateRestoreCancelState();
+                setStep1StartedNow();
+                updateStep1TimerDisplay();
                 ajaxRequest(formData).then(function (json) {
                     remoteButton.disabled = false;
                     handleSummaryResponse(json);
@@ -4177,6 +4895,8 @@ function initRestoreCenter() {
                     syncWizard();
                     updateRestoreCancelState();
                     notifyError({ message: (error && error.message) ? error.message : (strings.errorGeneric || 'Request failed. Please try again.') });
+                    clearStep1Started();
+                    updateStep1TimerDisplay('');
                 });
             });
         }
@@ -4209,6 +4929,23 @@ function initRestoreCenter() {
                 // Check if button is already disabled (safety check)
                 if (startButton.disabled) {
                     console.warn('[Backup Lite] Start button already disabled, ignoring click');
+                    return;
+                }
+                
+                // Guard: Step 1 must have produced a valid archive selection/summary before we can enqueue restore.
+                // This prevents admin-ajax 400 errors and avoids starting the monitor with missing data.
+                if (!restoreData || !restoreData.summary || !restoreData.summary.name) {
+                    notifyError({ message: strings.noFileSelected || 'Please select a backup file to restore.' });
+                    // Ensure UI stays in a retryable state.
+                    stopRestoreJobMonitor();
+                    restoreInProgress = false;
+                    restoreCompleted = false;
+                    activeRestoreJobId = null;
+                    if (startButton) {
+                        startButton.disabled = false;
+                    }
+                    syncWizard();
+                    updateRestoreCancelState();
                     return;
                 }
                 
@@ -4322,6 +5059,87 @@ function initRestoreCenter() {
                 });
             });
         }
+
+        var forceUnlockBtn = document.getElementById('forceRestoreUnlock');
+        if (forceUnlockBtn) {
+            forceUnlockBtn.addEventListener('click', function () {
+                var msg = strings && strings.forceUnlockConfirm
+                    ? strings.forceUnlockConfirm
+                    : 'Force unlock will clear a stuck restore lock. Use only if you are sure no restore is running. Continue?';
+                if (!window.confirm('⚠️ ' + msg)) {
+                    return;
+                }
+
+                forceUnlockBtn.disabled = true;
+                var fd = prepareFormData('backup_lite_restore_force_unlock');
+                ajaxRequest(fd).then(function (json) {
+                    var payload = getJsonPayload(json) || {};
+                    showToast('✅ ' + ((payload && payload.message) ? payload.message : 'Restore lock cleared.'), 'success');
+                    setTimeout(function () {
+                        window.location.reload();
+                    }, 800);
+                }).catch(function (error) {
+                    // If backend says a job is running, offer a hard-force mode (3rd confirmation).
+                    if (error && parseInt(error.status, 10) === 409 && error.payload && error.payload.job_id) {
+                        var jobId = error.payload.job_id;
+                        var stage = error.payload.stage || '';
+                        var msg2 = 'A restore job is reported as running.\n\njob_id: ' + jobId + (stage ? ('\nstage: ' + stage) : '') + '\n\nIf you believe it is stuck, you can HARD FORCE unlock. Continue?';
+                        if (!window.confirm('⚠️ ' + msg2)) {
+                            forceUnlockBtn.disabled = false;
+                            return;
+                        }
+                        var typed = window.prompt('Type FORCE to confirm hard unlock (this may break a truly running restore):', '');
+                        if (typed !== 'FORCE') {
+                            forceUnlockBtn.disabled = false;
+                            showToast('⚠️ Hard unlock cancelled.', 'warning');
+                            return;
+                        }
+                        var fd2 = prepareFormData('backup_lite_restore_force_unlock');
+                        fd2.append('force', 'true');
+                        ajaxRequest(fd2).then(function (json2) {
+                            var payload2 = getJsonPayload(json2) || {};
+                            showToast('✅ ' + ((payload2 && payload2.message) ? payload2.message : 'Restore lock cleared.'), 'success');
+                            setTimeout(function () {
+                                window.location.reload();
+                            }, 800);
+                        }).catch(function (error2) {
+                            forceUnlockBtn.disabled = false;
+                            var m2 = (error2 && error2.message) ? error2.message : (strings.errorGeneric || 'Request failed. Please try again.');
+                            showToast('⚠️ ' + m2, 'warning');
+                        });
+                        return;
+                    }
+
+                    forceUnlockBtn.disabled = false;
+                    var m = (error && error.message) ? error.message : (strings.errorGeneric || 'Request failed. Please try again.');
+                    showToast('⚠️ ' + m, 'warning');
+                });
+            });
+        }
+
+        function tryAutoResumeRestoreMonitor() {
+            if (!restoreMonitorPaused || !activeRestoreJobId) {
+                return;
+            }
+            refreshAjaxNonce().then(function () {
+                if (restoreAutoResumeInterval) {
+                    clearInterval(restoreAutoResumeInterval);
+                    restoreAutoResumeInterval = null;
+                }
+                resumeRestoreJobMonitor(activeRestoreJobId);
+            }).catch(function () {
+                // Ignore; interval-based auto-resume will keep trying.
+            });
+        }
+
+        document.addEventListener('visibilitychange', function () {
+            if (document.visibilityState === 'visible') {
+                tryAutoResumeRestoreMonitor();
+            }
+        });
+        window.addEventListener('focus', function () {
+            tryAutoResumeRestoreMonitor();
+        });
     }
 
     if (currentPage === 'backup-lite-restore') {

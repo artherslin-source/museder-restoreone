@@ -129,6 +129,14 @@ if ( $safe_mode_active ) {
                     <p><strong><?php esc_html_e( 'SHA1:', 'museder-restoreone' ); ?></strong> <code><?php echo esc_html( $museder_restoreone_summary['sha1'] ); ?></code></p>
                 <?php endif; ?>
                 <p><strong><?php esc_html_e( 'Source:', 'museder-restoreone' ); ?></strong> <?php echo esc_html( ucfirst( $museder_restoreone_summary['source'] ) ); ?></p>
+                <?php if ( ! empty( $museder_restoreone_summary['db_prefix_source'] ) && ! empty( $museder_restoreone_summary['db_prefix_target'] ) ) : ?>
+                    <p>
+                        <strong><?php esc_html_e( 'DB Prefix (backup → target):', 'museder-restoreone' ); ?></strong>
+                        <code><?php echo esc_html( $museder_restoreone_summary['db_prefix_source'] ); ?></code>
+                        →
+                        <code><?php echo esc_html( $museder_restoreone_summary['db_prefix_target'] ); ?></code>
+                    </p>
+                <?php endif; ?>
             <?php else : ?>
                 <p><?php esc_html_e( 'No file selected yet.', 'museder-restoreone' ); ?></p>
             <?php endif; ?>
@@ -151,6 +159,37 @@ if ( $safe_mode_active ) {
             <label><input type="checkbox" id="applyReplace"> <?php esc_html_e( 'Apply URL Search & Replace', 'museder-restoreone' ); ?></label><br>
             <label><input type="checkbox" id="skipConfig"> <?php esc_html_e( 'Skip wp-config.php', 'museder-restoreone' ); ?></label><br>
             <label><input type="checkbox" id="autoBackup" checked> <?php esc_html_e( 'Backup current site before restore', 'museder-restoreone' ); ?></label><br>
+            <div style="margin-top: 12px;">
+                <label for="restoreDecryptionPassword" style="display:block; margin-bottom: 6px;">
+                    <?php esc_html_e( 'Decryption password (for encrypted .wpress backups)', 'museder-restoreone' ); ?>
+                </label>
+                <input
+                    type="password"
+                    id="restoreDecryptionPassword"
+                    autocomplete="current-password"
+                    placeholder="<?php echo esc_attr__( 'Leave blank if not encrypted', 'museder-restoreone' ); ?>"
+                    style="max-width: 420px; width: 100%;"
+                />
+                <p class="description" style="margin-top: 6px;">
+                    <?php esc_html_e( 'If the backup is encrypted, RestoreOne will validate and use this password during extraction.', 'museder-restoreone' ); ?>
+                </p>
+            </div>
+            <div style="margin-top: 12px;">
+                <label for="restoreTargetBlogId" style="display:block; margin-bottom: 6px;">
+                    <?php esc_html_e( 'Target Blog ID (Multisite only)', 'museder-restoreone' ); ?>
+                </label>
+                <input
+                    type="number"
+                    id="restoreTargetBlogId"
+                    min="1"
+                    step="1"
+                    placeholder="<?php echo esc_attr__( 'e.g. 2', 'museder-restoreone' ); ?>"
+                    style="max-width: 160px; width: 100%;"
+                />
+                <p class="description" style="margin-top: 6px;">
+                    <?php esc_html_e( 'If you are restoring a subsite backup into a multisite, set which Blog ID should receive the data.', 'museder-restoreone' ); ?>
+                </p>
+            </div>
     </section>
 
         <section class="backup-lite-card restore-step-card" data-step-card="execute">
@@ -166,6 +205,18 @@ if ( $safe_mode_active ) {
                 </div>
             </div>
             <button id="startRestore" class="button-primary button-glow step-cta"><?php esc_html_e( 'Step 3 – Start Restore', 'museder-restoreone' ); ?></button>
+            <button
+                id="forceRestoreUnlock"
+                type="button"
+                class="button button-secondary"
+                style="margin-left: 8px;"
+                title="<?php echo esc_attr__( 'Use only if you are sure no restore is running. This will clear a stuck restore lock so you can start again.', 'museder-restoreone' ); ?>"
+            >
+                <?php esc_html_e( 'Force Unlock', 'museder-restoreone' ); ?>
+            </button>
+            <p class="description" style="margin-top: 8px;">
+                <?php esc_html_e( 'If Step 3 is blocked with “Another restore is already in progress” but you are sure nothing is running, click Force Unlock to clear the stuck lock.', 'museder-restoreone' ); ?>
+            </p>
             <div id="restore-progress-container" style="display: none; padding: 24px; background: linear-gradient(135deg, rgba(58, 123, 255, 0.1) 0%, rgba(36, 93, 255, 0.05) 100%); border-radius: 12px; margin: 16px 0; border: 2px solid rgba(58, 123, 255, 0.2);">
             <div style="text-align: center; margin-bottom: 16px;">
                 <div id="restore-status-icon" style="font-size: 48px; margin-bottom: 12px;">⚡</div>

@@ -209,7 +209,7 @@
                 if (reportsContainer) {
                     reportsContainer.appendChild(reportsList);
                 } else {
-                    card.appendChild(reportsList);
+                card.appendChild(reportsList);
                 }
             }
 
