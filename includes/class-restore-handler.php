@@ -961,6 +961,14 @@ class Backup_Lite_Restore_Handler {
             return;
         }
 
+        // Safe mode status (best-effort) for UI hints.
+        $safe_mode_active = ( get_option( 'backup_lite_safe_mode', '' ) === '1' );
+        $prev_plugins_count = 0;
+        if ( $safe_mode_active ) {
+            $prev_plugins = get_option( 'backup_lite_prev_active_plugins', [] );
+            $prev_plugins_count = is_array( $prev_plugins ) ? count( $prev_plugins ) : 0;
+        }
+
         // If nonce is invalid but we have a valid job, still return the job status.
         if ( ! $nonce_valid ) {
             // Return success but include a flag to indicate nonce should be refreshed
@@ -969,6 +977,8 @@ class Backup_Lite_Restore_Handler {
                     'job'     => $job,
                     'history' => self::history_for_js( 10 ),
                     'nonce_expired' => true, // Flag to trigger nonce refresh on frontend
+                    'safe_mode_active' => (bool) $safe_mode_active,
+                    'prev_plugins_count' => (int) $prev_plugins_count,
                 ]
             );
             return;
@@ -978,6 +988,8 @@ class Backup_Lite_Restore_Handler {
             [
                 'job'     => $job,
                 'history' => self::history_for_js( 10 ),
+                'safe_mode_active' => (bool) $safe_mode_active,
+                'prev_plugins_count' => (int) $prev_plugins_count,
             ]
         );
     }
@@ -1254,6 +1266,18 @@ class Backup_Lite_Restore_Handler {
         }
         // @plugin-check: sanitized
         $options['skip_config'] = ! empty( $skip_config_value ) && 'true' === $skip_config_value;
+
+        // Safe mode (default: enabled). When enabled, RestoreOne will temporarily disable non-essential plugins after restore.
+        $safe_mode_value = '';
+        if ( isset( $_POST['safeMode'] ) ) {
+            $safe_mode_value = sanitize_text_field( wp_unslash( $_POST['safeMode'] ) );
+        }
+        // @plugin-check: sanitized
+        if ( '' === $safe_mode_value ) {
+            $options['safe_mode'] = true;
+        } else {
+            $options['safe_mode'] = ( 'true' === $safe_mode_value || '1' === $safe_mode_value || 'yes' === strtolower( $safe_mode_value ) );
+        }
 
         $search_replace_raw = '';
         if ( isset( $_POST['searchReplace'] ) ) {
@@ -1742,6 +1766,14 @@ class Backup_Lite_Restore_Handler {
         global $wpdb;
         $db_prefix_target = isset( $wpdb->prefix ) ? (string) $wpdb->prefix : '';
 
+        if ( function_exists( 'backup_lite_log' ) ) {
+            backup_lite_log( 'info', 'Restore prepare: detected DB prefixes.', [
+                'file'            => basename( $file_path ),
+                'source_prefix'   => (string) $db_prefix_source,
+                'target_prefix'   => (string) $db_prefix_target,
+            ] );
+        }
+
         // Store only filename in state, not full path
         // Full path will be resolved when needed using backup_lite_get_backup_path()
         $file_name = basename( $file_path );
@@ -2088,34 +2120,121 @@ class Backup_Lite_Restore_Handler {
             return '';
         }
 
-        // Read only the head for prefix detection.
-        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- reading from ZipArchive stream
-        $head = fread( $stream, 1024 * 1024 ); // 1MB
-        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- closing ZipArchive stream
-        fclose( $stream );
-        $zip->close();
+        // Avoid false prefix detection caused by plugin tables early in the dump (e.g. schema_type_options,
+        // qvj4_masterslider_options). Scan the first N MB from the ZipArchive stream and score candidates
+        // by WP core table matches. Require options + another high-signal table before accepting.
+        $max_scan_bytes = 40 * 1024 * 1024; // 40MB
+        $chunk_bytes    = 1024 * 1024;      // 1MB
+        $buffer_keep    = 2 * 1024 * 1024;  // keep last 2MB
 
-        if ( ! is_string( $head ) || '' === $head ) {
+        $weights = [
+            'options'            => 5,
+            'posts'              => 4,
+            'postmeta'           => 4,
+            'users'              => 4,
+            'usermeta'           => 4,
+            'terms'              => 2,
+            'term_taxonomy'      => 2,
+            'term_relationships' => 2,
+            'comments'           => 1,
+            'commentmeta'        => 1,
+            'links'              => 1,
+        ];
+
+        $candidates = []; // prefix => ['score'=>int,'core'=>[table=>true],'first_seen'=>int]
+        $scanned    = 0;
+        $buffer     = '';
+
+        try {
+            while ( $scanned < $max_scan_bytes ) {
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- reading from ZipArchive stream
+                $chunk = fread( $stream, $chunk_bytes );
+                if ( ! is_string( $chunk ) || '' === $chunk ) {
+                    break;
+                }
+                $scanned += strlen( $chunk );
+                $buffer  .= $chunk;
+
+                if ( strlen( $buffer ) > $buffer_keep ) {
+                    $buffer = substr( $buffer, -$buffer_keep );
+                }
+
+                if ( preg_match_all( '/\\b(?:CREATE TABLE(?: IF NOT EXISTS)?|DROP TABLE IF EXISTS|INSERT INTO|ALTER TABLE)\\s+`([^`]+)`/i', $buffer, $ms ) ) {
+                    foreach ( (array) $ms[1] as $table ) {
+                        $table = (string) $table;
+                        if ( '' === $table ) {
+                            continue;
+                        }
+
+                        if ( preg_match( '/^([A-Za-z0-9_]+_)(options|posts|postmeta|users|usermeta|terms|term_taxonomy|term_relationships|comments|commentmeta|links)$/i', $table, $m2 ) ) {
+                            $prefix = (string) $m2[1];
+                            $core   = strtolower( (string) $m2[2] );
+                            $w      = isset( $weights[ $core ] ) ? (int) $weights[ $core ] : 0;
+
+                            if ( ! isset( $candidates[ $prefix ] ) ) {
+                                $candidates[ $prefix ] = [
+                                    'score'      => 0,
+                                    'core'       => [],
+                                    'first_seen' => (int) $scanned,
+                                ];
+                            }
+
+                            if ( empty( $candidates[ $prefix ]['core'][ $core ] ) ) {
+                                $candidates[ $prefix ]['core'][ $core ] = true;
+                                $candidates[ $prefix ]['score']        += $w;
+                            }
+                        }
+                    }
+                }
+
+                // Early exit only when we see a plausible WP prefix:
+                // must include `options` and at least one other high-signal core table.
+                foreach ( $candidates as $cand ) {
+                    $core = isset( $cand['core'] ) && is_array( $cand['core'] ) ? $cand['core'] : [];
+                    if ( ! empty( $core['options'] ) && ( ! empty( $core['posts'] ) || ! empty( $core['users'] ) || ! empty( $core['postmeta'] ) || ! empty( $core['usermeta'] ) ) ) {
+                        break 2;
+                    }
+                }
+            }
+        } finally {
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- closing ZipArchive stream
+            fclose( $stream );
+            $zip->close();
+        }
+
+        if ( empty( $candidates ) ) {
             return '';
         }
 
-        // Prefer options table since it exists in all WP sites.
-        if ( preg_match( '/`([A-Za-z0-9_]+_options)`/i', $head, $m ) ) {
-            $table = (string) $m[1];
-            if ( preg_match( '/^([A-Za-z0-9_]+_)options$/', $table, $m2 ) ) {
-                return (string) $m2[1];
+        $best_prefix = '';
+        $best_score  = -1;
+        $best_distinct = -1;
+        $best_first_seen = PHP_INT_MAX;
+
+        foreach ( $candidates as $prefix => $cand ) {
+            $score    = isset( $cand['score'] ) ? (int) $cand['score'] : 0;
+            $distinct = isset( $cand['core'] ) && is_array( $cand['core'] ) ? count( $cand['core'] ) : 0;
+            $first    = isset( $cand['first_seen'] ) ? (int) $cand['first_seen'] : PHP_INT_MAX;
+
+            // Require `options` and at least one other core table; prevents plugin tables like *_masterslider_options.
+            $core = isset( $cand['core'] ) && is_array( $cand['core'] ) ? $cand['core'] : [];
+            if ( empty( $core['options'] ) || ( empty( $core['posts'] ) && empty( $core['users'] ) && empty( $core['postmeta'] ) && empty( $core['usermeta'] ) ) ) {
+                continue;
+            }
+
+            if (
+                $score > $best_score
+                || ( $score === $best_score && $distinct > $best_distinct )
+                || ( $score === $best_score && $distinct === $best_distinct && $first < $best_first_seen )
+            ) {
+                $best_prefix     = (string) $prefix;
+                $best_score      = $score;
+                $best_distinct   = $distinct;
+                $best_first_seen = $first;
             }
         }
 
-        // Fallback: pick the first referenced table and infer prefix if it ends with options.
-        if ( preg_match( '/\\b(?:CREATE TABLE|DROP TABLE IF EXISTS|INSERT INTO)\\s+`([^`]+)`/i', $head, $m ) ) {
-            $table = (string) $m[1];
-            if ( preg_match( '/^([A-Za-z0-9_]+_)options$/', $table, $m2 ) ) {
-                return (string) $m2[1];
-            }
-        }
-
-        return '';
+        return $best_prefix;
     }
 
     private static function report_job_progress( $job_id, $percent, $message, $done = false, $status = null ) {

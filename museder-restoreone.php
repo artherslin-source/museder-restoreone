@@ -3,7 +3,7 @@
 Plugin Name: Museder RestoreOne
 Plugin URI: https://museder.com/restoreone
 Description: Museder RestoreOne is a simple backup & restore plugin for WordPress.
-Version: 2.7.126
+Version: 2.7.128
 Requires at least: 5.8
 Tested up to: 6.9
 Requires PHP: 7.4
@@ -17,9 +17,9 @@ Domain Path: /languages
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-define( 'BACKUP_LITE_VERSION', '2.7.126' );
+define( 'BACKUP_LITE_VERSION', '2.7.128' );
 // Build identifier for debugging host-side opcode caching issues.
-define( 'BACKUP_LITE_BUILD_ID', '2.7.126-1' );
+define( 'BACKUP_LITE_BUILD_ID', '2.7.128-1' );
 define( 'BACKUP_LITE_PATH', plugin_dir_path( __FILE__ ) );
 define( 'BACKUP_LITE_URL', plugin_dir_url( __FILE__ ) );
 

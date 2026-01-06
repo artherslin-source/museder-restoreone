@@ -777,6 +777,17 @@ class Backup_Lite_Restore_Service {
             }
         }
 
+        if ( function_exists( 'backup_lite_log' ) && 0 === (int) $db_offset ) {
+            backup_lite_log( 'info', 'DB prefix rewrite decision.', [
+                'job_id'        => $job_id,
+                'source_prefix' => ! empty( $cp['db_source_prefix'] ) ? (string) $cp['db_source_prefix'] : '',
+                'target_prefix' => isset( $target_prefix ) ? (string) $target_prefix : ( function_exists( 'is_multisite' ) && is_multisite() ? 'multisite' : '' ),
+                'rewrite_from'  => (string) $rewrite_from,
+                'rewrite_to'    => (string) $rewrite_to,
+                'ms_source'     => ! empty( $cp['ms_source_prefix'] ) ? (string) $cp['ms_source_prefix'] : '',
+            ] );
+        }
+
         $result = Backup_Lite_Restore::import_database_sliced( $sql_file, $db_offset, $db_query_buffer, (int) $slice_seconds, $rewrite_from, $rewrite_to );
 
         // Observability: record last statement type and whether we split large INSERTs (no SQL content logged).
@@ -832,6 +843,51 @@ class Backup_Lite_Restore_Service {
             self::write_job_meta( $job_id, $meta );
 
         if ( ! empty( $result['completed'] ) ) {
+            // Guard against "restore success but empty content" caused by prefix mis-detection.
+            // If we imported SQL without rewriting to the active prefix, the site will appear blank even though the SQL import ran.
+            $verify_prefix = '';
+            if ( is_string( $rewrite_to ) && '' !== $rewrite_to ) {
+                $verify_prefix = $rewrite_to;
+            } else {
+                global $wpdb;
+                $verify_prefix = isset( $wpdb->prefix ) ? (string) $wpdb->prefix : '';
+            }
+
+            $verify = self::verify_restored_database_core_tables( $verify_prefix );
+            $meta['checkpoints']['db_verify'] = $verify;
+            self::write_job_meta( $job_id, $meta );
+
+            if ( empty( $verify['ok'] ) ) {
+                $src = ( is_string( $rewrite_from ) && '' !== $rewrite_from ) ? $rewrite_from : ( ! empty( $cp['db_source_prefix'] ) ? (string) $cp['db_source_prefix'] : '' );
+                $dst = $verify_prefix;
+                $reason = isset( $verify['reason'] ) ? (string) $verify['reason'] : 'unknown';
+
+                if ( function_exists( 'backup_lite_log' ) ) {
+                    backup_lite_log( 'error', 'DB verify failed after import; refusing to mark restore success.', [
+                        'job_id'        => $job_id,
+                        'source_prefix' => $src,
+                        'target_prefix' => $dst,
+                        'reason'        => $reason,
+                        'missing'       => isset( $verify['missing'] ) ? $verify['missing'] : [],
+                    ] );
+                }
+
+                throw new RuntimeException(
+                    sprintf(
+                        /* translators: 1: source prefix, 2: target prefix */
+                        esc_html__( 'Database import verification failed (source prefix: %1$s, target prefix: %2$s).', 'museder-restoreone' ),
+                        $src ? $src : 'unknown',
+                        $dst ? $dst : 'unknown'
+                    )
+                );
+            } elseif ( function_exists( 'backup_lite_log' ) ) {
+                backup_lite_log( 'info', 'DB verify ok after import.', [
+                    'job_id'        => $job_id,
+                    'target_prefix' => $verify_prefix,
+                    'tables'        => isset( $verify['tables'] ) ? $verify['tables'] : [],
+                ] );
+            }
+
             // If we rewrote table prefixes during import, we must also migrate prefix-dependent keys/values
             // inside options/usermeta (e.g., qvj4_user_roles, qvj4_capabilities).
             if ( $rewrite_from && $rewrite_to && $rewrite_from !== $rewrite_to ) {
@@ -859,6 +915,109 @@ class Backup_Lite_Restore_Service {
                 self::write_job_meta( $job_id, $meta );
             }
         }
+    }
+
+    /**
+     * Verify that core WP tables exist under the expected prefix after importing a SQL dump.
+     *
+     * This prevents false-success restores where SQL was imported under a different prefix, making the site appear empty.
+     *
+     * @param string $target_prefix e.g. "wp_" or "wp_2_" (including trailing underscore)
+     * @return array{ok:bool,reason:string,missing:array,tables:array}
+     */
+    protected static function verify_restored_database_core_tables( $target_prefix ) {
+        global $wpdb;
+
+        $target_prefix = (string) $target_prefix;
+        if ( '' === $target_prefix || ! preg_match( '/^[A-Za-z0-9_]+_$/', $target_prefix ) ) {
+            return [
+                'ok'      => false,
+                'reason'  => 'invalid_prefix',
+                'missing' => [],
+                'tables'  => [],
+            ];
+        }
+
+        $need = [ 'options', 'posts' ];
+        $missing = [];
+        $present = [];
+
+        foreach ( $need as $suffix ) {
+            $table = $target_prefix . $suffix;
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+            $found = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) );
+            // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+            if ( $found ) {
+                $present[] = $table;
+            } else {
+                $missing[] = $table;
+            }
+        }
+
+        if ( ! empty( $missing ) ) {
+            return [
+                'ok'      => false,
+                'reason'  => 'missing_core_tables',
+                'missing' => $missing,
+                'tables'  => $present,
+            ];
+        }
+
+        // Validate expected schema columns to prevent "wrong table rewritten into {prefix}_options".
+        $options_table = $target_prefix . 'options';
+        $posts_table   = $target_prefix . 'posts';
+        $missing_cols  = [];
+
+        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+        $opt_autoload = $wpdb->get_var( $wpdb->prepare( 'SHOW COLUMNS FROM `' . $options_table . '` LIKE %s', 'autoload' ) );
+        $opt_name     = $wpdb->get_var( $wpdb->prepare( 'SHOW COLUMNS FROM `' . $options_table . '` LIKE %s', 'option_name' ) );
+        $opt_value    = $wpdb->get_var( $wpdb->prepare( 'SHOW COLUMNS FROM `' . $options_table . '` LIKE %s', 'option_value' ) );
+        $post_id      = $wpdb->get_var( $wpdb->prepare( 'SHOW COLUMNS FROM `' . $posts_table . '` LIKE %s', 'ID' ) );
+        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+        if ( ! $opt_autoload ) {
+            $missing_cols[] = $options_table . '.autoload';
+        }
+        if ( ! $opt_name ) {
+            $missing_cols[] = $options_table . '.option_name';
+        }
+        if ( ! $opt_value ) {
+            $missing_cols[] = $options_table . '.option_value';
+        }
+        if ( ! $post_id ) {
+            $missing_cols[] = $posts_table . '.ID';
+        }
+
+        if ( ! empty( $missing_cols ) ) {
+            return [
+                'ok'      => false,
+                'reason'  => 'core_schema_mismatch',
+                'missing' => $missing_cols,
+                'tables'  => $present,
+            ];
+        }
+
+        // Basic sanity: siteurl/home should exist in the target options table.
+        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+        $siteurl = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$options_table} WHERE option_name = %s LIMIT 1", 'siteurl' ) );
+        $home    = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$options_table} WHERE option_name = %s LIMIT 1", 'home' ) );
+        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+        if ( empty( $siteurl ) && empty( $home ) ) {
+            return [
+                'ok'      => false,
+                'reason'  => 'missing_siteurl_home',
+                'missing' => [],
+                'tables'  => $present,
+            ];
+        }
+
+        return [
+            'ok'      => true,
+            'reason'  => 'ok',
+            'missing' => [],
+            'tables'  => $present,
+        ];
     }
 
     /**
@@ -1189,37 +1348,132 @@ class Backup_Lite_Restore_Service {
      * @return string
      */
     protected static function detect_table_prefix_from_sql( $sql_file ) {
+        $sql_file = (string) $sql_file;
+        if ( '' === $sql_file || ! file_exists( $sql_file ) || ! is_readable( $sql_file ) ) {
+            return '';
+        }
+
+        // Some large sites include plugin tables early in the dump which can contain misleading *_options tables
+        // (e.g. schema_type_options). To avoid prefix mis-detection, scan the first N MB and score candidates
+        // by how many WordPress core tables they match.
+        $max_scan_bytes = 40 * 1024 * 1024; // 40MB
+        $chunk_bytes    = 1024 * 1024;      // 1MB
+        $buffer_keep    = 2 * 1024 * 1024;  // keep last 2MB for regex boundary safety
+
+        $weights = [
+            'options'            => 5,
+            'posts'              => 4,
+            'postmeta'           => 4,
+            'users'              => 4,
+            'usermeta'           => 4,
+            'terms'              => 2,
+            'term_taxonomy'      => 2,
+            'term_relationships' => 2,
+            'comments'           => 1,
+            'commentmeta'        => 1,
+            'links'              => 1,
+        ];
+
+        $candidates = []; // prefix => ['score'=>int,'core'=>[table=>true],'first_seen'=>int]
+        $scanned    = 0;
+        $buffer     = '';
+
         // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- reading local SQL file in job temp dir
         $fh = fopen( $sql_file, 'rb' );
         if ( ! $fh ) {
             return '';
         }
-        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread
-        $head = fread( $fh, 1024 * 1024 ); // 1MB
-        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-        fclose( $fh );
 
-        if ( ! is_string( $head ) || '' === $head ) {
-            return '';
-        }
+        try {
+            while ( $scanned < $max_scan_bytes ) {
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- reading SQL file
+                $chunk = fread( $fh, $chunk_bytes );
+                if ( ! is_string( $chunk ) || '' === $chunk ) {
+                    break;
+                }
+                $scanned += strlen( $chunk );
+                $buffer  .= $chunk;
 
-        // Prefer options table since it exists in all WP sites.
-        if ( preg_match( '/`([A-Za-z0-9_]+_options)`/i', $head, $m ) ) {
-            $table = (string) $m[1];
-            if ( preg_match( '/^([A-Za-z0-9_]+_)options$/', $table, $m2 ) ) {
-                return (string) $m2[1];
+                if ( strlen( $buffer ) > $buffer_keep ) {
+                    $buffer = substr( $buffer, -$buffer_keep );
+                }
+
+                if ( preg_match_all( '/\\b(?:CREATE TABLE(?: IF NOT EXISTS)?|DROP TABLE IF EXISTS|INSERT INTO|ALTER TABLE)\\s+`([^`]+)`/i', $buffer, $ms ) ) {
+                    foreach ( (array) $ms[1] as $table ) {
+                        $table = (string) $table;
+                        if ( '' === $table ) {
+                            continue;
+                        }
+
+                        if ( preg_match( '/^([A-Za-z0-9_]+_)(options|posts|postmeta|users|usermeta|terms|term_taxonomy|term_relationships|comments|commentmeta|links)$/i', $table, $m2 ) ) {
+                            $prefix = (string) $m2[1];
+                            $core   = strtolower( (string) $m2[2] );
+                            $w      = isset( $weights[ $core ] ) ? (int) $weights[ $core ] : 0;
+
+                            if ( ! isset( $candidates[ $prefix ] ) ) {
+                                $candidates[ $prefix ] = [
+                                    'score'      => 0,
+                                    'core'       => [],
+                                    'first_seen' => (int) $scanned,
+                                ];
+                            }
+
+                            if ( empty( $candidates[ $prefix ]['core'][ $core ] ) ) {
+                                $candidates[ $prefix ]['core'][ $core ] = true;
+                                $candidates[ $prefix ]['score']        += $w;
+                            }
+                        }
+                    }
+                }
+
+                // Early exit only when we see a plausible WP prefix:
+                // must include `options` and at least one other high-signal core table.
+                foreach ( $candidates as $cand ) {
+                    $core = isset( $cand['core'] ) && is_array( $cand['core'] ) ? $cand['core'] : [];
+                    if ( ! empty( $core['options'] ) && ( ! empty( $core['posts'] ) || ! empty( $core['users'] ) || ! empty( $core['postmeta'] ) || ! empty( $core['usermeta'] ) ) ) {
+                        break 2;
+                    }
+                }
             }
+        } finally {
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- reading local SQL file in job temp dir
+            fclose( $fh );
         }
 
-        // Fallback: infer from first referenced table statement if it ends with options.
-        if ( preg_match( '/\\b(?:CREATE TABLE|DROP TABLE IF EXISTS|INSERT INTO)\\s+`([^`]+)`/i', $head, $m ) ) {
-            $table = (string) $m[1];
-            if ( preg_match( '/^([A-Za-z0-9_]+_)options$/', $table, $m2 ) ) {
-                return (string) $m2[1];
-            }
-        }
-
+        if ( empty( $candidates ) ) {
         return '';
+        }
+
+        $best_prefix = '';
+        $best_score  = -1;
+        $best_distinct = -1;
+        $best_first_seen = PHP_INT_MAX;
+
+        foreach ( $candidates as $prefix => $cand ) {
+            $score    = isset( $cand['score'] ) ? (int) $cand['score'] : 0;
+            $distinct = isset( $cand['core'] ) && is_array( $cand['core'] ) ? count( $cand['core'] ) : 0;
+            $first    = isset( $cand['first_seen'] ) ? (int) $cand['first_seen'] : PHP_INT_MAX;
+
+            // Require `options` and at least one other core table; prevents plugin tables like *_masterslider_options.
+            $core = isset( $cand['core'] ) && is_array( $cand['core'] ) ? $cand['core'] : [];
+            if ( empty( $core['options'] ) || ( empty( $core['posts'] ) && empty( $core['users'] ) && empty( $core['postmeta'] ) && empty( $core['usermeta'] ) ) ) {
+                continue;
+            }
+
+            // Prefer higher score, then more distinct core tables, then earlier appearance.
+            if (
+                $score > $best_score
+                || ( $score === $best_score && $distinct > $best_distinct )
+                || ( $score === $best_score && $distinct === $best_distinct && $first < $best_first_seen )
+            ) {
+                $best_prefix    = (string) $prefix;
+                $best_score     = $score;
+                $best_distinct  = $distinct;
+                $best_first_seen = $first;
+            }
+        }
+
+        return $best_prefix;
     }
 
     /**
@@ -1424,16 +1678,35 @@ class Backup_Lite_Restore_Service {
                     $meta['updated_at'] = current_time( 'mysql' );
                     self::write_job_meta( $job_id, $meta );
 
-            $safe_mode_entered = false;
-            try {
-                Backup_Lite_Restore::enter_safe_mode_after_import();
-                $safe_mode_entered = true;
-            } catch ( Exception $e ) {
-                backup_lite_log( 'warning', 'Failed to enter safe mode after restore.', [
-                    'job_id' => $job_id,
-                    'error' => $e->getMessage(),
-                ] );
-            }
+                    $safe_mode_entered = false;
+                    $opt = ( isset( $meta['options'] ) && is_array( $meta['options'] ) ) ? $meta['options'] : [];
+                    $want_safe_mode = true;
+                    if ( array_key_exists( 'safe_mode', $opt ) ) {
+                        $want_safe_mode = (bool) $opt['safe_mode'];
+                    }
+
+                    if ( $want_safe_mode ) {
+                        try {
+                            Backup_Lite_Restore::enter_safe_mode_after_import();
+                            $safe_mode_entered = true;
+                        } catch ( Exception $e ) {
+                            backup_lite_log( 'warning', 'Failed to enter safe mode after restore.', [
+                                'job_id' => $job_id,
+                                'error' => $e->getMessage(),
+                            ] );
+                        }
+                    } else {
+                        // If safe mode is disabled for this restore, ensure no stale safe-mode flags linger.
+                        if ( function_exists( 'delete_option' ) ) {
+                            delete_option( 'backup_lite_safe_mode' );
+                            delete_option( 'backup_lite_prev_active_plugins' );
+                        }
+                        if ( function_exists( 'backup_lite_log' ) ) {
+                            backup_lite_log( 'info', 'Safe mode disabled by user option; leaving plugins as restored.', [
+                                'job_id' => $job_id,
+                            ] );
+                        }
+                    }
                     $cleanup['safe_mode_entered'] = $safe_mode_entered ? 1 : 0;
                     $cleanup['step'] = 'cleanup_tmp';
                     break;

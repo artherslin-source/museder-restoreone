@@ -311,6 +311,7 @@ var backupLiteTimer = {
         var message = config.message || '';
         var actionHref = config.actionHref || '';
         var actionText = config.actionText || strings.downloadLabel || 'Download';
+        var actionCallback = typeof config.actionCallback === 'function' ? config.actionCallback : null;
         var confirmText = config.confirmText || '';
         var autoClose = typeof config.autoClose === 'number' ? config.autoClose : 0;
         var type = config.type || 'success'; // 'success' or 'error'
@@ -370,7 +371,7 @@ var backupLiteTimer = {
             dialog.appendChild(messageEl);
         }
 
-        if (actionHref || confirmText) {
+        if (actionHref || actionCallback || confirmText) {
             var actionsEl = document.createElement('div');
             actionsEl.className = 'bl-completion-actions';
 
@@ -425,6 +426,21 @@ var backupLiteTimer = {
                 });
                 
                 actionsEl.appendChild(actionBtn);
+            } else if (actionCallback) {
+                var actionBtn2 = document.createElement('button');
+                actionBtn2.type = 'button';
+                actionBtn2.className = 'button button-primary';
+                actionBtn2.textContent = actionText;
+                actionBtn2.addEventListener('click', function (e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    try {
+                        actionCallback();
+                    } catch (err) {
+                        // No-op: overlay action should never crash UI.
+                    }
+                });
+                actionsEl.appendChild(actionBtn2);
             }
 
             if (confirmText) {
@@ -1694,6 +1710,7 @@ function initRestoreCenter() {
         var applyReplaceToggle = document.getElementById('applyReplace');
         var skipConfigToggle = document.getElementById('skipConfig');
         var autoBackupToggle = document.getElementById('autoBackup');
+        var safeModeToggle = document.getElementById('safeMode');
         var historyTable = document.getElementById('restoreHistory');
         var summaryContainer = document.getElementById('fileSummary');
         var wizardSteps = {
@@ -2360,7 +2377,7 @@ function initRestoreCenter() {
             });
         }
         
-        function markRestoreCompleted(message) {
+        function markRestoreCompleted(message, meta) {
             // Check if we already have a final result (prevent duplicate modals)
             if (restoreMonitor.hasFinalResult && restoreMonitor.lastStatus !== 'success') {
                 console.log('[Backup Lite] Already have final result, skipping completion display', { 
@@ -2441,10 +2458,42 @@ function initRestoreCenter() {
             // Always show overlay when marking completion
             restoreCompletionShown = true;
             try {
+                var safeMode = meta && meta.safe_mode_active;
+                var prevCount = meta && typeof meta.prev_plugins_count !== 'undefined' ? meta.prev_plugins_count : 0;
+                var overlayMessage = strings.restoreOverlayMessage || strings.successRestore || 'Your site has been restored successfully.';
+                if (safeMode) {
+                    overlayMessage += '\n\n' + (strings.safeModeOverlayHint || ('Safe mode is active: ' + String(prevCount || 0) + ' plugin(s) are temporarily disabled. You can restore plugins with one click.'));
+                }
                 showCompletionOverlay({
                     icon: '✅',
                     title: strings.restoreCompleted || 'Restore Completed',
-                    message: strings.restoreOverlayMessage || strings.successRestore || 'Your site has been restored successfully.',
+                    message: overlayMessage,
+                    actionText: safeMode ? (strings.exitSafeModeRestorePlugins || 'Exit Safe Mode & Restore Plugins') : '',
+                    actionCallback: safeMode ? function () {
+                        var ajaxUrl = localizedSettings.ajaxUrl || '/wp-admin/admin-ajax.php';
+                        var nonce = localizedSettings.nonce || '';
+                        jQuery.ajax({
+                            url: ajaxUrl,
+                            type: 'POST',
+                            data: {
+                                action: 'backup_lite_exit_safe_mode',
+                                nonce: nonce
+                            },
+                            success: function (response) {
+                                if (response && response.success) {
+                                    showToast('✅ ' + ((response.data && response.data.message) ? response.data.message : 'Plugins restored.'), 'success');
+                                    setTimeout(function () {
+                                        window.location.reload();
+                                    }, 800);
+                                } else {
+                                    showToast('❌ ' + ((response && response.data && response.data.message) ? response.data.message : 'Failed to restore plugins.'), 'error');
+                                }
+                            },
+                            error: function () {
+                                showToast('❌ ' + (strings.errorGeneric || 'An error occurred. Please try again.'), 'error');
+                            }
+                        });
+                    } : null,
                     confirmText: strings.restoreOverlayConfirm || strings.close || 'Got it'
                 });
                 console.log('[Backup Lite] Completion overlay shown');
@@ -2460,7 +2509,7 @@ function initRestoreCenter() {
                             showCompletionOverlay({
                                 icon: '✅',
                                 title: strings.restoreCompleted || 'Restore Completed',
-                                message: strings.restoreOverlayMessage || strings.successRestore || 'Your site has been restored successfully.',
+                                message: overlayMessage,
                                 confirmText: strings.restoreOverlayConfirm || strings.close || 'Got it'
                             });
                             restoreCompletionShown = true;
@@ -2963,6 +3012,11 @@ function initRestoreCenter() {
                 }
                 
                 setProgress(displayProgress, job.message || (strings.runningMessage || ''), isComplete || isFailed);
+
+                var completionMeta = {
+                    safe_mode_active: !!payload.safe_mode_active,
+                    prev_plugins_count: (typeof payload.prev_plugins_count !== 'undefined') ? payload.prev_plugins_count : 0
+                };
                 
                 if (payload.history) {
                     // DISABLED: Restore History is now rendered server-side in PHP template
@@ -3028,7 +3082,7 @@ function initRestoreCenter() {
                                 jobStartRaw, 
                                 latestHistory 
                             });
-                            markRestoreCompleted(job.message || (strings.restoreCompleted || 'Restore Completed.'));
+                            markRestoreCompleted(job.message || (strings.restoreCompleted || 'Restore Completed.'), completionMeta);
                             return; // Stop polling
                         }
                     }
@@ -3041,7 +3095,7 @@ function initRestoreCenter() {
                     restoreMonitor.hasFinalResult = true;
                     restoreMonitor.lastStatus = 'success';
                     console.log('[Backup Lite] Job status is success/completed, marking as completed', { status, progress, jobId });
-                    markRestoreCompleted(job.message || (strings.restoreCompleted || 'Restore Completed.'));
+                    markRestoreCompleted(job.message || (strings.restoreCompleted || 'Restore Completed.'), completionMeta);
                     return; // Stop polling
                 } 
                 // Priority 2: Progress is 100% - check history or wait for status update
@@ -4961,6 +5015,7 @@ function initRestoreCenter() {
                 formData.append('overwrite', overwriteToggle.checked ? 'true' : 'false');
                 formData.append('autoBackup', autoBackupToggle && autoBackupToggle.checked ? 'true' : 'false');
                 formData.append('skipConfig', skipConfigToggle && skipConfigToggle.checked ? 'true' : 'false');
+                formData.append('safeMode', safeModeToggle && safeModeToggle.checked ? 'true' : 'false');
                 if (applyReplaceToggle && applyReplaceToggle.checked) {
                     formData.append('searchReplace', JSON.stringify([]));
                 }

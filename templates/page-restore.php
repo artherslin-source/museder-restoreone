@@ -160,6 +160,15 @@ if ( $safe_mode_active ) {
             <label><input type="checkbox" id="skipConfig"> <?php esc_html_e( 'Skip wp-config.php', 'museder-restoreone' ); ?></label><br>
             <label><input type="checkbox" id="autoBackup" checked> <?php esc_html_e( 'Backup current site before restore', 'museder-restoreone' ); ?></label><br>
             <div style="margin-top: 12px;">
+                <label>
+                    <input type="checkbox" id="safeMode" checked>
+                    <?php esc_html_e( 'Enter Safe Mode after restore (recommended)', 'museder-restoreone' ); ?>
+                </label>
+                <p class="description" style="margin: 6px 0 0 0;">
+                    <?php esc_html_e( 'Safe mode temporarily disables non-essential plugins to prevent conflicts. You can restore plugins with one click after verifying the site works.', 'museder-restoreone' ); ?>
+                </p>
+            </div>
+            <div style="margin-top: 12px;">
                 <label for="restoreDecryptionPassword" style="display:block; margin-bottom: 6px;">
                     <?php esc_html_e( 'Decryption password (for encrypted .wpress backups)', 'museder-restoreone' ); ?>
                 </label>
