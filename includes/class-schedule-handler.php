@@ -246,8 +246,10 @@ class Backup_Lite_Schedule_Handler {
     public static function ajax_toggle_schedule() {
         self::verify_ajax();
 
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax()
         $id     = isset( $_POST['id'] ) ? sanitize_text_field( wp_unslash( $_POST['id'] ) ) : '';
         $status = isset( $_POST['status'] ) ? sanitize_text_field( wp_unslash( $_POST['status'] ) ) : 'enabled';
+        // phpcs:enable WordPress.Security.NonceVerification.Missing
 
         if ( ! $id ) {
             wp_send_json_error( [ 'message' => __( 'Schedule ID missing.', 'museder-restoreone' ) ], 400 );
@@ -269,18 +271,17 @@ class Backup_Lite_Schedule_Handler {
         self::verify_ajax();
 
         $data = self::read_schedule_data();
-        
-        // Support both 'id' and 'schedule_id' parameters for backward compatibility
-        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified via verify_ajax()
-        $raw_id         = isset( $_POST['id'] ) ? wp_unslash( $_POST['id'] ) : '';
-        $raw_schedule_id = isset( $_POST['schedule_id'] ) ? wp_unslash( $_POST['schedule_id'] ) : '';
+
+        // Support both 'id' and 'schedule_id' parameters for backward compatibility.
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax()
+        $effective_id = '';
+        if ( isset( $_POST['schedule_id'] ) ) {
+            $effective_id = sanitize_text_field( wp_unslash( $_POST['schedule_id'] ) );
+        } elseif ( isset( $_POST['id'] ) ) {
+            $effective_id = sanitize_text_field( wp_unslash( $_POST['id'] ) );
+        }
         // phpcs:enable WordPress.Security.NonceVerification.Missing
-        
-        $id_from_id         = sanitize_text_field( $raw_id );
-        $id_from_schedule   = sanitize_text_field( $raw_schedule_id );
-        
-        // 只要有一個有值就算在編輯
-        $effective_id = $id_from_schedule !== '' ? $id_from_schedule : $id_from_id;
+
         $is_edit = ( '' !== $effective_id );
 
         // Check PRO limit for Free users - ONLY on create (not edit)

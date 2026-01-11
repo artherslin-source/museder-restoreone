@@ -15,7 +15,6 @@ if ( ! defined( 'ABSPATH' ) ) {
 $status  = isset( $status ) ? $status : Backup_Lite_UI::get_environment_status();
 $backups = isset( $backups ) ? $backups : Backup_Lite_UI::get_backups_list();
 $settings = class_exists( 'Backup_Lite_Settings' ) ? Backup_Lite_Settings::get_settings() : [];
-// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 ?>
 
 <div class="wrap backup-lite-admin backup-lite-backups">
@@ -379,6 +378,3 @@ $settings = class_exists( 'Backup_Lite_Settings' ) ? Backup_Lite_Settings::get_s
         </ul>
     </div>
 </div>
-<?php
-// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
-

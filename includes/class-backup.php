@@ -501,18 +501,15 @@ class Backup_Lite_Backup {
 
         $wp_content_skip_prefixes = [];
         if ( 'wp-content' === $target ) {
+            $upload_dir = wp_upload_dir();
+            $uploads_basedir = isset( $upload_dir['basedir'] ) ? (string) $upload_dir['basedir'] : '';
+            $uploads_basedir = $uploads_basedir ? wp_normalize_path( $uploads_basedir ) : '';
+
             // Prevent duplicate inclusion ONLY when these directories are actually included elsewhere.
             // Some hosts may not expose themes/plugins/uploads as separate roots, so skipping unconditionally
             // can lead to missing uploads in backups.
-            $candidates = [
-                'themes'     => WP_CONTENT_DIR . '/themes',
-                'plugins'    => WP_CONTENT_DIR . '/plugins',
-                'uploads'    => WP_CONTENT_DIR . '/uploads',
-                'mu-plugins' => WP_CONTENT_DIR . '/mu-plugins',
-                'languages'  => WP_CONTENT_DIR . '/languages',
-            ];
-
-            foreach ( $candidates as $key => $default_path ) {
+            $keys = [ 'themes', 'plugins', 'uploads', 'mu-plugins', 'languages' ];
+            foreach ( $keys as $key ) {
                 if ( is_array( $directory_map ) && isset( $directory_map[ $key ] ) && is_string( $directory_map[ $key ] ) && '' !== $directory_map[ $key ] ) {
                     $wp_content_skip_prefixes[] = wp_normalize_path( trailingslashit( $directory_map[ $key ] ) );
                 }
@@ -1059,7 +1056,7 @@ class Backup_Lite_Backup {
                 fwrite( $handle, sprintf( "-- Table structure for table `%s`\n\n", $safe_table ) );
 
                 // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-                $create = $wpdb->get_row( $wpdb->prepare( "SHOW CREATE TABLE `%s`", $safe_table ), ARRAY_N ); // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- safe: table name sanitized from SHOW TABLES result
+                $create = $wpdb->get_row( $wpdb->prepare( "SHOW CREATE TABLE `%s`", $safe_table ), ARRAY_N ); // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter, WordPress.DB.DirectDatabaseQuery.SchemaChange -- schema inspection for backup export; no schema changes executed
                 // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
                 if ( isset( $create[1] ) ) {
                     // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for SQL stream export
@@ -1417,7 +1414,8 @@ class Backup_Lite_Backup {
                     'reason' => (string) $reason,
                 ] );
             }
-            throw new RuntimeException( $friendly );
+            // @plugin-check: escaped
+            throw new RuntimeException( esc_html( $friendly ) );
         };
 
         // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for streaming legacy manifest conversion, path is plugin-controlled
@@ -1725,11 +1723,17 @@ class Backup_Lite_Backup {
      * @return array<string,mixed>
      */
     private static function selfcheck_backup_roots( $archive_path, array $directories ) {
+        $upload_dir = wp_upload_dir();
+        $uploads_basedir = isset( $upload_dir['basedir'] ) ? (string) $upload_dir['basedir'] : '';
+        $uploads_basedir = $uploads_basedir ? wp_normalize_path( $uploads_basedir ) : '';
+        $plugins_dir = defined( 'WP_PLUGIN_DIR' ) ? wp_normalize_path( WP_PLUGIN_DIR ) : '';
+        $themes_dir  = function_exists( 'get_theme_root' ) ? wp_normalize_path( (string) get_theme_root() ) : '';
+
         $roots = [
-            'uploads'   => $directories['uploads'] ?? ( WP_CONTENT_DIR . '/uploads' ),
-            'plugins'   => $directories['plugins'] ?? ( WP_CONTENT_DIR . '/plugins' ),
-            'themes'    => $directories['themes'] ?? ( WP_CONTENT_DIR . '/themes' ),
-            'wp-content'=> $directories['wp-content'] ?? WP_CONTENT_DIR,
+            'uploads'   => $directories['uploads'] ?? $uploads_basedir,
+            'plugins'   => $directories['plugins'] ?? $plugins_dir,
+            'themes'    => $directories['themes'] ?? $themes_dir,
+            'wp-content'=> $directories['wp-content'] ?? wp_normalize_path( WP_CONTENT_DIR ),
         ];
 
         $results = [
@@ -1892,7 +1896,7 @@ class Backup_Lite_Backup {
             return true;
         };
 
-        set_error_handler( $handler );
+        set_error_handler( $handler ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_set_error_handler -- capture fopen warnings (e.g. open_basedir) for diagnostics; not debug logging
         try {
             // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- probe only; no data is stored
             $h = @fopen( $path, 'rb' );
@@ -4044,8 +4048,13 @@ class Backup_Lite_Backup {
             $table_args = ' ' . implode( ' ', $escaped );
         }
 
+        // Prefer mariadb-dump on MariaDB hosts to avoid mysqldump deprecation warnings polluting the SQL file.
+        $dump_bin = backup_lite_command_exists( 'mariadb-dump' ) ? 'mariadb-dump' : 'mysqldump';
+
+        // NOTE: Do NOT redirect stderr into the SQL file. `run_shell_command()` already captures stderr for logging.
         $command = sprintf(
-            'mysqldump --single-transaction --quick --lock-tables=false --skip-comments --no-tablespaces%s -h%s%s -u%s -p%s %s%s > %s 2>&1',
+            '%s --single-transaction --quick --lock-tables=false --skip-comments --no-tablespaces%s -h%s%s -u%s -p%s %s%s > %s',
+            $dump_bin,
             $ignore_args,
             $host,
             $port,
@@ -4127,7 +4136,8 @@ class Backup_Lite_Backup {
             // 輸入值來自系統內部狀態，不包含直接的使用者輸入。
             // 為了確保相容性與效能，此處使用直接查詢而非 WP_Query。
             // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-            $create = $wpdb->get_row( $wpdb->prepare( "SHOW CREATE TABLE `%s`", $safe_table ), ARRAY_N ); // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- safe: table name sanitized from SHOW TABLES result
+            $create = $wpdb->get_row( $wpdb->prepare( "SHOW CREATE TABLE `%s`", $safe_table ), ARRAY_N ); // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter, WordPress.DB.DirectDatabaseQuery.SchemaChange -- safe: schema inspection for backup export; no schema changes executed
+            $create = $wpdb->get_row( $wpdb->prepare( "SHOW CREATE TABLE `%s`", $safe_table ), ARRAY_N ); // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter, WordPress.DB.DirectDatabaseQuery.SchemaChange -- safe: schema inspection for backup export; no schema changes executed
             // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
             if ( isset( $create[1] ) ) {
                 // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing SQL dump file
@@ -4479,7 +4489,9 @@ class Backup_Lite_Backup {
         };
         
         // Exclude all museder-restoreone-* directories in uploads (handles versioned plugin directories)
-        $uploads_dir = WP_CONTENT_DIR . '/uploads';
+        $upload_dir = wp_upload_dir();
+        $uploads_dir = isset( $upload_dir['basedir'] ) ? (string) $upload_dir['basedir'] : '';
+        $uploads_dir = $uploads_dir ? wp_normalize_path( $uploads_dir ) : '';
         if ( is_dir( $uploads_dir ) && is_readable( $uploads_dir ) ) {
             try {
                 $iterator = new DirectoryIterator( $uploads_dir );
@@ -4553,23 +4565,35 @@ class Backup_Lite_Backup {
         if ( function_exists( 'is_multisite' ) && is_multisite() && ! empty( $options['multisite_blog_id'] ) ) {
             $blog_id = absint( $options['multisite_blog_id'] );
             if ( $blog_id > 0 ) {
+                $upload_dir = wp_upload_dir();
+                $uploads_basedir = isset( $upload_dir['basedir'] ) ? (string) $upload_dir['basedir'] : '';
+                $uploads_basedir = $uploads_basedir ? wp_normalize_path( $uploads_basedir ) : '';
+                if ( '' === $uploads_basedir ) {
+                    return $prefixes;
+                }
+
                 // Include only selected subsite uploads + common wp-content components.
                 if ( $blog_id > 1 ) {
-                    $prefixes[] = wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/uploads/sites/' . $blog_id ) );
+                    // Default multisite structure: .../uploads/sites/{blog_id}. Use basedir parent for portability.
+                    $prefixes[] = wp_normalize_path( trailingslashit( dirname( $uploads_basedir ) ) . 'sites/' . $blog_id );
                 } else {
-                    $prefixes[] = wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/uploads' ) );
+                    $prefixes[] = wp_normalize_path( trailingslashit( $uploads_basedir ) );
                 }
 
                 if ( empty( $options['no_plugins'] ) ) {
-                    $prefixes[] = wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/plugins' ) );
+                    $prefixes[] = wp_normalize_path( trailingslashit( WP_PLUGIN_DIR ) );
                 }
                 if ( empty( $options['no_themes'] ) ) {
-                    $prefixes[] = wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/themes' ) );
+                    $prefixes[] = wp_normalize_path( trailingslashit( (string) get_theme_root() ) );
                 }
                 if ( empty( $options['no_muplugins'] ) ) {
-                    $prefixes[] = wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/mu-plugins' ) );
+                    if ( defined( 'WPMU_PLUGIN_DIR' ) ) {
+                        $prefixes[] = wp_normalize_path( trailingslashit( WPMU_PLUGIN_DIR ) );
+                    }
                 }
-                $prefixes[] = wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/languages' ) );
+                if ( defined( 'WP_LANG_DIR' ) ) {
+                    $prefixes[] = wp_normalize_path( trailingslashit( WP_LANG_DIR ) );
+                }
             }
         }
 
@@ -4656,16 +4680,23 @@ class Backup_Lite_Backup {
 
         // Scope presets (AI1WM-like).
         if ( ! empty( $options['no_media'] ) ) {
-            $prefixes[] = wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/uploads' ) );
+            $upload_dir = wp_upload_dir();
+            $uploads_basedir = isset( $upload_dir['basedir'] ) ? (string) $upload_dir['basedir'] : '';
+            $uploads_basedir = $uploads_basedir ? wp_normalize_path( $uploads_basedir ) : '';
+            if ( '' !== $uploads_basedir ) {
+                $prefixes[] = wp_normalize_path( trailingslashit( $uploads_basedir ) );
+            }
         }
         if ( ! empty( $options['no_plugins'] ) ) {
-            $prefixes[] = wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/plugins' ) );
+            $prefixes[] = wp_normalize_path( trailingslashit( WP_PLUGIN_DIR ) );
         }
         if ( ! empty( $options['no_themes'] ) ) {
-            $prefixes[] = wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/themes' ) );
+            $prefixes[] = wp_normalize_path( trailingslashit( (string) get_theme_root() ) );
         }
         if ( ! empty( $options['no_muplugins'] ) ) {
-            $prefixes[] = wp_normalize_path( trailingslashit( WP_CONTENT_DIR . '/mu-plugins' ) );
+            if ( defined( 'WPMU_PLUGIN_DIR' ) ) {
+                $prefixes[] = wp_normalize_path( trailingslashit( WPMU_PLUGIN_DIR ) );
+            }
         }
         if ( ! empty( $options['no_cache'] ) ) {
             $prefixes = array_merge( $prefixes, self::get_smart_exclude_prefixes() );
@@ -4696,13 +4727,19 @@ class Backup_Lite_Backup {
      * @return array<string>
      */
     private static function get_smart_exclude_prefixes() {
+        $upload_dir = wp_upload_dir();
+        $uploads_basedir = isset( $upload_dir['basedir'] ) ? (string) $upload_dir['basedir'] : '';
+        $uploads_basedir = $uploads_basedir ? wp_normalize_path( $uploads_basedir ) : '';
+
         $prefixes = [
             trailingslashit( WP_CONTENT_DIR . '/cache' ),
             trailingslashit( WP_CONTENT_DIR . '/litespeed' ),
             trailingslashit( WP_CONTENT_DIR . '/w3tc-cache' ),
             trailingslashit( WP_CONTENT_DIR . '/wp-rocket-cache' ),
-            trailingslashit( WP_CONTENT_DIR . '/uploads/cache' ),
         ];
+        if ( '' !== $uploads_basedir ) {
+            $prefixes[] = trailingslashit( $uploads_basedir . '/cache' );
+        }
 
         $prefixes = array_map(
             static function ( $p ) {
@@ -4781,7 +4818,13 @@ class Backup_Lite_Backup {
             if ( 0 === strpos( $line, 'wp-content/' ) ) {
                 $line = wp_normalize_path( WP_CONTENT_DIR . '/' . substr( $line, strlen( 'wp-content/' ) ) );
             } elseif ( 0 === strpos( $line, 'uploads/' ) ) {
-                $line = wp_normalize_path( WP_CONTENT_DIR . '/uploads/' . substr( $line, strlen( 'uploads/' ) ) );
+                $upload_dir = wp_upload_dir();
+                $uploads_basedir = isset( $upload_dir['basedir'] ) ? (string) $upload_dir['basedir'] : '';
+                $uploads_basedir = $uploads_basedir ? wp_normalize_path( $uploads_basedir ) : '';
+                if ( '' === $uploads_basedir ) {
+                    continue;
+                }
+                $line = wp_normalize_path( trailingslashit( $uploads_basedir ) . substr( $line, strlen( 'uploads/' ) ) );
             } elseif ( 0 === strpos( $line, './' ) ) {
                 $line = ltrim( $line, './' );
                 $line = wp_normalize_path( ABSPATH . $line );
@@ -4850,12 +4893,10 @@ class Backup_Lite_Backup {
                 // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- required for large backup operations
                 // Adjusting PHP settings locally for backup/restore process.
                 // phpcs:ignore WordPress.PHP.IniSet
-                // Adjust memory limit for large backup/restore operations.
-                // @phpcs:disable Squiz.PHP.DiscouragedFunctions.Discouraged
-                if ( function_exists( 'ini_set' ) ) {
-                    @ini_set( 'memory_limit', '1024M' );
+                // Adjust memory limit for large backup/restore operations (WP recommended API).
+                if ( function_exists( 'wp_raise_memory_limit' ) ) {
+                    wp_raise_memory_limit( 'admin' );
                 }
-                // @phpcs:enable Squiz.PHP.DiscouragedFunctions.Discouraged
             }
         }
     }

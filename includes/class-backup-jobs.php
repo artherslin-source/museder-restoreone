@@ -229,13 +229,17 @@ class Backup_Lite_Backup_Jobs {
             $max_execution_time = 30;
         }
         
-        // Dynamic time budget calculation
-        // Use 75% of max_execution_time, but ensure minimum of 25 seconds
-        // Cap at 90 seconds to prevent extremely long single requests that might timeout
-        // This leaves buffer for frontend timeout (30s) and other operations
+        // Dynamic time budget calculation.
+        // Use 75% of max_execution_time, but ensure minimum of 25 seconds; cap at 90 seconds.
+        // Note: We apply a hard cap below to avoid very long single requests.
         $time_budget = max( 25, min( (int) ( $max_execution_time * 0.75 ), 90 ) );
+
         // Hard cap to keep requests short on strict shared hosting (prevents 150s+ requests when a single batch is slow).
+        // For AJAX, keep the budget smaller to avoid long pending requests (which makes the progress UI appear "stuck then jump").
         $hard_budget = 25;
+        if ( function_exists( 'wp_doing_ajax' ) && wp_doing_ajax() ) {
+            $hard_budget = 12;
+        }
         $time_budget = min( $time_budget, $hard_budget );
         $start_microtime = microtime( true ); // Use microtime for precise timing
         $processed_bytes_start = isset( $job['processed_bytes'] ) ? (int) $job['processed_bytes'] : 0;

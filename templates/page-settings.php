@@ -25,7 +25,6 @@ $temp_dir         = function_exists( 'get_temp_dir' ) ? get_temp_dir() : ( funct
 $temp_writable    = wp_is_writable( $temp_dir );
 $uploads_dir      = wp_upload_dir();
 $uploads_writable = wp_is_writable( $uploads_dir['basedir'] );
-// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 $cron_disabled    = defined( 'DISABLE_WP_CRON' ) && DISABLE_WP_CRON;
 $cron_status      = $cron_disabled ? __( 'External cron (DISABLE_WP_CRON enabled)', 'museder-restoreone' ) : __( 'Using WP-Cron', 'museder-restoreone' );
 $php_memory       = ini_get( 'memory_limit' );

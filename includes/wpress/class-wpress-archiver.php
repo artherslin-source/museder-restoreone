@@ -47,55 +47,76 @@ abstract class Backup_Lite_Wpress_Archiver {
 		$this->file_name = $file_name;
 		$this->eof       = pack( 'a4377', '' );
 
-		// phpcs:disable WordPress.WP.AlternativeFunctions.file_system_read_fopen, WordPress.WP.AlternativeFunctions.file_system_read_fseek
+		// phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fseek
 		// Reason: streaming access for large archives; paths are controlled by plugin and validated by callers.
 		if ( $write ) {
 			$this->file_handle = @fopen( $file_name, 'cb' );
 			if ( $this->file_handle === false ) {
 				throw new Backup_Lite_Wpress_Not_Accessible_Exception(
-					sprintf( __( 'Could not open file for writing. File: %s', 'museder-restoreone' ), $this->file_name )
+					sprintf(
+						/* translators: %s: archive file path */
+						esc_html__( 'Could not open file for writing. File: %s', 'museder-restoreone' ),
+						esc_html( $this->file_name )
+					)
 				);
 			}
 
 			if ( @fseek( $this->file_handle, 0, SEEK_END ) === -1 ) {
 				throw new Backup_Lite_Wpress_Not_Seekable_Exception(
-					sprintf( __( 'Could not seek to end of file. File: %s', 'museder-restoreone' ), $this->file_name )
+					sprintf(
+						/* translators: %s: archive file path */
+						esc_html__( 'Could not seek to end of file. File: %s', 'museder-restoreone' ),
+						esc_html( $this->file_name )
+					)
 				);
 			}
 		} else {
 			$this->file_handle = @fopen( $file_name, 'rb' );
 			if ( $this->file_handle === false ) {
 				throw new Backup_Lite_Wpress_Not_Accessible_Exception(
-					sprintf( __( 'Could not open file for reading. File: %s', 'museder-restoreone' ), $this->file_name )
+					sprintf(
+						/* translators: %s: archive file path */
+						esc_html__( 'Could not open file for reading. File: %s', 'museder-restoreone' ),
+						esc_html( $this->file_name )
+					)
 				);
 			}
 		}
-		// phpcs:enable WordPress.WP.AlternativeFunctions.file_system_read_fopen, WordPress.WP.AlternativeFunctions.file_system_read_fseek
+		// phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fseek
 	}
 
 	/**
 	 * @throws Backup_Lite_Wpress_Not_Seekable_Exception
 	 */
 	public function set_file_pointer( int $offset ): void {
-		// phpcs:disable WordPress.WP.AlternativeFunctions.file_system_read_fseek
+		// phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fseek
 		if ( @fseek( $this->file_handle, $offset, SEEK_SET ) === -1 ) {
 			throw new Backup_Lite_Wpress_Not_Seekable_Exception(
-				sprintf( __( 'Could not seek to offset of file. File: %s Offset: %d', 'museder-restoreone' ), $this->file_name, $offset )
+				sprintf(
+					/* translators: 1: archive file path, 2: offset */
+					esc_html__( 'Could not seek to offset of file. File: %1$s Offset: %2$d', 'museder-restoreone' ),
+					esc_html( $this->file_name ),
+					(int) $offset
+				)
 			);
 		}
-		// phpcs:enable WordPress.WP.AlternativeFunctions.file_system_read_fseek
+		// phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fseek
 	}
 
 	/**
 	 * @throws Backup_Lite_Wpress_Not_Tellable_Exception
 	 */
 	public function get_file_pointer(): int {
-		// phpcs:disable WordPress.WP.AlternativeFunctions.file_system_read_ftell
+		// phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_ftell
 		$offset = @ftell( $this->file_handle );
-		// phpcs:enable WordPress.WP.AlternativeFunctions.file_system_read_ftell
+		// phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_ftell
 		if ( $offset === false ) {
 			throw new Backup_Lite_Wpress_Not_Tellable_Exception(
-				sprintf( __( 'Could not tell offset of file. File: %s', 'museder-restoreone' ), $this->file_name )
+				sprintf(
+					/* translators: %s: archive file path */
+					esc_html__( 'Could not tell offset of file. File: %s', 'museder-restoreone' ),
+					esc_html( $this->file_name )
+				)
 			);
 		}
 
@@ -106,7 +127,7 @@ abstract class Backup_Lite_Wpress_Archiver {
 	 * Validate archive file completeness (trailing EOF marker).
 	 */
 	public function is_valid(): bool {
-		// phpcs:disable WordPress.WP.AlternativeFunctions.file_system_read_ftell, WordPress.WP.AlternativeFunctions.file_system_read_fseek, WordPress.WP.AlternativeFunctions.file_system_read_fread
+		// phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_ftell, WordPress.WP.AlternativeFunctions.file_system_operations_fseek, WordPress.WP.AlternativeFunctions.file_system_operations_fread
 		$offset = @ftell( $this->file_handle );
 		if ( $offset === false ) {
 			return false;
@@ -123,7 +144,7 @@ abstract class Backup_Lite_Wpress_Archiver {
 		if ( @fseek( $this->file_handle, $offset, SEEK_SET ) === -1 ) {
 			return false;
 		}
-		// phpcs:enable WordPress.WP.AlternativeFunctions.file_system_read_ftell, WordPress.WP.AlternativeFunctions.file_system_read_fseek, WordPress.WP.AlternativeFunctions.file_system_read_fread
+		// phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_ftell, WordPress.WP.AlternativeFunctions.file_system_operations_fseek, WordPress.WP.AlternativeFunctions.file_system_operations_fread
 
 		return true;
 	}
@@ -135,28 +156,36 @@ abstract class Backup_Lite_Wpress_Archiver {
 	public function truncate(): void {
 		$offset = $this->get_file_pointer();
 
-		// phpcs:disable WordPress.WP.AlternativeFunctions.file_system_read_filesize, WordPress.WP.AlternativeFunctions.file_system_read_ftruncate
+		// phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_filesize, WordPress.WP.AlternativeFunctions.file_system_operations_ftruncate
 		if ( @filesize( $this->file_name ) > $offset ) {
 			if ( @ftruncate( $this->file_handle, $offset ) === false ) {
 				throw new Backup_Lite_Wpress_Not_Truncatable_Exception(
-					sprintf( __( 'Could not truncate file. File: %s', 'museder-restoreone' ), $this->file_name )
+					sprintf(
+						/* translators: %s: archive file path */
+						esc_html__( 'Could not truncate file. File: %s', 'museder-restoreone' ),
+						esc_html( $this->file_name )
+					)
 				);
 			}
 		}
-		// phpcs:enable WordPress.WP.AlternativeFunctions.file_system_read_filesize, WordPress.WP.AlternativeFunctions.file_system_read_ftruncate
+		// phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_filesize, WordPress.WP.AlternativeFunctions.file_system_operations_ftruncate
 	}
 
 	/**
 	 * @throws Backup_Lite_Wpress_Not_Closable_Exception
 	 */
 	public function close(): void {
-		// phpcs:disable WordPress.WP.AlternativeFunctions.file_system_read_fclose
+		// phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fclose
 		if ( @fclose( $this->file_handle ) === false ) {
 			throw new Backup_Lite_Wpress_Not_Closable_Exception(
-				sprintf( __( 'Could not close file. File: %s', 'museder-restoreone' ), $this->file_name )
+				sprintf(
+					/* translators: %s: archive file path */
+					esc_html__( 'Could not close file. File: %s', 'museder-restoreone' ),
+					esc_html( $this->file_name )
+				)
 			);
 		}
-		// phpcs:enable WordPress.WP.AlternativeFunctions.file_system_read_fclose
+		// phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fclose
 	}
 
 	protected function replace_forward_slash_with_directory_separator( string $path ): string {

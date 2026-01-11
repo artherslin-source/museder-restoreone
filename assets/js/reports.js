@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var config = window.BackupLiteReports || {};
+    var config = window.MusederRestoreOneReports || {};
     var restUrl = config.restUrl || '';
     var nonce = config.nonce || '';
     var isPro = config.isPro || false;

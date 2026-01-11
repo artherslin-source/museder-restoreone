@@ -21,7 +21,7 @@ $museder_restoreone_enabled_count   = 0;
 $museder_restoreone_next_run_label  = __( 'Not scheduled', 'museder-restoreone' );
 $museder_restoreone_next_run_title  = '—';
 $museder_restoreone_next_run_diff   = '';
-// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
+// (keep disabled for the entire template; variables are scoped to this file)
 
 if ( $museder_restoreone_total_schedules ) {
     $museder_restoreone_now = time();
@@ -132,10 +132,16 @@ if ( $museder_restoreone_total_schedules ) {
                 <h2>🗂️ <?php esc_html_e( 'List Created Schedules', 'museder-restoreone' ); ?></h2>
                 <p class="description"><?php esc_html_e( 'Each schedule runs through WP-Cron. Start, edit, or delete tasks anytime.', 'museder-restoreone' ); ?></p>
             </div>
+            <?php
+            // Ensure total count is always available (prevents PHP notices in minimal/admin contexts).
+            $museder_restoreone_total_schedules = isset( $museder_restoreone_total_schedules )
+                ? (int) $museder_restoreone_total_schedules
+                : ( is_array( $museder_restoreone_schedules ) ? count( $museder_restoreone_schedules ) : 0 );
+            ?>
             <?php // @plugin-check: escaped ?>
             <button type="button" class="button button-primary <?php echo esc_attr( $is_pro || $museder_restoreone_total_schedules === 0 ? '' : 'pro-locked' ); ?>" id="bl-new-schedule" <?php echo $is_pro || $museder_restoreone_total_schedules === 0 ? '' : 'data-upgrade="' . esc_attr( 'pro' ) . '"'; // @plugin-check: escaped ?>>
                 ＋ <?php esc_html_e( 'New Schedule', 'museder-restoreone' ); ?>
-                <?php if ( ! $is_pro && $total_schedules >= 1 ) : ?>
+                <?php if ( ! $is_pro && $museder_restoreone_total_schedules >= 1 ) : ?>
                     <span class="pro-badge">PRO</span>
                 <?php endif; ?>
             </button>

@@ -3,7 +3,7 @@
 
     var prefersDark = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
     var bodyReady = false;
-    var config = window.BackupLiteAdmin || {};
+    var config = window.MusederRestoreOneAdminUI || {};
     var themePreference = config.theme || 'auto';
     var features = (config && config.features) ? config.features : { restoreV2: true, animations: true, extendedLog: false };
 
@@ -109,8 +109,8 @@
         modal.innerHTML = [
             '<div class="backup-lite-pro-modal-content">',
             '  <div class="backup-lite-pro-modal-header">',
-            '    <h2>' + (window.BackupLitePro && window.BackupLitePro.strings ? window.BackupLitePro.strings.modalTitle : 'Museder RestoreOne PRO Required') + '</h2>',
-            '    <p class="backup-lite-pro-modal-subtitle">' + (window.BackupLitePro && window.BackupLitePro.strings ? window.BackupLitePro.strings.modalSubtitle : 'This feature requires Museder RestoreOne PRO to activate.') + '</p>',
+            '    <h2>' + (window.MusederRestoreOnePro && window.MusederRestoreOnePro.strings ? window.MusederRestoreOnePro.strings.modalTitle : 'Museder RestoreOne PRO Required') + '</h2>',
+            '    <p class="backup-lite-pro-modal-subtitle">' + (window.MusederRestoreOnePro && window.MusederRestoreOnePro.strings ? window.MusederRestoreOnePro.strings.modalSubtitle : 'This feature requires Museder RestoreOne PRO to activate.') + '</p>',
             '    <p class="backup-lite-pro-modal-feature"></p>',
             '  </div>',
             '  <div class="backup-lite-pro-modal-body">',
@@ -122,8 +122,8 @@
             '    </ul>',
             '  </div>',
             '  <div class="backup-lite-pro-modal-footer">',
-            '    <button class="backup-lite-pro-modal-close">' + (window.BackupLitePro && window.BackupLitePro.strings ? window.BackupLitePro.strings.close : 'Close') + '</button>',
-            '    <button class="backup-lite-pro-modal-upgrade">' + (window.BackupLitePro && window.BackupLitePro.strings ? window.BackupLitePro.strings.upgrade : 'Upgrade to PRO') + '</button>',
+            '    <button class="backup-lite-pro-modal-close">' + (window.MusederRestoreOnePro && window.MusederRestoreOnePro.strings ? window.MusederRestoreOnePro.strings.close : 'Close') + '</button>',
+            '    <button class="backup-lite-pro-modal-upgrade">' + (window.MusederRestoreOnePro && window.MusederRestoreOnePro.strings ? window.MusederRestoreOnePro.strings.upgrade : 'Upgrade to PRO') + '</button>',
             '  </div>',
             '</div>'
         ].join('');
@@ -154,7 +154,7 @@
         var upgradeBtn = modal.querySelector('.backup-lite-pro-modal-upgrade');
         if (upgradeBtn) {
             upgradeBtn.addEventListener('click', function () {
-                var upgradeUrl = (window.BackupLitePro && window.BackupLitePro.upgradeUrl) || 'https://your-site.com/pro';
+                var upgradeUrl = (window.MusederRestoreOnePro && window.MusederRestoreOnePro.upgradeUrl) || 'https://your-site.com/pro';
                 window.open(upgradeUrl, '_blank');
             });
         }
@@ -196,7 +196,7 @@
         if (proFeatureNotice) {
             var label = formatFeatureLabel(featureKey);
             if (label) {
-                var template = (window.BackupLitePro && window.BackupLitePro.strings && window.BackupLitePro.strings.featureLocked) ? window.BackupLitePro.strings.featureLocked : 'Feature "%s" is available in Museder RestoreOne PRO.';
+                var template = (window.MusederRestoreOnePro && window.MusederRestoreOnePro.strings && window.MusederRestoreOnePro.strings.featureLocked) ? window.MusederRestoreOnePro.strings.featureLocked : 'Feature "%s" is available in Museder RestoreOne PRO.';
                 proFeatureNotice.textContent = template.replace('%s', label);
                 proFeatureNotice.style.display = 'block';
             } else {

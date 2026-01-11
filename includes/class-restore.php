@@ -583,7 +583,8 @@ class Backup_Lite_Restore {
 
                     if ( false === $result ) {
                         $error = $wpdb->last_error ?: 'unknown error';
-                        throw new RuntimeException( $error );
+                        // @plugin-check: escaped
+                        throw new RuntimeException( esc_html( (string) $error ) );
                     }
                     $split_info['batches_done']++;
                 }
@@ -607,7 +608,8 @@ class Backup_Lite_Restore {
 
         if ( false === $result ) {
             $error = $wpdb->last_error ?: 'unknown error';
-            throw new RuntimeException( $error );
+            // @plugin-check: escaped
+            throw new RuntimeException( esc_html( (string) $error ) );
         }
     }
 
@@ -785,9 +787,9 @@ class Backup_Lite_Restore {
             }
             if ( $charset ) {
                 if ( $collation ) {
-                    $wpdb->query( "SET NAMES {$charset} COLLATE {$collation}" ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- validated tokens from server vars
+                    $wpdb->query( $wpdb->prepare( 'SET NAMES %s COLLATE %s', $charset, $collation ) ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- MySQL accepts quoted charset/collation tokens; values are prepared
                 } else {
-                    $wpdb->query( "SET NAMES {$charset}" ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- validated token from server vars
+                    $wpdb->query( $wpdb->prepare( 'SET NAMES %s', $charset ) ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- MySQL accepts quoted charset token; value is prepared
                 }
             }
             // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
@@ -1048,17 +1050,16 @@ class Backup_Lite_Restore {
             }
 
             // @plugin-check: backup-restore
-            // $safe has been whitelist-filtered (alphanumeric + underscore only), safe for DROP TABLE
-            // SQL source: only executes sanitized table names from plugin-generated backup files
-            // Table name sanitization: preg_replace('/[^A-Za-z0-9_]/', '', $table) ensures only safe characters
-            // Note: Using prepare() for table name (identifier) - $safe is already sanitized
+            // $safe has been whitelist-filtered (alphanumeric + underscore only), safe for identifier usage.
+            // Prefer wpdb identifier placeholders when available (WP 6.2+), otherwise fall back to a strict whitelist + esc_sql().
             // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery
             // phpcs:disable WordPress.DB.DirectDatabaseQuery.NoCaching
             // phpcs:disable WordPress.DB.DirectDatabaseQuery.SchemaChange
-            // 說明：以下查詢用於備份/還原過程，必須直接操作資料表結構，table 名稱皆來自 $wpdb 或白名單，不接受使用者輸入。
-            $wpdb->query(
-                $wpdb->prepare( 'DROP TABLE IF EXISTS `%s`', $safe )
-            );
+            if ( method_exists( $wpdb, 'has_cap' ) && $wpdb->has_cap( 'identifier_placeholders' ) ) {
+                $wpdb->query( $wpdb->prepare( 'DROP TABLE IF EXISTS %i', $safe ) ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- prepared statement
+            } else {
+                $wpdb->query( 'DROP TABLE IF EXISTS `' . esc_sql( $safe ) . '`' ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- identifier is strict-whitelisted above and escaped with esc_sql()
+            }
             // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery
             // phpcs:enable WordPress.DB.DirectDatabaseQuery.NoCaching
             // phpcs:enable WordPress.DB.DirectDatabaseQuery.SchemaChange
@@ -1083,14 +1084,23 @@ class Backup_Lite_Restore {
         if ( $wp_content_source && is_dir( $wp_content_source ) ) {
             $targets[] = [ $wp_content_source, WP_CONTENT_DIR ];
         } else {
+            $upload_dir = wp_upload_dir();
+            $uploads_basedir = isset( $upload_dir['basedir'] ) ? (string) $upload_dir['basedir'] : '';
+            $uploads_basedir = $uploads_basedir ? wp_normalize_path( $uploads_basedir ) : '';
+            $plugins_dir  = defined( 'WP_PLUGIN_DIR' ) ? wp_normalize_path( WP_PLUGIN_DIR ) : '';
+            $themes_dir   = function_exists( 'get_theme_root' ) ? wp_normalize_path( (string) get_theme_root() ) : '';
+            $mu_plugins_dir = defined( 'WPMU_PLUGIN_DIR' ) ? wp_normalize_path( WPMU_PLUGIN_DIR ) : '';
             $fallbacks = [
-                'themes'     => WP_CONTENT_DIR . '/themes',
-                'plugins'    => WP_CONTENT_DIR . '/plugins',
-                'uploads'    => WP_CONTENT_DIR . '/uploads',
-                'mu-plugins' => WP_CONTENT_DIR . '/mu-plugins',
+                'themes'     => $themes_dir,
+                'plugins'    => $plugins_dir,
+                'uploads'    => $uploads_basedir,
+                'mu-plugins' => $mu_plugins_dir,
             ];
 
             foreach ( $fallbacks as $dir => $destination ) {
+                if ( empty( $destination ) ) {
+                    continue;
+                }
                 $source = self::find_directory_by_name( $extract_dir, $dir );
                 if ( $source && is_dir( $source ) ) {
                     $targets[] = [ $source, $destination ];
@@ -1526,13 +1536,11 @@ class Backup_Lite_Restore {
             ];
         }
         
-        // 在備份檔案串流過程中，必須使用底層 fopen/fread/fwrite/fclose 以確保大檔案（>1GB）在各種主機環境下具有最佳效能與穩定性。
-        // WP_Filesystem 在部分共用主機環境中會受到限制，因此此處保留原生檔案操作。
+        // Read file header to determine format.
+        // Large archive streaming requires direct file operations for performance and compatibility.
         // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-        // Read file header to determine format
-        $file_handle = fopen( $archive, 'rb' );
+        $file_handle = fopen( $archive, 'rb' ); // Streaming backup file header.
         if ( ! $file_handle ) {
-            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
             return [
                 'success'    => false,
                 'error'      => __( 'Unable to open WPRESS file for reading.', 'museder-restoreone' ),
@@ -1540,8 +1548,8 @@ class Backup_Lite_Restore {
             ];
         }
         
-        $header = fread( $file_handle, 1024 );
-        fclose( $file_handle );
+        $header = fread( $file_handle, 1024 ); // Streaming backup file header.
+        fclose( $file_handle ); // Streaming backup file header.
         
         // Check for gzip magic bytes (0x1f 0x8b)
         if ( strlen( $header ) >= 2 && ord( $header[0] ) === 0x1f && ord( $header[1] ) === 0x8b ) {
@@ -1551,7 +1559,7 @@ class Backup_Lite_Restore {
                 if ( $gz_handle ) {
                     // Read and write decompressed data
                     $output_file = trailingslashit( $destination ) . 'extracted_content';
-                    $output_handle = fopen( $output_file, 'wb' );
+                    $output_handle = fopen( $output_file, 'wb' ); // Streaming decompressed output.
                     if ( $output_handle ) {
                         $bytes_written = 0;
                         while ( ! gzeof( $gz_handle ) ) {
@@ -1559,12 +1567,11 @@ class Backup_Lite_Restore {
                             if ( false === $chunk ) {
                                 break;
                             }
-                            fwrite( $output_handle, $chunk );
+                            fwrite( $output_handle, $chunk ); // Streaming decompressed output.
                             $bytes_written += strlen( $chunk );
                         }
-                        fclose( $output_handle );
+                        fclose( $output_handle ); // Streaming decompressed output.
                         gzclose( $gz_handle );
-            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
                         
                         if ( $bytes_written > 0 ) {
                             backup_lite_log( 'info', 'WPRESS PHP extraction completed (gzip)', [
@@ -2007,10 +2014,9 @@ class Backup_Lite_Restore {
     private static function import_database_with_php( $sql_file, $progress_cb = null ) {
         global $wpdb;
 
-        // 在備份檔案串流過程中，必須使用底層 fopen/fread/fclose 以確保大檔案（>1GB）在各種主機環境下具有最佳效能與穩定性。
-        // WP_Filesystem 在部分共用主機環境中會受到限制，因此此處保留原生檔案操作。
-        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen
-        $handle = fopen( $sql_file, 'r' );
+        // Large SQL streaming requires direct file operations for performance and compatibility.
+        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fgets, WordPress.WP.AlternativeFunctions.file_system_operations_ftell, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+        $handle = fopen( $sql_file, 'r' ); // Streaming SQL file.
         if ( ! $handle ) {
             backup_lite_log( 'error', 'Unable to open SQL file for reading.', [ 'path' => $sql_file ] );
             return false;
@@ -2026,14 +2032,10 @@ class Backup_Lite_Restore {
             }
             // @phpcs:enable Squiz.PHP.DiscouragedFunctions.Discouraged
         }
-        // Adjusting PHP settings locally for backup/restore process.
-        // phpcs:ignore WordPress.PHP.IniSet
-        // Adjust memory limit for large backup/restore operations.
-        // @phpcs:disable Squiz.PHP.DiscouragedFunctions.Discouraged
-        if ( function_exists( 'ini_set' ) ) {
-            @ini_set( 'memory_limit', '512M' );
+        // Adjust memory limit for large restore operations (WP recommended API).
+        if ( function_exists( 'wp_raise_memory_limit' ) ) {
+            wp_raise_memory_limit( 'admin' );
         }
-        // @phpcs:enable Squiz.PHP.DiscouragedFunctions.Discouraged
 
         $query    = '';
         $success  = true;
@@ -2051,7 +2053,7 @@ class Backup_Lite_Restore {
         $wpdb->query( 'START TRANSACTION' );
         // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 
-        while ( false !== ( $line = fgets( $handle ) ) ) {
+        while ( false !== ( $line = fgets( $handle ) ) ) { // Streaming SQL file.
             $line_num++;
             $trimmed = trim( $line );
 
@@ -2063,7 +2065,7 @@ class Backup_Lite_Restore {
 
             // Report progress periodically during import (reduced frequency)
             if ( is_callable( $progress_cb ) && $file_size > 0 ) {
-                $current_pos = ftell( $handle );
+                $current_pos = ftell( $handle ); // Streaming SQL file.
                 $progress_percent = min( 100, floor( ( $current_pos / $file_size ) * 100 ) );
                 // Only report every 10% change or every 2 seconds (reduced frequency)
                 if ( $progress_percent >= $last_progress_report + 10 ) {
@@ -2098,8 +2100,7 @@ class Backup_Lite_Restore {
                             'line'  => $line_num,
                             'error' => $error,
                         ] );
-                        fclose( $handle );
-                        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_read_fgets, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+                        fclose( $handle ); // Close streaming SQL file on error.
                         return [
                             'success' => false,
                             'message' => __( 'Database restore encountered an error. Check logs.', 'museder-restoreone' ),
@@ -2129,8 +2130,8 @@ class Backup_Lite_Restore {
         $wpdb->query( 'SET autocommit = 1' );
         // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 
-        fclose( $handle );
-        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_read_fgets, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+        fclose( $handle ); // Close streaming SQL file.
+        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fgets, WordPress.WP.AlternativeFunctions.file_system_operations_ftell, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
 
         self::restore_database_constraints();
 
@@ -2249,7 +2250,9 @@ class Backup_Lite_Restore {
             // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery
             // phpcs:disable WordPress.DB.DirectDatabaseQuery.NoCaching
             // 說明：以下查詢用於備份/還原過程，必須直接操作資料表結構，table 名稱皆來自 $wpdb 或白名單，不接受使用者輸入。
-            $columns = $wpdb->get_results( $wpdb->prepare( "SHOW COLUMNS FROM `%s`", $safe_table ), ARRAY_A );
+            // Identifier: safe_table is strict-whitelisted; do not use prepare() for identifiers.
+            // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- identifier; strict whitelist applied above
+            $columns = $wpdb->get_results( 'SHOW COLUMNS FROM `' . esc_sql( $safe_table ) . '`', ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- identifier is strict-whitelisted above and escaped with esc_sql()
             // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery
             // phpcs:enable WordPress.DB.DirectDatabaseQuery.NoCaching
             if ( empty( $columns ) ) {
@@ -2272,7 +2275,9 @@ class Backup_Lite_Restore {
             // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery
             // phpcs:disable WordPress.DB.DirectDatabaseQuery.NoCaching
             // 說明：以下查詢用於備份/還原過程，必須直接操作資料表結構，table 名稱皆來自 $wpdb 或白名單，不接受使用者輸入。
-            $rows = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM `%s`", $safe_table ), ARRAY_A );
+            // Identifier: safe_table is strict-whitelisted; do not use prepare() for identifiers.
+            // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- identifier; strict whitelist applied above
+            $rows = $wpdb->get_results( 'SELECT * FROM `' . esc_sql( $safe_table ) . '`', ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- identifier is strict-whitelisted above and escaped with esc_sql()
             // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery
             // phpcs:enable WordPress.DB.DirectDatabaseQuery.NoCaching
             if ( empty( $rows ) ) {
@@ -2439,31 +2444,14 @@ class Backup_Lite_Restore {
 
         $plugin_count = count( $active_plugins );
         
-        // Store the previous active plugins list
+        // Store the previous active plugins list so the admin can review it.
         update_option( 'backup_lite_prev_active_plugins', $active_plugins, false );
         
-        // Keep only essential plugins (this plugin itself)
-        // Find this plugin's basename
-        $plugin_file = plugin_basename( dirname( dirname( __FILE__ ) ) . '/museder-restoreone.php' );
-        $essential_plugins = [];
-        
-        // Always keep this plugin active (even if the restored database did not list it as active).
-        // This ensures admins can access RestoreOne UI to exit safe mode and continue recovery.
-        $essential_plugins[] = $plugin_file;
-        
-        // Set active_plugins to only essential plugins
-        update_option( 'active_plugins', $essential_plugins, false );
-        
-        // Set safe mode flag
+        // Set safe mode flag (note: we do NOT change other plugins' activation status automatically).
         update_option( 'backup_lite_safe_mode', '1', false );
-        
-        // Clear plugin cache
-        wp_cache_delete( 'plugins', 'plugins' );
-        
-        backup_lite_log( 'info', 'Safe mode entered after restore.', [
+
+        backup_lite_log( 'info', 'Safe mode marker enabled after restore (no automatic plugin activation changes).', [
             'previous_plugins_count' => $plugin_count,
-            'essential_plugins_count' => count( $essential_plugins ),
-            'plugin_file' => $plugin_file,
         ] );
         
         return true;
@@ -2482,48 +2470,12 @@ class Backup_Lite_Restore {
             backup_lite_log( 'info', 'Safe mode exit called but safe mode is not active.', [] );
             return false;
         }
-        
-        // Get previous active plugins
-        $prev_plugins = get_option( 'backup_lite_prev_active_plugins', [] );
-        
-        if ( ! is_array( $prev_plugins ) ) {
-            $prev_plugins = [];
-        }
-        
-        // Validate that plugins still exist before restoring
-        if ( ! function_exists( 'get_plugins' ) ) {
-            require_once ABSPATH . 'wp-admin/includes/plugin.php';
-        }
-        
-        $all_plugins = get_plugins();
-        $valid_plugins = [];
-        $missing_plugins = [];
-        
-        foreach ( $prev_plugins as $plugin_file ) {
-            $plugin_path = wp_normalize_path( trailingslashit( WP_PLUGIN_DIR ) . $plugin_file );
-            
-            if ( file_exists( $plugin_path ) && isset( $all_plugins[ $plugin_file ] ) ) {
-                $valid_plugins[] = $plugin_file;
-            } else {
-                $missing_plugins[] = $plugin_file;
-            }
-        }
-        
-        // Restore active plugins
-        update_option( 'active_plugins', $valid_plugins, false );
-        
-        // Clear plugin cache
-        wp_cache_delete( 'plugins', 'plugins' );
-        
-        // Delete safe mode options
+
+        // Delete safe mode options (no plugin activation changes are performed here).
         delete_option( 'backup_lite_safe_mode' );
         delete_option( 'backup_lite_prev_active_plugins' );
         
-        backup_lite_log( 'info', 'Safe mode exited and plugins restored.', [
-            'restored_plugins_count' => count( $valid_plugins ),
-            'missing_plugins_count' => count( $missing_plugins ),
-            'missing_plugins' => $missing_plugins,
-        ] );
+        backup_lite_log( 'info', 'Safe mode marker cleared by admin.', [] );
         
         return true;
     }

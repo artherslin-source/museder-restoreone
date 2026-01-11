@@ -18,7 +18,7 @@ $logs = isset( $logs ) ? $logs : Backup_Lite_Log_Handler::get_logs();
 
 <div class="wrap backup-lite-admin backup-lite-logs">
     <h1 class="backup-lite-page-title">📜 <?php esc_html_e( 'Museder RestoreOne Logs', 'museder-restoreone' ); ?></h1>
-    <p class="backup-lite-page-description"><?php esc_html_e( 'Inspect backup, restore, and schedule activity. Logs are stored under wp-content/uploads/backup-lite-logs/.', 'museder-restoreone' ); ?></p>
+    <p class="backup-lite-page-description"><?php esc_html_e( 'Inspect backup, restore, and schedule activity. Logs are stored under wp-content/uploads/museder-restoreone/logs/ (legacy: wp-content/uploads/backup-lite-logs/).', 'museder-restoreone' ); ?></p>
 
     <div class="backup-lite-log-layout">
         <div class="log-table-wrapper">

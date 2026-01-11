@@ -105,12 +105,6 @@ if ( 'wpress' === $ext ) {
 
 // Allow longer execution time for large file downloads
 ignore_user_abort( true );
-// 下載大備份檔時需要避免超時，因此使用 set_time_limit() 延長執行時間。
-// phpcs:disable WordPress.PHP.NoSetTimeLimit
-if ( function_exists( 'set_time_limit' ) ) {
-    @set_time_limit( 0 );
-}
-// phpcs:enable WordPress.PHP.NoSetTimeLimit
 
 // Clear any output buffers
 if ( function_exists( 'ob_get_level' ) ) {

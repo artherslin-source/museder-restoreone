@@ -19,7 +19,8 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 class Museder_RestoreOne_Cloud_Service {
 
-    const OPTION_KEY = 'museder_cloud_settings';
+    const OPTION_KEY = 'museder_restoreone_cloud_settings';
+    const LEGACY_OPTION_KEY = 'museder_cloud_settings';
 
     /**
      * Get cloud storage settings.
@@ -38,6 +39,14 @@ class Museder_RestoreOne_Cloud_Service {
         ];
 
         $stored = get_option( self::OPTION_KEY, [] );
+        if ( empty( $stored ) ) {
+            $legacy = get_option( self::LEGACY_OPTION_KEY, [] );
+            if ( is_array( $legacy ) && ! empty( $legacy ) ) {
+                // One-time best-effort migration for early builds.
+                update_option( self::OPTION_KEY, $legacy, false );
+                $stored = $legacy;
+            }
+        }
         
         if ( ! is_array( $stored ) ) {
             $stored = [];

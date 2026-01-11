@@ -115,6 +115,7 @@ class Backup_Lite_UI {
             '<div class="notice notice-%1$s"><p><strong>%2$s</strong> — %3$s</p><p>%4$s</p></div>',
             esc_attr( $type ),
             esc_html( $title ),
+            /* translators: %d: progress percentage */
             esc_html( sprintf( __( 'Progress: %d%%', 'museder-restoreone' ), $progress ) ),
             wp_kses_post(
                 sprintf(
@@ -219,7 +220,7 @@ class Backup_Lite_UI {
 
         wp_localize_script(
             'backup-lite-admin-ui',
-            'BackupLitePro',
+            'MusederRestoreOnePro',
             [
                 'isPro'      => $is_pro,
                 'upgradeUrl' => class_exists( 'Backup_Lite_Pro' ) ? Backup_Lite_Pro::get_upgrade_url() : 'https://your-site.com/pro',
@@ -238,7 +239,7 @@ class Backup_Lite_UI {
         $settings = Backup_Lite_Settings::get_settings();
         wp_localize_script(
             'backup-lite-admin-ui',
-            'BackupLiteAdmin',
+            'MusederRestoreOneAdminUI',
             [
                 'theme'    => isset( $settings['ui_theme'] ) ? $settings['ui_theme'] : 'auto',
                 'features' => [
@@ -251,7 +252,7 @@ class Backup_Lite_UI {
 
         wp_localize_script(
             'backup-lite-admin-ui',
-            'BackupLiteAdmin',
+            'MusederRestoreOneAdminUI',
             [
                 'theme' => isset( $settings['ui_theme'] ) ? $settings['ui_theme'] : 'auto',
             ]
@@ -318,7 +319,7 @@ class Backup_Lite_UI {
             ]
         );
 
-        wp_localize_script( 'backup-lite-admin', 'BackupLite', [
+        wp_localize_script( 'backup-lite-admin', 'MusederRestoreOneAdmin', [
             'ajaxUrl'        => admin_url( 'admin-ajax.php' ),
             'nonce'          => wp_create_nonce( self::NONCE ),
             'nonceV2'        => $nonce_v2,
@@ -485,7 +486,7 @@ class Backup_Lite_UI {
 
         wp_localize_script(
             'backup-lite-chunk-upload-v2',
-            'BackupLiteV2',
+            'MusederRestoreOneV2',
             [
                 'restUrl'        => esc_url_raw( $rest_url_v2 ),
                 'nonce'          => wp_create_nonce( 'wp_rest' ),
@@ -791,18 +792,10 @@ class Backup_Lite_UI {
             wp_send_json_error( [ 'message' => esc_html__( 'Backup filename not provided.', 'museder-restoreone' ) ], 400 );
         }
 
-        $backup_dir = backup_lite_get_backup_dir();
-        $file_path  = trailingslashit( $backup_dir ) . basename( $filename );
-        $file_path  = wp_normalize_path( $file_path );
-
-        if ( ! file_exists( $file_path ) ) {
+        $file_path = backup_lite_get_backup_path( $filename );
+        if ( ! $file_path || ! file_exists( $file_path ) ) {
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'Backup file not found.', 'museder-restoreone' ) ], 404 );
-        }
-
-        if ( strpos( wp_normalize_path( $file_path ), wp_normalize_path( $backup_dir ) ) !== 0 ) {
-            // @plugin-check: escaped
-            wp_send_json_error( [ 'message' => esc_html__( 'Invalid backup file path.', 'museder-restoreone' ) ], 403 );
         }
 
         // @plugin-check: allowed - required for backup/restore file operations
@@ -858,20 +851,12 @@ class Backup_Lite_UI {
             wp_send_json_error( [ 'message' => esc_html__( 'No backup files selected.', 'museder-restoreone' ) ], 400 );
         }
 
-        $backup_dir = backup_lite_get_backup_dir();
         $deleted    = [];
         $errors     = [];
 
         foreach ( $filenames as $filename ) {
-            $file_path = trailingslashit( $backup_dir ) . basename( $filename );
-            $file_path = wp_normalize_path( $file_path );
-
-            if ( strpos( $file_path, wp_normalize_path( $backup_dir ) ) !== 0 ) {
-                $errors[] = [ 'file' => $filename, 'message' => __( 'Invalid backup file path.', 'museder-restoreone' ) ];
-                continue;
-            }
-
-            if ( ! file_exists( $file_path ) ) {
+            $file_path = backup_lite_get_backup_path( $filename );
+            if ( ! $file_path || ! file_exists( $file_path ) ) {
                 $errors[] = [ 'file' => $filename, 'message' => esc_html__( 'Backup file not found.', 'museder-restoreone' ) ];
                 continue;
             }
@@ -1261,8 +1246,10 @@ class Backup_Lite_UI {
             wp_send_json_error( [ 'message' => esc_html__( 'Unauthorized.', 'museder-restoreone' ) ], 403 );
         }
 
-        $nonce = isset( $_REQUEST['nonce'] ) ? sanitize_text_field( wp_unslash( $_REQUEST['nonce'] ) ) : '';
-        if ( empty( $nonce ) || ! wp_verify_nonce( $nonce, self::NONCE ) ) {
+        // Use WordPress' standard nonce verifier so automated checks can detect it reliably.
+        // Keep custom error response instead of the default -1.
+        $ok = check_ajax_referer( self::NONCE, 'nonce', false );
+        if ( ! $ok ) {
             wp_send_json_error(
                 [
                     'code'    => 'invalid_nonce',
@@ -1288,7 +1275,10 @@ class Backup_Lite_UI {
     }
 
     public static function get_backups_list( $limit = 0 ) {
-        $dir = trailingslashit( backup_lite_get_backup_dir() );
+        $dirs = array_map( 'trailingslashit', backup_lite_get_all_backup_dirs() );
+        if ( empty( $dirs ) ) {
+            return [];
+        }
 
         // Hide the currently-running archive from the library list to avoid exposing partial files.
         $active_archive = '';
@@ -1305,16 +1295,40 @@ class Backup_Lite_UI {
         }
         
         // Support all ZIP/WPRESS backups regardless of naming convention.
-        // Older versions created names like backup-lite-*.zip or museder-restoreone-*.zip,
-        // while the new format uses domain-YYYYMMDDHHmmss-random.zip.
-        // Matching on *.zip/*.wpress ensures future naming changes still work.
-        $glob = glob( $dir . '*.{zip,wpress}', GLOB_BRACE );
-        
+        $glob = [];
+        foreach ( $dirs as $dir ) {
+            if ( defined( 'GLOB_BRACE' ) ) {
+                $found = glob( $dir . '*.{zip,wpress}', GLOB_BRACE );
+            } else {
+                // GLOB_BRACE is not available on all platforms (e.g., some Alpine builds).
+                // Fall back to two globs to keep the Backups UI working everywhere.
+                $found = array_merge(
+                    (array) glob( $dir . '*.zip' ),
+                    (array) glob( $dir . '*.wpress' )
+                );
+            }
+            if ( ! empty( $found ) ) {
+                $glob = array_merge( $glob, $found );
+            }
+        }
+        $glob = array_values( array_unique( array_filter( $glob ) ) );
+
         if ( empty( $glob ) ) {
             return [];
         }
 
-        rsort( $glob );
+        // Sort by modified time (desc) for stable ordering across multiple directories.
+        usort(
+            $glob,
+            static function ( $a, $b ) {
+                $ta = @filemtime( $a );
+                $tb = @filemtime( $b );
+                if ( $ta === $tb ) {
+                    return strcmp( (string) $b, (string) $a );
+                }
+                return ( $tb <=> $ta );
+            }
+        );
 
         $items = [];
         $shown = 0;

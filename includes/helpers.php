@@ -102,6 +102,30 @@ function backup_lite_get_backup_dir() {
 }
 
 /**
+ * Return all known backup directories (current + legacy).
+ *
+ * @return array<int,string> Absolute directory paths.
+ */
+function backup_lite_get_all_backup_dirs() {
+    $dirs = [];
+
+    $current = backup_lite_get_backup_dir();
+    if ( $current ) {
+        $dirs[] = wp_normalize_path( $current );
+    }
+
+    foreach ( backup_lite_get_legacy_storage_roots() as $legacy_root ) {
+        $legacy_backups = trailingslashit( wp_normalize_path( $legacy_root ) ) . 'backups';
+        if ( is_dir( $legacy_backups ) ) {
+            $dirs[] = wp_normalize_path( $legacy_backups );
+        }
+    }
+
+    $dirs = array_values( array_unique( array_filter( $dirs ) ) );
+    return $dirs;
+}
+
+/**
  * Check if a path is an absolute path.
  *
  * @param string $path Path to check.
@@ -127,89 +151,60 @@ function backup_lite_get_backup_path( $file ) {
         return false;
     }
 
-    // If already an absolute path, and exists and is readable, use it directly
-    if ( backup_lite_is_absolute_path( $file ) && file_exists( $file ) && is_readable( $file ) ) {
-        return $file;
+    $backup_dirs = backup_lite_get_all_backup_dirs();
+    if ( empty( $backup_dirs ) ) {
+        backup_lite_log( 'error', 'Backup directories not available.', [ 'file' => $file ] );
+        return false;
     }
 
-    $backups_dir = backup_lite_get_backup_dir();
-    if ( empty( $backups_dir ) ) {
-        backup_lite_log( 'error', 'Backup directory not available.', [ 'file' => $file ] );
+    // If already an absolute path, validate it stays within a known backups directory.
+    if ( backup_lite_is_absolute_path( $file ) && file_exists( $file ) && is_readable( $file ) ) {
+        $real_candidate = realpath( $file );
+        if ( ! $real_candidate ) {
+            return false;
+        }
+        foreach ( $backup_dirs as $dir ) {
+            $real_dir = realpath( $dir );
+            if ( $real_dir && 0 === strpos( $real_candidate, $real_dir ) ) {
+                return $real_candidate;
+            }
+        }
         return false;
     }
 
     // Sanitize file name to handle any special characters
     $sanitized_file = sanitize_file_name( basename( $file ) );
-    $candidate = trailingslashit( $backups_dir ) . $sanitized_file;
+    foreach ( $backup_dirs as $backups_dir ) {
+        $candidate = trailingslashit( $backups_dir ) . $sanitized_file;
 
-    // realpath protection to prevent directory traversal
-    $real_backups_dir = realpath( $backups_dir );
-    if ( ! $real_backups_dir ) {
-        backup_lite_log( 'error', 'Backup directory realpath failed.', [
-            'backups_dir' => $backups_dir,
-            'file' => $file,
-        ] );
-        return false;
-    }
-
-    $real_candidate = $candidate && file_exists( $candidate ) ? realpath( $candidate ) : false;
-
-    if ( ! $real_candidate ) {
-        // Log detailed error for debugging
-        backup_lite_log( 'warning', 'Backup file not found.', [
-            'file' => $file,
-            'sanitized_file' => $sanitized_file,
-            'candidate' => $candidate,
-            'backups_dir' => $backups_dir,
-            'backups_dir_exists' => is_dir( $backups_dir ),
-            'backups_dir_readable' => is_dir( $backups_dir ) ? is_readable( $backups_dir ) : false,
-        ] );
-        
-        // Try to find similar files (case-insensitive or with different extensions)
-        if ( is_dir( $backups_dir ) && is_readable( $backups_dir ) ) {
-            $files = @glob( trailingslashit( $backups_dir ) . '*' . pathinfo( $sanitized_file, PATHINFO_EXTENSION ) );
-            if ( ! empty( $files ) ) {
-                $similar = array_filter( $files, function( $f ) use ( $sanitized_file ) {
-                    $basename = basename( $f );
-                    // Check if filenames are similar (case-insensitive or with variations)
-                    return stripos( $basename, pathinfo( $sanitized_file, PATHINFO_FILENAME ) ) === 0;
-                } );
-                
-                if ( ! empty( $similar ) ) {
-                    backup_lite_log( 'info', 'Found similar backup files.', [
-                        'requested' => $sanitized_file,
-                        'similar' => array_map( 'basename', $similar ),
-                    ] );
-                }
-            }
+        $real_backups_dir = realpath( $backups_dir );
+        if ( ! $real_backups_dir ) {
+            continue;
         }
-        
-        return false;
+
+        $real_candidate = file_exists( $candidate ) ? realpath( $candidate ) : false;
+        if ( ! $real_candidate ) {
+            continue;
+        }
+
+        if ( 0 !== strpos( $real_candidate, $real_backups_dir ) ) {
+            continue;
+        }
+
+        if ( ! is_readable( $real_candidate ) ) {
+            continue;
+        }
+
+        return $real_candidate;
     }
 
-    // Use strpos with strict comparison for path traversal protection
-    // PHP 8.0+ compatibility: strpos can return 0 (false) for match at position 0
-    if ( false === strpos( $real_candidate, $real_backups_dir ) || 0 !== strpos( $real_candidate, $real_backups_dir ) ) {
-        backup_lite_log( 'error', 'Backup file path traversal detected.', [
-            'file' => $file,
-            'real_candidate' => $real_candidate,
-            'real_backups_dir' => $real_backups_dir,
-        ] );
-        return false;
-    }
-
-    if ( ! is_readable( $real_candidate ) ) {
-        backup_lite_log( 'error', 'Backup file exists but is not readable.', [
-            'file' => $file,
-            'real_candidate' => $real_candidate,
-            'file_exists' => file_exists( $real_candidate ),
-            'is_file' => is_file( $real_candidate ),
-            'permissions' => file_exists( $real_candidate ) ? substr( sprintf( '%o', fileperms( $real_candidate ) ), -4 ) : 'unknown',
-        ] );
-        return false;
-    }
-
-    return $real_candidate;
+    // Not found in any known directory.
+    backup_lite_log( 'warning', 'Backup file not found in known directories.', [
+        'file' => $file,
+        'sanitized_file' => $sanitized_file,
+        'dirs' => $backup_dirs,
+    ] );
+    return false;
 }
 
 /**
@@ -320,13 +315,142 @@ function backup_lite_parse_legacy_timestamp( $timestamp_legacy ) {
 }
 
 function backup_lite_get_log_dir() {
-    $upload_dir = wp_upload_dir();
-    $dir        = trailingslashit( $upload_dir['basedir'] ) . 'backup-lite-logs';
+    $root = backup_lite_get_storage_root();
+    $dir  = trailingslashit( $root['path'] ) . 'logs';
 
     backup_lite_ensure_directory( $dir );
     backup_lite_maybe_protect_directory( $dir );
 
     return $dir;
+}
+
+/**
+ * Return legacy storage roots used by older versions (best-effort).
+ *
+ * @return array<int,string> Array of absolute legacy roots (e.g. .../uploads/backup-lite)
+ */
+function backup_lite_get_legacy_storage_roots() {
+    $candidates = [];
+
+    $upload_dir = wp_upload_dir();
+    if ( ! empty( $upload_dir['basedir'] ) ) {
+        $candidates[] = wp_normalize_path( trailingslashit( $upload_dir['basedir'] ) . 'backup-lite' );
+    }
+
+    $roots = [];
+    foreach ( array_unique( $candidates ) as $path ) {
+        if ( $path && is_dir( $path ) ) {
+            $roots[] = $path;
+        }
+    }
+
+    return array_values( array_unique( array_filter( $roots ) ) );
+}
+
+/**
+ * Return legacy log directories used by older versions (best-effort).
+ *
+ * @return array<int,string> Array of absolute legacy log directories (e.g. .../uploads/backup-lite-logs)
+ */
+function backup_lite_get_legacy_log_dirs() {
+    $candidates = [];
+
+    $upload_dir = wp_upload_dir();
+    if ( ! empty( $upload_dir['basedir'] ) ) {
+        $candidates[] = wp_normalize_path( trailingslashit( $upload_dir['basedir'] ) . 'backup-lite-logs' );
+    }
+
+    $dirs = [];
+    foreach ( array_unique( $candidates ) as $path ) {
+        if ( $path && is_dir( $path ) ) {
+            $dirs[] = $path;
+        }
+    }
+
+    return array_values( array_unique( array_filter( $dirs ) ) );
+}
+
+/**
+ * Attempt to migrate legacy storage directories into the wp_upload_dir-based museder-restoreone root.
+ *
+ * This runs in a best-effort manner: failures are logged but will not break the plugin.
+ *
+ * @return array<string,mixed> Migration report.
+ */
+function backup_lite_migrate_legacy_storage() {
+    $flag = (int) get_option( 'backup_lite_legacy_storage_migrated', 0 );
+    if ( 1 === $flag ) {
+        return [ 'skipped' => true ];
+    }
+
+    $report = [
+        'skipped'  => false,
+        'migrated' => [],
+        'errors'   => [],
+    ];
+
+    $root = backup_lite_get_storage_root();
+    $new_root = isset( $root['path'] ) ? wp_normalize_path( $root['path'] ) : '';
+    if ( '' === $new_root ) {
+        $report['errors'][] = 'new_root_missing';
+        return $report;
+    }
+
+    // Ensure root exists (but do not pre-create subdirectories so we can rename legacy folders atomically when possible).
+    backup_lite_ensure_directory( $new_root );
+
+    $moves = [];
+
+    foreach ( backup_lite_get_legacy_storage_roots() as $legacy_root ) {
+        $legacy_root = wp_normalize_path( $legacy_root );
+        $moves[] = [ trailingslashit( $legacy_root ) . 'backups', trailingslashit( $new_root ) . 'backups' ];
+        $moves[] = [ trailingslashit( $legacy_root ) . 'temp', trailingslashit( $new_root ) . 'temp' ];
+        $moves[] = [ trailingslashit( $legacy_root ) . 'jobs', trailingslashit( $new_root ) . 'jobs' ];
+        $moves[] = [ trailingslashit( $legacy_root ) . 'reports', trailingslashit( $new_root ) . 'reports' ];
+        $moves[] = [ trailingslashit( $legacy_root ) . 'pro/jobs', trailingslashit( $new_root ) . 'pro/jobs' ];
+        $moves[] = [ trailingslashit( $legacy_root ) . 'pro/reports', trailingslashit( $new_root ) . 'pro/reports' ];
+    }
+
+    foreach ( backup_lite_get_legacy_log_dirs() as $legacy_logs ) {
+        $legacy_logs = wp_normalize_path( $legacy_logs );
+        $moves[] = [ $legacy_logs, trailingslashit( $new_root ) . 'logs' ];
+    }
+
+    $moves = array_values( array_unique( array_filter( $moves ) ) );
+
+    foreach ( $moves as $pair ) {
+        $from = wp_normalize_path( $pair[0] );
+        $to   = wp_normalize_path( $pair[1] );
+
+        if ( ! $from || ! is_dir( $from ) ) {
+            continue;
+        }
+
+        if ( $to && ! file_exists( $to ) ) {
+            backup_lite_ensure_directory( dirname( $to ) );
+
+            // Prefer atomic rename when possible (same filesystem).
+            // @phpcs:disable WordPress.WP.AlternativeFunctions.rename_rename
+            $ok = @rename( $from, $to );
+            // @phpcs:enable WordPress.WP.AlternativeFunctions.rename_rename
+
+            if ( $ok ) {
+                $report['migrated'][] = [ 'from' => $from, 'to' => $to, 'method' => 'rename' ];
+                continue;
+            }
+        }
+
+        // Fallback: keep legacy directory in place; dual-read will continue to work.
+        $report['errors'][] = [ 'from' => $from, 'to' => $to, 'code' => 'rename_failed' ];
+    }
+
+    update_option( 'backup_lite_legacy_storage_migrated', 1, false );
+
+    if ( function_exists( 'backup_lite_log' ) ) {
+        backup_lite_log( 'info', 'Legacy storage migration completed.', $report );
+    }
+
+    return $report;
 }
 
 function backup_lite_get_temp_dir() {
@@ -869,11 +993,18 @@ function backup_lite_generate_filename( $type, $extension ) {
 }
 
 function backup_lite_get_download_url( $path ) {
-    $storage_root = backup_lite_get_storage_root();
     $path         = wp_normalize_path( $path );
-    $backups_dir  = wp_normalize_path( trailingslashit( $storage_root['path'] ) . 'backups' );
+    $allowed_dirs = array_map( 'wp_normalize_path', backup_lite_get_all_backup_dirs() );
 
-    if ( 0 !== strpos( $path, $backups_dir ) ) {
+    $allowed = false;
+    foreach ( $allowed_dirs as $dir ) {
+        if ( '' !== $dir && 0 === strpos( $path, trailingslashit( $dir ) ) ) {
+            $allowed = true;
+            break;
+        }
+    }
+
+    if ( ! $allowed ) {
         return '';
     }
 
@@ -997,16 +1128,20 @@ if ( ! function_exists( 'backup_lite_get_excluded_paths' ) ) {
         $paths[] = $normalize( backup_lite_get_reports_dir() );
         
         // Legacy directories (only exclude when they exist to avoid false positives).
-        $legacy = [
-            WP_CONTENT_DIR . '/uploads/backup-lite',
-            WP_CONTENT_DIR . '/uploads/backup-lite/backups',
-            WP_CONTENT_DIR . '/uploads/backup-lite/temp',
-            WP_CONTENT_DIR . '/uploads/backup-lite/jobs',
-            WP_CONTENT_DIR . '/uploads/backup-lite/pro',
-            WP_CONTENT_DIR . '/uploads/backup-lite/pro/jobs',
-            WP_CONTENT_DIR . '/uploads/backup-lite/pro/reports',
-            WP_CONTENT_DIR . '/uploads/backup-lite-logs',
-        ];
+        $upload_dir = wp_upload_dir();
+        $uploads_base = isset( $upload_dir['basedir'] ) ? (string) $upload_dir['basedir'] : '';
+
+        $legacy = [];
+        if ( '' !== $uploads_base ) {
+            $legacy[] = trailingslashit( $uploads_base ) . 'backup-lite';
+            $legacy[] = trailingslashit( $uploads_base ) . 'backup-lite/backups';
+            $legacy[] = trailingslashit( $uploads_base ) . 'backup-lite/temp';
+            $legacy[] = trailingslashit( $uploads_base ) . 'backup-lite/jobs';
+            $legacy[] = trailingslashit( $uploads_base ) . 'backup-lite/pro';
+            $legacy[] = trailingslashit( $uploads_base ) . 'backup-lite/pro/jobs';
+            $legacy[] = trailingslashit( $uploads_base ) . 'backup-lite/pro/reports';
+            $legacy[] = trailingslashit( $uploads_base ) . 'backup-lite-logs';
+        }
         
         foreach ( $legacy as $legacy_path ) {
             $normalized = $normalize( $legacy_path, true );
@@ -1017,9 +1152,13 @@ if ( ! function_exists( 'backup_lite_get_excluded_paths' ) ) {
 
         // Exclude other backup plugins' archives to prevent "backup of backups" explosions.
         // Only exclude when the directory exists to avoid false positives.
-        $other_backup_dirs = [
-            WP_CONTENT_DIR . '/updraft',
-        ];
+        $other_backup_dirs = [];
+        if ( '' !== $uploads_base ) {
+            $content_base = wp_normalize_path( dirname( $uploads_base ) );
+            if ( $content_base ) {
+                $other_backup_dirs[] = trailingslashit( $content_base ) . 'updraft';
+            }
+        }
         foreach ( $other_backup_dirs as $p ) {
             $normalized = $normalize( $p, true );
             if ( $normalized ) {

@@ -2,7 +2,7 @@
     'use strict';
 
     document.addEventListener('DOMContentLoaded', function () {
-        var config = window.BackupLiteDashboard || {};
+        var config = window.MusederRestoreOneDashboard || {};
         var strings = config.strings || {};
         var aiConfig = config.ai || {};
 

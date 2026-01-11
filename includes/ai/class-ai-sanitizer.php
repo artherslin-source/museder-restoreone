@@ -234,7 +234,7 @@ class Museder_AI_Sanitizer {
         $backup_dir   = $storage_root ? trailingslashit( $storage_root ) . 'backups' : '';
         $temp_dir     = $storage_root ? trailingslashit( $storage_root ) . 'temp' : '';
         $reports_dir  = $storage_root ? trailingslashit( $storage_root ) . 'reports' : '';
-        $log_dir      = $basedir ? trailingslashit( $basedir ) . 'backup-lite-logs' : '';
+        $log_dir      = $storage_root ? trailingslashit( $storage_root ) . 'logs' : '';
 
         $dirs = [
             'storage_root' => $storage_root,

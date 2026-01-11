@@ -109,8 +109,45 @@ class Backup_Lite_Log_Handler {
      * @return string
      */
     public static function get_log_dir() {
-        $uploads = wp_upload_dir();
-        return trailingslashit( $uploads['basedir'] ) . self::LOG_DIR;
+        // Use the unified log directory resolver (wp_upload_dir-based museder-restoreone root).
+        return backup_lite_get_log_dir();
+    }
+
+    /**
+     * Returns all log directories (current + legacy).
+     *
+     * @return array<int,string>
+     */
+    private static function get_log_dirs() {
+        $dirs = [];
+
+        $current = self::get_log_dir();
+        if ( is_string( $current ) && '' !== $current ) {
+            $dirs[] = wp_normalize_path( $current );
+        }
+
+        if ( function_exists( 'backup_lite_get_legacy_log_dirs' ) ) {
+            $legacy = backup_lite_get_legacy_log_dirs();
+            if ( is_array( $legacy ) ) {
+                foreach ( $legacy as $dir ) {
+                    if ( is_string( $dir ) && '' !== $dir ) {
+                        $dirs[] = wp_normalize_path( $dir );
+                    }
+                }
+            }
+        }
+
+        $dirs = array_values( array_unique( array_filter( $dirs ) ) );
+        $dirs = array_values(
+            array_filter(
+                $dirs,
+                static function( $dir ) {
+                    return is_string( $dir ) && '' !== $dir && is_dir( $dir );
+                }
+            )
+        );
+
+        return $dirs;
     }
 
     /**
@@ -337,9 +374,17 @@ class Backup_Lite_Log_Handler {
             $timestamp = $base_timestamp - ( DAY_IN_SECONDS * $offset );
             // @plugin-check: wp_date with local timezone - $timestamp is UTC, backup_lite_format_local_time() handles timezone conversion
             $filename  = sprintf( 'backup-lite-%s.log', backup_lite_format_local_time( $timestamp, 'Y-m-d' ) );
-            $path     = trailingslashit( self::get_log_dir() ) . $filename;
+            $path     = '';
 
-            if ( ! file_exists( $path ) ) {
+            foreach ( self::get_log_dirs() as $dir ) {
+                $candidate = wp_normalize_path( trailingslashit( $dir ) . $filename );
+                if ( file_exists( $candidate ) ) {
+                    $path = $candidate;
+                    break;
+                }
+            }
+
+            if ( '' === $path ) {
                 continue;
             }
 
@@ -365,19 +410,41 @@ class Backup_Lite_Log_Handler {
      * @return array
      */
     private static function scan_logs() {
-        $path = self::get_log_dir();
-        if ( ! is_dir( $path ) ) {
+        $files = [];
+
+        foreach ( self::get_log_dirs() as $dir ) {
+            $glob = glob( trailingslashit( $dir ) . '*.log' );
+            if ( empty( $glob ) ) {
+                continue;
+            }
+            foreach ( $glob as $path ) {
+                if ( is_string( $path ) && '' !== $path ) {
+                    $files[] = wp_normalize_path( $path );
+                }
+            }
+        }
+
+        $files = array_values( array_unique( array_filter( $files ) ) );
+        if ( empty( $files ) ) {
             return [];
         }
 
-        $glob = glob( trailingslashit( $path ) . '*.log' );
+        usort(
+            $files,
+            static function( $a, $b ) {
+                $an = basename( (string) $a );
+                $bn = basename( (string) $b );
+                if ( $an === $bn ) {
+                    $at = @filemtime( (string) $a );
+                    $bt = @filemtime( (string) $b );
+                    return (int) $bt <=> (int) $at;
+                }
+                // Desc by filename (backup-lite-YYYY-MM-DD.log).
+                return strcmp( $bn, $an );
+            }
+        );
 
-        if ( empty( $glob ) ) {
-            return [];
-        }
-
-        rsort( $glob );
-        return $glob;
+        return $files;
     }
 
     /**
@@ -390,16 +457,25 @@ class Backup_Lite_Log_Handler {
         if ( empty( $log ) ) {
             return null;
         }
-
-        $path = self::get_log_dir() . '/' . basename( $log );
-        $path = wp_normalize_path( $path );
-
-        $root = wp_normalize_path( self::get_log_dir() );
-        if ( strpos( $path, $root ) !== 0 ) {
+        $base = basename( (string) $log );
+        if ( '' === $base ) {
             return null;
         }
 
-        return $path;
+        foreach ( self::get_log_dirs() as $dir ) {
+            $root = wp_normalize_path( $dir );
+            $path = wp_normalize_path( trailingslashit( $root ) . $base );
+
+            if ( strpos( $path, $root ) !== 0 ) {
+                continue;
+            }
+
+            if ( file_exists( $path ) ) {
+                return $path;
+            }
+        }
+
+        return null;
     }
 
     /**

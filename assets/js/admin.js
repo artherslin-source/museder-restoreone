@@ -4,6 +4,152 @@ var backupJobContext = {
     lastNudge: 0
 };
 
+// Backup progress smoothing (UX): if server progress stalls, gently advance the bar.
+// Parameters: stallAfterMs=8000, stepEveryMs=2000, stepDelta=0.2
+var backupProgressSmoother = {
+    display: 0,
+    server: 0,
+    lastServer: null,
+    lastChangeAt: 0,
+    stage: '',
+    status: '',
+    timer: null,
+    animTimer: null,
+    target: 0,
+    stop: function () {
+        if (this.timer) {
+            window.clearInterval(this.timer);
+            this.timer = null;
+        }
+        if (this.animTimer) {
+            window.clearInterval(this.animTimer);
+            this.animTimer = null;
+        }
+    },
+    stopStall: function () {
+        if (this.timer) {
+            window.clearInterval(this.timer);
+            this.timer = null;
+        }
+    },
+    stopAnim: function () {
+        if (this.animTimer) {
+            window.clearInterval(this.animTimer);
+            this.animTimer = null;
+        }
+    },
+    capForStage: function (stage, status) {
+        stage = String(stage || '');
+        status = String(status || '');
+        if (status === 'completed' || stage === 'completed') return 100;
+        if (status === 'failed' || status === 'cancelled') return 100;
+        if (stage === 'preparing' || stage === 'pending') return 10;
+        if (stage === 'packing') return 95;
+        if (stage === 'finalizing') return 99;
+        return 99;
+    },
+    apply: function (serverProgress, stage, status, updateFn) {
+        var now = Date.now();
+        var sp = Number(serverProgress || 0);
+        if (isNaN(sp) || sp < 0) sp = 0;
+        if (sp > 100) sp = 100;
+        stage = String(stage || '');
+        status = String(status || '');
+
+        if (this.lastServer === null) {
+            this.lastServer = sp;
+            this.server = sp;
+            this.display = sp;
+            this.lastChangeAt = now;
+            this.stage = stage;
+            this.status = status;
+            this.target = sp;
+            return this.display;
+        }
+
+        var stageChanged = stage !== this.stage;
+        var statusChanged = status !== this.status;
+        var progressChanged = sp !== this.lastServer;
+        if (stageChanged || statusChanged || progressChanged) {
+            this.stage = stage;
+            this.status = status;
+            this.server = sp;
+            this.lastServer = sp;
+            this.lastChangeAt = now;
+            // New server snapshot: stop any timers, then optionally animate large forward jumps.
+            this.stopStall();
+            this.stopAnim();
+
+            // Never go backwards; never exceed server progress.
+            var current = Number(this.display || 0);
+            if (isNaN(current) || current < 0) current = 0;
+            current = Math.min(100, Math.max(0, current));
+            this.target = Math.max(current, sp);
+
+            var delta = this.target - current;
+            if (typeof updateFn === 'function' && delta >= 6 && status !== 'completed' && status !== 'failed' && status !== 'cancelled') {
+                var self = this;
+                // Smooth large jumps to avoid "stuck then suddenly 80%" feel.
+                this.animTimer = window.setInterval(function () {
+                    var remaining = (self.target || 0) - (self.display || 0);
+                    if (remaining <= 0.05) {
+                        self.display = self.target || 0;
+                        updateFn(self.display);
+                        self.stopAnim();
+                        return;
+                    }
+                    // Adaptive speed: bigger jumps animate faster, still smooth.
+                    var ratePerSec = 6 + Math.min(14, remaining); // 6–20 %/s
+                    var step = ratePerSec * 0.1; // tick=100ms
+                    self.display = Math.min(self.target || 0, (self.display || 0) + step);
+                    updateFn(self.display);
+                }, 100);
+                return this.display;
+            }
+
+            // Small delta: apply immediately.
+            this.display = this.target;
+            return this.display;
+        }
+
+        // Only smooth when running and below stage cap.
+        var stallAfterMs = 8000;
+        var stepEveryMs = 2000;
+        var stepDelta = 0.2;
+        var cap = this.capForStage(stage, status);
+        var epsilon = 0.1;
+        var capMax = Math.max(0, cap - epsilon);
+
+        this.display = Math.max(this.display || 0, sp);
+        if (this.display >= capMax || cap >= 100 || sp >= 100) {
+            this.stopStall();
+            return this.display;
+        }
+
+        if ((now - (this.lastChangeAt || 0)) >= stallAfterMs) {
+            if (!this.timer && typeof updateFn === 'function') {
+                var self = this;
+                this.timer = window.setInterval(function () {
+                    var capNow = self.capForStage(self.stage, self.status);
+                    var capNowMax = Math.max(0, capNow - epsilon);
+                    // Never go backwards; never exceed cap.
+                    self.display = Math.max(self.display || 0, self.server || 0);
+                    var next = self.display + stepDelta;
+                    next = Math.min(next, capNowMax);
+                    next = Math.max(next, self.server || 0);
+                    self.display = next;
+                    updateFn(self.display);
+                    if (self.display >= capNowMax || capNow >= 100) {
+                        self.stopStall();
+                    }
+                }, stepEveryMs);
+            }
+        }
+
+        return this.display;
+    }
+};
+
 // Backup timer for elapsed time display
 var backupLiteTimer = {
     startTime: null,
@@ -72,7 +218,7 @@ var backupLiteTimer = {
 (function ($) {
     'use strict';
 
-    const settings = window.BackupLite || {};
+    const settings = window.MusederRestoreOneAdmin || {};
     const strings = settings.strings || {};
     var backupModeStatus = null;
     function getString(key, fallback) {
@@ -753,7 +899,9 @@ var backupLiteTimer = {
         if (!backupProgressEl) {
             return;
         }
+        // Keep one decimal for smoother bar motion while avoiding float artifacts.
         var value = Math.max(0, Math.min(100, percent || 0));
+        value = Math.round(value * 10) / 10;
         backupProgressEl.style.width = value + '%';
         if (backupProgressText) {
             backupProgressText.textContent = value + '%';
@@ -856,7 +1004,7 @@ var backupLiteTimer = {
         }
 
         // PRO options
-        if (!window.BackupLitePro || !window.BackupLitePro.isPro) {
+        if (!window.MusederRestoreOnePro || !window.MusederRestoreOnePro.isPro) {
             return;
         }
 
@@ -899,17 +1047,27 @@ var backupLiteTimer = {
 
     function handleJobResponse(job) {
         backupJobContext.current = job;
-        updateBackupProgress(job.percentage || 0);
+        // Smooth progress when server stalls (UX): 8s stall -> +0.2% every 2s, capped by stage.
+        var rawPct = job.percentage || 0;
+        var smoothed = backupProgressSmoother.apply(
+            rawPct,
+            job.stage || '',
+            job.status || '',
+            function (p) { updateBackupProgress(p); }
+        );
+        updateBackupProgress(smoothed);
         setBackupCancelable(true);
         updateBackupModeStatus(job);
 
         if ('completed' === job.status) {
+            backupProgressSmoother.stop();
             setBackupCancelable(false);
             finishBackupJob(job);
             return;
         }
 
         if ('failed' === job.status) {
+            backupProgressSmoother.stop();
             stopBackupJobPolling();
             backupLiteTimer.stop(); // Stop elapsed time timer
             setBackupBusy(false);
@@ -920,6 +1078,7 @@ var backupLiteTimer = {
         }
 
         if ('cancelled' === job.status) {
+            backupProgressSmoother.stop();
             stopBackupJobPolling();
             backupLiteTimer.stop(); // Stop elapsed time timer
             setBackupBusy(false);
@@ -1262,6 +1421,11 @@ var backupLiteTimer = {
             clearTimeout(backupJobContext.timer);
             backupJobContext.timer = null;
         }
+
+        // Stop any smoothing timer.
+        if (backupProgressSmoother) {
+            backupProgressSmoother.stop();
+        }
         
         // Abort any pending request
         if (backupLitePollController) {
@@ -1537,7 +1701,7 @@ $(document).on('click', '.backup-lite-delete-backup', function (event) {
 });
 
 function initBackupLiteDomReady() {
-    var localizedSettings = window.BackupLite || {};
+    var localizedSettings = window.MusederRestoreOneAdmin || {};
     var strings = localizedSettings.strings || {};
     var currentPage = localizedSettings.page || '';
     var backupForm = document.getElementById('backup-lite-backup-form');
@@ -1630,7 +1794,7 @@ function initBackupLiteDomReady() {
             if (uploadInterval) {
                 window.clearInterval(uploadInterval);
             }
-            var strings = (window.BackupLite && window.BackupLite.strings) || {};
+            var strings = (window.MusederRestoreOneAdmin && window.MusederRestoreOneAdmin.strings) || {};
             uploadInterval = animateProgress(uploadProgress, 5, 250, function () {
                 showToast('✅ ' + (strings.successRestore || 'Restore Successful!'), 'success');
             });
@@ -1678,7 +1842,7 @@ document.addEventListener('backup-lite-summary-ready', function(event) {
 });
 
 function initRestoreCenter() {
-        var restoreData = window.BackupLiteRestore || {};
+        var restoreData = window.MusederRestoreOneRestore || {};
         // Get ajaxUrl from BackupLiteRestore, BackupLite (main settings), or fallback
         var ajaxUrl = restoreData.ajaxUrl 
             || settings.ajaxUrl 
@@ -5202,7 +5366,7 @@ function initRestoreCenter() {
         
         // Check for completed restore job on page load (e.g., after re-login)
         // This handles the case where restore completed while user was logged out
-        var restoreData = window.BackupLiteRestore || {};
+        var restoreData = window.MusederRestoreOneRestore || {};
         if (restoreData && restoreData.job && restoreData.job.id) {
             var jobId = restoreData.job.id;
             var jobStatus = restoreData.job.status || '';
@@ -5409,7 +5573,7 @@ function initRestoreCenter() {
     var newScheduleButtons = Array.prototype.slice.call(document.querySelectorAll('#bl-new-schedule, [data-bl-action="new-schedule"]'));
     var scheduleModal = document.getElementById('bl-schedule-modal');
     var scheduleModalTitle = document.getElementById('bl-modal-title');
-    var localizedSettings = window.BackupLite || {};
+    var localizedSettings = window.MusederRestoreOneAdmin || {};
     var strings = localizedSettings.strings || {};
     
     function getString(key, fallback) {
@@ -6204,7 +6368,7 @@ function initRestoreCenter() {
                          (window.MusederRestoreOne && MusederRestoreOne.ajax_url) ||
                          window.ajaxurl || '';
             
-            var fetchNonce = (window.BackupLite && BackupLite.nonce) ||
+            var fetchNonce = (window.MusederRestoreOneAdmin && MusederRestoreOneAdmin.nonce) ||
                             (window.backupLiteSchedulesL10n && backupLiteSchedulesL10n.nonce) ||
                             (window.backupLiteAdmin && backupLiteAdmin.nonce) ||
                             (window.MusederRestoreOne && MusederRestoreOne.nonce) || '';
@@ -7362,7 +7526,7 @@ if (document.readyState === 'loading') {
             deleteButton.addEventListener('click', function() {
                 var selected = rowCheckboxes.filter(function(cb) { return cb.checked; });
                 if (selected.length === 0) {
-                    var localizedSettings = window.BackupLite || {};
+                    var localizedSettings = window.MusederRestoreOneAdmin || {};
                     var strings = localizedSettings.strings || {};
                     var showToast = function(message, type) {
                         if (window.Toastify) {
@@ -7379,7 +7543,7 @@ if (document.readyState === 'loading') {
                     return;
                 }
                 
-                var localizedSettings = window.BackupLite || {};
+                var localizedSettings = window.MusederRestoreOneAdmin || {};
                 var strings = localizedSettings.strings || {};
                 var confirmMessage = strings.confirmDeleteSelectedRestoreHistory || 'Are you sure you want to delete the selected restore history entries? This action cannot be undone.';
                 if (!window.confirm(confirmMessage)) {

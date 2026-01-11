@@ -837,7 +837,11 @@ class Backup_Lite_Restore_Service {
             $hint = (string) $meta['checkpoints']['db_last_stmt'];
         }
         $meta['message']    = $hint
-            ? sprintf( __( 'Importing database… (%s)', 'museder-restoreone' ), $hint )
+            ? sprintf(
+                /* translators: %s: progress hint (e.g. INSERT 3/10) */
+                __( 'Importing database… (%s)', 'museder-restoreone' ),
+                esc_html( $hint )
+            )
             : __( 'Importing database…', 'museder-restoreone' );
         $meta['updated_at'] = current_time( 'mysql' );
             self::write_job_meta( $job_id, $meta );
@@ -876,8 +880,8 @@ class Backup_Lite_Restore_Service {
                     sprintf(
                         /* translators: 1: source prefix, 2: target prefix */
                         esc_html__( 'Database import verification failed (source prefix: %1$s, target prefix: %2$s).', 'museder-restoreone' ),
-                        $src ? $src : 'unknown',
-                        $dst ? $dst : 'unknown'
+                        esc_html( $src ? $src : 'unknown' ),
+                        esc_html( $dst ? $dst : 'unknown' )
                     )
                 );
             } elseif ( function_exists( 'backup_lite_log' ) ) {
@@ -964,15 +968,20 @@ class Backup_Lite_Restore_Service {
         }
 
         // Validate expected schema columns to prevent "wrong table rewritten into {prefix}_options".
-        $options_table = $target_prefix . 'options';
-        $posts_table   = $target_prefix . 'posts';
+        // Identifiers: prefix has already been validated (^[A-Za-z0-9_]+_$), sanitize again defensively.
+        $options_table = sanitize_key( (string) ( $target_prefix . 'options' ) );
+        $posts_table   = sanitize_key( (string) ( $target_prefix . 'posts' ) );
         $missing_cols  = [];
 
         // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-        $opt_autoload = $wpdb->get_var( $wpdb->prepare( 'SHOW COLUMNS FROM `' . $options_table . '` LIKE %s', 'autoload' ) );
-        $opt_name     = $wpdb->get_var( $wpdb->prepare( 'SHOW COLUMNS FROM `' . $options_table . '` LIKE %s', 'option_name' ) );
-        $opt_value    = $wpdb->get_var( $wpdb->prepare( 'SHOW COLUMNS FROM `' . $options_table . '` LIKE %s', 'option_value' ) );
-        $post_id      = $wpdb->get_var( $wpdb->prepare( 'SHOW COLUMNS FROM `' . $posts_table . '` LIKE %s', 'ID' ) );
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- identifiers are sanitized and escaped with esc_sql(); LIKE value uses prepare()
+        $opt_autoload = $wpdb->get_var( $wpdb->prepare( 'SHOW COLUMNS FROM `' . esc_sql( $options_table ) . '` LIKE %s', 'autoload' ) ); // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- identifier sanitized via sanitize_key() + esc_sql()
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- identifiers are sanitized and escaped with esc_sql(); LIKE value uses prepare()
+        $opt_name     = $wpdb->get_var( $wpdb->prepare( 'SHOW COLUMNS FROM `' . esc_sql( $options_table ) . '` LIKE %s', 'option_name' ) ); // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- identifier sanitized via sanitize_key() + esc_sql()
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- identifiers are sanitized and escaped with esc_sql(); LIKE value uses prepare()
+        $opt_value    = $wpdb->get_var( $wpdb->prepare( 'SHOW COLUMNS FROM `' . esc_sql( $options_table ) . '` LIKE %s', 'option_value' ) ); // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- identifier sanitized via sanitize_key() + esc_sql()
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- identifiers are sanitized and escaped with esc_sql(); LIKE value uses prepare()
+        $post_id      = $wpdb->get_var( $wpdb->prepare( 'SHOW COLUMNS FROM `' . esc_sql( $posts_table ) . '` LIKE %s', 'ID' ) ); // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- identifier sanitized via sanitize_key() + esc_sql()
         // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 
         if ( ! $opt_autoload ) {
@@ -999,8 +1008,10 @@ class Backup_Lite_Restore_Service {
 
         // Basic sanity: siteurl/home should exist in the target options table.
         // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-        $siteurl = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$options_table} WHERE option_name = %s LIMIT 1", 'siteurl' ) );
-        $home    = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$options_table} WHERE option_name = %s LIMIT 1", 'home' ) );
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- identifier is sanitized + esc_sql(); option_name uses prepare()
+        $siteurl = $wpdb->get_var( $wpdb->prepare( 'SELECT option_value FROM `' . esc_sql( $options_table ) . '` WHERE option_name = %s LIMIT 1', 'siteurl' ) );
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- identifier is sanitized + esc_sql(); option_name uses prepare()
+        $home    = $wpdb->get_var( $wpdb->prepare( 'SELECT option_value FROM `' . esc_sql( $options_table ) . '` WHERE option_name = %s LIMIT 1', 'home' ) );
         // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 
         if ( empty( $siteurl ) && empty( $home ) ) {
@@ -1055,8 +1066,9 @@ class Backup_Lite_Restore_Service {
         $start = microtime( true );
         $slice_seconds = max( 1, (int) $slice_seconds );
 
-        $options_table  = $wpdb->prefix . 'options';
-        $usermeta_table = $wpdb->prefix . 'usermeta';
+        // Use core table names. These are not user input.
+        $options_table  = isset( $wpdb->options ) ? (string) $wpdb->options : ( $wpdb->prefix . 'options' );
+        $usermeta_table = isset( $wpdb->usermeta ) ? (string) $wpdb->usermeta : ( $wpdb->prefix . 'usermeta' );
 
         $from_len = strlen( $from );
         $safe_value_replace = ( strlen( $from ) === strlen( $to ) );
@@ -1069,14 +1081,16 @@ class Backup_Lite_Restore_Service {
                 $like = $wpdb->esc_like( $from ) . '%';
                 $start_pos = (int) $from_len + 1; // MySQL SUBSTRING is 1-based.
                 // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-                $sql = $wpdb->prepare(
-                    "UPDATE {$options_table} SET option_name = CONCAT(%s, SUBSTRING(option_name, %d)) WHERE option_name LIKE %s LIMIT %d",
-                    $to,
-                    $start_pos,
-                    $like,
-                    $limit_keys
+                // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- core table name; values are prepared
+                $affected = (int) $wpdb->query(
+                    $wpdb->prepare(
+                        'UPDATE ' . $options_table . ' SET option_name = CONCAT(%s, SUBSTRING(option_name, %d)) WHERE option_name LIKE %s LIMIT %d', // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- table identifier is core ($wpdb->options), cannot be a placeholder
+                        $to,
+                        $start_pos,
+                        $like,
+                        $limit_keys
+                    )
                 );
-                $affected = (int) $wpdb->query( $sql );
                 // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 
                 $stats['options_keys'] = isset( $stats['options_keys'] ) ? (int) $stats['options_keys'] + max( 0, $affected ) : max( 0, $affected );
@@ -1087,14 +1101,16 @@ class Backup_Lite_Restore_Service {
                 $like = $wpdb->esc_like( $from ) . '%';
                 $start_pos = (int) $from_len + 1;
                 // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-                $sql = $wpdb->prepare(
-                    "UPDATE {$usermeta_table} SET meta_key = CONCAT(%s, SUBSTRING(meta_key, %d)) WHERE meta_key LIKE %s LIMIT %d",
-                    $to,
-                    $start_pos,
-                    $like,
-                    $limit_keys
+                // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- core table name; values are prepared
+                $affected = (int) $wpdb->query(
+                    $wpdb->prepare(
+                        'UPDATE ' . $usermeta_table . ' SET meta_key = CONCAT(%s, SUBSTRING(meta_key, %d)) WHERE meta_key LIKE %s LIMIT %d', // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- table identifier is core ($wpdb->usermeta), cannot be a placeholder
+                        $to,
+                        $start_pos,
+                        $like,
+                        $limit_keys
+                    )
                 );
-                $affected = (int) $wpdb->query( $sql );
                 // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 
                 $stats['usermeta_keys'] = isset( $stats['usermeta_keys'] ) ? (int) $stats['usermeta_keys'] + max( 0, $affected ) : max( 0, $affected );
@@ -1104,14 +1120,16 @@ class Backup_Lite_Restore_Service {
             } elseif ( 'options_values' === $phase ) {
                 $like = '%' . $wpdb->esc_like( $from ) . '%';
                 // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-                $sql = $wpdb->prepare(
-                    "UPDATE {$options_table} SET option_value = REPLACE(option_value, %s, %s) WHERE option_value LIKE %s LIMIT %d",
-                    $from,
-                    $to,
-                    $like,
-                    $limit_values
+                // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- core table name; values are prepared
+                $affected = (int) $wpdb->query(
+                    $wpdb->prepare(
+                        'UPDATE ' . $options_table . ' SET option_value = REPLACE(option_value, %s, %s) WHERE option_value LIKE %s LIMIT %d', // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- table identifier is core ($wpdb->options), cannot be a placeholder
+                        $from,
+                        $to,
+                        $like,
+                        $limit_values
+                    )
                 );
-                $affected = (int) $wpdb->query( $sql );
                 // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 
                 $stats['options_values'] = isset( $stats['options_values'] ) ? (int) $stats['options_values'] + max( 0, $affected ) : max( 0, $affected );
@@ -1121,14 +1139,16 @@ class Backup_Lite_Restore_Service {
             } elseif ( 'usermeta_values' === $phase ) {
                 $like = '%' . $wpdb->esc_like( $from ) . '%';
                 // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-                $sql = $wpdb->prepare(
-                    "UPDATE {$usermeta_table} SET meta_value = REPLACE(meta_value, %s, %s) WHERE meta_value LIKE %s LIMIT %d",
-                    $from,
-                    $to,
-                    $like,
-                    $limit_values
+                // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- core table name; values are prepared
+                $affected = (int) $wpdb->query(
+                    $wpdb->prepare(
+                        'UPDATE ' . $usermeta_table . ' SET meta_value = REPLACE(meta_value, %s, %s) WHERE meta_value LIKE %s LIMIT %d', // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- table identifier is core ($wpdb->usermeta), cannot be a placeholder
+                        $from,
+                        $to,
+                        $like,
+                        $limit_values
+                    )
                 );
-                $affected = (int) $wpdb->query( $sql );
                 // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 
                 $stats['usermeta_values'] = isset( $stats['usermeta_values'] ) ? (int) $stats['usermeta_values'] + max( 0, $affected ) : max( 0, $affected );
@@ -1913,10 +1933,13 @@ class Backup_Lite_Restore_Service {
         $cleanup['transients_last_id'] = max( $ids );
         $cleanup['transients_batches']++;
 
-        $in = implode( ',', $ids );
-        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery
-        $deleted = $wpdb->query( "DELETE FROM {$wpdb->options} WHERE option_id IN ({$in})" ); // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- safe: IDs are absint'ed, table from $wpdb
-        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery
+        $placeholders = implode( ',', array_fill( 0, count( $ids ), '%d' ) );
+        $sql          = "DELETE FROM {$wpdb->options} WHERE option_id IN ($placeholders)"; // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- core table name from $wpdb; dynamic placeholders will be prepared below
+        $args         = array_merge( [ $sql ], $ids );
+        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- placeholders are built from absint() IDs, table is core ($wpdb->options)
+        $deleted = $wpdb->query( call_user_func_array( [ $wpdb, 'prepare' ], $args ) ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- prepared from absint IDs; core table name from $wpdb
+        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
         $deleted = is_numeric( $deleted ) ? (int) $deleted : 0;
         $cleanup['transients_deleted_total'] += max( 0, $deleted );
 
@@ -1946,21 +1969,19 @@ class Backup_Lite_Restore_Service {
 
         backup_lite_ensure_directory( dirname( $dest_path ) );
 
-        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_read_fopen, WordPress.WP.AlternativeFunctions.file_system_read_fwrite, WordPress.WP.AlternativeFunctions.file_system_read_fread
-        $out = fopen( $dest_path, 'wb' );
+        // Large ZIP streaming requires direct file operations for performance and compatibility.
+        $out = fopen( $dest_path, 'wb' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- Stream extraction to disk.
         if ( $out ) {
             while ( ! feof( $stream ) ) {
-                $buf = fread( $stream, 1024 * 1024 );
+                $buf = fread( $stream, 1024 * 1024 ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- Stream extraction to disk.
                 if ( $buf === false ) {
                     break;
                 }
-                fwrite( $out, $buf );
+                fwrite( $out, $buf ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- Stream extraction to disk.
             }
-            fclose( $out );
+            fclose( $out ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Stream extraction to disk.
         }
-        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_read_fopen, WordPress.WP.AlternativeFunctions.file_system_read_fwrite, WordPress.WP.AlternativeFunctions.file_system_read_fread
-
-        fclose( $stream );
+        fclose( $stream ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Stream from ZipArchive.
         $zip->close();
     }
 
@@ -2017,14 +2038,14 @@ class Backup_Lite_Restore_Service {
 
             backup_lite_ensure_directory( dirname( $target ) );
 
-            // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_read_fopen, WordPress.WP.AlternativeFunctions.file_system_read_fread, WordPress.WP.AlternativeFunctions.file_system_read_fwrite
-            $out = fopen( $target, ( $entry_offset > 0 ? 'ab' : 'wb' ) );
+            // Large ZIP streaming requires direct file operations for performance and compatibility.
+            $out = fopen( $target, ( $entry_offset > 0 ? 'ab' : 'wb' ) ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- Stream extraction to disk.
             if ( $out ) {
                 // Skip bytes if resuming the same entry.
                 $to_skip = (int) $entry_offset;
                 while ( $to_skip > 0 && ! feof( $in ) ) {
                     $skip_chunk = $to_skip > 65536 ? 65536 : $to_skip;
-                    $buf = fread( $in, $skip_chunk );
+                    $buf = fread( $in, $skip_chunk ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- Stream extraction to disk.
                     if ( $buf === false || $buf === '' ) {
                         break;
                     }
@@ -2033,14 +2054,14 @@ class Backup_Lite_Restore_Service {
 
                 $written_this_entry = 0;
                 while ( ! feof( $in ) ) {
-                    $buf = fread( $in, 512000 );
+                    $buf = fread( $in, 512000 ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- Stream extraction to disk.
                     if ( $buf === false ) {
                         break;
                     }
                     if ( $buf === '' ) {
                         break;
                     }
-                    $w = fwrite( $out, $buf );
+                    $w = fwrite( $out, $buf ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- Stream extraction to disk.
                     if ( $w === false ) {
                         break;
                     }
@@ -2048,18 +2069,16 @@ class Backup_Lite_Restore_Service {
                     $entry_offset += $w;
 
                     if ( $slice_seconds > 0 && ( microtime( true ) - $start ) > $slice_seconds ) {
-                        fclose( $out );
-                        fclose( $in );
+                        fclose( $out ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Stream extraction to disk.
+                        fclose( $in ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Stream from ZipArchive.
                         $zip->close();
                         $entry_index = $i;
                         return [ 'completed' => false, 'skipped_self' => $skipped_self ];
                     }
                 }
-                fclose( $out );
+                fclose( $out ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Stream extraction to disk.
             }
-            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_read_fopen, WordPress.WP.AlternativeFunctions.file_system_read_fread, WordPress.WP.AlternativeFunctions.file_system_read_fwrite
-
-            fclose( $in );
+            fclose( $in ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Stream from ZipArchive.
 
             // Move to next entry.
             $entry_offset = 0;
@@ -2233,8 +2252,8 @@ class Backup_Lite_Restore_Service {
                 return [ 'completed' => true, 'scanned' => $scanned, 'updated' => $updated ];
             }
 
-            $table = (string) $tables[ $idx ];
-            $safe_table = preg_replace( '/[^A-Za-z0-9_]/', '', $table );
+            $table      = (string) $tables[ $idx ];
+            $safe_table = sanitize_key( $table );
             if ( '' === $safe_table ) {
                 $idx++;
                 $cp['sr_table_index'] = $idx;
@@ -2246,7 +2265,7 @@ class Backup_Lite_Restore_Service {
             // Cache per-table metadata: pk + text columns.
             if ( empty( $cp['sr_table_cache'][ $safe_table ] ) || ! is_array( $cp['sr_table_cache'][ $safe_table ] ) ) {
                 // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-                $columns = $wpdb->get_results( "SHOW COLUMNS FROM `{$safe_table}`", ARRAY_A );
+                $columns = $wpdb->get_results( 'SHOW COLUMNS FROM `' . esc_sql( $safe_table ) . '`', ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- identifiers sanitized + escaped
                 // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 
                 if ( empty( $columns ) ) {
@@ -2315,9 +2334,9 @@ class Backup_Lite_Restore_Service {
             }
             $select_sql_cols = [];
             foreach ( $select_cols as $c ) {
-                $safe_c = preg_replace( '/[^A-Za-z0-9_]/', '', (string) $c );
+                $safe_c = sanitize_key( (string) $c );
                 if ( '' !== $safe_c ) {
-                    $select_sql_cols[] = '`' . $safe_c . '`';
+                    $select_sql_cols[] = '`' . esc_sql( $safe_c ) . '`';
                 }
             }
             if ( empty( $select_sql_cols ) ) {
@@ -2331,6 +2350,7 @@ class Backup_Lite_Restore_Service {
             $rows = [];
             if ( $pk ) {
                 $last = $cp['sr_pk_last'];
+                $pk_sql = esc_sql( sanitize_key( $pk ) );
                 $pk_is_numeric = ( $pk_type !== '' ) && preg_match( '/^(tinyint|smallint|mediumint|int|bigint)/i', $pk_type );
 
                 if ( null !== $last && '' !== $last ) {
@@ -2338,9 +2358,9 @@ class Backup_Lite_Restore_Service {
                     if ( $pk_is_numeric ) {
                         $last_int = (int) $last;
                         // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-                        $rows = $wpdb->get_results(
+                        $rows = $wpdb->get_results( // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- $select_sql_cols built from sanitized + esc_sql() identifiers
                             $wpdb->prepare(
-                                "SELECT " . implode( ',', $select_sql_cols ) . " FROM `{$safe_table}` WHERE `{$pk}` > %d ORDER BY `{$pk}` ASC LIMIT %d",
+								'SELECT ' . implode( ',', $select_sql_cols ) . ' FROM `' . esc_sql( $safe_table ) . '` WHERE `' . $pk_sql . '` > %d ORDER BY `' . $pk_sql . '` ASC LIMIT %d', // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- identifiers sanitized + escaped; values prepared
                                 $last_int,
                                 (int) $batch_size
                             ),
@@ -2349,9 +2369,9 @@ class Backup_Lite_Restore_Service {
                         // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
                     } else {
                         // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-                        $rows = $wpdb->get_results(
+                        $rows = $wpdb->get_results( // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- $select_sql_cols built from sanitized + esc_sql() identifiers
                             $wpdb->prepare(
-                                "SELECT " . implode( ',', $select_sql_cols ) . " FROM `{$safe_table}` WHERE `{$pk}` > %s ORDER BY `{$pk}` ASC LIMIT %d",
+								'SELECT ' . implode( ',', $select_sql_cols ) . ' FROM `' . esc_sql( $safe_table ) . '` WHERE `' . $pk_sql . '` > %s ORDER BY `' . $pk_sql . '` ASC LIMIT %d', // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- identifiers sanitized + escaped; values prepared
                                 (string) $last,
                                 (int) $batch_size
                             ),
@@ -2361,9 +2381,9 @@ class Backup_Lite_Restore_Service {
                     }
                 } else {
                     // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-                    $rows = $wpdb->get_results(
+                    $rows = $wpdb->get_results( // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- $select_sql_cols built from sanitized + esc_sql() identifiers
                         $wpdb->prepare(
-                            "SELECT " . implode( ',', $select_sql_cols ) . " FROM `{$safe_table}` ORDER BY `{$pk}` ASC LIMIT %d",
+							'SELECT ' . implode( ',', $select_sql_cols ) . ' FROM `' . esc_sql( $safe_table ) . '` ORDER BY `' . $pk_sql . '` ASC LIMIT %d', // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- identifiers sanitized + escaped; values prepared
                             (int) $batch_size
                         ),
                         ARRAY_A
@@ -2373,9 +2393,9 @@ class Backup_Lite_Restore_Service {
             } else {
                 $offset = isset( $cp['sr_row_offset'] ) ? (int) $cp['sr_row_offset'] : 0;
                 // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-                $rows = $wpdb->get_results(
+                $rows = $wpdb->get_results( // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- $select_sql_cols built from sanitized + esc_sql() identifiers
                     $wpdb->prepare(
-                        "SELECT " . implode( ',', $select_sql_cols ) . " FROM `{$safe_table}` LIMIT %d OFFSET %d",
+						'SELECT ' . implode( ',', $select_sql_cols ) . ' FROM `' . esc_sql( $safe_table ) . '` LIMIT %d OFFSET %d', // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- identifiers sanitized + escaped; values prepared
                         (int) $batch_size,
                         (int) $offset
                     ),
@@ -3038,7 +3058,7 @@ class Backup_Lite_Restore_Service {
             // @plugin-check: safe table name from whitelist
             // $table comes from SHOW TABLES result (system query, not user input)
             // Sanitize table name to ensure only safe characters
-            $safe_table = preg_replace( '/[^A-Za-z0-9_]/', '', $table );
+            $safe_table = sanitize_key( (string) $table );
             if ( empty( $safe_table ) ) {
                 continue;
             }
@@ -3046,7 +3066,9 @@ class Backup_Lite_Restore_Service {
             // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery
             // phpcs:disable WordPress.DB.DirectDatabaseQuery.NoCaching
             // 說明：以下查詢用於備份/還原過程，必須直接操作資料表結構，table 名稱皆來自 $wpdb 或白名單，不接受使用者輸入。
-            $columns = $wpdb->get_results( $wpdb->prepare( "SHOW COLUMNS FROM `%s`", $safe_table ), ARRAY_A ); // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- safe: table name sanitized from SHOW TABLES result
+            // Identifier: safe_table is strict-whitelisted; do not use prepare() for identifiers.
+            // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- identifier; strict whitelist applied above
+            $columns = $wpdb->get_results( 'SHOW COLUMNS FROM `' . esc_sql( $safe_table ) . '`', ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- identifiers sanitized + escaped
             // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery
             // phpcs:enable WordPress.DB.DirectDatabaseQuery.NoCaching
             if ( empty( $columns ) ) {
@@ -3067,7 +3089,9 @@ class Backup_Lite_Restore_Service {
             // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery
             // phpcs:disable WordPress.DB.DirectDatabaseQuery.NoCaching
             // 說明：以下查詢用於備份/還原過程，必須直接操作資料表結構，table 名稱皆來自 $wpdb 或白名單，不接受使用者輸入。
-            $rows = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM `%s`", $safe_table ), ARRAY_A );
+            // Identifier: safe_table is strict-whitelisted; do not use prepare() for identifiers.
+            // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- identifier; strict whitelist applied above
+            $rows = $wpdb->get_results( 'SELECT * FROM `' . esc_sql( $safe_table ) . '`', ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- identifiers sanitized + escaped
             // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery
             // phpcs:enable WordPress.DB.DirectDatabaseQuery.NoCaching
             if ( empty( $rows ) ) {
@@ -3185,7 +3209,7 @@ class Backup_Lite_Restore_Service {
             return [ 'ok' => false, 'value' => null ];
         }
 
-        $prev = set_error_handler(
+        $prev = set_error_handler( // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_set_error_handler -- convert unserialize warnings into exceptions; not debug logging
             static function () {
                 throw new RuntimeException( 'unserialize_warning' );
             }
@@ -3272,82 +3296,29 @@ class Backup_Lite_Restore_Service {
             }
         }
 
-        // Restore plugin activation status from backup
-        self::restore_plugin_status();
+        // Do not change other plugins' activation status automatically.
+        // Store info for the admin to review manually if needed.
+        self::record_restored_plugin_list();
 
         backup_lite_log( 'info', 'Post-restore cleanup completed.', [] );
     }
 
     /**
-     * Restore plugin activation status from the backup database.
-     * This ensures plugins are activated/deactivated according to the original site state.
+     * Record plugin list found in the restored database for admin visibility.
+     * Note: Per WordPress.org policy, we do not change activation status of other plugins.
      */
-    protected static function restore_plugin_status() {
-        // Get the active_plugins option from the restored database
+    protected static function record_restored_plugin_list() {
         $active_plugins = get_option( 'active_plugins', [] );
-        
         if ( ! is_array( $active_plugins ) || empty( $active_plugins ) ) {
-            backup_lite_log( 'info', 'No active plugins found in restored database, skipping plugin status restoration.', [] );
+            backup_lite_log( 'info', 'No active plugins found in restored database.', [] );
             return;
         }
 
-        // Get all installed plugins
-        if ( ! function_exists( 'get_plugins' ) ) {
-            require_once ABSPATH . 'wp-admin/includes/plugin.php';
-        }
-        
-        $all_plugins = get_plugins();
-        $plugins_dir = WP_PLUGIN_DIR;
-        
-        // Filter active plugins to only include those that actually exist
-        $valid_active_plugins = [];
-        $missing_plugins = [];
-        
-        foreach ( $active_plugins as $plugin_file ) {
-            $plugin_path = wp_normalize_path( trailingslashit( $plugins_dir ) . $plugin_file );
-            
-            // Check if plugin file exists
-            if ( file_exists( $plugin_path ) && isset( $all_plugins[ $plugin_file ] ) ) {
-                $valid_active_plugins[] = $plugin_file;
-            } else {
-                $missing_plugins[] = $plugin_file;
-            }
-        }
-        
-        // Log missing plugins
-        if ( ! empty( $missing_plugins ) ) {
-            backup_lite_log( 'warning', 'Some plugins from backup are missing and will not be activated.', [
-                'missing' => $missing_plugins,
-            ] );
-        }
-        
-        // Get currently active plugins
-        $current_active = get_option( 'active_plugins', [] );
-        
-        // Only update if there's a difference
-        if ( $valid_active_plugins !== $current_active ) {
-            // Update active_plugins option
-            update_option( 'active_plugins', $valid_active_plugins );
-            
-            // Also handle network-active plugins if multisite
-            if ( is_multisite() ) {
-                $network_active = get_site_option( 'active_sitewide_plugins', [] );
-                // For multisite, we might need to handle network plugins differently
-                // For now, we'll just log it
-                if ( ! empty( $network_active ) ) {
-                    backup_lite_log( 'info', 'Multisite network plugins detected, manual activation may be needed.', [
-                        'network_plugins' => array_keys( $network_active ),
-                    ] );
-                }
-            }
-            
-            backup_lite_log( 'info', 'Plugin activation status restored from backup.', [
-                'restored_count' => count( $valid_active_plugins ),
-                'missing_count' => count( $missing_plugins ),
-            ] );
-        } else {
-            backup_lite_log( 'info', 'Plugin activation status already matches backup, no changes needed.', [] );
-        }
+        update_option( 'backup_lite_restored_active_plugins_last', $active_plugins, false );
+
+        backup_lite_log( 'info', 'Restore completed. Plugin activation status was not modified automatically.', [
+            'active_plugins_count' => count( $active_plugins ),
+        ] );
     }
 
     protected static function restore_from_snapshot( array $snapshot ) {

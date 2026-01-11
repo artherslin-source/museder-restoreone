@@ -43,10 +43,14 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 	public function list_files(): array {
 		$files = array();
 
-		// phpcs:disable WordPress.WP.AlternativeFunctions.file_system_read_fseek, WordPress.WP.AlternativeFunctions.file_system_read_fread, WordPress.WP.AlternativeFunctions.file_system_read_ftell
+		// phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fseek, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_ftell
 		if ( @fseek( $this->file_handle, 0, SEEK_SET ) === -1 ) {
 			throw new Backup_Lite_Wpress_Not_Seekable_Exception(
-				sprintf( __( 'Could not seek to beginning of file. File: %s', 'museder-restoreone' ), $this->file_name )
+				sprintf(
+					/* translators: %s: archive file path */
+					esc_html__( 'Could not seek to beginning of file. File: %s', 'museder-restoreone' ),
+					esc_html( $this->file_name )
+				)
 			);
 		}
 
@@ -61,14 +65,19 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 
 				if ( @fseek( $this->file_handle, $data['size'], SEEK_CUR ) === -1 ) {
 					throw new Backup_Lite_Wpress_Not_Seekable_Exception(
-						sprintf( __( 'Could not seek to offset of file. File: %s Offset: %d', 'museder-restoreone' ), $this->file_name, $data['size'] )
+						sprintf(
+							/* translators: 1: archive file path, 2: offset */
+							esc_html__( 'Could not seek to offset of file. File: %1$s Offset: %2$d', 'museder-restoreone' ),
+							esc_html( $this->file_name ),
+							(int) $data['size']
+						)
 					);
 				}
 
 				$files[] = $data;
 			}
 		}
-		// phpcs:enable WordPress.WP.AlternativeFunctions.file_system_read_fseek, WordPress.WP.AlternativeFunctions.file_system_read_fread, WordPress.WP.AlternativeFunctions.file_system_read_ftell
+		// phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fseek, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_ftell
 
 		return $files;
 	}
@@ -119,7 +128,11 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 	): bool {
 		if ( ! is_dir( $location ) ) {
 			throw new Backup_Lite_Wpress_Not_Directory_Exception(
-				sprintf( __( 'Location is not a directory: %s', 'museder-restoreone' ), $location )
+				sprintf(
+					/* translators: %s: directory path */
+					esc_html__( 'Location is not a directory: %s', 'museder-restoreone' ),
+					esc_html( $location )
+				)
 			);
 		}
 
@@ -128,11 +141,16 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 		$completed = true;
 		$start     = microtime( true );
 
-		// phpcs:disable WordPress.WP.AlternativeFunctions.file_system_read_fseek, WordPress.WP.AlternativeFunctions.file_system_read_fread
+		// phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fseek, WordPress.WP.AlternativeFunctions.file_system_operations_fread
 		if ( $file_offset > 0 ) {
 			if ( @fseek( $this->file_handle, - $file_offset - self::HEADER_BYTES, SEEK_CUR ) === -1 ) {
 				throw new Backup_Lite_Wpress_Not_Seekable_Exception(
-					sprintf( __( 'Could not seek to offset of file. File: %s Offset: %d', 'museder-restoreone' ), $this->file_name, - $file_offset - self::HEADER_BYTES )
+					sprintf(
+						/* translators: 1: archive file path, 2: offset */
+						esc_html__( 'Could not seek to offset of file. File: %1$s Offset: %2$d', 'museder-restoreone' ),
+						esc_html( $this->file_name ),
+						(int) ( - $file_offset - self::HEADER_BYTES )
+					)
 				);
 			}
 		}
@@ -167,7 +185,7 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 				$dest_file = $this->safe_join( $location, $dest_rel_file );
 
 				if ( ! is_dir( $dest_dir ) ) {
-					@mkdir( $dest_dir, $this->get_permissions_for_directory(), true );
+					wp_mkdir_p( $dest_dir );
 				}
 
 				$file_written = 0;
@@ -180,7 +198,12 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 			} else {
 				if ( @fseek( $this->file_handle, $file_size, SEEK_CUR ) === -1 ) {
 					throw new Backup_Lite_Wpress_Not_Seekable_Exception(
-						sprintf( __( 'Could not seek to offset of file. File: %s Offset: %d', 'museder-restoreone' ), $this->file_name, $file_size )
+						sprintf(
+							/* translators: 1: archive file path, 2: offset */
+							esc_html__( 'Could not seek to offset of file. File: %1$s Offset: %2$d', 'museder-restoreone' ),
+							esc_html( $this->file_name ),
+							(int) $file_size
+						)
 					);
 				}
 			}
@@ -190,7 +213,7 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 				break;
 			}
 		}
-		// phpcs:enable WordPress.WP.AlternativeFunctions.file_system_read_fseek, WordPress.WP.AlternativeFunctions.file_system_read_fread
+		// phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fseek, WordPress.WP.AlternativeFunctions.file_system_operations_fread
 
 		return $completed;
 	}
@@ -225,7 +248,11 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 	): bool {
 		if ( ! is_dir( $location ) ) {
 			throw new Backup_Lite_Wpress_Not_Directory_Exception(
-				sprintf( __( 'Location is not a directory: %s', 'museder-restoreone' ), $location )
+				sprintf(
+					/* translators: %s: directory path */
+					esc_html__( 'Location is not a directory: %s', 'museder-restoreone' ),
+					esc_html( $location )
+				)
 			);
 		}
 
@@ -234,10 +261,15 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 		$start     = microtime( true );
 		$completed = true;
 
-		// phpcs:disable WordPress.WP.AlternativeFunctions.file_system_read_fseek, WordPress.WP.AlternativeFunctions.file_system_read_fread, WordPress.WP.AlternativeFunctions.file_system_read_ftell
+		// phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fseek, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_ftell
 		if ( @fseek( $this->file_handle, $archive_offset, SEEK_SET ) === -1 ) {
 			throw new Backup_Lite_Wpress_Not_Seekable_Exception(
-				sprintf( __( 'Could not seek to offset of file. File: %s Offset: %d', 'museder-restoreone' ), $this->file_name, $archive_offset )
+				sprintf(
+					/* translators: 1: archive file path, 2: offset */
+					esc_html__( 'Could not seek to offset of file. File: %1$s Offset: %2$d', 'museder-restoreone' ),
+					esc_html( $this->file_name ),
+					(int) $archive_offset
+				)
 			);
 		}
 
@@ -282,7 +314,7 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 				$dest_file = $this->safe_join( $location, $dest_rel_file );
 
 				if ( ! is_dir( $dest_dir ) ) {
-					@mkdir( $dest_dir, $this->get_permissions_for_directory(), true );
+					wp_mkdir_p( $dest_dir );
 				}
 
 				$file_written = 0;
@@ -307,7 +339,12 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 				}
 				if ( @fseek( $this->file_handle, $skip, SEEK_CUR ) === -1 ) {
 					throw new Backup_Lite_Wpress_Not_Seekable_Exception(
-						sprintf( __( 'Could not seek to offset of file. File: %s Offset: %d', 'museder-restoreone' ), $this->file_name, $skip )
+						sprintf(
+							/* translators: 1: archive file path, 2: offset */
+							esc_html__( 'Could not seek to offset of file. File: %1$s Offset: %2$d', 'museder-restoreone' ),
+							esc_html( $this->file_name ),
+							(int) $skip
+						)
 					);
 				}
 				$file_offset    = 0;
@@ -319,7 +356,7 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 				break;
 			}
 		}
-		// phpcs:enable WordPress.WP.AlternativeFunctions.file_system_read_fseek, WordPress.WP.AlternativeFunctions.file_system_read_fread, WordPress.WP.AlternativeFunctions.file_system_read_ftell
+		// phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fseek, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_ftell
 
 		return $completed;
 	}
@@ -342,14 +379,19 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 		$this->total_files_count = 0;
 		$this->total_files_size  = 0;
 
-		// phpcs:disable WordPress.WP.AlternativeFunctions.file_system_read_fseek, WordPress.WP.AlternativeFunctions.file_system_read_fread
-		if ( @fseek( $this->file_handle, 0, SEEK_SET ) === -1 ) {
+		// Large archive streaming requires direct file operations for performance and compatibility.
+		// phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fseek, WordPress.WP.AlternativeFunctions.file_system_operations_fread
+		if ( @fseek( $this->file_handle, 0, SEEK_SET ) === -1 ) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fseek -- Streaming archive handle.
 			throw new Backup_Lite_Wpress_Not_Seekable_Exception(
-				sprintf( __( 'Could not seek to beginning of file. File: %s', 'museder-restoreone' ), $this->file_name )
+				sprintf(
+					/* translators: %s: archive file path */
+					esc_html__( 'Could not seek to beginning of file. File: %s', 'museder-restoreone' ),
+					esc_html( $this->file_name )
+				)
 			);
 		}
 
-		while ( $block = @fread( $this->file_handle, self::HEADER_BYTES ) ) {
+		while ( $block = @fread( $this->file_handle, self::HEADER_BYTES ) ) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- Streaming archive handle.
 			if ( $block === $this->eof ) {
 				continue;
 			}
@@ -359,14 +401,19 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 				$this->total_files_count += 1;
 				$this->total_files_size  += (int) $data['size'];
 
-				if ( @fseek( $this->file_handle, (int) $data['size'], SEEK_CUR ) === -1 ) {
+				if ( @fseek( $this->file_handle, (int) $data['size'], SEEK_CUR ) === -1 ) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fseek -- Streaming archive handle.
 					throw new Backup_Lite_Wpress_Not_Seekable_Exception(
-						sprintf( __( 'Could not seek to offset of file. File: %s Offset: %d', 'museder-restoreone' ), $this->file_name, (int) $data['size'] )
+						sprintf(
+							/* translators: 1: archive file path, 2: file offset in bytes */
+							esc_html__( 'Could not seek to offset of file. File: %1$s Offset: %2$d', 'museder-restoreone' ),
+							esc_html( $this->file_name ),
+							(int) $data['size']
+						)
 					);
 				}
 			}
 		}
-		// phpcs:enable WordPress.WP.AlternativeFunctions.file_system_read_fseek, WordPress.WP.AlternativeFunctions.file_system_read_fread
+		// phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fseek, WordPress.WP.AlternativeFunctions.file_system_operations_fread
 	}
 
 	/**
@@ -389,18 +436,24 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 		$file_written = 0;
 		$completed    = true;
 
-		// phpcs:disable WordPress.WP.AlternativeFunctions.file_system_read_fseek, WordPress.WP.AlternativeFunctions.file_system_read_fopen, WordPress.WP.AlternativeFunctions.file_system_read_fread, WordPress.WP.AlternativeFunctions.file_system_read_fwrite
+		// Large archive streaming requires direct file operations for performance and compatibility.
+		// phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fseek, WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose, WordPress.WP.AlternativeFunctions.file_system_operations_touch, WordPress.WP.AlternativeFunctions.file_system_operations_chmod
 		if ( $file_offset > 0 ) {
-			if ( @fseek( $this->file_handle, $file_offset, SEEK_CUR ) === -1 ) {
+			if ( @fseek( $this->file_handle, $file_offset, SEEK_CUR ) === -1 ) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fseek -- Streaming archive handle.
 				throw new Backup_Lite_Wpress_Not_Seekable_Exception(
-					sprintf( __( 'Could not seek to offset of file. File: %s Offset: %d', 'museder-restoreone' ), $this->file_name, $file_offset )
+					sprintf(
+						/* translators: 1: archive file path, 2: file offset in bytes */
+						esc_html__( 'Could not seek to offset of file. File: %1$s Offset: %2$d', 'museder-restoreone' ),
+						esc_html( $this->file_name ),
+						(int) $file_offset
+					)
 				);
 			}
 		}
 
 		$file_size -= $file_offset;
 
-		$file_handle = @fopen( $dest_file, ( $file_offset === 0 ? 'wb' : 'ab' ) );
+		$file_handle = @fopen( $dest_file, ( $file_offset === 0 ? 'wb' : 'ab' ) ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- Streaming large archive extraction.
 		if ( $file_handle ) {
 			while ( $file_size > 0 ) {
 				$chunk_size = $file_size > 512000 ? 512000 : $file_size;
@@ -414,10 +467,14 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 					}
 				}
 
-				$file_content = @fread( $this->file_handle, $chunk_size );
+				$file_content = @fread( $this->file_handle, $chunk_size ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- Streaming archive handle.
 				if ( $file_content === false ) {
 					throw new Backup_Lite_Wpress_Not_Readable_Exception(
-						sprintf( __( 'Could not read content from file. File: %s', 'museder-restoreone' ), $this->file_name )
+						sprintf(
+							/* translators: %s: archive file path */
+							esc_html__( 'Could not read content from file. File: %s', 'museder-restoreone' ),
+							esc_html( $this->file_name )
+						)
 					);
 				}
 
@@ -427,10 +484,14 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 					$file_content = Backup_Lite_Wpress_Crypto::decrypt_bytes( $file_content, (string) $this->decryption_password );
 				}
 
-				$written = @fwrite( $file_handle, $file_content );
+				$written = @fwrite( $file_handle, $file_content ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- Streaming large archive extraction.
 				if ( $written === false || strlen( $file_content ) !== $written ) {
 					throw new Backup_Lite_Wpress_Quota_Exceeded_Exception(
-						sprintf( __( 'Out of disk space. Could not write content to file. File: %s', 'museder-restoreone' ), $dest_file )
+						sprintf(
+							/* translators: %s: destination file path */
+							esc_html__( 'Out of disk space. Could not write content to file. File: %s', 'museder-restoreone' ),
+							esc_html( $dest_file )
+						)
 					);
 				}
 
@@ -444,21 +505,26 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 
 			$file_offset += $file_written;
 
-			@fclose( $file_handle );
+			@fclose( $file_handle ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Streaming large archive extraction.
 
 			if ( $completed ) {
-				@touch( $dest_file, $file_mtime );
-				@chmod( $dest_file, $this->get_permissions_for_file() );
+				@touch( $dest_file, $file_mtime ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_touch -- Best-effort mtime restore.
+				@chmod( $dest_file, $this->get_permissions_for_file() ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- Best-effort permission restore.
 			}
 		} else {
 			// No file permissions, skip remaining bytes.
-			if ( @fseek( $this->file_handle, $file_size, SEEK_CUR ) === -1 ) {
+			if ( @fseek( $this->file_handle, $file_size, SEEK_CUR ) === -1 ) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fseek -- Streaming archive handle.
 				throw new Backup_Lite_Wpress_Not_Seekable_Exception(
-					sprintf( __( 'Could not seek to offset of file. File: %s Offset: %d', 'museder-restoreone' ), $this->file_name, $file_size )
+					sprintf(
+						/* translators: 1: archive file path, 2: file offset in bytes */
+						esc_html__( 'Could not seek to offset of file. File: %1$s Offset: %2$d', 'museder-restoreone' ),
+						esc_html( $this->file_name ),
+						(int) $file_size
+					)
 				);
 			}
 		}
-		// phpcs:enable WordPress.WP.AlternativeFunctions.file_system_read_fseek, WordPress.WP.AlternativeFunctions.file_system_read_fopen, WordPress.WP.AlternativeFunctions.file_system_read_fread, WordPress.WP.AlternativeFunctions.file_system_read_fwrite
+		// phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fseek, WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose, WordPress.WP.AlternativeFunctions.file_system_operations_touch, WordPress.WP.AlternativeFunctions.file_system_operations_chmod
 
 		return $completed;
 	}
@@ -546,19 +612,19 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 		}
 
 		if ( path_is_absolute( $norm_rel ) ) {
-			throw new Backup_Lite_Wpress_Path_Traversal_Exception( __( 'Unsafe absolute path in archive.', 'museder-restoreone' ) );
+			throw new Backup_Lite_Wpress_Path_Traversal_Exception( esc_html__( 'Unsafe absolute path in archive.', 'museder-restoreone' ) );
 		}
 
 		foreach ( explode( '/', $norm_rel ) as $seg ) {
 			if ( $seg === '..' ) {
-				throw new Backup_Lite_Wpress_Path_Traversal_Exception( __( 'Unsafe path traversal in archive.', 'museder-restoreone' ) );
+				throw new Backup_Lite_Wpress_Path_Traversal_Exception( esc_html__( 'Unsafe path traversal in archive.', 'museder-restoreone' ) );
 			}
 		}
 
 		$joined = wp_normalize_path( $norm_base . '/' . $norm_rel );
 
 		if ( strpos( $joined . '/', rtrim( $norm_base, '/' ) . '/' ) !== 0 ) {
-			throw new Backup_Lite_Wpress_Path_Traversal_Exception( __( 'Unsafe extract path (outside base directory).', 'museder-restoreone' ) );
+			throw new Backup_Lite_Wpress_Path_Traversal_Exception( esc_html__( 'Unsafe extract path (outside base directory).', 'museder-restoreone' ) );
 		}
 
 		return str_replace( '/', DIRECTORY_SEPARATOR, $joined );

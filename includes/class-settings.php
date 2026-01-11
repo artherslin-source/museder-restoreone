@@ -71,19 +71,28 @@ class Backup_Lite_Settings {
         $backup_directory = isset( $value['backup_directory'] ) ? sanitize_text_field( $value['backup_directory'] ) : backup_lite_get_backup_dir();
         $backup_directory = wp_normalize_path( $backup_directory );
 
+        $ui_theme = $value['ui_theme'] ?? 'auto';
+        $ui_theme = in_array( $ui_theme, [ 'auto', 'light', 'dark' ], true ) ? $ui_theme : 'auto';
+
+        $backup_mode_default = $value['backup_mode_default'] ?? 'auto';
+        $backup_mode_default = in_array( $backup_mode_default, [ 'auto', 'balanced', 'fast' ], true ) ? $backup_mode_default : 'auto';
+
+        $backup_smart_exclude_default = $value['backup_smart_exclude_default'] ?? 'auto';
+        $backup_smart_exclude_default = in_array( $backup_smart_exclude_default, [ 'auto', 'on', 'off' ], true ) ? $backup_smart_exclude_default : 'auto';
+
         $sanitized = [
             'backup_directory'          => $backup_directory,
             'notification_email'        => isset( $value['notification_email'] ) ? sanitize_email( $value['notification_email'] ) : get_option( 'admin_email' ),
             'min_role'                  => $requested_role,
-            'ui_theme'                  => in_array( $value['ui_theme'] ?? 'auto', [ 'auto', 'light', 'dark' ], true ) ? $value['ui_theme'] : 'auto',
+            'ui_theme'                  => $ui_theme,
             'feature_restore_center_v2' => ! empty( $value['feature_restore_center_v2'] ),
             'feature_ui_animation'      => ! empty( $value['feature_ui_animation'] ),
             'feature_extended_log'      => ! empty( $value['feature_extended_log'] ),
             'feature_cloud_destinations' => false,
             'feature_advanced_filters'   => false,
             // Backup performance defaults (Free + Pro)
-            'backup_mode_default'        => in_array( $value['backup_mode_default'] ?? 'auto', [ 'auto', 'balanced', 'fast' ], true ) ? $value['backup_mode_default'] : 'auto',
-            'backup_smart_exclude_default' => in_array( $value['backup_smart_exclude_default'] ?? 'auto', [ 'auto', 'on', 'off' ], true ) ? $value['backup_smart_exclude_default'] : 'auto',
+            'backup_mode_default'        => $backup_mode_default,
+            'backup_smart_exclude_default' => $backup_smart_exclude_default,
             'backup_smart_exclude_threshold' => isset( $value['backup_smart_exclude_threshold'] ) ? absint( $value['backup_smart_exclude_threshold'] ) : 50000,
             'backup_custom_excludes'     => isset( $value['backup_custom_excludes'] ) ? sanitize_textarea_field( $value['backup_custom_excludes'] ) : '',
             'debug_mode'                 => false,

@@ -222,7 +222,9 @@ class Backup_Lite_Restore_Controller {
     protected static function error_response( Exception $e ) {
         return rest_ensure_response( [
             'ok'      => false,
-            'message' => $e->getMessage(),
+            // Do not expose raw exception messages to REST clients.
+            // @plugin-check: escaped
+            'message' => esc_html( $e->getMessage() ),
         ] );
     }
 }

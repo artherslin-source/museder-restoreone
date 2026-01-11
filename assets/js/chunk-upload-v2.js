@@ -2,7 +2,7 @@
     'use strict';
 
     const ui = window.BackupLiteUI || {};
-    const restConfig = window.BackupLiteV2 || {};
+    const restConfig = window.MusederRestoreOneV2 || {};
     const base = (restConfig.restUrl || '').replace(/\/?$/, '/');
     const restNonce = restConfig.nonce || '';
     const uploadHandlerUrl = restConfig.uploadHandler || '';
@@ -28,13 +28,13 @@
     const sha1El = progressWrap ? progressWrap.querySelector('.backup-lite-progress-sha1') : null;
     const searchToggle = document.getElementById('backup-lite-search-replace-toggle');
     const searchFields = form.querySelector('.backup-lite-search-replace-fields');
-    const allowedExt = ((ui.allowedExt || (window.BackupLite && window.BackupLite.chunk && window.BackupLite.chunk.allowedExt)) || ['zip', 'wpress']).map((ext) => ext.toLowerCase());
+    const allowedExt = ((ui.allowedExt || (window.MusederRestoreOneAdmin && window.MusederRestoreOneAdmin.chunk && window.MusederRestoreOneAdmin.chunk.allowedExt)) || ['zip', 'wpress']).map((ext) => ext.toLowerCase());
 
     const showMessage = typeof ui.showMessage === 'function' ? ui.showMessage : function () {};
     const handleError = typeof ui.handleError === 'function' ? ui.handleError : function () {};
     const refreshLogs = typeof ui.refreshLogs === 'function' ? ui.refreshLogs : function () {};
 
-    const CHUNK_SIZE = (window.BackupLite && window.BackupLite.chunk && window.BackupLite.chunk.chunkSize) || (2 * 1024 * 1024);
+    const CHUNK_SIZE = (window.MusederRestoreOneAdmin && window.MusederRestoreOneAdmin.chunk && window.MusederRestoreOneAdmin.chunk.chunkSize) || (2 * 1024 * 1024);
     const MAX_RETRIES = 5;
 
     let startTime = 0;

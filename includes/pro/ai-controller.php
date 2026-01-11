@@ -98,10 +98,31 @@ class Backup_Lite_AI_Controller {
     /**
      * Check user permission.
      * 
+     * Require manage_options + REST nonce for cookie-authenticated requests.
+     *
+     * @param WP_REST_Request $request Request.
      * @return bool
      */
-    public static function check_permission() {
-        return current_user_can( 'manage_options' );
+    public static function check_permission( WP_REST_Request $request ) {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            return false;
+        }
+
+        $nonce = (string) $request->get_header( 'X-WP-Nonce' );
+        if ( '' === $nonce ) {
+            $nonce = (string) $request->get_param( '_wpnonce' );
+        }
+
+        if ( '' === $nonce ) {
+            return false;
+        }
+
+        // wp_verify_nonce() can return 1|2|false. Ensure we explicitly verify the return value.
+        $verified = wp_verify_nonce( $nonce, 'wp_rest' );
+        if ( false === $verified ) {
+            return false;
+        }
+        return true;
     }
 
     /**

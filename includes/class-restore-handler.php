@@ -158,7 +158,8 @@ class Backup_Lite_Restore_Handler {
 
         // Verify temp chunk root is writable (plugin-controlled path).
         $chunk_root = self::chunk_root_dir();
-        $chunk_root_ok = ( $chunk_root && is_dir( $chunk_root ) && is_writable( $chunk_root ) );
+        // Use WP helper for portability across filesystems.
+        $chunk_root_ok = ( $chunk_root && is_dir( $chunk_root ) && wp_is_writable( $chunk_root ) );
 
         wp_send_json_success(
             [
@@ -196,25 +197,21 @@ class Backup_Lite_Restore_Handler {
         // Optimize runtime environment for large file processing
         self::optimize_runtime_environment();
 
-        // Nonce verified above
+        // Nonce verified above.
         // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
         $file = null;
+        // phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- tmp_name used as server-side path only after is_uploaded_file()
         if ( isset( $_FILES['file'], $_FILES['file']['tmp_name'] ) && is_uploaded_file( $_FILES['file']['tmp_name'] ) ) {
             // 已用 isset() + is_uploaded_file() 驗證。這裡只會把 tmp_name 當作伺服器端暫存檔路徑使用，不會輸出到前端。
-            // phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
             $file = $_FILES['file'];
-            // phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
         } elseif ( isset( $_FILES['restoreFile'], $_FILES['restoreFile']['tmp_name'] ) && is_uploaded_file( $_FILES['restoreFile']['tmp_name'] ) ) {
             // 已用 isset() + is_uploaded_file() 驗證。這裡只會把 tmp_name 當作伺服器端暫存檔路徑使用，不會輸出到前端。
-            // phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
             $file = $_FILES['restoreFile'];
-            // phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
         } elseif ( isset( $_FILES['restore_file'], $_FILES['restore_file']['tmp_name'] ) && is_uploaded_file( $_FILES['restore_file']['tmp_name'] ) ) {
             // 已用 isset() + is_uploaded_file() 驗證。這裡只會把 tmp_name 當作伺服器端暫存檔路徑使用，不會輸出到前端。
-            // phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
             $file = $_FILES['restore_file'];
-            // phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
         }
+        // phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
         // phpcs:enable WordPress.Security.NonceVerification.Missing
         if ( empty( $file ) ) {
             // @plugin-check: escaped
@@ -267,7 +264,7 @@ class Backup_Lite_Restore_Handler {
         // For very large files (>1GB), we skip automatic conversion to avoid timeouts
         // For large files (500MB-1GB), we attempt conversion with extended timeout
         // The restore process will attempt to handle the file directly if conversion is skipped
-        require_once plugin_dir_path( __FILE__ ) . 'class-ai1wm-converter.php';
+        require_once BACKUP_LITE_PATH . 'includes/class-ai1wm-converter.php';
         
         $should_attempt_conversion = true;
         if ( $file_size > $very_large_file_threshold ) {
@@ -416,7 +413,7 @@ class Backup_Lite_Restore_Handler {
         }
 
         // Check if this is an All-in-One WP Migration backup and convert it
-        require_once plugin_dir_path( __FILE__ ) . 'class-ai1wm-converter.php';
+        require_once BACKUP_LITE_PATH . 'includes/class-ai1wm-converter.php';
         
         try {
             if ( class_exists( 'Backup_Lite_AI1WM_Converter' ) && Backup_Lite_AI1WM_Converter::is_ai1wm_backup( $path ) ) {
@@ -535,7 +532,7 @@ class Backup_Lite_Restore_Handler {
         }
 
         // Check if this is an All-in-One WP Migration backup and convert it
-        require_once plugin_dir_path( __FILE__ ) . 'class-ai1wm-converter.php';
+        require_once BACKUP_LITE_PATH . 'includes/class-ai1wm-converter.php';
         
         try {
             if ( class_exists( 'Backup_Lite_AI1WM_Converter' ) && Backup_Lite_AI1WM_Converter::is_ai1wm_backup( $destination ) ) {
@@ -880,34 +877,17 @@ class Backup_Lite_Restore_Handler {
         if ( ob_get_level() ) {
             @ob_end_clean();
         }
-        
-        self::ensure_permission();
-        
-        // Try to verify AJAX request, but don't fail completely if nonce is invalid
-        // This allows status checks to continue even if nonce expires during long restore
-        $nonce_valid = false;
-        $nonce = isset( $_REQUEST['nonce'] ) ? sanitize_text_field( wp_unslash( $_REQUEST['nonce'] ) ) : '';
-        if ( ! empty( $nonce ) && wp_verify_nonce( $nonce, Backup_Lite_UI::NONCE ) ) {
-            $nonce_valid = true;
-        } else {
-            // Nonce validation failed, but we'll still try to return job status
-            // This is important for long-running restores where nonce may expire
-            backup_lite_log( 'warning', 'job_status_nonce_failed', [
-                'nonce_provided' => ! empty( $nonce ),
-                'nonce_length' => strlen( $nonce ),
-            ] );
-        }
 
+        self::ensure_permission();
+        Backup_Lite_UI::verify_ajax_request();
+        // Additional nonce verification for plugin-check.
+        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
+
+        // Nonce verified above
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
         $job_id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
+        // phpcs:enable WordPress.Security.NonceVerification.Missing
         if ( empty( $job_id ) ) {
-            // If nonce is invalid, return 403 instead of 400 to trigger nonce refresh
-            if ( ! $nonce_valid ) {
-                wp_send_json_error( [
-                    'code'    => 'invalid_nonce',
-                    // @plugin-check: escaped
-                    'message' => esc_html__( 'Your session has expired. Refreshing security token…', 'museder-restoreone' ),
-                ], 403 );
-            }
             // No job id: fall back to Restore_Service active job id or return history only.
             $active_job_id = class_exists( 'Backup_Lite_Restore_Service' ) ? Backup_Lite_Restore_Service::get_active_job_id() : '';
             if ( ! empty( $active_job_id ) ) {
@@ -945,13 +925,6 @@ class Backup_Lite_Restore_Handler {
             $status = Backup_Lite_Restore_Service::status( $job_id );
             $job    = self::map_restore_service_status_to_job( $job_id, $status );
         } catch ( Exception $e ) {
-            if ( ! $nonce_valid ) {
-                wp_send_json_error( [
-                    'code'    => 'invalid_nonce',
-                    // @plugin-check: escaped
-                    'message' => esc_html__( 'Your session has expired. Refreshing security token…', 'museder-restoreone' ),
-                ], 403 );
-            }
             wp_send_json_success( [
                 'job'     => null,
                 'history' => self::history_for_js( 10 ),
@@ -967,21 +940,6 @@ class Backup_Lite_Restore_Handler {
         if ( $safe_mode_active ) {
             $prev_plugins = get_option( 'backup_lite_prev_active_plugins', [] );
             $prev_plugins_count = is_array( $prev_plugins ) ? count( $prev_plugins ) : 0;
-        }
-
-        // If nonce is invalid but we have a valid job, still return the job status.
-        if ( ! $nonce_valid ) {
-            // Return success but include a flag to indicate nonce should be refreshed
-            wp_send_json_success(
-                [
-                    'job'     => $job,
-                    'history' => self::history_for_js( 10 ),
-                    'nonce_expired' => true, // Flag to trigger nonce refresh on frontend
-                    'safe_mode_active' => (bool) $safe_mode_active,
-                    'prev_plugins_count' => (int) $prev_plugins_count,
-                ]
-            );
-            return;
         }
 
         wp_send_json_success(
@@ -1309,6 +1267,7 @@ class Backup_Lite_Restore_Handler {
         self::ensure_permission();
         Backup_Lite_UI::verify_ajax_request();
 
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request()
         $filename = '';
         if ( isset( $_POST['filename'] ) ) {
             $filename = sanitize_file_name( wp_unslash( $_POST['filename'] ) );
@@ -1332,6 +1291,7 @@ class Backup_Lite_Restore_Handler {
             $total_chunks = absint( wp_unslash( $_POST['total_chunks'] ) );
         }
         // @plugin-check: validated
+        // phpcs:enable WordPress.Security.NonceVerification.Missing
 
         if ( ! $filename || ! $filesize || ! $chunk_size || ! $total_chunks ) {
             // @plugin-check: escaped
@@ -1390,6 +1350,7 @@ class Backup_Lite_Restore_Handler {
         self::ensure_permission();
         Backup_Lite_UI::verify_ajax_request();
 
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request()
         $session_id = '';
         if ( isset( $_POST['session_id'] ) ) {
             $session_id = sanitize_text_field( wp_unslash( $_POST['session_id'] ) );
@@ -1401,6 +1362,7 @@ class Backup_Lite_Restore_Handler {
             $index = absint( wp_unslash( $_POST['chunk_index'] ) );
         }
         // @plugin-check: validated
+        // phpcs:enable WordPress.Security.NonceVerification.Missing
 
         if ( ! $session_id || $index < 0 ) {
             // @plugin-check: escaped
@@ -1418,13 +1380,15 @@ class Backup_Lite_Restore_Handler {
             wp_send_json_error( [ 'message' => esc_html__( 'Invalid chunk index.', 'museder-restoreone' ) ], 400 );
         }
 
-        // 此方法是透過 verify_ajax_request() 間接呼叫，該函式已完成 nonce 驗證與權限檢查。
-        // 因此此處存取 $_FILES 僅使用已驗證過的請求資料。
-        // phpcs:disable WordPress.Security.NonceVerification.Missing
+        // 此方法透過 verify_ajax_request() 已完成 nonce 驗證與權限檢查。
+        // tmp_name 僅作為伺服器端暫存檔路徑使用，且經 is_uploaded_file() 驗證。
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request()
+        // phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- tmp_name used as server-side path only after is_uploaded_file()
         if ( ! isset( $_FILES['chunk']['tmp_name'] ) || ! is_uploaded_file( $_FILES['chunk']['tmp_name'] ) ) {
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'Invalid chunk file upload.', 'museder-restoreone' ) ], 400 );
         }
+        // phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
         // phpcs:enable WordPress.Security.NonceVerification.Missing
 
         // Direct-write mode: write chunk bytes into the final destination file at a known offset.
@@ -1436,9 +1400,11 @@ class Backup_Lite_Restore_Handler {
         }
         
         // 已用 isset() + is_uploaded_file() 驗證。這裡只會把 tmp_name 當作伺服器端暫存檔路徑使用，不會輸出到前端。
-        // phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request()
+        // phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- tmp_name used as server-side path only after is_uploaded_file()
         $tmp_name = $_FILES['chunk']['tmp_name'];
         // phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+        // phpcs:enable WordPress.Security.NonceVerification.Missing
 
         // Use stream_copy_to_stream instead of move_uploaded_file to avoid WordPress Plugin Check warning.
         // $final_path is in plugin-controlled backups dir, $tmp_name is verified via is_uploaded_file().
@@ -1510,7 +1476,9 @@ class Backup_Lite_Restore_Handler {
         self::ensure_permission();
         Backup_Lite_UI::verify_ajax_request();
 
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request()
         $session_id = isset( $_POST['session_id'] ) ? sanitize_text_field( wp_unslash( $_POST['session_id'] ) ) : '';
+        // phpcs:enable WordPress.Security.NonceVerification.Missing
 
         if ( ! $session_id ) {
             // @plugin-check: escaped
@@ -1602,7 +1570,9 @@ class Backup_Lite_Restore_Handler {
         self::ensure_permission();
         Backup_Lite_UI::verify_ajax_request();
 
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request()
         $session_id = isset( $_POST['session_id'] ) ? sanitize_text_field( wp_unslash( $_POST['session_id'] ) ) : '';
+        // phpcs:enable WordPress.Security.NonceVerification.Missing
         if ( $session_id ) {
             self::delete_chunk_session( $session_id );
         }
@@ -1619,7 +1589,9 @@ class Backup_Lite_Restore_Handler {
         self::ensure_permission();
         Backup_Lite_UI::verify_ajax_request();
 
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request()
         $session_id = isset( $_POST['session_id'] ) ? sanitize_text_field( wp_unslash( $_POST['session_id'] ) ) : '';
+        // phpcs:enable WordPress.Security.NonceVerification.Missing
         if ( ! $session_id ) {
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'Missing chunk session identifier.', 'museder-restoreone' ) ], 400 );
@@ -2420,96 +2392,6 @@ class Backup_Lite_Restore_Handler {
         }
     }
 
-    /**
-     * Restore plugin activation status from the backup database.
-     * This ensures plugins are activated/deactivated according to the original site state.
-     */
-    private static function restore_plugin_status() {
-        // First, try to get active_plugins from the temporary option (extracted from SQL file before import)
-        $active_plugins = get_option( 'backup_lite_restored_active_plugins', [] );
-        
-        // If not found, try to get from the restored database
-        if ( empty( $active_plugins ) || ! is_array( $active_plugins ) ) {
-            $active_plugins = get_option( 'active_plugins', [] );
-        }
-        
-        // Clean up temporary option
-        delete_option( 'backup_lite_restored_active_plugins' );
-        
-        if ( ! is_array( $active_plugins ) || empty( $active_plugins ) ) {
-            backup_lite_log( 'info', 'No active plugins found in restored database or SQL file, skipping plugin status restoration.', [] );
-            return;
-        }
-
-        // Get all installed plugins
-        if ( ! function_exists( 'get_plugins' ) ) {
-            require_once ABSPATH . 'wp-admin/includes/plugin.php';
-        }
-        
-        $all_plugins = get_plugins();
-        $plugins_dir = WP_PLUGIN_DIR;
-        
-        // Filter active plugins to only include those that actually exist
-        $valid_active_plugins = [];
-        $missing_plugins = [];
-        
-        foreach ( $active_plugins as $plugin_file ) {
-            $plugin_path = wp_normalize_path( trailingslashit( $plugins_dir ) . $plugin_file );
-            
-            // Check if plugin file exists
-            if ( file_exists( $plugin_path ) && isset( $all_plugins[ $plugin_file ] ) ) {
-                $valid_active_plugins[] = $plugin_file;
-            } else {
-                $missing_plugins[] = $plugin_file;
-            }
-        }
-        
-        // Log missing plugins
-        if ( ! empty( $missing_plugins ) ) {
-            backup_lite_log( 'warning', 'Some plugins from backup are missing and will not be activated.', [
-                'missing' => $missing_plugins,
-            ] );
-        }
-        
-        // Get currently active plugins
-        $current_active = get_option( 'active_plugins', [] );
-        
-        // Sort arrays for comparison (WordPress may store them in different order)
-        sort( $valid_active_plugins );
-        sort( $current_active );
-        
-        // Only update if there's a difference
-        if ( $valid_active_plugins !== $current_active ) {
-            // Update active_plugins option
-            // Restore original order from backup
-            $restored_order = [];
-            foreach ( $active_plugins as $plugin_file ) {
-                if ( in_array( $plugin_file, $valid_active_plugins, true ) ) {
-                    $restored_order[] = $plugin_file;
-                }
-            }
-            update_option( 'active_plugins', $restored_order );
-            
-            // Clear plugin cache to ensure WordPress recognizes the changes
-            wp_cache_delete( 'plugins', 'plugins' );
-            
-            // Also handle network-active plugins if multisite
-            if ( is_multisite() ) {
-                $network_active = get_site_option( 'active_sitewide_plugins', [] );
-                if ( ! empty( $network_active ) ) {
-                    backup_lite_log( 'info', 'Multisite network plugins detected, manual activation may be needed.', [
-                        'network_plugins' => array_keys( $network_active ),
-                    ] );
-                }
-            }
-            
-            backup_lite_log( 'info', 'Plugin activation status restored from backup.', [
-                'restored_count' => count( $restored_order ),
-                'missing_count' => count( $missing_plugins ),
-                'previous_count' => count( $current_active ),
-            ] );
-        } else {
-            backup_lite_log( 'info', 'Plugin activation status already matches backup, no changes needed.', [] );
-        }
-    }
+    // Note: We intentionally do not modify other plugins' activation status (active_plugins option).
+    // WordPress.org policy requires activation/deactivation to be performed by the user.
 }

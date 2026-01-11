@@ -2,7 +2,7 @@
     'use strict';
 
     const ui = window.BackupLiteUI || {};
-    const settings = window.BackupLite || {};
+    const settings = window.MusederRestoreOneAdmin || {};
     const chunkSettings = settings.chunk || {};
     const strings = ui.strings || {};
 

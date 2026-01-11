@@ -3,20 +3,8 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-// @plugin-check: safe - suppress error display during chunk upload processing to prevent output pollution
-// These settings are necessary to prevent PHP warnings/notices from breaking JSON responses during file uploads
-if ( ! defined( 'WP_DEBUG' ) || ! WP_DEBUG ) {
-    // Suppress error display during chunk upload processing to prevent output pollution.
-    // phpcs:ignore WordPress.PHP.IniSet -- suppress error display in production, only when WP_DEBUG is off
-    // Adjust display_errors for chunk upload handler.
-    // @phpcs:disable Squiz.PHP.DiscouragedFunctions.Discouraged
-    if ( function_exists( 'ini_set' ) ) {
-        @ini_set( 'display_errors', 0 );
-    }
-    // @phpcs:enable Squiz.PHP.DiscouragedFunctions.Discouraged
-    // phpcs:ignore WordPress.PHP.DevelopmentFunctions.prevent_path_disclosure_error_reporting -- suppress error reporting in production, only when WP_DEBUG is off
-    @error_reporting( E_ALL & ~E_NOTICE & ~E_WARNING );
-}
+// Note: Do not change global PHP ini settings here (e.g., display_errors) as it can affect other plugins/routes.
+// JSON responses are protected by proper output handling in the endpoint implementation.
 
 class Backup_Lite_Chunk_V2 {
 
@@ -578,6 +566,7 @@ class Backup_Lite_Chunk_V2 {
                 wp_delete_file( $final_path );
             } else {
                 if ( file_exists( $final_path ) ) {
+                    // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- fallback for non-standard environments where wp_delete_file() is unavailable
                     @unlink( $final_path );
                 }
             }

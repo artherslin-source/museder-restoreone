@@ -60,16 +60,8 @@ class Backup_Lite_Chunk_Handler {
 
     public static function handle_prepare_upload() {
         self::verify_permissions();
-        // Allow longer execution time for large backup/restore jobs when possible.
-        // phpcs:ignore WordPress.PHP.NoSetTimeLimit
-        if ( function_exists( 'set_time_limit' ) ) {
-        // Long-running backup/restore job: attempt to raise time limit for CLI/cron.
-        // @phpcs:disable Squiz.PHP.DiscouragedFunctions.Discouraged
-        if ( function_exists( 'set_time_limit' ) ) {
-            @set_time_limit( 60 );
-        }
-        // @phpcs:enable Squiz.PHP.DiscouragedFunctions.Discouraged
-        }
+        // Nonce verified in verify_permissions() above.
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_permissions() above
 
         $file_name = '';
         if ( isset( $_POST['file_name'] ) ) {
@@ -88,6 +80,7 @@ class Backup_Lite_Chunk_Handler {
             $total_chunks = absint( wp_unslash( $_POST['total_chunks'] ) );
         }
         // @plugin-check: validated
+        // phpcs:enable WordPress.Security.NonceVerification.Missing
 
         try {
             $session = self::create_session( $file_name, $file_size, $total_chunks );
@@ -100,16 +93,6 @@ class Backup_Lite_Chunk_Handler {
 
     public static function handle_chunk_upload() {
         self::verify_permissions();
-        // Allow longer execution time for large backup/restore jobs when possible.
-        // phpcs:ignore WordPress.PHP.NoSetTimeLimit
-        if ( function_exists( 'set_time_limit' ) ) {
-        // Long-running backup/restore job: attempt to raise time limit for CLI/cron.
-        // @phpcs:disable Squiz.PHP.DiscouragedFunctions.Discouraged
-        if ( function_exists( 'set_time_limit' ) ) {
-            @set_time_limit( 60 );
-        }
-        // @phpcs:enable Squiz.PHP.DiscouragedFunctions.Discouraged
-        }
 
         // Nonce verified in verify_permissions() above
         // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_permissions() above
@@ -148,7 +131,6 @@ class Backup_Lite_Chunk_Handler {
             $chunk_sha1 = sanitize_text_field( wp_unslash( $_POST['chunk_sha1'] ) );
         }
         // @plugin-check: sanitized
-        // phpcs:enable WordPress.Security.NonceVerification.Missing
 
         try {
             $meta = self::ensure_session_token( $upload_id, $token );
@@ -167,17 +149,16 @@ class Backup_Lite_Chunk_Handler {
 
             // @plugin-check: sanitized + nonce - verified via verify_permissions() above
             $uploaded_file = null;
+            // phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- tmp_name used as server-side path only after is_uploaded_file()
             if ( isset( $_FILES['file']['tmp_name'] ) && is_uploaded_file( $_FILES['file']['tmp_name'] ) ) {
                 // 已用 isset() + is_uploaded_file() 驗證。這裡只會把 tmp_name 當作伺服器端暫存檔路徑使用，不會輸出到前端。
-                // phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
                 $uploaded_file = $_FILES['file']['tmp_name'];
-                // phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
             } elseif ( isset( $_FILES['chunk']['tmp_name'] ) && is_uploaded_file( $_FILES['chunk']['tmp_name'] ) ) {
                 // 已用 isset() + is_uploaded_file() 驗證。這裡只會把 tmp_name 當作伺服器端暫存檔路徑使用，不會輸出到前端。
-                // phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
                 $uploaded_file = $_FILES['chunk']['tmp_name'];
-                // phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
             }
+            // phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+            // phpcs:enable WordPress.Security.NonceVerification.Missing
 
             if ( ! $uploaded_file ) {
                 throw new Backup_Lite_Chunk_Exception( 'no_upload', esc_html__( 'No chunk file uploaded.', 'museder-restoreone' ), [], 400 );
@@ -307,16 +288,8 @@ class Backup_Lite_Chunk_Handler {
 
     public static function handle_finalize_upload() {
         self::verify_permissions();
-        // Allow longer execution time for large backup/restore jobs when possible.
-        // phpcs:ignore WordPress.PHP.NoSetTimeLimit
-        if ( function_exists( 'set_time_limit' ) ) {
-        // Long-running backup/restore job: attempt to raise time limit for CLI/cron.
-        // @phpcs:disable Squiz.PHP.DiscouragedFunctions.Discouraged
-        if ( function_exists( 'set_time_limit' ) ) {
-            @set_time_limit( 900 );
-        }
-        // @phpcs:enable Squiz.PHP.DiscouragedFunctions.Discouraged
-        }
+        // Nonce verified in verify_permissions() above.
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_permissions() above
 
         $upload_id = '';
         if ( isset( $_POST['upload_id'] ) ) {
@@ -342,8 +315,6 @@ class Backup_Lite_Chunk_Handler {
         }
         // @plugin-check: sanitized
 
-        // Nonce verified in verify_permissions() above
-        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_permissions() above
         $replace_json = '';
         if ( isset( $_POST['search_replace'] ) ) {
             $replace_json = sanitize_text_field( wp_unslash( $_POST['search_replace'] ) );
@@ -376,19 +347,10 @@ class Backup_Lite_Chunk_Handler {
 
     public static function handle_abort_upload() {
         self::verify_permissions();
-        // Allow longer execution time for large backup/restore jobs when possible.
-        // phpcs:ignore WordPress.PHP.NoSetTimeLimit
-        if ( function_exists( 'set_time_limit' ) ) {
-        // Long-running backup/restore job: attempt to raise time limit for CLI/cron.
-        // @phpcs:disable Squiz.PHP.DiscouragedFunctions.Discouraged
-        if ( function_exists( 'set_time_limit' ) ) {
-            @set_time_limit( 60 );
-        }
-        // @phpcs:enable Squiz.PHP.DiscouragedFunctions.Discouraged
-        }
+        // Nonce verified in verify_permissions() above.
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_permissions() above
 
         // Nonce verified in verify_permissions() above
-        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_permissions() above
         $upload_id = '';
         if ( isset( $_POST['upload_id'] ) ) {
             $upload_id = sanitize_key( wp_unslash( $_POST['upload_id'] ) );

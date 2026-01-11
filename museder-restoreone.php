@@ -1,14 +1,14 @@
 <?php
 /*
 Plugin Name: Museder RestoreOne
-Plugin URI: https://museder.com/restoreone
+Plugin URI: https://musederlabs.com/
 Description: Museder RestoreOne is a simple backup & restore plugin for WordPress.
-Version: 2.7.128
+Version: 2.7.222
 Requires at least: 5.8
 Tested up to: 6.9
 Requires PHP: 7.4
 Author: Jerry Lin
-Author URI: https://museder.com/
+Author URI: https://profiles.wordpress.org/artherslin/
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 Text Domain: museder-restoreone
@@ -17,9 +17,9 @@ Domain Path: /languages
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-define( 'BACKUP_LITE_VERSION', '2.7.128' );
+define( 'BACKUP_LITE_VERSION', '2.7.222' );
 // Build identifier for debugging host-side opcode caching issues.
-define( 'BACKUP_LITE_BUILD_ID', '2.7.128-1' );
+define( 'BACKUP_LITE_BUILD_ID', '2.7.222-1' );
 define( 'BACKUP_LITE_PATH', plugin_dir_path( __FILE__ ) );
 define( 'BACKUP_LITE_URL', plugin_dir_url( __FILE__ ) );
 
@@ -131,6 +131,11 @@ function backup_lite_bootstrap() {
         // Run initialization tasks that were deferred from activation hook
         if ( function_exists( 'backup_lite_get_backup_dir' ) ) {
             try {
+                // Migrate any legacy storage locations into wp_upload_dir()/museder-restoreone (best-effort).
+                if ( function_exists( 'backup_lite_migrate_legacy_storage' ) ) {
+                    backup_lite_migrate_legacy_storage();
+                }
+
                 backup_lite_get_backup_dir();
                 backup_lite_get_log_dir();
                 backup_lite_get_temp_dir();
@@ -294,9 +299,9 @@ function backup_lite_render_dashboard() {
 
     wp_enqueue_script(
         'chartjs',
-        BACKUP_LITE_URL . 'assets/vendor/chart.4.4.4.min.js',
+        BACKUP_LITE_URL . 'assets/vendor/chart.4.5.1.min.js',
         [],
-        '4.4.4',
+        '4.5.1',
         true
     );
 
@@ -314,7 +319,7 @@ function backup_lite_render_dashboard() {
 
     wp_localize_script(
         'backup-lite-dashboard',
-        'BackupLiteDashboard',
+        'MusederRestoreOneDashboard',
         [
             'chart' => [
                 'success' => $chart_success,
@@ -403,7 +408,7 @@ function backup_lite_render_restore_page() {
 
     wp_localize_script(
         'backup-lite-restore',
-        'BackupLiteRestore',
+        'MusederRestoreOneRestore',
         [
             'restURL' => esc_url_raw( rest_url( 'backup-lite/v2/' ) ),
             'nonce'   => wp_create_nonce( 'wp_rest' ),
@@ -515,9 +520,9 @@ function backup_lite_render_pro_reports() {
     // Enqueue Chart.js for trend charts
     wp_enqueue_script(
         'chartjs',
-        BACKUP_LITE_URL . 'assets/vendor/chart.4.4.4.min.js',
+        BACKUP_LITE_URL . 'assets/vendor/chart.4.5.1.min.js',
         [],
-        '4.4.4',
+        '4.5.1',
         true
     );
 
@@ -531,7 +536,7 @@ function backup_lite_render_pro_reports() {
 
     wp_localize_script(
         'backup-lite-reports',
-        'BackupLiteReports',
+        'MusederRestoreOneReports',
         [
             'restUrl' => esc_url_raw( rest_url( 'backup-lite/v2/' ) ),
             'nonce'   => wp_create_nonce( 'wp_rest' ),

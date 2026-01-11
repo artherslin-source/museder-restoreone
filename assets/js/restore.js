@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var config = window.BackupLiteRestore || {};
+    var config = window.MusederRestoreOneRestore || {};
     var restURL = config.restURL || '';
     var nonce = config.nonce || '';
     var toast = window.Toastify || null;
@@ -21,7 +21,20 @@
             autoScroll: true,
             polling: null,
             lastStage: null,
-            lastMessage: null
+            lastMessage: null,
+
+            // Progress smoothing (UX): if server progress stalls, gently advance the bar.
+            // Parameters: stallAfterMs=8000, stepEveryMs=2000, stepDelta=0.2
+            smoother: {
+                displayProgress: 0,
+                serverProgress: 0,
+                lastServerProgress: null,
+                lastServerChangeAt: 0,
+                stage: '',
+                timer: null,
+                animTimer: null,
+                target: 0
+            }
         },
         refs: {},
         init: function () {
@@ -457,13 +470,165 @@
                 window.clearInterval(this.state.polling);
                 this.state.polling = null;
             }
+            this.stopSmoother();
+        },
+        stopSmoother: function () {
+            if (this.state.smoother && this.state.smoother.timer) {
+                window.clearInterval(this.state.smoother.timer);
+                this.state.smoother.timer = null;
+            }
+            if (this.state.smoother && this.state.smoother.animTimer) {
+                window.clearInterval(this.state.smoother.animTimer);
+                this.state.smoother.animTimer = null;
+            }
+        },
+        getStageCap: function (stage) {
+            stage = String(stage || '');
+            // Caps are used ONLY for stall smoothing, to avoid drifting into unrealistic ranges.
+            if (stage === 'prepared') return 10;
+            if (stage === 'validated') return 30;
+            if (stage === 'dry-run') return 60;
+            if (stage === 'restore-extract-db' || stage === 'restore-import-db') return 80;
+            if (stage === 'search-replace') return 96;
+            if (stage === 'restore-files' || stage === 'cleanup') return 99;
+            if (stage === 'done' || stage === 'failed' || stage === 'cancelled') return 100;
+            // Fallback: never auto-smooth to 100 for unknown stages.
+            return 99;
+        },
+        applySmoothProgress: function (serverProgress, stage) {
+            var now = Date.now();
+            var s = this.state.smoother;
+            if (!s) {
+                return serverProgress;
+            }
+
+            var sp = Number(serverProgress || 0);
+            if (isNaN(sp) || sp < 0) {
+                sp = 0;
+            }
+            if (sp > 100) {
+                sp = 100;
+            }
+            stage = String(stage || '');
+
+            // Initialize baseline.
+            if (s.lastServerProgress === null) {
+                s.lastServerProgress = sp;
+                s.serverProgress = sp;
+                s.displayProgress = sp;
+                s.lastServerChangeAt = now;
+                s.stage = stage;
+                s.target = sp;
+                return s.displayProgress;
+            }
+
+            // Detect stage change or server progress change.
+            var stageChanged = stage !== s.stage;
+            var progressChanged = sp !== s.lastServerProgress;
+            if (stageChanged || progressChanged) {
+                s.stage = stage;
+                s.serverProgress = sp;
+                s.lastServerProgress = sp;
+                s.lastServerChangeAt = now;
+                // Stop any existing timers; we'll either animate to target or re-evaluate stalling window.
+                this.stopSmoother();
+
+                // Never go backwards; never exceed server progress.
+                var current = Number(s.displayProgress || 0);
+                if (isNaN(current) || current < 0) {
+                    current = 0;
+                }
+                current = Math.min(100, Math.max(0, current));
+                s.target = Math.max(current, sp);
+
+                var delta = s.target - current;
+                if (delta >= 6) {
+                    var self = this;
+                    s.animTimer = window.setInterval(function () {
+                        var remaining = (s.target || 0) - (s.displayProgress || 0);
+                        if (remaining <= 0.05) {
+                            s.displayProgress = s.target || 0;
+                            if (self.refs && self.refs.progressBar) {
+                                self.refs.progressBar.style.width = Math.min(100, Math.max(0, s.displayProgress)) + '%';
+                            }
+                            self.stopSmoother();
+                            return;
+                        }
+                        var ratePerSec = 6 + Math.min(14, remaining); // 6–20 %/s
+                        var step = ratePerSec * 0.1; // tick=100ms
+                        s.displayProgress = Math.min(s.target || 0, (s.displayProgress || 0) + step);
+                        if (self.refs && self.refs.progressBar) {
+                            self.refs.progressBar.style.width = Math.min(100, Math.max(0, s.displayProgress)) + '%';
+                        }
+                    }, 100);
+                    return s.displayProgress;
+                }
+
+                s.displayProgress = s.target;
+                return s.displayProgress;
+            }
+
+            // If stalled long enough, start/continue smoothing.
+            var stallAfterMs = 8000;
+            var stepEveryMs = 2000;
+            var stepDelta = 0.2;
+            var cap = this.getStageCap(stage);
+            // Avoid touching 100 via smoothing.
+            var epsilon = 0.1;
+            var capMax = Math.max(0, cap - epsilon);
+
+            // If already at/above cap, don't smooth.
+            s.displayProgress = Math.max(s.displayProgress || 0, sp);
+            if (s.displayProgress >= capMax || cap >= 100 || sp >= 100) {
+                this.stopSmoother();
+                return s.displayProgress;
+            }
+
+            if ((now - (s.lastServerChangeAt || 0)) >= stallAfterMs) {
+                if (!s.timer) {
+                    var self = this;
+                    s.timer = window.setInterval(function () {
+                        // Recompute cap each tick in case stage changes.
+                        var stageNow = self.state && self.state.status ? String(self.state.status.stage || '') : stage;
+                        var capNow = self.getStageCap(stageNow);
+                        var capNowMax = Math.max(0, capNow - epsilon);
+                        var serverNow = Number(self.state && self.state.status ? (self.state.status.progress || 0) : sp);
+                        if (isNaN(serverNow) || serverNow < 0) {
+                            serverNow = 0;
+                        }
+
+                        // Never go backwards; never exceed cap.
+                        s.displayProgress = Math.max(s.displayProgress || 0, serverNow);
+                        var next = s.displayProgress + stepDelta;
+                        next = Math.min(next, capNowMax);
+                        next = Math.max(next, serverNow);
+                        s.displayProgress = next;
+
+                        if (self.refs && self.refs.progressBar) {
+                            self.refs.progressBar.style.width = Math.min(100, Math.max(0, s.displayProgress)) + '%';
+                        }
+
+                        // Stop smoothing if we reach cap or job completes.
+                        if (s.displayProgress >= capNowMax) {
+                            self.stopSmoother();
+                        }
+                        if (self.state && self.state.status && self.state.status.completed) {
+                            self.stopSmoother();
+                        }
+                    }, stepEveryMs);
+                }
+            }
+
+            return s.displayProgress;
         },
         updateProgress: function (status) {
             if (!this.refs.progressBar || !this.refs.progressText) {
                 return;
             }
             var progress = status.progress || 0;
-            this.refs.progressBar.style.width = Math.min(100, Math.max(0, progress)) + '%';
+            var stage = status.stage || '';
+            var displayProgress = this.applySmoothProgress(progress, stage);
+            this.refs.progressBar.style.width = Math.min(100, Math.max(0, displayProgress)) + '%';
             this.refs.progressText.textContent = status.message || this.formatStageLabel(status.stage || '') || '等待流程開始…';
         },
         updateHeader: function () {
@@ -796,14 +961,14 @@
         }
     };
 
-    window.BackupLiteRestoreCenter = RestoreCenter;
+    window.MusederRestoreOneRestoreCenter = RestoreCenter;
 })();
 document.addEventListener('DOMContentLoaded', function () {
-    if (window.BackupLiteRestoreLoaded) {
+    if (window.MusederRestoreOneRestoreLoaded) {
         return;
     }
-    window.BackupLiteRestoreLoaded = true;
-    if (window.BackupLiteRestoreCenter && typeof window.BackupLiteRestoreCenter.init === 'function') {
-        window.BackupLiteRestoreCenter.init();
+    window.MusederRestoreOneRestoreLoaded = true;
+    if (window.MusederRestoreOneRestoreCenter && typeof window.MusederRestoreOneRestoreCenter.init === 'function') {
+        window.MusederRestoreOneRestoreCenter.init();
     }
 });
