@@ -4,7 +4,11 @@ archive/
 .DS_Store
 node_modules/
 vendor/
+!assets/vendor/
+!assets/vendor/**
 logs/
+!logs/
+!logs/**
 
 museder-restoreone/
 
