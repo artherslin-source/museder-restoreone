@@ -1,0 +1,177 @@
+[2026-01-14T00:00:12+08:00] [INFO] Time budget reached, scheduling next batch. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","elapsed":33.52,"time_budget":12,"batches_processed":1}
+[2026-01-14T00:00:13+08:00] [INFO] Closed ZipArchive after time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","batches_processed":1,"completed":false}
+[2026-01-14T00:00:13+08:00] [INFO] Scheduled next batch with short interval. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","interval":13,"next_run":1768320026,"stage":"packing"}
+[2026-01-14T00:00:17+08:00] [INFO] Opened ZipArchive for time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f"}
+[2026-01-14T00:00:53+08:00] [INFO] Time budget reached, scheduling next batch. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","elapsed":35.48,"time_budget":12,"batches_processed":1}
+[2026-01-14T00:00:53+08:00] [INFO] Closed ZipArchive after time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","batches_processed":1,"completed":false}
+[2026-01-14T00:00:53+08:00] [INFO] Scheduled next batch with short interval. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","interval":19,"next_run":1768320072,"stage":"packing"}
+[2026-01-14T00:00:55+08:00] [INFO] Opened ZipArchive for time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f"}
+[2026-01-14T00:01:33+08:00] [INFO] Time budget reached, scheduling next batch. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","elapsed":38.3,"time_budget":12,"batches_processed":1}
+[2026-01-14T00:01:33+08:00] [INFO] Closed ZipArchive after time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","batches_processed":1,"completed":false}
+[2026-01-14T00:01:33+08:00] [INFO] Scheduled next batch with short interval. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","interval":12,"next_run":1768320105,"stage":"packing"}
+[2026-01-14T00:01:37+08:00] [INFO] Opened ZipArchive for time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f"}
+[2026-01-14T00:02:17+08:00] [INFO] Time budget reached, scheduling next batch. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","elapsed":40.34,"time_budget":12,"batches_processed":1}
+[2026-01-14T00:02:17+08:00] [INFO] Closed ZipArchive after time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","batches_processed":1,"completed":false}
+[2026-01-14T00:02:17+08:00] [INFO] Scheduled next batch with short interval. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","interval":20,"next_run":1768320157,"stage":"packing"}
+[2026-01-14T00:02:20+08:00] [INFO] Opened ZipArchive for time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f"}
+[2026-01-14T00:03:03+08:00] [INFO] Time budget reached, scheduling next batch. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","elapsed":43.19,"time_budget":12,"batches_processed":1}
+[2026-01-14T00:03:03+08:00] [INFO] Closed ZipArchive after time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","batches_processed":1,"completed":false}
+[2026-01-14T00:03:03+08:00] [INFO] Scheduled next batch with short interval. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","interval":11,"next_run":1768320194,"stage":"packing"}
+[2026-01-14T00:03:07+08:00] [INFO] Opened ZipArchive for time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f"}
+[2026-01-14T00:03:52+08:00] [INFO] Time budget reached, scheduling next batch. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","elapsed":45.74,"time_budget":12,"batches_processed":1}
+[2026-01-14T00:03:52+08:00] [INFO] Closed ZipArchive after time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","batches_processed":1,"completed":false}
+[2026-01-14T00:03:52+08:00] [INFO] Scheduled next batch with short interval. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","interval":14,"next_run":1768320246,"stage":"packing"}
+[2026-01-14T00:03:53+08:00] [INFO] Opened ZipArchive for time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f"}
+[2026-01-14T00:04:42+08:00] [INFO] Time budget reached, scheduling next batch. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","elapsed":48.42,"time_budget":12,"batches_processed":1}
+[2026-01-14T00:04:42+08:00] [INFO] Closed ZipArchive after time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","batches_processed":1,"completed":false}
+[2026-01-14T00:04:42+08:00] [INFO] Scheduled next batch with short interval. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","interval":12,"next_run":1768320294,"stage":"packing"}
+[2026-01-14T00:04:43+08:00] [INFO] Opened ZipArchive for time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f"}
+[2026-01-14T00:05:33+08:00] [INFO] Time budget reached, scheduling next batch. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","elapsed":50.12,"time_budget":12,"batches_processed":1}
+[2026-01-14T00:05:33+08:00] [INFO] Closed ZipArchive after time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","batches_processed":1,"completed":false}
+[2026-01-14T00:05:33+08:00] [INFO] Scheduled next batch with short interval. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","interval":16,"next_run":1768320349,"stage":"packing"}
+[2026-01-14T00:05:34+08:00] [INFO] Opened ZipArchive for time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f"}
+[2026-01-14T00:06:25+08:00] [INFO] Time budget reached, scheduling next batch. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","elapsed":51.01,"time_budget":12,"batches_processed":1}
+[2026-01-14T00:06:25+08:00] [INFO] Closed ZipArchive after time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","batches_processed":1,"completed":false}
+[2026-01-14T00:06:25+08:00] [INFO] Scheduled next batch with short interval. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","interval":15,"next_run":1768320400,"stage":"packing"}
+[2026-01-14T00:06:28+08:00] [INFO] Opened ZipArchive for time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f"}
+[2026-01-14T00:07:22+08:00] [INFO] Time budget reached, scheduling next batch. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","elapsed":53.5,"time_budget":12,"batches_processed":1}
+[2026-01-14T00:07:22+08:00] [INFO] Closed ZipArchive after time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","batches_processed":1,"completed":false}
+[2026-01-14T00:07:22+08:00] [INFO] Scheduled next batch with short interval. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","interval":10,"next_run":1768320452,"stage":"packing"}
+[2026-01-14T00:07:26+08:00] [INFO] Opened ZipArchive for time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f"}
+[2026-01-14T00:08:22+08:00] [INFO] Time budget reached, scheduling next batch. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","elapsed":56.48,"time_budget":12,"batches_processed":1}
+[2026-01-14T00:08:22+08:00] [INFO] Closed ZipArchive after time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","batches_processed":1,"completed":false}
+[2026-01-14T00:08:22+08:00] [INFO] Scheduled next batch with short interval. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","interval":11,"next_run":1768320513,"stage":"packing"}
+[2026-01-14T00:08:27+08:00] [INFO] Opened ZipArchive for time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f"}
+[2026-01-14T00:09:26+08:00] [INFO] Time budget reached, scheduling next batch. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","elapsed":59.13,"time_budget":12,"batches_processed":1}
+[2026-01-14T00:09:26+08:00] [INFO] Closed ZipArchive after time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","batches_processed":1,"completed":false}
+[2026-01-14T00:09:26+08:00] [INFO] Scheduled next batch with short interval. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","interval":13,"next_run":1768320579,"stage":"packing"}
+[2026-01-14T00:09:30+08:00] [INFO] Opened ZipArchive for time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f"}
+[2026-01-14T00:10:30+08:00] [INFO] Time budget reached, scheduling next batch. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","elapsed":60.49,"time_budget":12,"batches_processed":1}
+[2026-01-14T00:10:31+08:00] [INFO] Closed ZipArchive after time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","batches_processed":1,"completed":false}
+[2026-01-14T00:10:31+08:00] [INFO] Scheduled next batch with short interval. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","interval":11,"next_run":1768320642,"stage":"packing"}
+[2026-01-14T00:10:33+08:00] [INFO] Opened ZipArchive for time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f"}
+[2026-01-14T00:11:37+08:00] [INFO] Time budget reached, scheduling next batch. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","elapsed":64.11,"time_budget":12,"batches_processed":1}
+[2026-01-14T00:11:37+08:00] [INFO] Closed ZipArchive after time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","batches_processed":1,"completed":false}
+[2026-01-14T00:11:37+08:00] [INFO] Scheduled next batch with short interval. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","interval":16,"next_run":1768320713,"stage":"packing"}
+[2026-01-14T00:11:41+08:00] [INFO] Opened ZipArchive for time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f"}
+[2026-01-14T00:12:47+08:00] [INFO] Time budget reached, scheduling next batch. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","elapsed":65.87,"time_budget":12,"batches_processed":1}
+[2026-01-14T00:12:47+08:00] [INFO] Closed ZipArchive after time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","batches_processed":1,"completed":false}
+[2026-01-14T00:12:47+08:00] [INFO] Scheduled next batch with short interval. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","interval":12,"next_run":1768320779,"stage":"packing"}
+[2026-01-14T00:12:49+08:00] [INFO] Opened ZipArchive for time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f"}
+[2026-01-14T00:13:58+08:00] [INFO] Time budget reached, scheduling next batch. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","elapsed":68.76,"time_budget":12,"batches_processed":1}
+[2026-01-14T00:13:58+08:00] [INFO] Closed ZipArchive after time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","batches_processed":1,"completed":false}
+[2026-01-14T00:13:58+08:00] [INFO] Scheduled next batch with short interval. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","interval":18,"next_run":1768320856,"stage":"packing"}
+[2026-01-14T00:14:01+08:00] [INFO] Opened ZipArchive for time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f"}
+[2026-01-14T00:15:13+08:00] [INFO] Time budget reached, scheduling next batch. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","elapsed":71.43,"time_budget":12,"batches_processed":1}
+[2026-01-14T00:15:13+08:00] [INFO] Closed ZipArchive after time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","batches_processed":1,"completed":false}
+[2026-01-14T00:15:13+08:00] [INFO] Scheduled next batch with short interval. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","interval":20,"next_run":1768320933,"stage":"packing"}
+[2026-01-14T00:15:14+08:00] [INFO] Opened ZipArchive for time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f"}
+[2026-01-14T00:16:31+08:00] [INFO] Time budget reached, scheduling next batch. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","elapsed":76.54,"time_budget":12,"batches_processed":1}
+[2026-01-14T00:16:31+08:00] [INFO] Closed ZipArchive after time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","batches_processed":1,"completed":false}
+[2026-01-14T00:16:31+08:00] [INFO] Scheduled next batch with short interval. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","interval":11,"next_run":1768321002,"stage":"packing"}
+[2026-01-14T00:16:34+08:00] [INFO] Opened ZipArchive for time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f"}
+[2026-01-14T00:17:52+08:00] [INFO] Time budget reached, scheduling next batch. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","elapsed":78.5,"time_budget":12,"batches_processed":1}
+[2026-01-14T00:17:53+08:00] [INFO] Closed ZipArchive after time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","batches_processed":1,"completed":false}
+[2026-01-14T00:17:53+08:00] [INFO] Scheduled next batch with short interval. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","interval":19,"next_run":1768321092,"stage":"packing"}
+[2026-01-14T00:17:55+08:00] [INFO] Opened ZipArchive for time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f"}
+[2026-01-14T00:19:14+08:00] [INFO] Time budget reached, scheduling next batch. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","elapsed":78.75,"time_budget":12,"batches_processed":1}
+[2026-01-14T00:19:14+08:00] [INFO] Closed ZipArchive after time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","batches_processed":1,"completed":false}
+[2026-01-14T00:19:14+08:00] [INFO] Scheduled next batch with short interval. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","interval":10,"next_run":1768321164,"stage":"packing"}
+[2026-01-14T00:19:16+08:00] [INFO] Opened ZipArchive for time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f"}
+[2026-01-14T00:20:36+08:00] [INFO] Time budget reached, scheduling next batch. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","elapsed":80.11,"time_budget":12,"batches_processed":1}
+[2026-01-14T00:20:36+08:00] [INFO] Closed ZipArchive after time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","batches_processed":1,"completed":false}
+[2026-01-14T00:20:36+08:00] [INFO] Scheduled next batch with short interval. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","interval":19,"next_run":1768321255,"stage":"packing"}
+[2026-01-14T00:20:40+08:00] [INFO] Opened ZipArchive for time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f"}
+[2026-01-14T00:21:05+08:00] [INFO] Backup job cancelled by user. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","stage":"packing","status":"running"}
+[2026-01-14T00:21:06+08:00] [INFO] Backup job cancelled by user. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","stage":"cancelled","status":"cancelled"}
+[2026-01-14T00:22:02+08:00] [INFO] Time budget reached, scheduling next batch. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","elapsed":81.84,"time_budget":12,"batches_processed":1}
+[2026-01-14T00:22:02+08:00] [INFO] Closed ZipArchive after time budget loop. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","batches_processed":1,"completed":false}
+[2026-01-14T00:22:02+08:00] [INFO] Scheduled next batch with short interval. {"job_id":"a333111c-83cb-4083-9e42-bc737f8a997f","interval":12,"next_run":1768321334,"stage":"packing"}
+[2026-01-14T00:43:00+08:00] [INFO] Attempted OPcache invalidate for plugin files. {"invalidated":46,"failed":0,"files":46}
+[2026-01-14T00:43:00+08:00] [INFO] Backup Lite version updated. {"version":"2.7.234","build_id":"2.7.227-1","opcache":true,"php":"8.3.28"}
+[2026-01-14T00:44:20+08:00] [INFO] Time budget reached, scheduling next batch. {"job_id":"09d47348-c647-40f3-b9f1-18114a5b5bed","elapsed":27.61,"time_budget":25,"batches_processed":9}
+[2026-01-14T00:44:20+08:00] [INFO] Processed multiple batches in single request. {"job_id":"09d47348-c647-40f3-b9f1-18114a5b5bed","batches":9,"elapsed":27.61,"bytes":0,"mb_per_second":0,"backup_mode":"auto"}
+[2026-01-14T00:44:20+08:00] [INFO] Scheduled next batch with short interval. {"job_id":"09d47348-c647-40f3-b9f1-18114a5b5bed","interval":12,"next_run":1768322672,"stage":"preparing"}
+[2026-01-14T00:44:26+08:00] [INFO] Backup Auto mode decision. {"threshold_files":50000,"reached_threshold":false,"scanned_files":19878,"scanned_bytes":1878942036,"backup_mode_effective":"balanced","smart_exclude_effective":"off"}
+[2026-01-14T00:44:28+08:00] [INFO] Backup job prepared (sliced manifest). {"job":"09d47348-c647-40f3-b9f1-18114a5b5bed","files":18347,"bytes":1867024889,"backup_mode":"balanced","smart_exclude":"off"}
+[2026-01-14T00:46:38+08:00] [INFO] Time budget reached, scheduling next batch. {"job_id":"09d47348-c647-40f3-b9f1-18114a5b5bed","elapsed":133.71,"time_budget":12,"batches_processed":4}
+[2026-01-14T00:46:44+08:00] [INFO] Closed ZipArchive after time budget loop. {"job_id":"09d47348-c647-40f3-b9f1-18114a5b5bed","batches_processed":4,"completed":false}
+[2026-01-14T00:46:44+08:00] [INFO] Processed multiple batches in single request. {"job_id":"09d47348-c647-40f3-b9f1-18114a5b5bed","batches":4,"elapsed":140.34,"bytes":2456250,"mb_per_second":0.02,"backup_mode":"balanced"}
+[2026-01-14T00:46:44+08:00] [INFO] Scheduled next batch with short interval. {"job_id":"09d47348-c647-40f3-b9f1-18114a5b5bed","interval":19,"next_run":1768322823,"stage":"packing"}
+[2026-01-14T00:46:48+08:00] [INFO] Opened ZipArchive for time budget loop. {"job_id":"09d47348-c647-40f3-b9f1-18114a5b5bed"}
+[2026-01-14T00:49:02+08:00] [INFO] Closed ZipArchive after time budget loop. {"job_id":"09d47348-c647-40f3-b9f1-18114a5b5bed","batches_processed":100,"completed":false}
+[2026-01-14T00:49:02+08:00] [INFO] Processed multiple batches in single request. {"job_id":"09d47348-c647-40f3-b9f1-18114a5b5bed","batches":100,"elapsed":133.64,"bytes":1695655650,"mb_per_second":12.1,"backup_mode":"balanced"}
+[2026-01-14T00:49:02+08:00] [INFO] Scheduled next batch with short interval. {"job_id":"09d47348-c647-40f3-b9f1-18114a5b5bed","interval":14,"next_run":1768322956,"stage":"packing"}
+[2026-01-14T00:49:05+08:00] [INFO] Opened ZipArchive for time budget loop. {"job_id":"09d47348-c647-40f3-b9f1-18114a5b5bed"}
+[2026-01-14T00:49:06+08:00] [INFO] Packing reached end pointer; running integrity guards. {"job_id":"09d47348-c647-40f3-b9f1-18114a5b5bed","total_files":18347,"pointer":18347,"added_files":18347,"skipped_files":0,"total_bytes":1867024889,"added_bytes":1867024889,"pack_method":"ziparchive"}
+[2026-01-14T00:51:27+08:00] [INFO] Closed ZipArchive after time budget loop. {"job_id":"09d47348-c647-40f3-b9f1-18114a5b5bed","batches_processed":82,"completed":false}
+[2026-01-14T00:51:27+08:00] [INFO] Finalize snapshot (after close). {"job_id":"09d47348-c647-40f3-b9f1-18114a5b5bed","total_files":18347,"added_files":18347,"total_bytes":1867024889,"added_bytes":1867024889,"pointer":18347,"processed_files":18347,"pack_method":"ziparchive","finalize_step":"verify"}
+[2026-01-14T00:51:27+08:00] [INFO] Archive verify snapshot (after close). {"job_id":"09d47348-c647-40f3-b9f1-18114a5b5bed","ok":true,"checked":7,"missing":0,"samples":[],"roots":[]}
+[2026-01-14T00:51:27+08:00] [INFO] Backup job completed. {"archive":"\/home\/eo8lmixijvfj\/public_html\/sunpoweroflight.com_OFF\/wp-content\/uploads\/museder-restoreone\/backups\/sunpoweroflight.com-20260114004352-iBCWRz.zip","size":1439745124,"duration_seconds":455,"skipped_files":0,"skip_reasons":[]}
+[2026-01-14T00:51:27+08:00] [INFO] event=backup_result {"file":"\/home\/eo8lmixijvfj\/public_html\/sunpoweroflight.com_OFF\/wp-content\/uploads\/museder-restoreone\/backups\/sunpoweroflight.com-20260114004352-iBCWRz.zip","size_bytes":1439745124,"size_human":"1.34 GB","label":"","started_at":1768322632,"completed_at":1768323087,"duration_seconds":455,"status":"success","time":"2026-01-14 00:51:27","event":"backup_result"}
+[2026-01-14T00:51:27+08:00] [INFO] Processed multiple batches in single request. {"job_id":"09d47348-c647-40f3-b9f1-18114a5b5bed","batches":82,"elapsed":141.76,"bytes":168912989,"mb_per_second":1.14,"backup_mode":"balanced"}
+[2026-01-14T00:54:24+08:00] [INFO] Backup Lite build active. {"version":"2.7.234","build_id":"2.7.227-1","opcache":true}
+[2026-01-14T01:30:14+08:00] [[PREPARE_V2_OK]] {"upload_id":"6e66acb9-ab09-4228-aa3d-3f72ffef492b","filename":"sunpoweroflight.com-20260114004352-iBCWRz.zip","filesize":1260388352,"chunks":601} "INFO"
+[2026-01-14T01:31:59+08:00] [[PREPARE_V2_OK]] {"upload_id":"c81f00a4-edc6-4ce8-8c38-fe77625085cb","filename":"sunpoweroflight.com-20260114004352-iBCWRz.zip","filesize":1260388352,"chunks":601} "INFO"
+[2026-01-14T01:32:19+08:00] [[PREPARE_V2_OK]] {"upload_id":"ee360fd4-cba9-45ee-85e5-fbbfaf3a16c1","filename":"sunpoweroflight.com-20260114004352-iBCWRz.zip","filesize":1260388352,"chunks":601} "INFO"
+[2026-01-14T01:32:48+08:00] [[PREPARE_V2_OK]] {"upload_id":"085f11ae-ee06-4a14-96a9-4f0105f40b23","filename":"sunpoweroflight.com-20260114004352-iBCWRz.zip","filesize":1260388352,"chunks":601} "INFO"
+[2026-01-14T01:33:12+08:00] [[PREPARE_V2_OK]] {"upload_id":"b0df9042-7b48-4391-9ea2-07febd0bcf51","filename":"sunpoweroflight.com-20260114004352-iBCWRz.zip","filesize":1260388352,"chunks":601} "INFO"
+[2026-01-14T01:33:42+08:00] [[UPLOAD_V2_ABORT]] {"upload_id":"b0df9042-7b48-4391-9ea2-07febd0bcf51"} "INFO"
+[2026-01-14T01:33:47+08:00] [[UPLOAD_V2_ABORT]] {"upload_id":"b0df9042-7b48-4391-9ea2-07febd0bcf51"} "INFO"
+[2026-01-14T01:33:52+08:00] [[UPLOAD_V2_ABORT]] {"upload_id":"b0df9042-7b48-4391-9ea2-07febd0bcf51"} "INFO"
+[2026-01-14T01:33:59+08:00] [[UPLOAD_V2_ABORT]] {"upload_id":"b0df9042-7b48-4391-9ea2-07febd0bcf51"} "INFO"
+[2026-01-14T01:54:38+08:00] [INFO] Backup Lite build active. {"version":"2.7.234","build_id":"2.7.227-1","opcache":true}
+[2026-01-14T02:01:22+08:00] [INFO] Attempted OPcache invalidate for plugin files. {"invalidated":46,"failed":0,"files":46}
+[2026-01-14T02:01:22+08:00] [INFO] Backup Lite version updated. {"version":"2.7.235","build_id":"2.7.227-1","opcache":true,"php":"8.3.28"}
+[2026-01-14T02:02:02+08:00] [[PREPARE_V2_OK]] {"upload_id":"dd209cd4-b33f-4e41-b900-c48cae690b94","filename":"sunpoweroflight.com-20260114004352-iBCWRz.zip","filesize":1260388352,"chunks":601} "INFO"
+[2026-01-14T02:02:21+08:00] [[PREPARE_V2_OK]] {"upload_id":"845cc3fe-6913-4868-b9e3-ab1eda3adb3d","filename":"sunpoweroflight.com-20260114004352-iBCWRz.zip","filesize":1260388352,"chunks":601} "INFO"
+[2026-01-14T02:02:37+08:00] [[PREPARE_V2_OK]] {"upload_id":"154fda61-0acb-43cd-8415-201692736e62","filename":"sunpoweroflight.com-20260114004352-iBCWRz.zip","filesize":1260388352,"chunks":601} "INFO"
+[2026-01-14T02:03:15+08:00] [[PREPARE_V2_OK]] {"upload_id":"9a448e60-24f6-4621-9c10-28c48c05fded","filename":"sunpoweroflight.com-20260114004352-iBCWRz.zip","filesize":1260388352,"chunks":601} "INFO"
+[2026-01-14T02:03:46+08:00] [[PREPARE_V2_OK]] {"upload_id":"d1d7d3b9-ce58-4b25-95a3-e07a4de97772","filename":"sunpoweroflight.com-20260114004352-iBCWRz.zip","filesize":1260388352,"chunks":601} "INFO"
+[2026-01-14T02:04:08+08:00] [[PREPARE_V2_OK]] {"upload_id":"0850a150-7049-4373-9729-082b662ab38e","filename":"sunpoweroflight.com-20260114004352-iBCWRz.zip","filesize":1260388352,"chunks":601} "INFO"
+[2026-01-14T02:04:36+08:00] [[UPLOAD_V2_ABORT]] {"upload_id":"0850a150-7049-4373-9729-082b662ab38e"} "INFO"
+[2026-01-14T02:17:45+08:00] [INFO] Attempted OPcache invalidate for plugin files. {"invalidated":46,"failed":0,"files":46}
+[2026-01-14T02:17:45+08:00] [INFO] Backup Lite version updated. {"version":"2.7.236","build_id":"2.7.227-1","opcache":true,"php":"8.3.28"}
+[2026-01-14T02:19:20+08:00] [[PREPARE_V2_OK]] {"upload_id":"9035a699-fecc-41a2-837e-0c182d98062e","filename":"sunpoweroflight.com-20260114004352-iBCWRz.zip","filesize":1260388352,"chunks":601} "INFO"
+[2026-01-14T02:19:36+08:00] [[PREPARE_V2_OK]] {"upload_id":"54f9773c-2169-43af-8c4b-ab74ec179134","filename":"sunpoweroflight.com-20260114004352-iBCWRz.zip","filesize":1260388352,"chunks":601} "INFO"
+[2026-01-14T02:19:50+08:00] [[PREPARE_V2_OK]] {"upload_id":"1501c0e4-55e0-47b2-a4e9-c70a6489bed8","filename":"sunpoweroflight.com-20260114004352-iBCWRz.zip","filesize":1260388352,"chunks":601} "INFO"
+[2026-01-14T02:20:05+08:00] [[PREPARE_V2_OK]] {"upload_id":"3459677b-bf7b-4804-b5bf-e12fd1ad23c0","filename":"sunpoweroflight.com-20260114004352-iBCWRz.zip","filesize":1260388352,"chunks":601} "INFO"
+[2026-01-14T02:51:56+08:00] [[FINALIZE_V2_START]] {"upload_id":"3459677b-bf7b-4804-b5bf-e12fd1ad23c0","client_sha1":"2e26b0809e55c0eea0c83ba84a20b25889ca4ab7","chunk_count":601} "INFO"
+[2026-01-14T02:51:58+08:00] [[FINALIZE_V2_START]] {"upload_id":"3459677b-bf7b-4804-b5bf-e12fd1ad23c0","client_sha1":"2e26b0809e55c0eea0c83ba84a20b25889ca4ab7","chunk_count":601} "INFO"
+[2026-01-14T02:52:03+08:00] [[FINALIZE_V2_START]] {"upload_id":"3459677b-bf7b-4804-b5bf-e12fd1ad23c0","client_sha1":"2e26b0809e55c0eea0c83ba84a20b25889ca4ab7","chunk_count":601} "INFO"
+[2026-01-14T02:52:06+08:00] [[FINALIZE_V2_START]] {"upload_id":"3459677b-bf7b-4804-b5bf-e12fd1ad23c0","client_sha1":"2e26b0809e55c0eea0c83ba84a20b25889ca4ab7","chunk_count":601} "INFO"
+[2026-01-14T02:53:58+08:00] [[UPLOAD_V2_ABORT]] {"upload_id":"3459677b-bf7b-4804-b5bf-e12fd1ad23c0"} "INFO"
+[2026-01-14T02:53:58+08:00] [[UPLOAD_V2_ABORT]] {"upload_id":"3459677b-bf7b-4804-b5bf-e12fd1ad23c0"} "INFO"
+[2026-01-14T02:53:58+08:00] [[UPLOAD_V2_ABORT]] {"upload_id":"3459677b-bf7b-4804-b5bf-e12fd1ad23c0"} "INFO"
+[2026-01-14T02:53:58+08:00] [[UPLOAD_V2_ABORT]] {"upload_id":"3459677b-bf7b-4804-b5bf-e12fd1ad23c0"} "INFO"
+[2026-01-14T02:55:04+08:00] [INFO] Backup Lite build active. {"version":"2.7.236","build_id":"2.7.227-1","opcache":true}
+[2026-01-14T04:02:21+08:00] [INFO] Backup Lite build active. {"version":"2.7.236","build_id":"2.7.227-1","opcache":true}
+[2026-01-14T05:09:58+08:00] [INFO] Backup Lite build active. {"version":"2.7.236","build_id":"2.7.227-1","opcache":true}
+[2026-01-14T06:19:54+08:00] [INFO] Backup Lite build active. {"version":"2.7.236","build_id":"2.7.227-1","opcache":true}
+[2026-01-14T07:37:54+08:00] [INFO] Backup Lite build active. {"version":"2.7.236","build_id":"2.7.227-1","opcache":true}
+[2026-01-14T08:51:35+08:00] [INFO] Backup Lite build active. {"version":"2.7.236","build_id":"2.7.227-1","opcache":true}
+[2026-01-14T10:03:27+08:00] [INFO] Backup Lite build active. {"version":"2.7.236","build_id":"2.7.227-1","opcache":true}
+[2026-01-14T11:11:08+08:00] [INFO] Backup Lite build active. {"version":"2.7.236","build_id":"2.7.227-1","opcache":true}
+[2026-01-14T12:13:09+08:00] [INFO] Backup Lite build active. {"version":"2.7.236","build_id":"2.7.227-1","opcache":true}
+[2026-01-14T12:20:04+08:00] [INFO] Attempted OPcache invalidate for plugin files. {"invalidated":46,"failed":0,"files":46}
+[2026-01-14T12:20:04+08:00] [INFO] Backup Lite version updated. {"version":"2.7.237","build_id":"2.7.227-1","opcache":true,"php":"8.3.28"}
+[2026-01-14T12:22:32+08:00] [[PREPARE_V2_OK]] {"upload_id":"46d733db-8589-43a6-9b35-25c0b86ccefa","filename":"museder-restoreone-2.7.237.zip","filesize":663779,"chunks":1} "INFO"
+[2026-01-14T12:22:34+08:00] [[FINALIZE_V2_START]] {"upload_id":"46d733db-8589-43a6-9b35-25c0b86ccefa","client_sha1":"45d17a5cd3bc92228a4aab845ef5166a00757e3d","chunk_count":1} "INFO"
+[2026-01-14T12:22:34+08:00] [[FINALIZE_V2_OK]] {"upload_id":"46d733db-8589-43a6-9b35-25c0b86ccefa","sha1":"45d17a5cd3bc92228a4aab845ef5166a00757e3d","chunk_count":1} "INFO"
+[2026-01-14T12:22:34+08:00] [INFO] Restore prepare: detected DB prefixes. {"file":"final.zip","source_prefix":"","target_prefix":"ymra_"}
+[2026-01-14T12:23:50+08:00] [INFO] Restore job prepared. {"job_id":"rjb_20260114_122350_vffbse","file":"final.zip"}
+[2026-01-14T12:23:50+08:00] [INFO] Restore job validated. {"job_id":"rjb_20260114_122350_vffbse"}
+[2026-01-14T12:23:51+08:00] [ERROR] Restore job slice failed. {"job_id":"rjb_20260114_122350_vffbse","source":"cron","error":"database.ndjson not found in archive."}
+[2026-01-14T12:25:05+08:00] [[PREPARE_V2_OK]] {"upload_id":"ad1338a8-ecb3-456c-9928-ea65753f2040","filename":"sunpoweroflight.com-20260114004352-iBCWRz.zip","filesize":1260388352,"chunks":601} "INFO"
+[2026-01-14T13:00:08+08:00] [[FINALIZE_V2_START]] {"upload_id":"ad1338a8-ecb3-456c-9928-ea65753f2040","client_sha1":"2e26b0809e55c0eea0c83ba84a20b25889ca4ab7","chunk_count":601} "INFO"
+[2026-01-14T13:01:11+08:00] [INFO] Restore job prepared. {"job_id":"rjb_20260114_130111_nuj51k","file":"final.zip"}
+[2026-01-14T13:01:11+08:00] [INFO] Restore job validated. {"job_id":"rjb_20260114_130111_nuj51k"}
+[2026-01-14T13:01:11+08:00] [ERROR] Restore job slice failed. {"job_id":"rjb_20260114_130111_nuj51k","source":"cron","error":"database.ndjson not found in archive."}
+[2026-01-14T13:02:12+08:00] [[FINALIZE_V2_ZIP_ERROR]] {"upload_id":"ad1338a8-ecb3-456c-9928-ea65753f2040","zip_error_code":19} "ERROR"
+[2026-01-14T13:14:49+08:00] [INFO] Backup Lite build active. {"version":"2.7.237","build_id":"2.7.227-1","opcache":true}
+[2026-01-14T13:30:12+08:00] [[PREPARE_V2_OK]] {"upload_id":"7274b211-91b7-455d-aaca-66a90b1d69a8","filename":"sunpoweroflight.com-20260114004352-iBCWRz.zip","filesize":1260388352,"chunks":601} "INFO"
+[2026-01-14T14:06:01+08:00] [[FINALIZE_V2_START]] {"upload_id":"7274b211-91b7-455d-aaca-66a90b1d69a8","client_sha1":"2e26b0809e55c0eea0c83ba84a20b25889ca4ab7","chunk_count":601} "INFO"
+[2026-01-14T14:07:35+08:00] [INFO] Restore job prepared. {"job_id":"rjb_20260114_140735_zywgdf","file":"final.zip"}
+[2026-01-14T14:07:35+08:00] [INFO] Restore job validated. {"job_id":"rjb_20260114_140735_zywgdf"}
+[2026-01-14T14:07:36+08:00] [ERROR] Restore job slice failed. {"job_id":"rjb_20260114_140735_zywgdf","source":"cron","error":"database.ndjson not found in archive."}
+[2026-01-14T14:08:06+08:00] [[FINALIZE_V2_ZIP_ERROR]] {"upload_id":"7274b211-91b7-455d-aaca-66a90b1d69a8","zip_error_code":19} "ERROR"

@@ -1,0 +1,54 @@
+services:
+  db:
+    image: mariadb:10.11
+    environment:
+      MYSQL_DATABASE: wordpress
+      MYSQL_USER: wordpress
+      MYSQL_PASSWORD: wordpress
+      MYSQL_ROOT_PASSWORD: root
+    volumes:
+      - db_data:/var/lib/mysql
+
+  wordpress:
+    image: wordpress:6.6.2-php8.2-apache
+    depends_on:
+      - db
+    ports:
+      - "8080:80"
+    environment:
+      WORDPRESS_DB_HOST: db:3306
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: wordpress
+      WORDPRESS_DB_NAME: wordpress
+      WORDPRESS_DEBUG: "0"
+    volumes:
+      - wp_data:/var/www/html
+      # Mount repo as source (NOT as plugin dir) to avoid WordPress scanning large dev folders (logs/docs).
+      - ./:/tmp/museder-restoreone-src:ro
+      # Local test assets (theme/plugin zips)
+      - ./logs/test-one:/tmp/test-one:ro
+      # PHP limits for large backup/restore testing
+      - ./tools/docker/php.ini:/usr/local/etc/php/conf.d/zzz-museder-restoreone.ini:ro
+
+  wpcli:
+    image: wordpress:cli-php8.2
+    user: "33:33"
+    depends_on:
+      - wordpress
+    environment:
+      WORDPRESS_DB_HOST: db:3306
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: wordpress
+      WORDPRESS_DB_NAME: wordpress
+    volumes:
+      - wp_data:/var/www/html
+      - ./:/tmp/museder-restoreone-src:ro
+      - ./logs/test-one:/tmp/test-one:ro
+      - ./tools/docker/php.ini:/usr/local/etc/php/conf.d/zzz-museder-restoreone.ini:ro
+    working_dir: /var/www/html
+    entrypoint: ["wp"]
+
+volumes:
+  db_data:
+  wp_data:
+

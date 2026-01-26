@@ -1,0 +1,137 @@
+[
+    {
+        "job_id": "rjb_20260115_024154_mjrq4v",
+        "timestamp_utc": 1768416119,
+        "date": "2026-01-14 18:41:59",
+        "file": "sunpoweroflight.com-20260114004352-iBCWRz-1.zip",
+        "result": "failed",
+        "duration_seconds": 0,
+        "restore_started_at": 1768416119,
+        "restore_completed_at": 1768416119,
+        "restore_duration_seconds": 0,
+        "message": "Database backup not found in archive. Enable \u201cfiles-only restore\u201d to restore files without database, or recreate the backup with the updated plugin."
+    },
+    {
+        "job_id": "upload_4c7e7ebd-e9ef-43a9-8a57-89bec3697a1f",
+        "timestamp_utc": 1768416067,
+        "date": "2026-01-14 18:41:07",
+        "file": "sunpoweroflight.com-20260114004352-iBCWRz.zip",
+        "result": "pending",
+        "message": "finalize_ziparchive_unavailable",
+        "duration_seconds": 0,
+        "restore_started_at": 0,
+        "restore_completed_at": 0,
+        "restore_duration_seconds": 0,
+        "details": {
+            "zip_error_code": "19",
+            "final_size": "1260388352"
+        }
+    },
+    {
+        "job_id": "upload_06bd55aa-a59c-45e2-981b-c5310de7b00d",
+        "timestamp_utc": 1768413048,
+        "date": "2026-01-14 17:50:48",
+        "file": "sunpoweroflight.com-20260114004352-iBCWRz.zip",
+        "result": "failed",
+        "message": "finalize_zip_invalid",
+        "duration_seconds": 0,
+        "restore_started_at": 0,
+        "restore_completed_at": 0,
+        "restore_duration_seconds": 0,
+        "details": {
+            "zip_error_code": "19",
+            "final_size": "1260388352"
+        }
+    },
+    {
+        "job_id": "rjb_20260114_140735_zywgdf",
+        "timestamp_utc": 1768370856,
+        "date": "2026-01-14 06:07:36",
+        "file": "final.zip",
+        "result": "failed",
+        "message": "database.ndjson not found in archive.",
+        "duration_seconds": 1,
+        "restore_started_at": 1768370855,
+        "restore_completed_at": 1768370856,
+        "restore_duration_seconds": 1
+    },
+    {
+        "job_id": "rjb_20260114_130111_nuj51k",
+        "timestamp_utc": 1768366871,
+        "date": "2026-01-14 05:01:11",
+        "file": "final.zip",
+        "result": "failed",
+        "message": "database.ndjson not found in archive.",
+        "duration_seconds": 0,
+        "restore_started_at": 1768366871,
+        "restore_completed_at": 1768366871,
+        "restore_duration_seconds": 0
+    },
+    {
+        "job_id": "rjb_20260114_122350_vffbse",
+        "timestamp_utc": 1768364631,
+        "date": "2026-01-14 04:23:51",
+        "file": "final.zip",
+        "result": "failed",
+        "message": "database.ndjson not found in archive.",
+        "duration_seconds": 1,
+        "restore_started_at": 1768364630,
+        "restore_completed_at": 1768364631,
+        "restore_duration_seconds": 1
+    },
+    {
+        "job_id": "rjb_20260107_162318_ib66dh",
+        "timestamp_utc": 1767774474,
+        "date": "2026-01-07 08:27:54",
+        "file": "sunpoweroflight.com-20260107160856-rze4rr.zip",
+        "result": "success",
+        "duration_seconds": 271,
+        "restore_started_at": 1767774203,
+        "restore_completed_at": 1767774474,
+        "restore_duration_seconds": 271
+    },
+    {
+        "job_id": "rjb_20260107_124718_tblf1x",
+        "timestamp_utc": 1767763424,
+        "date": "2026-01-07 05:23:44",
+        "file": "sunpoweroflight.com-20260107052120-XNS7UI-1.zip",
+        "result": "success",
+        "duration_seconds": 2181,
+        "restore_started_at": 1767761243,
+        "restore_completed_at": 1767763424,
+        "restore_duration_seconds": 2181
+    },
+    {
+        "job_id": "rjb_20260107_010802_mqbomz",
+        "timestamp_utc": 1767719633,
+        "date": "2026-01-06 17:13:53",
+        "file": "sunpoweroflight.com-20260107002726-oeoe8y-1.zip",
+        "result": "success",
+        "duration_seconds": 345,
+        "restore_started_at": 1767719288,
+        "restore_completed_at": 1767719633,
+        "restore_duration_seconds": 345
+    },
+    {
+        "job_id": "rjb_20260106_021006_o29sab",
+        "timestamp_utc": 1767636867,
+        "date": "2026-01-05 18:14:27",
+        "file": "sunpoweroflight.com-20260106010939-MUMmIw.zip",
+        "result": "success",
+        "duration_seconds": 256,
+        "restore_started_at": 1767636611,
+        "restore_completed_at": 1767636867,
+        "restore_duration_seconds": 256
+    },
+    {
+        "job_id": "rjb_20260106_012246_is8oge",
+        "timestamp_utc": 1767634037,
+        "date": "2026-01-05 17:27:17",
+        "file": "sunpoweroflight.com-20260106010939-MUMmIw.zip",
+        "result": "success",
+        "duration_seconds": 266,
+        "restore_started_at": 1767633771,
+        "restore_completed_at": 1767634037,
+        "restore_duration_seconds": 266
+    }
+]

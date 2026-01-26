@@ -1,0 +1,8 @@
+[2026-01-15T00:05:36+08:00] [INFO] Backup Lite build active. {"version":"2.7.238","build_id":"2.7.227-1","opcache":true}
+[2026-01-15T01:05:49+08:00] [INFO] Backup Lite build active. {"version":"2.7.238","build_id":"2.7.227-1","opcache":true}
+[2026-01-15T01:08:39+08:00] [INFO] Attempted OPcache invalidate for plugin files. {"invalidated":46,"failed":0,"files":46}
+[2026-01-15T01:08:39+08:00] [INFO] Backup Lite version updated. {"version":"2.7.239","build_id":"2.7.227-1","opcache":true,"php":"8.3.28"}
+[2026-01-15T01:09:31+08:00] [[PREPARE_V2_OK]] {"upload_id":"06bd55aa-a59c-45e2-981b-c5310de7b00d","filename":"sunpoweroflight.com-20260114004352-iBCWRz.zip","filesize":1260388352,"chunks":601} "INFO"
+[2026-01-15T01:48:45+08:00] [[FINALIZE_V2_START]] {"upload_id":"06bd55aa-a59c-45e2-981b-c5310de7b00d","client_sha1":"2e26b0809e55c0eea0c83ba84a20b25889ca4ab7","chunk_count":601} "INFO"
+[2026-01-15T01:50:48+08:00] [[FINALIZE_V2_ZIP_ERROR]] {"upload_id":"06bd55aa-a59c-45e2-981b-c5310de7b00d","zip_error_code":19} "ERROR"
+[2026-01-15T01:50:50+08:00] [[UPLOAD_V2_ABORT]] {"upload_id":"06bd55aa-a59c-45e2-981b-c5310de7b00d"} "INFO"
