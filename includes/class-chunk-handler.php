@@ -317,7 +317,8 @@ class Backup_Lite_Chunk_Handler {
 
         $replace_json = '';
         if ( isset( $_POST['search_replace'] ) ) {
-            $replace_json = sanitize_text_field( wp_unslash( $_POST['search_replace'] ) );
+            // Sanitize as a plain text blob (preserve newlines), then decode JSON and sanitize decoded values.
+            $replace_json = sanitize_textarea_field( wp_unslash( $_POST['search_replace'] ) );
         }
         // phpcs:enable WordPress.Security.NonceVerification.Missing
         // JSON will be decoded and sanitized
@@ -326,13 +327,19 @@ class Backup_Lite_Chunk_Handler {
         if ( ! empty( $replace_json ) ) {
             $decoded = json_decode( $replace_json, true );
             if ( is_array( $decoded ) ) {
-                // Sanitize all string values in the array recursively
-                $search_replace = array_map( function( $item ) {
-                    if ( is_array( $item ) ) {
-                        return array_map( 'sanitize_text_field', $item );
-                    }
-                    return sanitize_text_field( $item );
-                }, $decoded );
+                // Sanitize decoded values (best-effort).
+                $search_replace = array_map(
+                    static function ( $item ) {
+                        if ( is_array( $item ) ) {
+                            return array_map( 'sanitize_text_field', $item );
+                        }
+                        if ( is_string( $item ) ) {
+                            return sanitize_text_field( $item );
+                        }
+                        return $item;
+                    },
+                    $decoded
+                );
             }
         }
 
@@ -393,11 +400,7 @@ class Backup_Lite_Chunk_Handler {
             throw new Backup_Lite_Chunk_Exception( 'invalid_chunks', esc_html__( 'Total chunk count is invalid.', 'museder-restoreone' ), [], 400 );
         }
 
-        if ( ! function_exists( 'wp_generate_uuid4' ) ) {
-            require_once ABSPATH . 'wp-includes/compat.php';
-        }
-
-        $upload_id = wp_generate_uuid4();
+        $upload_id = self::generate_uuid4();
         $token     = wp_generate_password( 20, false, false );
 
         $meta = [
@@ -422,6 +425,43 @@ class Backup_Lite_Chunk_Handler {
             'chunk_size'   => self::CHUNK_SIZE,
             'max_size'     => self::MAX_FILE_SIZE,
         ];
+    }
+
+    /**
+     * Generate a UUIDv4 without requiring core includes.
+     *
+     * @return string
+     */
+    protected static function generate_uuid4() {
+        if ( function_exists( 'wp_generate_uuid4' ) ) {
+            return wp_generate_uuid4();
+        }
+
+        try {
+            $data = random_bytes( 16 );
+        } catch ( Throwable $e ) {
+            // Fallback to a weaker source if random_bytes is unavailable.
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.rand_rand
+            $data = '';
+            for ( $i = 0; $i < 16; $i++ ) {
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.rand_rand
+                $data .= chr( rand( 0, 255 ) );
+            }
+        }
+
+        // Set version to 0100 and variant to 10xx.
+        $data[6] = chr( ( ord( $data[6] ) & 0x0f ) | 0x40 );
+        $data[8] = chr( ( ord( $data[8] ) & 0x3f ) | 0x80 );
+
+        $hex = bin2hex( $data );
+        return sprintf(
+            '%s-%s-%s-%s-%s',
+            substr( $hex, 0, 8 ),
+            substr( $hex, 8, 4 ),
+            substr( $hex, 12, 4 ),
+            substr( $hex, 16, 4 ),
+            substr( $hex, 20, 12 )
+        );
     }
 
     public static function create_session_for_test( $original_name, $total_size, $total_chunks ) {
@@ -1062,8 +1102,8 @@ class Backup_Lite_Chunk_Handler {
             ];
         }
 
-        if ( ! class_exists( 'PclZip' ) ) {
-            require_once ABSPATH . 'wp-admin/includes/class-pclzip.php';
+        if ( function_exists( 'backup_lite_require_pclzip' ) ) {
+            backup_lite_require_pclzip();
         }
 
         if ( ! class_exists( 'PclZip' ) ) {

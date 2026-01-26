@@ -4,7 +4,7 @@ Tags: backup, migration, restore, site-backup, database-backup
 Requires at least: 5.8
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 2.7.222
+Stable tag: 2.7.241
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -26,7 +26,7 @@ For full changelog history, please see the project repository changelog archive.
 
 Museder RestoreOne lets you create complete WordPress backups (database + `wp-content`) as a single archive, and restore them in a guided 3-step wizard.
 
-It is designed for shared hosting environments and includes safe fallbacks when `mysqldump`, `ZipArchive`, or shell functions are not available.
+It is designed for shared hosting environments and uses WordPress APIs for database backup/restore, with archive compression handled by `ZipArchive` or WordPress’ bundled PclZip.
 
 **Key features**
 
@@ -40,7 +40,7 @@ It is designed for shared hosting environments and includes safe fallbacks when 
   Bypass `upload_max_filesize` / `post_max_size` limits by uploading your archive in small chunks, with retries and integrity checks.
 
 * Shared-hosting friendly  
-  Automatically falls back from `mysqldump` and `ZipArchive` to pure PHP export and PclZip compression when needed.
+  Uses pure PHP + WordPress APIs for database backup/restore, and falls back from `ZipArchive` to PclZip compression when needed.
 
 * Schedules and logs  
   Create at least one automatic schedule, then inspect, download, or clean up structured backup and restore logs.
@@ -59,15 +59,15 @@ When PRO features are enabled and configured by the site owner, the plugin may c
 - What for: Upload backup archives to a cloud storage bucket configured by the site owner.
 - What data is sent: The backup archive file itself (which can contain site files and database content). Nothing is uploaded unless the site owner explicitly enables cloud destinations and triggers an upload.
 - When: Only when the site owner runs a backup with cloud upload enabled (manual or scheduled).
-- Domains/Endpoints: Typically connects to `*.amazonaws.com` (for example `s3.{region}.amazonaws.com` or `{bucket}.s3.{region}.amazonaws.com`) or the configured S3-compatible endpoint.
-- Terms/Privacy: Governed by the chosen provider (Amazon S3 or the configured S3-compatible provider). For Amazon Web Services, see `https://aws.amazon.com/service-terms/` and `https://aws.amazon.com/privacy/`.
+- Domains/Endpoints: Typically connects to *.amazonaws.com (for example s3.{region}.amazonaws.com or {bucket}.s3.{region}.amazonaws.com) or the configured S3-compatible endpoint.
+- Terms/Privacy: Governed by the chosen provider (Amazon S3 or the configured S3-compatible provider). For Amazon Web Services, see https://aws.amazon.com/service-terms/ and https://aws.amazon.com/privacy/.
 
 = OpenAI (AI features) =
 
 - What for: Optional AI-based analysis, reports, and smart scheduling (PRO only).
 - What data is sent: Only the data explicitly provided for analysis by the site owner through the plugin UI/API. AI features are opt-in and disabled by default unless configured.
 - When: Only when the site owner triggers an AI action in the plugin.
-- Terms/Privacy: Governed by OpenAI's terms and privacy policy: `https://openai.com/policies/terms-of-use` and `https://openai.com/policies/privacy-policy`.
+- Terms/Privacy: Governed by OpenAI's terms and privacy policy: https://openai.com/policies/terms-of-use and https://openai.com/policies/privacy-policy.
 
 == Installation ==
 
@@ -82,16 +82,23 @@ When PRO features are enabled and configured by the site owner, the plugin may c
 
 Each backup archive includes:
 
-* `database.sql` — a full dump of your WordPress database.  
+* `database.ndjson` — a structured export of your WordPress database (plugin-owned format).  
 * `meta.json` — metadata about when and how the backup was created.  
 * `wp-content/` — your themes, plugins, and uploads.
 
 Together, these files are enough to recreate your site on the same or another server.
 
+= Are there any file size limits? =
+
+Yes. For safety and compatibility, **single files larger than 2GB are skipped** during backup. This means they will not be included in the backup ZIP and will not be restored.
+
+Sites larger than 2GB in total size can still be backed up and restored successfully as long as each individual file is smaller than 2GB.
+
+When files are skipped, the backup completion message shows the skip reasons and examples.
+
 = What happens if mysqldump is not available? =
 
-Museder RestoreOne automatically detects whether `mysqldump` is available.  
-If it is not, the plugin falls back to a pure PHP export to generate the `database.sql` file. This makes the plugin suitable for shared hosting and restrictive environments.
+Museder RestoreOne does not require `mysqldump`. Database backup/restore is implemented in pure PHP using WordPress database APIs.
 
 = What if ZipArchive is not enabled on my server? =
 
@@ -127,6 +134,13 @@ No. Backup download and upload endpoints are protected by time-limited tokens an
 6. Settings page with general options and system diagnostics.
 
 == Changelog ==
+
+= 2.7.223 =
+* Compliance: Reworked deprecated download handler to avoid bootstrapping WordPress and route downloads via admin-post.php.
+* Compliance: Documented external services with plain Terms/Privacy URLs for review tooling.
+* Security: Added explicit nonce checks in key AJAX handlers for clearer automated detection.
+* Security: Hardened restore SQL import with a conservative allow/deny statement strategy.
+* Compatibility: Reduced reliance on hard-coded WP_* directory constants by using wp_upload_dir()-derived paths where possible.
 
 = 2.7.17 =
 * Code Quality: Fixed remaining AlternativeFunctions errors in class-chunk-handler-v2.php (fopen, rename, ini_set)
@@ -166,7 +180,7 @@ No. Backup download and upload endpoints are protected by time-limited tokens an
 = 2.7.11 =
 * Security: Fixed json_decode() sanitization issues - all JSON-decoded arrays are now properly sanitized using recursive array_map() and sanitize_text_field()
 * Security: Fixed REST API permission_callback - all REST API routes now use proper permission checks (manage_options + nonce verification) instead of '__return_true'
-* Security: Added ABSPATH checks to upload-handler.php and download-handler.php to prevent direct file access
+* Security: Added ABSPATH checks to download-handler.php to prevent direct file access
 * Code Quality: Replaced all parse_url() calls with wp_parse_url() for WordPress compatibility
 * Code Quality: Replaced all mkdir() calls with wp_mkdir_p() for WordPress compatibility
 * Code Quality: Removed all inline <style> and <script> tags from templates - now using wp_add_inline_style() and wp_add_inline_script() in enqueue_assets()

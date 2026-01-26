@@ -58,17 +58,8 @@ if ( ! function_exists( 'backup_lite_local_time' ) ) {
     }
 }
 
-if ( ! function_exists( 'wp_mkdir_p' ) ) {
-    require_once ABSPATH . 'wp-admin/includes/file.php';
-}
-
-if ( ! function_exists( 'sanitize_file_name' ) ) {
-    // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound -- temporary variable for file path only
-    $museder_restoreone_formatting = trailingslashit( ABSPATH ) . 'wp-includes/formatting.php';
-    if ( file_exists( $museder_restoreone_formatting ) ) {
-        require_once $museder_restoreone_formatting;
-    }
-}
+// This plugin requires WordPress 5.8+ where wp_mkdir_p() and sanitize_file_name() are always available.
+// Avoid including core files directly to reduce WP.org review risk.
 
 // WordPress 5.8+ includes size_format() in core.
 // We require WordPress 5.8+, so no polyfill is needed.
@@ -540,6 +531,16 @@ function backup_lite_get_restore_history( $limit = 0 ) {
         return [];
     }
 
+    // Sanitize decoded history entries (defensive; file lives under plugin-controlled uploads storage).
+    $sanitized = [];
+    foreach ( $data as $row ) {
+        if ( ! is_array( $row ) ) {
+            continue;
+        }
+        $sanitized[] = backup_lite_sanitize_restore_history_entry( $row );
+    }
+    $data = $sanitized;
+
     if ( $limit > 0 ) {
         return array_slice( $data, 0, $limit );
     }
@@ -547,11 +548,62 @@ function backup_lite_get_restore_history( $limit = 0 ) {
     return $data;
 }
 
+/**
+ * Sanitize a restore history entry (stored in JSON under uploads).
+ *
+ * @param array $entry
+ * @return array
+ */
+function backup_lite_sanitize_restore_history_entry( array $entry ) {
+    $allowed_results = [ 'running', 'success', 'failed', 'cancelled', 'pending' ];
+
+    $job_id  = isset( $entry['job_id'] ) ? sanitize_text_field( (string) $entry['job_id'] ) : '';
+    $file    = isset( $entry['file'] ) ? sanitize_file_name( basename( (string) $entry['file'] ) ) : '';
+    $result  = isset( $entry['result'] ) ? sanitize_text_field( (string) $entry['result'] ) : '';
+    if ( '' !== $result && ! in_array( $result, $allowed_results, true ) ) {
+        $result = '';
+    }
+
+    $out = [
+        'job_id'        => $job_id,
+        'timestamp_utc' => isset( $entry['timestamp_utc'] ) ? (int) $entry['timestamp_utc'] : 0,
+        'date'          => isset( $entry['date'] ) ? sanitize_text_field( (string) $entry['date'] ) : '',
+        'file'          => $file,
+        'result'        => $result,
+        'timestamp'     => isset( $entry['timestamp'] ) ? sanitize_text_field( (string) $entry['timestamp'] ) : '',
+        'log'           => isset( $entry['log'] ) ? sanitize_text_field( (string) $entry['log'] ) : '',
+        'message'       => isset( $entry['message'] ) ? sanitize_text_field( (string) $entry['message'] ) : '',
+        'duration_seconds' => isset( $entry['duration_seconds'] ) ? (int) $entry['duration_seconds'] : ( isset( $entry['restore_duration_seconds'] ) ? (int) $entry['restore_duration_seconds'] : 0 ),
+        'restore_started_at'   => isset( $entry['restore_started_at'] ) ? (int) $entry['restore_started_at'] : 0,
+        'restore_completed_at' => isset( $entry['restore_completed_at'] ) ? (int) $entry['restore_completed_at'] : 0,
+        'restore_duration_seconds' => isset( $entry['restore_duration_seconds'] ) ? (int) $entry['restore_duration_seconds'] : 0,
+    ];
+
+    // Preserve any known extra fields as sanitized strings.
+    foreach ( [ 'extra', 'details' ] as $maybe ) {
+        if ( isset( $entry[ $maybe ] ) ) {
+            $out[ $maybe ] = is_array( $entry[ $maybe ] ) ? array_map( 'sanitize_text_field', $entry[ $maybe ] ) : sanitize_text_field( (string) $entry[ $maybe ] );
+        }
+    }
+
+    // Remove empty keys to keep JSON smaller.
+    return array_filter(
+        $out,
+        static function ( $v ) {
+            if ( is_int( $v ) ) {
+                return true;
+            }
+            return '' !== $v && null !== $v;
+        }
+    );
+}
+
 function backup_lite_append_restore_history( $entry ) {
     if ( empty( $entry ) || ! is_array( $entry ) ) {
         return false;
     }
 
+    $entry = backup_lite_sanitize_restore_history_entry( $entry );
     $history = backup_lite_get_restore_history();
     array_unshift( $history, $entry );
 
@@ -579,6 +631,7 @@ function backup_lite_upsert_restore_history( $entry ) {
         return false;
     }
 
+    $entry = backup_lite_sanitize_restore_history_entry( $entry );
     $job_id = isset( $entry['job_id'] ) ? sanitize_text_field( (string) $entry['job_id'] ) : '';
     if ( '' === $job_id ) {
         return backup_lite_append_restore_history( $entry );
@@ -737,7 +790,7 @@ function backup_lite_sanitize_filename( $filename ) {
 
 function backup_lite_is_allowed_backup_extension( $filename ) {
     $extension = strtolower( pathinfo( $filename, PATHINFO_EXTENSION ) );
-    return in_array( $extension, [ 'zip', 'wpress' ], true );
+    return in_array( $extension, [ 'zip' ], true );
 }
 
 function backup_lite_safe_path_join( $base, $path ) {
@@ -790,8 +843,23 @@ function backup_lite_maybe_protect_directory( $dir ) {
 
     $nginx = trailingslashit( $dir ) . 'nginx-deny.conf';
     if ( ! file_exists( $nginx ) ) {
-        $instruction = "location ~ ^" . trailingslashit( str_replace( ABSPATH, '/', wp_normalize_path( $dir ) ) ) . " {\n    deny all;\n}\n";
-        @file_put_contents( $nginx, $instruction );
+        // Build an nginx location using uploads baseurl when possible (avoids relying on ABSPATH).
+        $location = '';
+        $uploads  = wp_upload_dir();
+        $basedir  = isset( $uploads['basedir'] ) ? wp_normalize_path( (string) $uploads['basedir'] ) : '';
+        $baseurl  = isset( $uploads['baseurl'] ) ? (string) $uploads['baseurl'] : '';
+        $basepath = $baseurl ? (string) wp_parse_url( $baseurl, PHP_URL_PATH ) : '';
+
+        $dir_norm = wp_normalize_path( (string) $dir );
+        if ( '' !== $basedir && 0 === strpos( $dir_norm, trailingslashit( $basedir ) ) && '' !== $basepath ) {
+            $relative = ltrim( substr( $dir_norm, strlen( $basedir ) ), '/' );
+            $location = trailingslashit( untrailingslashit( $basepath ) ) . $relative;
+        }
+
+        if ( '' !== $location ) {
+            $instruction = "location ~ ^" . trailingslashit( $location ) . " {\n    deny all;\n}\n";
+            @file_put_contents( $nginx, $instruction );
+        }
     }
 
     $index = trailingslashit( $dir ) . 'index.html';
@@ -812,6 +880,106 @@ function backup_lite_ensure_access_controls() {
         backup_lite_maybe_protect_directory( backup_lite_get_pro_jobs_dir() );
         backup_lite_maybe_protect_directory( backup_lite_get_pro_reports_dir() );
     }
+}
+
+/**
+ * Best-effort: derive wp-content directory path without hard-coding constants.
+ *
+ * Uses wp_upload_dir()['basedir'] (typically .../wp-content/uploads) and falls back to WP_CONTENT_DIR.
+ *
+ * @return string Normalized wp-content absolute path or empty string.
+ */
+function backup_lite_get_wp_content_dir() {
+    $uploads = wp_upload_dir();
+    $basedir = isset( $uploads['basedir'] ) ? wp_normalize_path( (string) $uploads['basedir'] ) : '';
+    if ( '' !== $basedir ) {
+        $maybe = wp_normalize_path( (string) dirname( $basedir ) );
+        if ( '' !== $maybe && is_dir( $maybe ) ) {
+            return $maybe;
+        }
+    }
+
+    // Derive wp-content from the plugin directory (wp-content/plugins/{this-plugin}).
+    if ( defined( 'BACKUP_LITE_PATH' ) ) {
+        $plugin_dir  = wp_normalize_path( (string) BACKUP_LITE_PATH );
+        $plugins_dir = wp_normalize_path( rtrim( dirname( $plugin_dir ), "/\\\n\r\t " ) );
+        $content_dir = wp_normalize_path( rtrim( dirname( $plugins_dir ), "/\\\n\r\t " ) );
+        if ( '' !== $content_dir && is_dir( $content_dir ) ) {
+            return $content_dir;
+        }
+    }
+
+    return '';
+}
+
+/**
+ * Best-effort: derive the WordPress install root directory.
+ *
+ * We prefer get_home_path() (from wp-admin/includes/file.php) when available because it
+ * handles cases like WordPress installed in a subdirectory. Falls back to ABSPATH.
+ *
+ * @return string Normalized absolute path to WP install root or empty string.
+ */
+function backup_lite_get_wp_root_dir() {
+    if ( function_exists( 'get_home_path' ) ) {
+        $path = (string) get_home_path();
+        $path = wp_normalize_path( rtrim( $path, "/\\\n\r\t " ) );
+        if ( '' !== $path && is_dir( $path ) ) {
+            return $path;
+        }
+    }
+
+    // Derive from wp-content: root is typically parent of wp-content.
+    $content = backup_lite_get_wp_content_dir();
+    if ( '' !== $content ) {
+        $root = wp_normalize_path( rtrim( dirname( $content ), "/\\\n\r\t " ) );
+        if ( '' !== $root && is_dir( $root ) ) {
+            return $root;
+        }
+    }
+
+    return '';
+}
+
+/**
+ * Best-effort: derive wp-content/plugins directory path.
+ *
+ * @return string Normalized plugins dir absolute path or empty string.
+ */
+function backup_lite_get_plugins_dir() {
+    $content = backup_lite_get_wp_content_dir();
+    if ( '' !== $content ) {
+        $plugins = wp_normalize_path( trailingslashit( $content ) . 'plugins' );
+        if ( is_dir( $plugins ) ) {
+            return $plugins;
+        }
+    }
+
+    return '';
+}
+
+/**
+ * Best-effort: derive wp-content/mu-plugins directory path.
+ *
+ * @return string Normalized mu-plugins dir absolute path or empty string.
+ */
+function backup_lite_get_mu_plugins_dir() {
+    $content = backup_lite_get_wp_content_dir();
+    if ( '' !== $content ) {
+        $mu = wp_normalize_path( trailingslashit( $content ) . 'mu-plugins' );
+        if ( is_dir( $mu ) ) {
+            return $mu;
+        }
+    }
+
+    if ( defined( 'WPMU_PLUGIN_DIR' ) ) {
+        $fallback = wp_normalize_path( (string) WPMU_PLUGIN_DIR );
+        if ( '' !== $fallback && is_dir( $fallback ) ) {
+            return $fallback;
+        }
+    }
+
+    return '';
 }
 
 /**
@@ -901,82 +1069,24 @@ function backup_lite_maybe_invalidate_opcache_for_plugin() {
 }
 
 function backup_lite_is_shell_available() {
-    if ( defined( 'BACKUP_LITE_FORCE_NO_SHELL' ) && BACKUP_LITE_FORCE_NO_SHELL ) {
-        return false;
-    }
-
-    if ( defined( 'BACKUP_LITE_FORCE_SHELL' ) && BACKUP_LITE_FORCE_SHELL ) {
-        return true;
-    }
-
-    $disabled_raw = ini_get( 'disable_functions' );
-    $disabled     = array_filter( array_map( 'trim', explode( ',', (string) $disabled_raw ) ) );
-
-    $required_helpers = [ 'escapeshellarg', 'escapeshellcmd' ];
-    foreach ( $required_helpers as $fn ) {
-        if ( ! function_exists( $fn ) || in_array( $fn, $disabled, true ) ) {
-            return false;
-        }
-    }
-
-    $shell_functions = [ 'exec', 'system', 'passthru', 'shell_exec' ];
-    foreach ( $shell_functions as $fn ) {
-        if ( function_exists( $fn ) && ! in_array( $fn, $disabled, true ) ) {
-            return true;
-        }
-    }
-
+    // WP.org submission hardening:
+    // Do not rely on shell execution functions in the directory build.
     return false;
 }
 
 function backup_lite_command_exists( $command ) {
-    if ( ! backup_lite_is_shell_available() ) {
-        return false;
-    }
-
-    $command = escapeshellcmd( $command );
-
-    if ( function_exists( 'shell_exec' ) ) {
-        $which = shell_exec( 'command -v ' . $command . ' 2>/dev/null' );
-        if ( ! empty( $which ) ) {
-            return true;
-        }
-    }
-
-    if ( function_exists( 'exec' ) ) {
-        $output = [];
-        $code   = 0;
-        exec( 'command -v ' . $command . ' 2>/dev/null', $output, $code );
-        if ( 0 === $code && ! empty( $output ) ) {
-            return true;
-        }
-    }
-
+    // WP.org submission hardening: no shell probing.
     return false;
 }
 
 function backup_lite_can_use_mysqldump() {
-    if ( defined( 'BACKUP_LITE_FORCE_NO_MYSQLDUMP' ) && BACKUP_LITE_FORCE_NO_MYSQLDUMP ) {
-        return false;
-    }
-
-    if ( defined( 'BACKUP_LITE_FORCE_MYSQLDUMP' ) && BACKUP_LITE_FORCE_MYSQLDUMP ) {
-        return true;
-    }
-
-    return backup_lite_is_shell_available() && backup_lite_command_exists( 'mysqldump' );
+    // WP.org submission hardening: do not use mysqldump in directory build.
+    return false;
 }
 
 function backup_lite_can_use_mysql_cli() {
-    if ( defined( 'BACKUP_LITE_FORCE_NO_MYSQL' ) && BACKUP_LITE_FORCE_NO_MYSQL ) {
-        return false;
-    }
-
-    if ( defined( 'BACKUP_LITE_FORCE_MYSQL' ) && BACKUP_LITE_FORCE_MYSQL ) {
-        return true;
-    }
-
-    return backup_lite_is_shell_available() && backup_lite_command_exists( 'mysql' );
+    // WP.org submission hardening: do not use mysql CLI in directory build.
+    return false;
 }
 
 function backup_lite_can_use_ziparchive() {
@@ -1009,36 +1119,102 @@ function backup_lite_get_download_url( $path ) {
     }
 
     $filename = basename( $path );
-    $secret   = '';
-
-    if ( class_exists( 'Backup_Lite_Upload_Secret' ) ) {
-        $secret = (string) Backup_Lite_Upload_Secret::get_secret();
-    }
-
-    if ( ! empty( $secret ) ) {
-        $expires = time() + apply_filters( 'backup_lite_download_ttl', 20 * MINUTE_IN_SECONDS, $path );
-        $token   = hash_hmac( 'sha256', $filename . '|' . $expires, $secret );
-        $handler = plugins_url( 'download-handler.php', BACKUP_LITE_PATH . 'download-handler.php' );
-
-        return add_query_arg(
-            [
-                'file'    => $filename,
-                'expires' => $expires,
-                'token'   => $token,
-            ],
-            $handler
-        );
-    }
-
+    // Standard admin-post download URL protected by a WordPress nonce.
+    // Note: We intentionally avoid generating plugin-specific “secret header” tokens to keep flows aligned with WP auth/nonce.
     return wp_nonce_url(
         admin_url( 'admin-post.php?action=backup_lite_download_backup&file=' . rawurlencode( $filename ) ),
-        'backup_lite_download_' . $filename
+        'backup_lite_download_backup',
+        '_backup_lite_download_nonce'
+    );
+}
+
+/**
+ * Verify a time-limited download token (HMAC).
+ *
+ * Used for legacy-style download URLs (file/expires/token). This function lives in shared helpers so
+ * both admin-post handlers and backward-compat stubs can rely on the same verification logic.
+ *
+ * @param string $file    Filename (basename only).
+ * @param int    $expires Expiration timestamp.
+ * @param string $token   Provided token.
+ * @return bool True if token is valid and not expired.
+ */
+function backup_lite_verify_download_token( $file, $expires, $token ) {
+    $file    = (string) $file;
+    $expires = (int) $expires;
+    $token   = (string) $token;
+
+    if ( '' === $file || $expires <= 0 || '' === $token ) {
+        return false;
+    }
+
+    if ( $expires < time() ) {
+        return false;
+    }
+
+    // Backward-compat: verify legacy time-limited tokens (file/expires/token).
+    // Use WordPress salts instead of any plugin-generated secret files.
+    $key = function_exists( 'wp_salt' ) ? (string) wp_salt( 'backup_lite_download' ) : '';
+    if ( '' === $key ) {
+        return false;
+    }
+
+    $expected = hash_hmac( 'sha256', $file . '|' . $expires, $key );
+    return hash_equals( $expected, $token );
+}
+
+/**
+ * Best-effort: nudge WordPress cron runner without loading any core files.
+ *
+ * Why this exists:
+ * - WP Plugin Review disallows directly including WordPress core files to force cron execution.
+ * - Low-traffic sites (or test environments) may not trigger wp-cron naturally.
+ *
+ * This function schedules nothing by itself; callers should schedule events first,
+ * then call this to *encourage* wp-cron to run soon.
+ *
+ * @return void
+ */
+function backup_lite_nudge_wp_cron() {
+    if ( ! function_exists( 'wp_remote_post' ) || ! function_exists( 'site_url' ) || ! function_exists( 'set_transient' ) || ! function_exists( 'get_transient' ) ) {
+        return;
+    }
+
+    // Rate-limit nudges to avoid spamming loopback requests.
+    $last = (int) get_transient( 'backup_lite_wp_cron_nudge_ts' );
+    if ( $last > 0 && ( time() - $last ) < 10 ) {
+        return;
+    }
+    set_transient( 'backup_lite_wp_cron_nudge_ts', time(), 30 );
+
+    $doing = sprintf( '%.22F', microtime( true ) );
+    $url   = add_query_arg( 'doing_wp_cron', rawurlencode( $doing ), site_url( 'wp-cron.php' ) );
+
+    // Non-blocking loopback request; ignore failures (some hosts disable loopback).
+    wp_remote_post(
+        $url,
+        [
+            'timeout'    => 0.01,
+            'blocking'   => false,
+            // Intentionally disable SSL verification for local loopback (some dev/test environments use self-signed certs).
+            'sslverify'  => false,
+            'user-agent' => 'Museder RestoreOne',
+        ]
     );
 }
 
 function backup_lite_log( $level, $message, $context = [] ) {
     $log_dir = backup_lite_get_log_dir();
     $file    = trailingslashit( $log_dir ) . 'backup-lite-' . backup_lite_local_time( 'Y-m-d' ) . '.log';
+
+    // Ensure message is always a string (avoid "Array to string conversion" notices).
+    if ( ! is_string( $message ) ) {
+        if ( is_scalar( $message ) ) {
+            $message = (string) $message;
+        } else {
+            $message = wp_json_encode( $message );
+        }
+    }
 
     $entry = sprintf(
         "[%s] [%s] %s",
@@ -1056,6 +1232,29 @@ function backup_lite_log( $level, $message, $context = [] ) {
     file_put_contents( $file, $entry, FILE_APPEND | LOCK_EX );
 
     return $file;
+}
+
+/**
+ * Load bundled PclZip fallback library if needed.
+ *
+ * WP.org compliance: we avoid including WordPress core files directly via ABSPATH.
+ *
+ * @return void
+ */
+function backup_lite_require_pclzip() {
+    if ( class_exists( 'PclZip' ) ) {
+        return;
+    }
+
+    $path = defined( 'BACKUP_LITE_PATH' ) ? (string) BACKUP_LITE_PATH : '';
+    if ( '' === $path ) {
+        return;
+    }
+
+    $file = trailingslashit( $path ) . 'includes/vendor/pclzip/class-pclzip.php';
+    if ( file_exists( $file ) ) {
+        require_once $file; // phpcs:ignore WordPressVIPMinimum.Files.IncludingFile.UsingVariable -- fixed plugin path
+    }
 }
 
 function backup_lite_get_recent_logs( $limit = 5 ) {

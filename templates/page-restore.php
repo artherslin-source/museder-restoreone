@@ -28,9 +28,54 @@ if ( $safe_mode_active ) {
     $prev_plugins = get_option( 'backup_lite_prev_active_plugins', [] );
     $prev_plugins_count = is_array( $prev_plugins ) ? count( $prev_plugins ) : 0;
 }
+
+// Manual DB import notice (CLI-only DB restore fallback).
+$manual_db_notice = null;
+if ( class_exists( 'Backup_Lite_Restore_Service' ) && method_exists( 'Backup_Lite_Restore_Service', 'get_active_job_id' ) ) {
+    $active_job_id = (string) Backup_Lite_Restore_Service::get_active_job_id();
+    if ( '' !== $active_job_id ) {
+        try {
+            $active_meta = Backup_Lite_Restore_Service::get_job_meta( $active_job_id );
+            if ( is_array( $active_meta ) && ! empty( $active_meta['manual_db']['required'] ) ) {
+                $download_url = wp_nonce_url(
+                    add_query_arg(
+                        [
+                            'action' => 'backup_lite_download_restore_sql',
+                            'job_id' => rawurlencode( $active_job_id ),
+                        ],
+                        admin_url( 'admin-post.php' )
+                    ),
+                    'backup_lite_download_restore_sql_' . $active_job_id
+                );
+                $manual_db_notice = [
+                    'job_id' => $active_job_id,
+                    'url'    => $download_url,
+                ];
+            }
+        } catch ( Exception $e ) {
+            // Ignore.
+        }
+    }
+}
 ?>
     <div class="wrap backup-lite-restore">
         <h1>🧩 <?php esc_html_e( 'Restore Center', 'museder-restoreone' ); ?></h1>
+
+        <?php if ( is_array( $manual_db_notice ) ) : ?>
+        <div class="notice notice-warning" style="border-left-color:#dba617; padding: 12px 20px; margin: 20px 0;">
+            <p style="margin: 0 0 6px 0; font-weight: 600;">
+                <?php esc_html_e( 'Manual database import required', 'museder-restoreone' ); ?>
+            </p>
+            <p style="margin: 0 0 8px 0;">
+                <?php esc_html_e( 'This host does not support automatic database import (MySQL CLI). RestoreOne will restore files, but you must import the database manually before the site can function normally.', 'museder-restoreone' ); ?>
+            </p>
+            <p style="margin: 0;">
+                <a class="button button-secondary" href="<?php echo esc_url( $manual_db_notice['url'] ); ?>">
+                    <?php esc_html_e( 'View manual database import steps', 'museder-restoreone' ); ?>
+                </a>
+            </p>
+        </div>
+        <?php endif; ?>
 
         <?php if ( $safe_mode_active ) : ?>
         <div class="notice notice-warning is-dismissible" id="backup-lite-safe-mode-notice" style="border-left-color: #ffb900; padding: 12px 20px; margin: 20px 0;">
@@ -101,8 +146,30 @@ if ( $safe_mode_active ) {
                 <button class="button-secondary" data-method="remote"><?php esc_html_e( 'Remote URL Restore', 'museder-restoreone' ); ?></button>
         </div>
         <div id="restore-upload" class="method-panel active">
-            <input type="file" id="restoreFile" accept=".zip,.wpress">
-                <button id="uploadRestore" class="button-primary step-action"><?php esc_html_e( 'Step 1 – Upload & Analyze', 'museder-restoreone' ); ?></button>
+            <form id="backup-lite-restore-form-v2">
+                <input type="file" id="backup-lite-restore-file-v2" accept=".zip">
+
+                <label style="display: block; margin-top: 10px;">
+                    <input type="checkbox" name="backup_lite_confirm" value="1">
+                    <?php esc_html_e( 'I understand this will upload the selected archive for analysis.', 'museder-restoreone' ); ?>
+                </label>
+
+                <div class="backup-lite-progress" aria-live="polite">
+                    <div class="progress-bar" style="height: 10px; width: 100%; background: rgba(0,0,0,0.08); border-radius: 4px; overflow: hidden;">
+                        <div class="progress-bar-fill" style="height: 100%; width: 0%;"></div>
+                    </div>
+                    <div class="backup-lite-progress-status" style="margin-top: 8px;"></div>
+                    <div class="backup-lite-progress-meta" style="margin-top: 4px;">
+                        <span class="backup-lite-progress-speed"></span>
+                        <span class="backup-lite-progress-eta" style="margin-left: 8px;"></span>
+                        <div class="backup-lite-progress-sha1" style="margin-top: 4px;"></div>
+                    </div>
+                </div>
+
+                <button type="submit" class="button-primary step-action">
+                    <?php esc_html_e( 'Step 1 – Upload & Analyze', 'museder-restoreone' ); ?>
+                </button>
+            </form>
         </div>
         <div id="restore-existing" class="method-panel">
             <select id="existingBackup">
@@ -157,8 +224,17 @@ if ( $safe_mode_active ) {
             </div>
             <label><input type="checkbox" id="overwriteData"> <?php esc_html_e( 'Overwrite existing data', 'museder-restoreone' ); ?></label><br>
             <label><input type="checkbox" id="applyReplace"> <?php esc_html_e( 'Apply URL Search & Replace', 'museder-restoreone' ); ?></label><br>
-            <label><input type="checkbox" id="skipConfig"> <?php esc_html_e( 'Skip wp-config.php', 'museder-restoreone' ); ?></label><br>
+            <label><input type="checkbox" id="skipConfig"> <?php esc_html_e( 'Skip site configuration file', 'museder-restoreone' ); ?></label><br>
             <label><input type="checkbox" id="autoBackup" checked> <?php esc_html_e( 'Backup current site before restore', 'museder-restoreone' ); ?></label><br>
+            <div id="restore-files-only-wrap" style="margin-top: 12px; display: none;">
+                <label>
+                    <input type="checkbox" id="filesOnly">
+                    <?php esc_html_e( 'Files-only restore (skip database)', 'museder-restoreone' ); ?>
+                </label>
+                <p class="description" style="margin: 6px 0 0 0;">
+                    <?php esc_html_e( 'Use this when the backup archive does not contain a database file. Your files will be restored, but the site may not work until you import the database separately.', 'museder-restoreone' ); ?>
+                </p>
+            </div>
             <div style="margin-top: 12px;">
                 <label>
                     <input type="checkbox" id="safeMode" checked>
@@ -168,21 +244,7 @@ if ( $safe_mode_active ) {
                     <?php esc_html_e( 'Safe mode temporarily disables non-essential plugins to prevent conflicts. You can restore plugins with one click after verifying the site works.', 'museder-restoreone' ); ?>
                 </p>
             </div>
-            <div style="margin-top: 12px;">
-                <label for="restoreDecryptionPassword" style="display:block; margin-bottom: 6px;">
-                    <?php esc_html_e( 'Decryption password (for encrypted .wpress backups)', 'museder-restoreone' ); ?>
-                </label>
-                <input
-                    type="password"
-                    id="restoreDecryptionPassword"
-                    autocomplete="current-password"
-                    placeholder="<?php echo esc_attr__( 'Leave blank if not encrypted', 'museder-restoreone' ); ?>"
-                    style="max-width: 420px; width: 100%;"
-                />
-                <p class="description" style="margin-top: 6px;">
-                    <?php esc_html_e( 'If the backup is encrypted, RestoreOne will validate and use this password during extraction.', 'museder-restoreone' ); ?>
-                </p>
-            </div>
+            <!-- .wpress / encrypted backups are not supported in this build. -->
             <div style="margin-top: 12px;">
                 <label for="restoreTargetBlogId" style="display:block; margin-bottom: 6px;">
                     <?php esc_html_e( 'Target Blog ID (Multisite only)', 'museder-restoreone' ); ?>

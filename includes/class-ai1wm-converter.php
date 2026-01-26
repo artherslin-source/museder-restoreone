@@ -24,9 +24,9 @@ class Backup_Lite_AI1WM_Converter {
 
         $ext = strtolower( pathinfo( $file_path, PATHINFO_EXTENSION ) );
         
-        // Check for .wpress extension
+        // WP.org submission build: .wpress is not supported.
         if ( 'wpress' === $ext ) {
-            return true;
+            return false;
         }
 
         // Check ZIP files for All-in-One structure
@@ -121,7 +121,11 @@ class Backup_Lite_AI1WM_Converter {
         $ext = strtolower( pathinfo( $source_file, PATHINFO_EXTENSION ) );
         
         if ( 'wpress' === $ext ) {
-            return self::convert_wpress( $source_file, $output_file );
+            return [
+                'success' => false,
+                'message' => __( 'This build does not support .wpress backups. Please convert the backup to ZIP format first.', 'museder-restoreone' ),
+                'error'   => 'wpress_not_supported',
+            ];
         } elseif ( 'zip' === $ext ) {
             return self::convert_zip( $source_file, $output_file );
         }
@@ -141,16 +145,10 @@ class Backup_Lite_AI1WM_Converter {
      * @return array{success:bool, message:string, file?:string, error?:string}
      */
     protected static function convert_wpress( $source_file, $output_file = null ) {
-        // .wpress files are AI1WM WPRESS archives (NOT tar.gz).
-        // RestoreOne restores them directly using the local WPRESS extractor engine
-        // (see includes/wpress/*). No conversion is needed.
-        
-        backup_lite_log( 'info', 'WPRESS format detected. Direct extraction will be handled during restore (no conversion needed).', [ 'file' => basename( $source_file ) ] );
-
         return [
             'success' => false,
-            'message' => __( '.wpress files can be restored directly without conversion. The restore process will extract the archive locally.', 'museder-restoreone' ),
-            'error'   => 'wpress_no_conversion_needed',
+            'message' => __( 'This build does not support .wpress backups. Please convert the backup to ZIP format first.', 'museder-restoreone' ),
+            'error'   => 'wpress_not_supported',
         ];
     }
 
@@ -518,8 +516,8 @@ class Backup_Lite_AI1WM_Converter {
         }
 
         // Fallback to PclZip
-        if ( ! class_exists( 'PclZip' ) ) {
-            require_once ABSPATH . 'wp-admin/includes/class-pclzip.php';
+        if ( function_exists( 'backup_lite_require_pclzip' ) ) {
+            backup_lite_require_pclzip();
         }
 
         $pcl = new PclZip( $output_file );
@@ -596,8 +594,8 @@ class Backup_Lite_AI1WM_Converter {
             }
         }
 
-        if ( ! class_exists( 'PclZip' ) ) {
-            require_once ABSPATH . 'wp-admin/includes/class-pclzip.php';
+        if ( function_exists( 'backup_lite_require_pclzip' ) ) {
+            backup_lite_require_pclzip();
         }
 
         $pcl = new PclZip( $archive_path );

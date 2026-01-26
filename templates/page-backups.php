@@ -89,6 +89,9 @@ $settings = class_exists( 'Backup_Lite_Settings' ) ? Backup_Lite_Settings::get_s
             ✨ <?php esc_html_e( 'Create Backup', 'museder-restoreone' ); ?>
         </h2>
         <p><?php esc_html_e( 'Export your entire WordPress site into a single downloadable archive.', 'museder-restoreone' ); ?></p>
+        <p class="description" style="margin-top: 8px;">
+            <?php esc_html_e( 'Note: Single files larger than 2GB are skipped for safety. If files are skipped, the backup completion message will show the reason and examples.', 'museder-restoreone' ); ?>
+        </p>
         <form id="backup-lite-backup-form" method="post">
             <?php wp_nonce_field( Backup_Lite_UI::NONCE, 'backup_lite_nonce' ); ?>
             
@@ -332,37 +335,9 @@ $settings = class_exists( 'Backup_Lite_Settings' ) ? Backup_Lite_Settings::get_s
         <h2>⚙️ <?php esc_html_e( 'Environment Compatibility', 'museder-restoreone' ); ?></h2>
         <ul class="backup-lite-status-list">
             <li>
-                <?php if ( ! empty( $status['shell'] ) ) : ?>
-                    <span class="badge success">
-                        <?php esc_html_e( 'Shell commands available', 'museder-restoreone' ); ?>
-                    </span>
-                <?php else : ?>
-                    <span class="badge pending">
-                        <?php esc_html_e( 'Shell commands disabled (fallback active)', 'museder-restoreone' ); ?>
-                    </span>
-                <?php endif; ?>
-            </li>
-            <li>
-                <?php if ( ! empty( $status['mysqldump'] ) ) : ?>
-                    <span class="badge success">
-                        <?php esc_html_e( 'mysqldump detected', 'museder-restoreone' ); ?>
-                    </span>
-                <?php else : ?>
-                    <span class="badge pending">
-                        <?php esc_html_e( 'mysqldump unavailable (using PHP export)', 'museder-restoreone' ); ?>
-                    </span>
-                <?php endif; ?>
-            </li>
-            <li>
-                <?php if ( ! empty( $status['mysql_cli'] ) ) : ?>
-                    <span class="badge success">
-                        <?php esc_html_e( 'mysql client detected', 'museder-restoreone' ); ?>
-                    </span>
-                <?php else : ?>
-                    <span class="badge pending">
-                        <?php esc_html_e( 'mysql client unavailable (using PHP import)', 'museder-restoreone' ); ?>
-                    </span>
-                <?php endif; ?>
+                <span class="badge success">
+                    <?php esc_html_e( 'Database backup/restore uses WordPress APIs (WP.org compliant)', 'museder-restoreone' ); ?>
+                </span>
             </li>
             <li>
                 <?php if ( ! empty( $status['ziparchive'] ) ) : ?>

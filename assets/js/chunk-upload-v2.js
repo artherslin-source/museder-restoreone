@@ -5,8 +5,6 @@
     const restConfig = window.MusederRestoreOneV2 || {};
     const base = (restConfig.restUrl || '').replace(/\/?$/, '/');
     const restNonce = restConfig.nonce || '';
-    const uploadHandlerUrl = restConfig.uploadHandler || '';
-    const uploadSecret = restConfig.uploadSecret || '';
 
     if (!base) {
         console.error('Backup Lite V2: REST base URL missing.');
@@ -28,7 +26,7 @@
     const sha1El = progressWrap ? progressWrap.querySelector('.backup-lite-progress-sha1') : null;
     const searchToggle = document.getElementById('backup-lite-search-replace-toggle');
     const searchFields = form.querySelector('.backup-lite-search-replace-fields');
-    const allowedExt = ((ui.allowedExt || (window.MusederRestoreOneAdmin && window.MusederRestoreOneAdmin.chunk && window.MusederRestoreOneAdmin.chunk.allowedExt)) || ['zip', 'wpress']).map((ext) => ext.toLowerCase());
+    const allowedExt = ((ui.allowedExt || (window.MusederRestoreOneAdmin && window.MusederRestoreOneAdmin.chunk && window.MusederRestoreOneAdmin.chunk.allowedExt)) || ['zip']).map((ext) => ext.toLowerCase());
 
     const showMessage = typeof ui.showMessage === 'function' ? ui.showMessage : function () {};
     const handleError = typeof ui.handleError === 'function' ? ui.handleError : function () {};
@@ -43,7 +41,6 @@
     let uploadId = '';
     let processedChunks = new Set();
     let useMultipartFallback = false;
-    let useNativeHandler = !!(uploadHandlerUrl && uploadSecret);
 
     if (searchToggle && searchFields) {
         searchToggle.addEventListener('change', function () {
@@ -71,8 +68,25 @@
         return headers;
     }
 
+    function buildRestUrl(endpoint, query) {
+        const url = new URL(base + endpoint.replace(/^\//, ''));
+        if (query && typeof query === 'object') {
+            Object.keys(query).forEach((key) => {
+                const val = query[key];
+                if (val !== undefined && val !== null && val !== '') {
+                    url.searchParams.set(key, String(val));
+                }
+            });
+        }
+        return url.toString();
+    }
+
     async function restRequest(endpoint, options = {}) {
-        const response = await fetch(base + endpoint.replace(/^\//, ''), Object.assign({ credentials: 'same-origin' }, options));
+        const url = buildRestUrl(endpoint, options.query);
+        const fetchOptions = Object.assign({ credentials: 'same-origin' }, options);
+        delete fetchOptions.query;
+
+        const response = await fetch(url, fetchOptions);
         const text = await response.text();
         let json = {};
 
@@ -229,60 +243,6 @@
         return formData;
     }
 
-    async function sendChunkNative(buffer, chunkSha1, index, totalChunks, fileSize) {
-        if (!useNativeHandler) {
-            throw new Error('native_handler_disabled');
-        }
-
-        const headers = {
-            'X-Backup-Secret': uploadSecret,
-            'X-Backup-Upload-Id': uploadId,
-            'X-Chunk-Index': String(index),
-            'X-Chunk-Total': String(totalChunks),
-            'X-Chunk-Size': String(buffer.byteLength),
-            'X-Chunk-Sha1': chunkSha1,
-            'X-File-Sha1': fileSha1Hex,
-            'X-File-Size': String(fileSize),
-            'Content-Type': 'application/octet-stream'
-        };
-
-        try {
-            const response = await fetch(uploadHandlerUrl, {
-                method: 'POST',
-                headers,
-                body: buffer,
-                credentials: 'same-origin'
-            });
-
-            const text = await response.text();
-            let json = {};
-
-            if (text) {
-                try {
-                    json = JSON.parse(text);
-                } catch (err) {
-                    const parseError = new Error('native_parse_error');
-                    parseError.status = response.status;
-                    parseError.responseText = text;
-                    throw parseError;
-                }
-            }
-
-            if (!response.ok || !json || json.ok === false) {
-                const error = new Error(json && json.message ? json.message : 'native_handler_failed');
-                error.status = response.status;
-                error.code = json && json.code ? json.code : 'native_error';
-                error.payload = json;
-                throw error;
-            }
-
-            return json;
-        } catch (error) {
-            useNativeHandler = false;
-            throw error;
-        }
-    }
-
     async function sendChunkBinary(buffer, chunkSha1, index, totalChunks, fileSize, fileName) {
         const headers = buildHeaders({
             'X-Backup-Lite-Action': 'chunk',
@@ -296,20 +256,23 @@
             'X-File-Name': encodeURIComponent(fileName)
         });
 
-        const params = new URLSearchParams({
-            upload_id: uploadId,
-            chunk_index: String(index),
-            chunk_size: String(buffer.byteLength),
-            chunk_sha1: chunkSha1,
-            total_chunks: String(totalChunks),
-            file_size: String(fileSize),
-            file_sha1: fileSha1Hex,
-            filename: fileName
-        });
-
-        const response = await restRequest(`chunk?${params.toString()}`, {
+        // Send metadata redundantly via query string too.
+        // Some hosts/proxies/security modules strip custom headers on large/binary POST requests,
+        // which would make the server see "missing_params". Using URL.searchParams is safe even when
+        // rest_url() is query-style (Plain permalinks), because it appends with '&' instead of creating a second '?'.
+        const response = await restRequest('chunk', {
             method: 'POST',
             headers,
+            query: {
+                upload_id: uploadId,
+                chunk_index: String(index),
+                chunk_size: String(buffer.byteLength),
+                chunk_sha1: chunkSha1,
+                total_chunks: String(totalChunks),
+                file_size: String(fileSize),
+                file_sha1: fileSha1Hex,
+                filename: fileName
+            },
             body: buffer
         });
 
@@ -338,14 +301,6 @@
     }
 
     async function sendChunk(buffer, chunkSha1, index, totalChunks, file) {
-        if (useNativeHandler) {
-            try {
-                return await sendChunkNative(buffer, chunkSha1, index, totalChunks, file.size);
-            } catch (nativeError) {
-                console.warn('Native upload handler failed, falling back to REST', nativeError);
-            }
-        }
-
         if (useMultipartFallback) {
             return sendChunkMultipart(buffer, chunkSha1, index, totalChunks, file.size, file.name);
         }
@@ -364,7 +319,7 @@
     async function uploadChunkWithRetry(buffer, chunkSha1, index, totalChunks, file) {
         const start = index * CHUNK_SIZE;
         const end = Math.min(file.size, start + CHUNK_SIZE);
-        console.log(`[Chunk ${index}] uploading bytes ${start}-${end} (${buffer.byteLength} bytes) via ${useNativeHandler ? 'native handler' : (useMultipartFallback ? 'REST multipart' : 'REST binary')}`);
+        console.log(`[Chunk ${index}] uploading bytes ${start}-${end} (${buffer.byteLength} bytes) via ${useMultipartFallback ? 'REST multipart' : 'REST binary'}`);
 
         for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
             try {
@@ -383,37 +338,21 @@
     }
 
     async function finalizeUpload({ uploadId, fileSha1Hex }) {
-        const response = await fetch(base + 'finalize', {
+        // Use the shared REST helper so query-style REST bases work and metadata can be sent as query params too.
+        // Some hosts drop custom headers on large/binary POST requests; sending upload_id/file_sha1 redundantly
+        // improves compatibility without weakening security (nonce + capability checks still apply).
+        return await restRequest('finalize', {
             method: 'POST',
             headers: buildHeaders({
                 'X-Backup-Lite-Upload-Id': uploadId,
-                'X-File-Sha1': fileSha1Hex,
+                'X-File-Sha1': fileSha1Hex
             }),
-            body: null,
-            credentials: 'same-origin'
+            query: {
+                upload_id: uploadId,
+                file_sha1: fileSha1Hex
+            },
+            body: null
         });
-
-        const text = await response.text();
-        let json;
-        try {
-            json = text ? JSON.parse(text) : {};
-        } catch (error) {
-            console.error('REST parse failed', text);
-            const parseError = new Error('REST_PARSE_ERROR');
-            parseError.status = response.status;
-            parseError.responseText = text;
-            throw parseError;
-        }
-
-        if (!response.ok || (json && json.ok === false) || (json && json.success === false)) {
-            const err = new Error(json && json.message ? json.message : 'REST finalize failed');
-            err.status = response.status;
-            err.code = json && json.code ? json.code : 'rest_error';
-            err.payload = json;
-            throw err;
-        }
-
-        return json;
     }
 
     async function abortUpload() {
@@ -453,7 +392,6 @@
         processedChunks = new Set();
         uploadedBytes = 0;
         useMultipartFallback = false;
-        useNativeHandler = !!(uploadHandlerUrl && uploadSecret);
 
         updateStatus(ui.strings && ui.strings.calculating ? ui.strings.calculating : 'Calculating file SHA1...');
         const fileBuffer = await file.arrayBuffer();
@@ -483,9 +421,27 @@
             updateSpeedAndEta(file.size);
         }
 
-        updateStatus(ui.strings && ui.strings.merging ? ui.strings.merging : 'Merging chunks...');
+        updateStatus(ui.strings && ui.strings.merging ? ui.strings.merging : 'Merging uploaded chunks...');
         console.log(`[Finalize] All ${totalChunks} chunks uploaded. Starting finalize...`);
-        const finalizeData = await finalizeUpload({ uploadId, fileSha1Hex, totalChunks, fileName: file.name, fileSize: file.size, searchReplacePayload });
+        let finalizeData = null;
+        for (let attempt = 0; attempt < 4; attempt++) {
+            try {
+                finalizeData = await finalizeUpload({ uploadId, fileSha1Hex, totalChunks, fileName: file.name, fileSize: file.size, searchReplacePayload });
+                break;
+            } catch (error) {
+                const code = error && error.code ? error.code : '';
+                const status = typeof error.status === 'number' ? error.status : 0;
+                const retryable = status === 409 && (code === 'chunk_open_failed' || code === 'missing_chunks' || code === 'manifest_missing' || code === 'session_missing');
+                if (!retryable || attempt === 3) {
+                    throw error;
+                }
+                updateStatus(`Finalize retry… (${attempt + 1}/3)`);
+                await delay(800 * (attempt + 1));
+            }
+        }
+        if (!finalizeData) {
+            throw new Error('Finalize failed.');
+        }
 
         updateSha1Display(finalizeData.sha1 || finalizeData.server_sha1 || '', fileSha1Hex, finalizeData.sha1_mismatch);
 
@@ -565,6 +521,13 @@
         }
     }
 
+    function setStep1Locked(locked) {
+        const submitBtn = form.querySelector('button[type="submit"], input[type="submit"]');
+        if (fileInput) fileInput.disabled = !!locked;
+        if (confirmCheckbox) confirmCheckbox.disabled = !!locked;
+        if (submitBtn) submitBtn.disabled = !!locked;
+    }
+
     form.addEventListener('submit', async function (event) {
         event.preventDefault();
 
@@ -586,6 +549,11 @@
         }
 
         try {
+            // Notify Restore UI to clear any previous summary/state before starting a new upload.
+            try {
+                document.dispatchEvent(new CustomEvent('backup-lite-restore-upload-start', { detail: { filename: file.name, size: file.size } }));
+            } catch (e) {}
+
             resetProgress();
             startTime = Date.now();
             uploadedBytes = 0;
@@ -593,6 +561,8 @@
             processedChunks = new Set();
             useMultipartFallback = false;
 
+            // Prevent users from re-submitting or toggling options mid-upload (avoids confusion).
+            setStep1Locked(true);
             await processChunks(file);
 
             if (typeof refreshLogs === 'function') {
@@ -603,12 +573,34 @@
             await abortUpload();
             resetProgress();
 
-            const errorMessage = error && error.message ? error.message : (ui.strings && ui.strings.errorGeneric ? ui.strings.errorGeneric : 'Upload failed');
+            let errorMessage = error && error.message ? error.message : (ui.strings && ui.strings.errorGeneric ? ui.strings.errorGeneric : 'Upload failed');
+            try {
+                const payload = error && error.payload ? error.payload : null;
+                if (payload && payload.debug && (payload.debug.zip_error_code || payload.debug.final_size)) {
+                    const parts = [];
+                    if (payload.debug.zip_error_code !== undefined && payload.debug.zip_error_code !== null) {
+                        parts.push(`zip_error_code=${payload.debug.zip_error_code}`);
+                    }
+                    if (payload.debug.final_size !== undefined && payload.debug.final_size !== null) {
+                        parts.push(`final_size=${payload.debug.final_size}`);
+                    }
+                    if (parts.length) {
+                        errorMessage += ' (' + parts.join(', ') + ')';
+                    }
+                }
+            } catch (e) {}
+            updateStatus(errorMessage);
             showMessage('error', ui.strings && ui.strings.errorTitle ? ui.strings.errorTitle : '', errorMessage);
 
             if (typeof handleError === 'function') {
                 handleError(error);
             }
+            // Notify Restore UI to clear stale summary (prevent Step 3 from using old file).
+            try {
+                document.dispatchEvent(new CustomEvent('backup-lite-restore-upload-failed', { detail: { message: errorMessage } }));
+            } catch (e) {}
+        } finally {
+            setStep1Locked(false);
         }
     });
 

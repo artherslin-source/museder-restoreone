@@ -266,12 +266,9 @@ class Backup_Lite_Restore_Jobs {
     }
 
     public static function spawn_cron() {
-        if ( ! function_exists( 'spawn_cron' ) ) {
-            require_once ABSPATH . 'wp-includes/cron.php';
-        }
-
-        if ( function_exists( 'spawn_cron' ) ) {
-            spawn_cron();
+        // Do not include WordPress core files directly. Best-effort: nudge wp-cron via loopback request.
+        if ( function_exists( 'backup_lite_nudge_wp_cron' ) ) {
+            backup_lite_nudge_wp_cron();
         }
     }
 

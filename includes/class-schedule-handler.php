@@ -149,8 +149,6 @@ class Backup_Lite_Schedule_Handler {
         }
 
         // Verify nonce with schedule-specific nonce
-        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce is verified, not used as data
-        $nonce = isset( $_POST['_ajax_nonce'] ) ? wp_unslash( $_POST['_ajax_nonce'] ) : '';
         check_ajax_referer( 'backup_lite_schedule_action_' . $schedule_id, '_ajax_nonce' );
 
         $deleted = self::delete_schedule( $schedule_id );
@@ -342,8 +340,6 @@ class Backup_Lite_Schedule_Handler {
         }
 
         // Verify nonce with schedule-specific nonce
-        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce is verified, not used as data
-        $nonce = isset( $_POST['_ajax_nonce'] ) ? wp_unslash( $_POST['_ajax_nonce'] ) : '';
         check_ajax_referer( 'backup_lite_schedule_action_' . $schedule_id, '_ajax_nonce' );
 
         $result = self::run_schedule_now( $schedule_id );

@@ -22,7 +22,7 @@
     const searchToggle = document.getElementById('backup-lite-search-replace-toggle');
     const searchFields = form.querySelector('.backup-lite-search-replace-fields');
 
-    const allowedExt = (chunkSettings.allowedExt || ['zip', 'wpress']).map(function (ext) {
+    const allowedExt = (chunkSettings.allowedExt || ['zip']).map(function (ext) {
         return ext.toLowerCase();
     });
 

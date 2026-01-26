@@ -22,7 +22,6 @@ cp -r docs "${PLUGIN_DIR}/"
 cp museder-restoreone.php "${PLUGIN_DIR}/"
 cp readme.txt "${PLUGIN_DIR}/"
 cp download-handler.php "${PLUGIN_DIR}/"
-cp upload-handler.php "${PLUGIN_DIR}/"
 
 # 排除的文件和目录
 exclude_items=(

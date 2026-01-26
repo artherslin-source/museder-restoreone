@@ -78,37 +78,9 @@ if ( $safe_mode_active ) {
             <h2>⚙️ <?php esc_html_e( 'Environment Compatibility', 'museder-restoreone' ); ?></h2>
             <ul class="backup-lite-status-list">
                 <li>
-                    <?php if ( ! empty( $status['shell'] ) ) : ?>
-                        <span class="badge success">
-                            <?php esc_html_e( 'Shell commands available', 'museder-restoreone' ); ?>
-                        </span>
-                    <?php else : ?>
-                        <span class="badge pending">
-                            <?php esc_html_e( 'Shell commands disabled (fallback active)', 'museder-restoreone' ); ?>
-                        </span>
-                    <?php endif; ?>
-                </li>
-                <li>
-                    <?php if ( ! empty( $status['mysqldump'] ) ) : ?>
-                        <span class="badge success">
-                            <?php esc_html_e( 'mysqldump detected', 'museder-restoreone' ); ?>
-                        </span>
-                    <?php else : ?>
-                        <span class="badge pending">
-                            <?php esc_html_e( 'mysqldump unavailable (using PHP export)', 'museder-restoreone' ); ?>
-                        </span>
-                    <?php endif; ?>
-                </li>
-                <li>
-                    <?php if ( ! empty( $status['mysql_cli'] ) ) : ?>
-                        <span class="badge success">
-                            <?php esc_html_e( 'mysql client detected', 'museder-restoreone' ); ?>
-                        </span>
-                    <?php else : ?>
-                        <span class="badge pending">
-                            <?php esc_html_e( 'mysql client unavailable (using PHP import)', 'museder-restoreone' ); ?>
-                        </span>
-                    <?php endif; ?>
+                    <span class="badge success">
+                        <?php esc_html_e( 'Database backup/restore uses WordPress APIs (WP.org compliant)', 'museder-restoreone' ); ?>
+                    </span>
                 </li>
                 <li>
                     <?php if ( ! empty( $status['ziparchive'] ) ) : ?>

@@ -127,8 +127,8 @@ class Backup_Lite_Estimate_Size {
             'pending_directories' => [],
         ];
 
-        // Initialize with wp-content directory only
-        $wp_content_path = WP_CONTENT_DIR;
+        // Initialize with wp-content directory only (best-effort derived via wp_upload_dir()).
+        $wp_content_path = function_exists( 'backup_lite_get_wp_content_dir' ) ? backup_lite_get_wp_content_dir() : '';
         if ( is_dir( $wp_content_path ) && is_readable( $wp_content_path ) ) {
             $job['pending_directories'][] = $wp_content_path;
         } else {

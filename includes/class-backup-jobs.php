@@ -274,6 +274,18 @@ class Backup_Lite_Backup_Jobs {
         $job_needs_finalize    = false;
         $last_cancel_check     = 0.0;
 
+        // Adaptive packing limits: if a host is slow (large files / slow disk / ZipArchive close overhead),
+        // shrink batch sizes automatically to keep each request within time budget and avoid "stuck at 95%".
+        $adaptive = isset( $job['adaptive_pack'] ) && is_array( $job['adaptive_pack'] ) ? $job['adaptive_pack'] : [];
+        $adaptive_max_files = isset( $adaptive['max_files'] ) ? (int) $adaptive['max_files'] : 0;
+        $adaptive_max_bytes = isset( $adaptive['max_bytes'] ) ? (int) $adaptive['max_bytes'] : 0;
+        if ( $adaptive_max_files > 0 ) {
+            $max_files = min( $max_files, $adaptive_max_files );
+        }
+        if ( $adaptive_max_bytes > 0 ) {
+            $max_bytes = min( $max_bytes, $adaptive_max_bytes );
+        }
+
             try {
             // Time budget loop: process multiple batches until time limit or job completion
             // Use microtime for more precise timing
@@ -363,7 +375,52 @@ class Backup_Lite_Backup_Jobs {
                 }
 
                 // Process one packing batch (reuse ZipArchive if available)
+                $batch_started_at = microtime( true );
+                $pointer_before   = isset( $job['pointer'] ) ? (int) $job['pointer'] : 0;
+                $processed_before = isset( $job['processed_bytes'] ) ? (int) $job['processed_bytes'] : 0;
                 $job = Backup_Lite_Backup::process_job_batch( $job, $max_files, $max_bytes, $zip );
+                $batch_elapsed = microtime( true ) - $batch_started_at;
+                $pointer_after   = isset( $job['pointer'] ) ? (int) $job['pointer'] : $pointer_before;
+                $processed_after = isset( $job['processed_bytes'] ) ? (int) $job['processed_bytes'] : $processed_before;
+                $delta_entries   = max( 0, $pointer_after - $pointer_before );
+                $delta_bytes     = max( 0, $processed_after - $processed_before );
+
+                // If a single batch is slower than the time budget, shrink batch limits for the next tick.
+                // This cannot preempt the current long operation, but prevents repeated 30-80s requests that make UI look stuck.
+                if ( $batch_elapsed > (float) $time_budget ) {
+                    $new_max_files = max( 10, (int) floor( $max_files / 2 ) );
+                    $new_max_bytes = max( 4 * 1024 * 1024, (int) floor( $max_bytes / 2 ) );
+                    $job['adaptive_pack'] = [
+                        'max_files' => $new_max_files,
+                        'max_bytes' => $new_max_bytes,
+                        'last_batch_seconds' => round( $batch_elapsed, 2 ),
+                    ];
+                    backup_lite_log( 'warning', 'Packing batch exceeded time budget; shrinking batch limits for next tick.', [
+                        'job_id' => $job_id,
+                        'time_budget' => $time_budget,
+                        'batch_seconds' => round( $batch_elapsed, 2 ),
+                        'entries' => $delta_entries,
+                        'bytes' => $delta_bytes,
+                        'next_max_files' => $new_max_files,
+                        'next_max_bytes' => $new_max_bytes,
+                    ] );
+
+                    // Improve UI message so users understand it is still working.
+                    $job['message'] = sprintf(
+                        /* translators: 1: seconds */
+                        __( 'Packing large files… (last step took %1$s seconds). Please keep this tab open.', 'museder-restoreone' ),
+                        number_format_i18n( round( $batch_elapsed, 1 ), 1 )
+                    );
+                } elseif ( $batch_elapsed > 0 && $delta_bytes > 0 && isset( $job['adaptive_pack'] ) && is_array( $job['adaptive_pack'] ) ) {
+                    // Slowly relax limits again when host is stable (avoid being stuck at very tiny batches forever).
+                    $cur_files = isset( $job['adaptive_pack']['max_files'] ) ? (int) $job['adaptive_pack']['max_files'] : 0;
+                    $cur_bytes = isset( $job['adaptive_pack']['max_bytes'] ) ? (int) $job['adaptive_pack']['max_bytes'] : 0;
+                    if ( $cur_files > 0 && $cur_bytes > 0 && $batch_elapsed < ( (float) $time_budget * 0.5 ) ) {
+                        $job['adaptive_pack']['max_files'] = min( $cur_files + 25, 500 );
+                        $job['adaptive_pack']['max_bytes'] = min( $cur_bytes + ( 2 * 1024 * 1024 ), 64 * 1024 * 1024 );
+                        $job['adaptive_pack']['last_batch_seconds'] = round( $batch_elapsed, 2 );
+                    }
+                }
                 $batch_count++;
 
                 // If packing is done, defer finalize until after ZipArchive::close().
@@ -852,6 +909,9 @@ class Backup_Lite_Backup_Jobs {
             'added_files'     => isset( $job['added_files'] ) ? (int) $job['added_files'] : 0,
             'skipped_files'   => isset( $job['skipped_files'] ) ? (int) $job['skipped_files'] : 0,
             'skip_reasons'    => isset( $job['skip_reasons'] ) && is_array( $job['skip_reasons'] ) ? $job['skip_reasons'] : [],
+            // Include small number of diagnostic samples so UI can explain what was skipped (e.g. too_large >2GB).
+            // This is safe: paths are within the site filesystem and are shown only to admins.
+            'diagnostic_samples' => isset( $job['diagnostic_samples'] ) && is_array( $job['diagnostic_samples'] ) ? array_slice( $job['diagnostic_samples'], 0, 20 ) : [],
             'download_url'    => isset( $job['download_url'] ) ? $job['download_url'] : '',
             'processing'      => ! empty( $job['processing'] ),
             'updated_at'      => isset( $job['updated_at'] ) ? $job['updated_at'] : '',
@@ -951,7 +1011,9 @@ class Backup_Lite_Backup_Jobs {
      * @return string
      */
     private static function get_option_lock_key( $job_id ) {
-        return 'backup_lite_job_lock_' . $job_id;
+        // Use a unique, plugin-specific option prefix to avoid collisions with other plugins.
+        // Job IDs are generated by our plugin, but we still sanitize defensively for storage.
+        return 'museder_restoreone_job_lock_' . sanitize_key( (string) $job_id );
     }
 
     /**

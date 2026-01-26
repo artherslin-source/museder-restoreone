@@ -5,6 +5,7 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 class Backup_Lite_Restore {
 
     private static $pclzip_destination = '';
+    private static $last_mysql_cli_output = '';
 
     /**
      * Restore a site from a unified backup archive.
@@ -115,16 +116,10 @@ class Backup_Lite_Restore {
             $ext = strtolower( pathinfo( $archive_file, PATHINFO_EXTENSION ) );
             $error_code = isset( $extract_result['code'] ) ? $extract_result['code'] : 'zip_open_failed';
             
-            // Provide more specific error messages for .wpress files
+            // Provide more specific error messages for unsupported formats
             $error_message = __( 'Unable to extract backup archive. Check logs for details.', 'museder-restoreone' );
             if ( 'wpress' === $ext ) {
-                if ( 'tar_not_available' === $error_code ) {
-                    $error_message = __( 'Unable to extract .wpress file: tar command is not available on this server. Please contact your hosting provider to enable tar command, or convert the .wpress file to ZIP format first.', 'museder-restoreone' );
-                } elseif ( 'wpress_extraction_failed' === $error_code ) {
-                    $error_message = __( 'Unable to extract .wpress file. The file may be corrupted, use a custom format, or require All-in-One WP Migration plugin to extract. Please try: 1) Verify the backup file is not corrupted, 2) Use All-in-One WP Migration plugin to convert the backup to ZIP format, or 3) Contact support with the log file for assistance.', 'museder-restoreone' );
-                } else {
-                    $error_message = __( 'Unable to extract .wpress file. All-in-One WP Migration .wpress files may require special handling. Please try converting the backup to ZIP format using All-in-One WP Migration plugin, or check the logs for details.', 'museder-restoreone' );
-                }
+                $error_message = __( 'This build does not support .wpress backups. Please convert the backup to ZIP format first.', 'museder-restoreone' );
             }
             
             backup_lite_log( 'error', 'Failed to extract archive for restore.', [
@@ -150,14 +145,14 @@ class Backup_Lite_Restore {
 
         $sql_path = self::locate_database_dump( $temp_dir );
         if ( ! $sql_path ) {
-            backup_lite_log( 'error', 'database.sql missing in archive.', [ 'archive' => $archive_file ] );
+            backup_lite_log( 'error', 'database file missing in archive.', [ 'archive' => $archive_file ] );
             backup_lite_delete_directory( $temp_dir );
 
             return [
                 'success' => false,
-                'message' => __( 'database.sql not found in backup archive.', 'museder-restoreone' ),
+                'message' => __( 'Database file not found in backup archive.', 'museder-restoreone' ),
                 'log'     => $log,
-                'code'    => 'sql_not_found',
+                'code'    => 'db_file_not_found',
             ];
         }
 
@@ -171,11 +166,11 @@ class Backup_Lite_Restore {
             return $db_result;
         }
 
-        // Store active_plugins from SQL file for later restoration
+        // Store active_plugins from database file for later restoration
         if ( ! empty( $db_result['active_plugins'] ) && is_array( $db_result['active_plugins'] ) ) {
             // Store in a temporary option that will be used after restore
             update_option( 'backup_lite_restored_active_plugins', $db_result['active_plugins'], false );
-            backup_lite_log( 'info', 'Stored active_plugins from SQL file for restoration.', [
+            backup_lite_log( 'info', 'Stored active_plugins from backup for restoration.', [
                 'count' => count( $db_result['active_plugins'] ),
             ] );
         }
@@ -213,7 +208,7 @@ class Backup_Lite_Restore {
     }
 
     /**
-     * Import the WordPress database from an SQL file.
+     * Import the WordPress database from a backup database file.
      *
      * @param string $sql_file
      */
@@ -225,88 +220,249 @@ class Backup_Lite_Restore {
         ];
 
         if ( ! file_exists( $sql_file ) || ! is_readable( $sql_file ) ) {
-            $log               = backup_lite_log( 'error', 'SQL file not readable for restore.', [ 'path' => $sql_file ] );
-            $result['message'] = __( 'SQL backup file not found or unreadable.', 'museder-restoreone' );
+            $log               = backup_lite_log( 'error', 'Database file not readable for restore.', [ 'path' => $sql_file ] );
+            $result['message'] = __( 'Database backup file not found or unreadable.', 'museder-restoreone' );
             $result['log']     = $log;
-            $result['code']    = 'sql_file_missing';
+            $result['code']    = 'db_file_missing';
             return $result;
         }
 
-        if ( is_callable( $progress_cb ) ) {
-            call_user_func( $progress_cb, 45, __( 'Preparing database SQL file…', 'museder-restoreone' ) );
-        }
-
-        // Extract active_plugins from SQL file before import
-        $active_plugins_from_sql = self::extract_active_plugins_from_sql( $sql_file );
-        if ( ! empty( $active_plugins_from_sql ) ) {
-            $result['active_plugins'] = $active_plugins_from_sql;
-            backup_lite_log( 'info', 'Extracted active_plugins from SQL file before import.', [
-                'count' => count( $active_plugins_from_sql ),
-            ] );
-        }
-
-        $prepared_sql = self::prepare_sql_for_import( $sql_file );
-        $sql_to_import = $prepared_sql['path'];
-
-        $method = backup_lite_can_use_mysql_cli() ? 'mysql-cli' : 'php';
-        $log    = backup_lite_log( 'info', 'Database restore started.', [ 'method' => $method, 'path' => $sql_to_import ] );
+        $ext = strtolower( pathinfo( $sql_file, PATHINFO_EXTENSION ) );
 
         if ( is_callable( $progress_cb ) ) {
-            $method_text = backup_lite_can_use_mysql_cli() ? __( 'Importing database via MySQL CLI…', 'museder-restoreone' ) : __( 'Importing database via PHP…', 'museder-restoreone' );
-            call_user_func( $progress_cb, 50, $method_text );
+            call_user_func( $progress_cb, 45, __( 'Preparing database import…', 'museder-restoreone' ) );
         }
+
+        if ( 'ndjson' === $ext ) {
+            return self::import_database_from_ndjson( $sql_file, $progress_cb );
+        }
+
+        // Legacy SQL backups are manual-only in this build.
+        if ( 'sql' === $ext ) {
+            $log = backup_lite_log( 'info', 'Database restore requires manual import (SQL).', [ 'path' => $sql_file ] );
+        if ( is_callable( $progress_cb ) ) {
+                call_user_func( $progress_cb, 50, __( 'Manual database import is required for SQL backups.', 'museder-restoreone' ) );
+            }
+            $result['message'] = __( 'This backup contains a database.sql file. Automatic database import is not available in this build. Please import the database manually (for example via phpMyAdmin) using the database.sql file from the backup archive, then continue with the file restore.', 'museder-restoreone' );
+                $result['log']     = $log;
+            $result['code']    = 'manual_db_required';
+                return $result;
+        }
+
+        $log               = backup_lite_log( 'error', 'Unsupported database backup format.', [ 'path' => $sql_file ] );
+        $result['message'] = __( 'Unsupported database backup format.', 'museder-restoreone' );
+        $result['log']     = $log;
+        $result['code']    = 'db_format_unsupported';
+        return $result;
+    }
+
+    /**
+     * Import database from NDJSON backup file generated by this plugin.
+     *
+     * Each line is a JSON object:
+     * - {type:"meta", ...}
+     * - {type:"schema", table:"wp_posts", create:"CREATE TABLE ..."}
+     * - {type:"row", table:"wp_posts", row:{...}}
+     *
+     * @param string        $path
+     * @param callable|null $progress_cb
+     * @return array{success:bool,message:string,code?:string,log?:string,active_plugins?:array}
+     */
+    private static function import_database_from_ndjson( $path, $progress_cb = null ) {
+        global $wpdb;
+
+        $path = wp_normalize_path( (string) $path );
+        $result = [
+            'success' => false,
+            'message' => __( 'Database restore failed.', 'museder-restoreone' ),
+            'code'    => 'db_import_failed',
+        ];
+
+        if ( '' === $path || ! file_exists( $path ) || ! is_readable( $path ) ) {
+            $result['code']    = 'db_file_missing';
+            $result['message'] = __( 'Database backup file not found or unreadable.', 'museder-restoreone' );
+            $result['log']     = backup_lite_log( 'error', 'NDJSON DB file not readable.', [ 'path' => $path ] );
+            return $result;
+        }
+
+        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fgets, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+        $handle = fopen( $path, 'rb' );
+        if ( ! $handle ) {
+            $result['code']    = 'db_file_open_failed';
+            $result['message'] = __( 'Unable to open database backup file.', 'museder-restoreone' );
+            $result['log']     = backup_lite_log( 'error', 'NDJSON DB file open failed.', [ 'path' => $path ] );
+            return $result;
+        }
+
+        // Ensure dbDelta exists for schema creation.
+        // Only include when needed, and only from a known core location.
+        if ( ! function_exists( 'dbDelta' ) && defined( 'ABSPATH' ) ) {
+            $upgrade = rtrim( (string) ABSPATH, '/\\' ) . '/wp-admin/includes/upgrade.php';
+            if ( file_exists( $upgrade ) ) {
+                require_once $upgrade; // phpcs:ignore WordPressVIPMinimum.Files.IncludingFile.UsingVariable -- core path
+            }
+        }
+
+        $file_size = (int) filesize( $path );
+        $last_progress = -1;
+        $line_num = 0;
+        $active_plugins = [];
+        $options_table_safe = '';
+        $source_prefix = '';
+        $target_prefix = isset( $wpdb->prefix ) ? (string) $wpdb->prefix : '';
+        $schemas_imported = 0;
+        $rows_imported    = 0;
+        $decoded_lines    = 0;
+        $saw_first_payload_line = false;
+
+        // Best-effort compute options table name once (target site).
+        if ( isset( $wpdb->options ) ) {
+            $options_table_safe = preg_replace( '/[^A-Za-z0-9_]/', '', (string) $wpdb->options );
+        }
+
+        $rewrite_table = static function ( $table ) use ( &$source_prefix, $target_prefix ) {
+            $table = preg_replace( '/[^A-Za-z0-9_]/', '', (string) $table );
+            if ( '' === $table ) {
+                return '';
+            }
+            if ( '' !== $source_prefix && '' !== $target_prefix && 0 === strpos( $table, $source_prefix ) ) {
+                return $target_prefix . substr( $table, strlen( $source_prefix ) );
+            }
+            return $table;
+        };
+
+        self::run_database_primers();
 
         try {
-            if ( backup_lite_can_use_mysql_cli() ) {
-                $success     = self::import_database_with_cli( $sql_to_import );
-                $php_details = [];
-            } else {
-                $php_details = self::import_database_with_php( $sql_to_import, $progress_cb );
-                $success     = isset( $php_details['success'] ) ? $php_details['success'] : false;
-            }
-
-            if ( is_callable( $progress_cb ) && $success ) {
-                call_user_func( $progress_cb, 65, __( 'Database import completed.', 'museder-restoreone' ) );
-            }
-
-            if ( ! $success ) {
-                backup_lite_log( 'error', 'Database restore failed.', [ 'path' => $sql_to_import ] );
-                $result['message'] = __( 'Database restore encountered an error. Check logs.', 'museder-restoreone' );
-                $result['log']     = $log;
-                if ( ! empty( $php_details['line'] ) ) {
-                    $result['line'] = $php_details['line'];
+            while ( false !== ( $line = fgets( $handle ) ) ) {
+                $line_num++;
+                $line = trim( (string) $line );
+                if ( '' === $line ) {
+                    continue;
                 }
-                $result['code'] = isset( $php_details['code'] ) ? $php_details['code'] : 'database_error';
-                return $result;
-            }
-        } finally {
-            if ( $prepared_sql['temporary'] && file_exists( $prepared_sql['path'] ) ) {
-                // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
-                // $prepared_sql['path'] is from plugin-controlled temp directory
-                if ( function_exists( 'wp_delete_file' ) ) {
-                    wp_delete_file( $prepared_sql['path'] );
-                } else {
-                    // @phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
-                    if ( function_exists( 'wp_delete_file' ) ) {
-                        wp_delete_file( $prepared_sql['path'] );
-                    } else {
-                        // Fallback for non-standard environments.
-                        if ( file_exists( $prepared_sql['path'] ) ) {
-                            @unlink( $prepared_sql['path'] );
+
+                if ( ! $saw_first_payload_line ) {
+                    $saw_first_payload_line = true;
+                    if ( '{' !== substr( $line, 0, 1 ) ) {
+                        throw new RuntimeException( 'db_format_invalid' );
+                    }
+                }
+
+                $obj = json_decode( $line, true );
+                if ( ! is_array( $obj ) ) {
+                    continue;
+                }
+                $decoded_lines++;
+
+                $type = isset( $obj['type'] ) ? (string) $obj['type'] : '';
+                if ( 'meta' === $type ) {
+                    if ( isset( $obj['table_prefix'] ) ) {
+                        $maybe = preg_replace( '/[^A-Za-z0-9_]/', '', (string) $obj['table_prefix'] );
+                        if ( '' !== $maybe ) {
+                            $source_prefix = $maybe;
                         }
                     }
-                    // @phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
+                    continue;
+                }
+
+                if ( 'schema' === $type ) {
+                    $raw_table = isset( $obj['table'] ) ? preg_replace( '/[^A-Za-z0-9_]/', '', (string) $obj['table'] ) : '';
+                    $table = $rewrite_table( $raw_table );
+                    $create = isset( $obj['create'] ) ? (string) $obj['create'] : '';
+                    if ( '' === $table || '' === $create ) {
+                        continue;
+                    }
+
+                    // Rewrite CREATE TABLE statement to match target prefix (best-effort).
+                    if ( '' !== $raw_table && '' !== $table && $raw_table !== $table ) {
+                        $create = str_replace( '`' . $raw_table . '`', '`' . $table . '`', $create );
+                    }
+
+                    // Reset table before data import.
+                    // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
+                    $wpdb->query( 'DROP TABLE IF EXISTS `' . esc_sql( $table ) . '`' ); // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- identifier is strict-sanitized + esc_sql()
+                    // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
+
+                    if ( ! function_exists( 'dbDelta' ) ) {
+                        throw new RuntimeException( esc_html__( 'Database schema import is unavailable on this host.', 'museder-restoreone' ) );
+                    }
+
+                    dbDelta( $create . ';' );
+                    $schemas_imported++;
+
+                    continue;
+                }
+
+                if ( 'row' === $type ) {
+                    $raw_table = isset( $obj['table'] ) ? preg_replace( '/[^A-Za-z0-9_]/', '', (string) $obj['table'] ) : '';
+                    $table = $rewrite_table( $raw_table );
+                    $row   = isset( $obj['row'] ) && is_array( $obj['row'] ) ? $obj['row'] : null;
+                    if ( '' === $table || ! is_array( $row ) ) {
+                        continue;
+                    }
+
+                    $wpdb->replace( $table, $row );
+                    $rows_imported++;
+
+                    // Capture active_plugins for later restoration (best-effort).
+                    if ( '' !== $options_table_safe && $table === $options_table_safe ) {
+                        $opt_name = isset( $row['option_name'] ) ? (string) $row['option_name'] : '';
+                        if ( 'active_plugins' === $opt_name && isset( $row['option_value'] ) ) {
+                            $maybe = maybe_unserialize( (string) $row['option_value'] );
+                            if ( is_array( $maybe ) ) {
+                                $active_plugins = array_values( array_filter( array_map( 'strval', $maybe ) ) );
+                            }
+                        }
+                    }
+                }
+
+                if ( is_callable( $progress_cb ) && $file_size > 0 ) {
+                    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_ftell -- progress tracking on local file handle
+                    $pos = ftell( $handle );
+                    if ( is_int( $pos ) && $pos > 0 ) {
+                        $pct = (int) floor( min( 99, ( $pos / $file_size ) * 100 ) );
+                        if ( $pct !== $last_progress && ( $pct % 5 === 0 ) ) {
+                            $last_progress = $pct;
+                            call_user_func( $progress_cb, 50 + ( $pct * 0.15 ), __( 'Importing database…', 'museder-restoreone' ) );
+                        }
+                    }
                 }
             }
+        } catch ( Throwable $e ) {
+            if ( 'db_format_invalid' === $e->getMessage() ) {
+                $result['code']    = 'db_format_invalid';
+                $result['message'] = __( 'Database backup file is not valid NDJSON. Please re-create the backup with the updated plugin.', 'museder-restoreone' );
+                $result['log']     = backup_lite_log( 'error', 'NDJSON DB format invalid (first line not JSON).', [ 'line' => $line_num, 'path' => $path ] );
+                return $result;
+            }
+            $result['message'] = __( 'Database restore encountered an error. Check logs.', 'museder-restoreone' );
+            $result['log']     = backup_lite_log( 'error', 'NDJSON DB import failed.', [ 'line' => $line_num, 'error' => $e->getMessage() ] );
+            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fgets, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+            return $result;
         }
 
-        backup_lite_log( 'info', 'Database restore completed.', [ 'path' => $sql_to_import ] );
+        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fgets, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+
+        self::restore_database_constraints();
+
+        if ( $decoded_lines <= 0 || $schemas_imported <= 0 ) {
+            $result['code']    = 'db_format_invalid';
+            $result['message'] = __( 'Database backup file is invalid or incomplete. Please re-create the backup with the updated plugin.', 'museder-restoreone' );
+            $result['log']     = backup_lite_log( 'error', 'NDJSON DB import produced no schema/data.', [
+                'decoded_lines' => $decoded_lines,
+                'schemas'       => $schemas_imported,
+                'rows'          => $rows_imported,
+                'path'          => $path,
+            ] );
+            return $result;
+        }
 
         $result['success'] = true;
         $result['message'] = __( 'Database restore completed successfully.', 'museder-restoreone' );
-        $result['log']     = $log;
         $result['code']    = 'database_restored';
-
+        if ( ! empty( $active_plugins ) ) {
+            $result['active_plugins'] = $active_plugins;
+        }
         return $result;
     }
 
@@ -321,138 +477,7 @@ class Backup_Lite_Restore {
      * @return array{success:bool,completed:bool}
      */
     public static function import_database_sliced( $sql_file, &$offset, &$query_buffer, $timeout_seconds = 10, $rewrite_from_prefix = '', $rewrite_to_prefix = '' ) {
-        global $wpdb;
-
-        if ( ! file_exists( $sql_file ) || ! is_readable( $sql_file ) ) {
-            throw new RuntimeException( esc_html__( 'SQL file is not readable.', 'museder-restoreone' ) );
-        }
-
-        $start = microtime( true );
-
-        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen
-        $handle = fopen( $sql_file, 'rb' );
-        if ( ! $handle ) {
-            throw new RuntimeException( esc_html__( 'Unable to open SQL file for reading.', 'museder-restoreone' ) );
-        }
-        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen
-
-        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_read_fseek
-        if ( is_int( $offset ) && $offset > 0 ) {
-            $seek = fseek( $handle, $offset, SEEK_SET );
-            if ( 0 !== $seek ) {
-                // If seeking fails (e.g., non-seekable stream), fall back to start.
-                $offset = 0;
-            }
-        }
-        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_read_fseek
-
-        $query = is_string( $query_buffer ) ? $query_buffer : '';
-        $completed = false;
-
-        $tune_state  = self::apply_import_session_tuning();
-        $tx_started  = false;
-        $tx_rolled_back = false;
-        $split_info = [
-            'split'        => false,
-            'batches_done' => 0,
-            'batches_total'=> 0,
-            'stmt'         => '',
-        ];
-
-        try {
-            // Disable autocommit and start transaction for better performance
-            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-            $wpdb->query( 'SET autocommit = 0' );
-            $wpdb->query( 'START TRANSACTION' );
-            // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-            $tx_started = true;
-
-            // If we have a complete buffered statement from a previous slice, execute it first.
-            if ( is_string( $query ) && '' !== trim( $query ) && ';' === substr( rtrim( $query ), -1 ) ) {
-                $prepared = trim( $query );
-                $prepared = self::maybe_rewrite_sql_prefix( $prepared, $rewrite_from_prefix, $rewrite_to_prefix );
-                self::exec_import_sql_statement( $prepared, $split_info, $timeout_seconds, $start );
-                $query = '';
-            }
-
-            // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_read_fgets, WordPress.WP.AlternativeFunctions.file_system_read_ftell
-            while ( false !== ( $line = fgets( $handle ) ) ) {
-                $trimmed = trim( $line );
-                if ( '' === $trimmed || 0 === strpos( $trimmed, '--' ) || 0 === strpos( $trimmed, '/*' ) ) {
-                    $offset = (int) ftell( $handle );
-                    if ( $timeout_seconds > 0 && ( microtime( true ) - $start ) > $timeout_seconds ) {
-                        break;
-                    }
-                    continue;
-                }
-
-                $query .= $line;
-                $offset = (int) ftell( $handle );
-
-                if ( ';' === substr( rtrim( $line ), -1 ) ) {
-                    $prepared = trim( $query );
-                    if ( $prepared !== '' ) {
-                        $prepared = self::maybe_rewrite_sql_prefix( $prepared, $rewrite_from_prefix, $rewrite_to_prefix );
-                        self::exec_import_sql_statement( $prepared, $split_info, $timeout_seconds, $start );
-
-                        // If we paused due to time budget during split INSERT, keep remaining statement in buffer and stop reading.
-                        if ( ! empty( $split_info['paused'] ) && ! empty( $split_info['remaining_sql'] ) ) {
-                            $query = (string) $split_info['remaining_sql'];
-                            break;
-                        }
-                    }
-                    $query = '';
-                }
-
-                if ( $timeout_seconds > 0 && ( microtime( true ) - $start ) > $timeout_seconds ) {
-                    break;
-                }
-            }
-            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_read_fgets, WordPress.WP.AlternativeFunctions.file_system_read_ftell
-
-            if ( feof( $handle ) ) {
-                $completed = true;
-            }
-
-            // Commit transaction chunk
-            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-            $wpdb->query( 'COMMIT' );
-            $wpdb->query( 'SET autocommit = 1' );
-            // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-            $tx_started = false;
-
-            $query_buffer = $query;
-
-            return [
-                'success'   => true,
-                'completed' => $completed,
-                'import'    => [
-                    'stmt'          => (string) $split_info['stmt'],
-                    'split'         => (bool) $split_info['split'],
-                    'batches_done'  => (int) $split_info['batches_done'],
-                    'batches_total' => (int) $split_info['batches_total'],
-                ],
-            ];
-        } finally {
-            // Best-effort rollback if an exception escaped while a transaction is active.
-            if ( $tx_started && ! $tx_rolled_back ) {
-                try {
-                    // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-                    $wpdb->query( 'ROLLBACK' );
-                    $wpdb->query( 'SET autocommit = 1' );
-                    // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-                } catch ( Exception $inner ) {
-                    // Ignore.
-                }
-            }
-
-            self::restore_import_session_tuning( $tune_state );
-
-            // Ensure file handle is closed even if we threw.
-            // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-            fclose( $handle );
-            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-        }
+        throw new RuntimeException( esc_html__( 'Automatic database import is unavailable for SQL backups in this build.', 'museder-restoreone' ) );
     }
 
     /**
@@ -464,21 +489,7 @@ class Backup_Lite_Restore {
      * @return string
      */
     private static function maybe_rewrite_sql_prefix( $prepared, $rewrite_from_prefix, $rewrite_to_prefix ) {
-        $prepared = (string) $prepared;
-        if ( $rewrite_from_prefix && $rewrite_to_prefix && $rewrite_from_prefix !== $rewrite_to_prefix ) {
-            $head = ltrim( $prepared );
-            if (
-                0 === stripos( $head, 'CREATE TABLE' )
-                || 0 === stripos( $head, 'DROP TABLE' )
-                || 0 === stripos( $head, 'INSERT INTO' )
-                || 0 === stripos( $head, 'ALTER TABLE' )
-                || 0 === stripos( $head, 'LOCK TABLES' )
-                || 0 === stripos( $head, 'UNLOCK TABLES' )
-            ) {
-                $prepared = str_replace( '`' . $rewrite_from_prefix, '`' . $rewrite_to_prefix, $prepared );
-            }
-        }
-        return $prepared;
+        return (string) $prepared;
     }
 
     /**
@@ -494,123 +505,211 @@ class Backup_Lite_Restore {
      * @return void
      */
     private static function exec_import_sql_statement( $prepared, array &$split_info, $timeout_seconds, $start ) {
+        // WP.org compliance: removed (no PHP execution of SQL dump statements).
+        throw new RuntimeException( esc_html__( 'Automatic database import requires MySQL CLI on this host.', 'museder-restoreone' ) );
+    }
+
+    /**
+     * Classify an SQL statement for restore import.
+     *
+     * @param string $sql Full SQL statement (single statement ending with ';').
+     * @return 'allow'|'skip'|'block'
+     */
+    private static function classify_restore_sql_statement_risk( $sql ) {
+        $sql  = (string) $sql;
+        $head = ltrim( $sql );
+
+        // Normalize leading optimizer/compat comments (common in dumps).
+        // Example: /*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;
+        if ( 0 === strpos( $head, '/*!' ) ) {
+            $head = preg_replace( '/^\\/\\*!\\d+\\s*/', '', $head );
+            $head = preg_replace( '/\\*\\/\\s*;?\\s*$/', '', (string) $head );
+            $head = ltrim( (string) $head );
+        }
+
+        // High-risk patterns: should never appear in a WordPress backup restore.
+        if ( preg_match( '/\b(INTO\s+(OUTFILE|DUMPFILE)|LOAD\s+DATA|LOAD_FILE\s*\(|INFILE)\b/i', $head ) ) {
+            return 'block';
+        }
+        if ( preg_match( '/^\s*(GRANT|REVOKE|CREATE\s+USER|DROP\s+USER|ALTER\s+USER)\b/i', $head ) ) {
+            return 'block';
+        }
+        if ( preg_match( '/^\s*SET\s+GLOBAL\b/i', $head ) ) {
+            return 'block';
+        }
+        if ( preg_match( '/^\s*SET\s+PASSWORD\b/i', $head ) ) {
+            return 'block';
+        }
+
+        // Unsupported / out-of-scope for WP restore: skip (best-effort compatibility).
+        if ( preg_match( '/^\s*USE\b/i', $head ) ) {
+            return 'skip';
+        }
+        if ( preg_match( '/^\s*(CREATE|DROP)\s+DATABASE\b/i', $head ) ) {
+            return 'skip';
+        }
+        if ( preg_match( '/^\s*(CREATE|DROP)\s+(TRIGGER|EVENT|PROCEDURE|FUNCTION)\b/i', $head ) ) {
+            return 'skip';
+        }
+
+        // Allow common dump statements used by WordPress backups, but only for expected table identifiers.
+        if ( preg_match( '/^\s*(INSERT|REPLACE)\s+INTO\b/i', $head ) ) {
+            $table = self::extract_sql_table_identifier( $head, 'into' );
+            return self::is_restore_sql_table_allowed( $table ) ? 'allow' : 'block';
+        }
+        if ( preg_match( '/^\s*UPDATE\b/i', $head ) ) {
+            $table = self::extract_sql_table_identifier( $head, 'update' );
+            return self::is_restore_sql_table_allowed( $table ) ? 'allow' : 'block';
+        }
+        if ( preg_match( '/^\s*DELETE\s+FROM\b/i', $head ) ) {
+            $table = self::extract_sql_table_identifier( $head, 'delete' );
+            return self::is_restore_sql_table_allowed( $table ) ? 'allow' : 'block';
+        }
+        if ( preg_match( '/^\s*TRUNCATE\s+TABLE\b/i', $head ) ) {
+            $table = self::extract_sql_table_identifier( $head, 'truncate' );
+            return self::is_restore_sql_table_allowed( $table ) ? 'allow' : 'block';
+        }
+        if ( preg_match( '/^\s*CREATE\s+TABLE\b/i', $head ) ) {
+            $table = self::extract_sql_table_identifier( $head, 'create_table' );
+            return self::is_restore_sql_table_allowed( $table ) ? 'allow' : 'block';
+        }
+        if ( preg_match( '/^\s*ALTER\s+TABLE\b/i', $head ) ) {
+            $table = self::extract_sql_table_identifier( $head, 'alter_table' );
+            return self::is_restore_sql_table_allowed( $table ) ? 'allow' : 'block';
+        }
+        if ( preg_match( '/^\s*DROP\s+TABLE\b/i', $head ) ) {
+            // DROP TABLE may include multiple tables; verify all listed tables are allowed.
+            $tables = self::extract_sql_table_list_for_drop( $head );
+            if ( empty( $tables ) ) {
+                return 'block';
+            }
+            foreach ( $tables as $t ) {
+                if ( ! self::is_restore_sql_table_allowed( $t ) ) {
+                    return 'block';
+                }
+            }
+            return 'allow';
+        }
+        if ( preg_match( '/^\s*SET\b/i', $head ) ) {
+            // Session-scoped SET statements are allowed (GLOBAL is blocked above).
+            return 'allow';
+        }
+
+        // Default: skip unknown statements for safety.
+        return 'skip';
+    }
+
+    /**
+     * Extract the primary table identifier from a SQL statement head.
+     *
+     * @param string $sql_head SQL head (trimmed, may include comments already stripped).
+     * @param string $mode into|update|delete|truncate|create_table|alter_table
+     * @return string Table name (without db qualifier/backticks) or empty string.
+     */
+    private static function extract_sql_table_identifier( $sql_head, $mode ) {
+        $sql_head = (string) $sql_head;
+        $mode     = (string) $mode;
+
+        $pattern = '';
+        switch ( $mode ) {
+            case 'into':
+                $pattern = '/^\s*(?:INSERT|REPLACE)\s+INTO\s+(?:`?[A-Za-z0-9_]+`?\.)?`?([A-Za-z0-9_]+)`?/i';
+                break;
+            case 'update':
+                $pattern = '/^\s*UPDATE\s+(?:`?[A-Za-z0-9_]+`?\.)?`?([A-Za-z0-9_]+)`?/i';
+                break;
+            case 'delete':
+                $pattern = '/^\s*DELETE\s+FROM\s+(?:`?[A-Za-z0-9_]+`?\.)?`?([A-Za-z0-9_]+)`?/i';
+                break;
+            case 'truncate':
+                $pattern = '/^\s*TRUNCATE\s+TABLE\s+(?:`?[A-Za-z0-9_]+`?\.)?`?([A-Za-z0-9_]+)`?/i';
+                break;
+            case 'create_table':
+                $pattern = '/^\s*CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:`?[A-Za-z0-9_]+`?\.)?`?([A-Za-z0-9_]+)`?/i';
+                break;
+            case 'alter_table':
+                $pattern = '/^\s*ALTER\s+TABLE\s+(?:`?[A-Za-z0-9_]+`?\.)?`?([A-Za-z0-9_]+)`?/i';
+                break;
+        }
+
+        if ( '' === $pattern ) {
+            return '';
+        }
+
+        if ( preg_match( $pattern, $sql_head, $m ) ) {
+            return isset( $m[1] ) ? (string) $m[1] : '';
+        }
+        return '';
+    }
+
+    /**
+     * Extract table list from a DROP TABLE statement.
+     *
+     * @param string $sql_head
+     * @return array<int,string> Table names (without db qualifier/backticks).
+     */
+    private static function extract_sql_table_list_for_drop( $sql_head ) {
+        $sql_head = (string) $sql_head;
+
+        $after = preg_replace( '/^\s*DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?/i', '', $sql_head );
+        $after = preg_replace( '/;.*$/', '', (string) $after );
+        $after = trim( (string) $after );
+        if ( '' === $after ) {
+            return [];
+        }
+
+        $parts  = array_map( 'trim', explode( ',', $after ) );
+        $tables = [];
+        foreach ( $parts as $p ) {
+            if ( '' === $p ) {
+                continue;
+            }
+            // Remove potential db qualifier, then strip backticks.
+            $p = preg_replace( '/^`?[A-Za-z0-9_]+`?\./', '', $p );
+            $p = trim( (string) $p, " \t\n\r\0\x0B`" );
+            if ( '' !== $p ) {
+                $tables[] = $p;
+            }
+        }
+        return $tables;
+    }
+
+    /**
+     * Allow only table identifiers that look like WordPress tables (current prefix/base_prefix),
+     * plus the SERVMASK placeholder used by certain exports before normalization.
+     *
+     * @param string $table
+     * @return bool
+     */
+    private static function is_restore_sql_table_allowed( $table ) {
         global $wpdb;
 
-        $prepared = (string) $prepared;
-        $head = ltrim( $prepared );
-        $split_info['stmt'] = '';
-        $split_info['paused'] = false;
-        $split_info['remaining_sql'] = '';
-
-        if ( 0 === stripos( $head, 'INSERT INTO' ) ) {
-            $split_info['stmt'] = 'INSERT';
-        } elseif ( 0 === stripos( $head, 'LOCK TABLES' ) ) {
-            $split_info['stmt'] = 'LOCK';
-        } elseif ( 0 === stripos( $head, 'UNLOCK TABLES' ) ) {
-            $split_info['stmt'] = 'UNLOCK';
-        } elseif ( 0 === stripos( $head, 'ALTER TABLE' ) ) {
-            $split_info['stmt'] = 'ALTER';
-        } elseif ( 0 === stripos( $head, 'CREATE TABLE' ) ) {
-            $split_info['stmt'] = 'CREATE';
-        } elseif ( 0 === stripos( $head, 'DROP TABLE' ) ) {
-            $split_info['stmt'] = 'DROP';
+        $table = (string) $table;
+        if ( '' === $table ) {
+            return false;
         }
 
-        // IMPORTANT: Skip LOCK/UNLOCK TABLES statements.
-        // These statements can affect the current MySQL connection session used by $wpdb and break
-        // WordPress internal writes (e.g., update_option('cron') used for rescheduling restore slices),
-        // causing the restore pipeline to stall.
-        if ( 0 === stripos( $head, 'LOCK TABLES' ) || 0 === stripos( $head, 'UNLOCK TABLES' ) ) {
-            if ( function_exists( 'backup_lite_log' ) ) {
-                backup_lite_log( 'info', 'DB import: skipped LOCK/UNLOCK TABLES statement.', [ 'stmt' => $split_info['stmt'] ] );
-            }
-            return;
+        // Strict identifier token.
+        if ( ! preg_match( '/^[A-Za-z0-9_]+$/', $table ) ) {
+            return false;
         }
 
-        // Split huge multi-row INSERT statements (heuristic).
-        $max_insert_bytes = 1024 * 1024; // 1MB statement size threshold
-        $max_batch_tuples = 100;         // tuples per batch
-        $max_batch_bytes  = 512 * 1024;  // 512KB per batch (approx)
+        $allowed_prefixes = [];
+        if ( isset( $wpdb->prefix ) && '' !== (string) $wpdb->prefix ) {
+            $allowed_prefixes[] = (string) $wpdb->prefix;
+        }
+        if ( isset( $wpdb->base_prefix ) && '' !== (string) $wpdb->base_prefix ) {
+            $allowed_prefixes[] = (string) $wpdb->base_prefix;
+        }
+        $allowed_prefixes[] = 'SERVMASK_PREFIX_';
 
-        if (
-            0 === stripos( $head, 'INSERT INTO' )
-            && strlen( $prepared ) >= $max_insert_bytes
-            && false !== stripos( $prepared, 'VALUES' )
-        ) {
-            $parsed = self::parse_multi_values_insert( $prepared );
-            if ( $parsed && ! empty( $parsed['prefix'] ) && ! empty( $parsed['tuples'] ) && count( $parsed['tuples'] ) > 1 ) {
-                $split_info['split'] = true;
-                $split_info['batches_total'] = (int) ceil( count( $parsed['tuples'] ) / $max_batch_tuples );
-                $split_info['batches_done']  = 0;
-
-                $tuples = $parsed['tuples'];
-                $prefix = $parsed['prefix'];
-
-                $i = 0;
-                $count = count( $tuples );
-                while ( $i < $count ) {
-                    // Time budget check between batches.
-                    if ( $timeout_seconds > 0 && ( microtime( true ) - $start ) > $timeout_seconds ) {
-                        $remaining = array_slice( $tuples, $i );
-                        $split_info['paused'] = true;
-                        $split_info['remaining_sql'] = $prefix . implode( ',', $remaining ) . ';';
-                        break;
-                    }
-
-                    $batch = [];
-                    $batch_bytes = 0;
-                    while ( $i < $count && count( $batch ) < $max_batch_tuples ) {
-                        $tuple = $tuples[ $i ];
-                        $tuple_len = strlen( $tuple );
-                        if ( ! empty( $batch ) && ( $batch_bytes + $tuple_len ) > $max_batch_bytes ) {
-                            break;
-                        }
-                        $batch[] = $tuple;
-                        $batch_bytes += $tuple_len;
-                        $i++;
-                    }
-                    if ( empty( $batch ) ) {
-                        // Fallback: avoid infinite loop; execute one tuple as-is.
-                        $batch[] = $tuples[ $i ];
-                        $i++;
-                    }
-
-                    $sql = $prefix . implode( ',', $batch ) . ';';
-                    // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange, PluginCheck.Security.DirectDB.UnescapedDBParameter
-                    $wpdb->flush();
-                    $result = $wpdb->query( $sql ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- SQL from trusted backup file
-                    // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange, PluginCheck.Security.DirectDB.UnescapedDBParameter
-
-                    if ( false === $result ) {
-                        $error = $wpdb->last_error ?: 'unknown error';
-                        // @plugin-check: escaped
-                        throw new RuntimeException( esc_html( (string) $error ) );
-                    }
-                    $split_info['batches_done']++;
-                }
-
-                if ( function_exists( 'backup_lite_log' ) ) {
-                    backup_lite_log( 'info', 'DB import: split large INSERT.', [
-                        'batches_done'  => (int) $split_info['batches_done'],
-                        'batches_total' => (int) $split_info['batches_total'],
-                        'paused'        => ! empty( $split_info['paused'] ),
-                    ] );
-                }
-                return;
+        foreach ( array_unique( $allowed_prefixes ) as $prefix ) {
+            if ( '' !== $prefix && 0 === strpos( $table, $prefix ) ) {
+                return true;
             }
         }
 
-        // Default execution path (single statement).
-        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange, PluginCheck.Security.DirectDB.UnescapedDBParameter
-        $wpdb->flush();
-        $result = $wpdb->query( $prepared ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- SQL from trusted backup file
-        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange, PluginCheck.Security.DirectDB.UnescapedDBParameter
-
-        if ( false === $result ) {
-            $error = $wpdb->last_error ?: 'unknown error';
-            // @plugin-check: escaped
-            throw new RuntimeException( esc_html( (string) $error ) );
-        }
+        return false;
     }
 
     /**
@@ -1055,11 +1154,9 @@ class Backup_Lite_Restore {
             // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery
             // phpcs:disable WordPress.DB.DirectDatabaseQuery.NoCaching
             // phpcs:disable WordPress.DB.DirectDatabaseQuery.SchemaChange
-            if ( method_exists( $wpdb, 'has_cap' ) && $wpdb->has_cap( 'identifier_placeholders' ) ) {
-                $wpdb->query( $wpdb->prepare( 'DROP TABLE IF EXISTS %i', $safe ) ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- prepared statement
-            } else {
+            // Note: Avoid %i identifier placeholders for compatibility with older WordPress versions.
+            // Identifier is strict-whitelisted above and escaped with esc_sql().
                 $wpdb->query( 'DROP TABLE IF EXISTS `' . esc_sql( $safe ) . '`' ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- identifier is strict-whitelisted above and escaped with esc_sql()
-            }
             // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery
             // phpcs:enable WordPress.DB.DirectDatabaseQuery.NoCaching
             // phpcs:enable WordPress.DB.DirectDatabaseQuery.SchemaChange
@@ -1082,14 +1179,17 @@ class Backup_Lite_Restore {
         $wp_content_source = self::find_directory_by_name( $extract_dir, 'wp-content' );
 
         if ( $wp_content_source && is_dir( $wp_content_source ) ) {
-            $targets[] = [ $wp_content_source, WP_CONTENT_DIR ];
+            $content_dir = function_exists( 'backup_lite_get_wp_content_dir' ) ? backup_lite_get_wp_content_dir() : '';
+            if ( '' !== $content_dir ) {
+                $targets[] = [ $wp_content_source, $content_dir ];
+            }
         } else {
             $upload_dir = wp_upload_dir();
             $uploads_basedir = isset( $upload_dir['basedir'] ) ? (string) $upload_dir['basedir'] : '';
             $uploads_basedir = $uploads_basedir ? wp_normalize_path( $uploads_basedir ) : '';
-            $plugins_dir  = defined( 'WP_PLUGIN_DIR' ) ? wp_normalize_path( WP_PLUGIN_DIR ) : '';
+            $plugins_dir  = function_exists( 'backup_lite_get_plugins_dir' ) ? backup_lite_get_plugins_dir() : '';
             $themes_dir   = function_exists( 'get_theme_root' ) ? wp_normalize_path( (string) get_theme_root() ) : '';
-            $mu_plugins_dir = defined( 'WPMU_PLUGIN_DIR' ) ? wp_normalize_path( WPMU_PLUGIN_DIR ) : '';
+            $mu_plugins_dir = function_exists( 'backup_lite_get_mu_plugins_dir' ) ? backup_lite_get_mu_plugins_dir() : '';
             $fallbacks = [
                 'themes'     => $themes_dir,
                 'plugins'    => $plugins_dir,
@@ -1146,24 +1246,14 @@ class Backup_Lite_Restore {
     private static function extract_archive( $archive, $destination ) {
         $zip_error_code = null;
 
-        // Check if this is a .wpress file (All-in-One WP Migration format)
+        // WP.org submission build: .wpress is not supported.
         $ext = strtolower( pathinfo( $archive, PATHINFO_EXTENSION ) );
         if ( 'wpress' === $ext ) {
-            // Try to extract .wpress file using tar command (it's a gzip-compressed tar archive)
-            $wpress_result = self::extract_with_tar( $archive, $destination );
-            if ( ! empty( $wpress_result['success'] ) ) {
+            backup_lite_log( 'warning', 'wpress_not_supported', [ 'archive' => basename( $archive ) ] );
                 return [
-                    'success'        => true,
-                    'method'         => 'tar',
-                    'zip_error_code' => 0,
-                ];
-            }
-
-            // If tar extraction failed, log and continue to try ZIP methods as fallback
-            backup_lite_log( 'warning', 'WPRESS extraction with tar failed, attempting ZIP methods as fallback', [
-                'archive' => $archive,
-                'error'  => isset( $wpress_result['error'] ) ? $wpress_result['error'] : 'unknown',
-            ] );
+                'success' => false,
+                'code'    => 'wpress_not_supported',
+            ];
         }
 
         if ( backup_lite_can_use_ziparchive() ) {
@@ -1198,9 +1288,6 @@ class Backup_Lite_Restore {
 
         // If all methods failed, return error
         $error_message = 'Both ZipArchive and PclZip extraction failed';
-        if ( 'wpress' === $ext ) {
-            $error_message = 'WPRESS extraction failed. All-in-One WP Migration .wpress files require tar command or need to be converted to ZIP format first.';
-        }
         
         backup_lite_log( 'error', $error_message, [
             'archive'    => $archive,
@@ -1210,7 +1297,7 @@ class Backup_Lite_Restore {
 
         return [
             'success'        => false,
-            'code'           => 'wpress' === $ext ? 'wpress_extraction_failed' : 'zip_open_failed',
+            'code'           => 'zip_open_failed',
             'zip_error_code' => $zip_error_code,
         ];
     }
@@ -1314,301 +1401,38 @@ class Backup_Lite_Restore {
     }
 
     /**
-     * Extract .wpress file using tar command
-     * .wpress files can be gzip-compressed tar, uncompressed tar, or other formats
+     * WP.org submission build: .wpress is not supported.
      *
-     * @param string $archive Path to .wpress file
-     * @param string $destination Destination directory
+     * @param string $archive
+     * @param string $destination
      * @return array{success:bool, error?:string, error_code?:string}
      */
     private static function extract_with_tar( $archive, $destination ) {
-        // Check if tar command is available
-        if ( ! backup_lite_command_exists( 'tar' ) ) {
-            backup_lite_log( 'warning', 'tar command not available for WPRESS extraction', [
-                'archive' => basename( $archive ),
-            ] );
-            return [
-                'success'    => false,
-                'error'      => __( 'tar command is not available on this server. .wpress files require tar command for extraction.', 'museder-restoreone' ),
-                'error_code' => 'tar_not_available',
-            ];
-        }
-
-        // Ensure destination directory exists
-        $destination = wp_normalize_path( $destination );
-        backup_lite_ensure_directory( $destination );
-
-        // Sanitize paths for shell command
-        $archive_escaped = escapeshellarg( $archive );
-        $destination_escaped = escapeshellarg( $destination );
-
-        // Detect file format by reading first few bytes
-        // 在備份檔案串流過程中，必須使用底層 fopen/fread/fclose 以確保大檔案（>1GB）在各種主機環境下具有最佳效能與穩定性。
-        // WP_Filesystem 在部分共用主機環境中會受到限制，因此此處保留原生檔案操作。
-        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-        $file_handle = fopen( $archive, 'rb' );
-        $file_header = '';
-        if ( $file_handle ) {
-            $file_header = fread( $file_handle, 512 ); // Read first 512 bytes
-            fclose( $file_handle );
-        }
-        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-
-        // Try different extraction methods based on file format
-        $methods = [];
-        
-        // Check if it's gzip compressed (starts with 0x1f 0x8b)
-        if ( strlen( $file_header ) >= 2 && ord( $file_header[0] ) === 0x1f && ord( $file_header[1] ) === 0x8b ) {
-            // Gzip compressed tar: tar -xzf
-            $methods[] = [
-                'command' => sprintf( 'tar -xzf %s -C %s 2>&1', $archive_escaped, $destination_escaped ),
-                'method' => 'gzip-compressed tar',
-            ];
-        }
-        
-        // Check if it's a tar file (starts with tar magic bytes or ustar)
-        if ( strlen( $file_header ) >= 263 ) {
-            $ustar_pos = strpos( $file_header, 'ustar', 257 );
-            if ( $ustar_pos !== false || substr( $file_header, 0, 4 ) === "\x00\x00\x00" ) {
-                // Uncompressed tar: tar -xf
-                $methods[] = [
-                    'command' => sprintf( 'tar -xf %s -C %s 2>&1', $archive_escaped, $destination_escaped ),
-                    'method' => 'uncompressed tar',
-                ];
-            }
-        }
-        
-        // If we couldn't detect format, try both methods in order
-        if ( empty( $methods ) ) {
-            $methods[] = [
-                'command' => sprintf( 'tar -xzf %s -C %s 2>&1', $archive_escaped, $destination_escaped ),
-                'method' => 'gzip-compressed tar (auto-detect)',
-            ];
-            $methods[] = [
-                'command' => sprintf( 'tar -xf %s -C %s 2>&1', $archive_escaped, $destination_escaped ),
-                'method' => 'uncompressed tar (fallback)',
-            ];
-        }
-
-        backup_lite_log( 'info', 'Extracting WPRESS file with tar command', [
-            'archive' => basename( $archive ),
-            'destination' => $destination,
-            'detected_methods' => count( $methods ),
-        ] );
-
-        $last_error = '';
-        $last_return_code = 0;
-
-        foreach ( $methods as $method_info ) {
-            $command = $method_info['command'];
-            $method_name = $method_info['method'];
-            
-            backup_lite_log( 'info', 'Attempting WPRESS extraction', [
-                'archive' => basename( $archive ),
-                'method' => $method_name,
-            ] );
-
-            $output = [];
-            $return_code = 0;
-
-            if ( function_exists( 'exec' ) ) {
-                exec( $command, $output, $return_code );
-            } elseif ( function_exists( 'shell_exec' ) ) {
-                $output_str = shell_exec( $command . ' 2>&1' );
-                $output = ! empty( $output_str ) ? explode( "\n", trim( $output_str ) ) : [];
-                // For shell_exec, check if output contains error indicators
-                if ( ! empty( $output_str ) && ( stripos( $output_str, 'error' ) !== false || stripos( $output_str, 'failed' ) !== false ) ) {
-                    $return_code = 1;
-                }
-            } else {
-                return [
-                    'success'    => false,
-                    'error'      => __( 'No shell execution function available for tar extraction.', 'museder-restoreone' ),
-                    'error_code' => 'shell_not_available',
-                ];
-            }
-
-            if ( 0 === $return_code ) {
-                // Success! Verify that files were actually extracted
-                $extracted_files = 0;
-                if ( is_dir( $destination ) ) {
-                    try {
-                        $iterator = new RecursiveIteratorIterator(
-                            new RecursiveDirectoryIterator( $destination, FilesystemIterator::SKIP_DOTS ),
-                            RecursiveIteratorIterator::LEAVES_ONLY
-                        );
-                        $extracted_files = iterator_count( $iterator );
-                    } catch ( Exception $e ) {
-                        backup_lite_log( 'warning', 'Unable to count extracted files after tar extraction', [
-                            'error' => $e->getMessage(),
-                        ] );
-                    }
-                }
-
-                if ( $extracted_files > 0 ) {
-                    backup_lite_log( 'info', 'WPRESS tar extraction completed successfully', [
-                        'archive' => basename( $archive ),
-                        'method' => $method_name,
-                        'files_extracted' => $extracted_files,
-                    ] );
-
-                    return [
-                        'success' => true,
-                    ];
-                } else {
-                    // No files extracted, continue to next method
-                    backup_lite_log( 'warning', 'WPRESS tar extraction completed but no files found', [
-                        'archive' => basename( $archive ),
-                        'method' => $method_name,
-                    ] );
-                    $last_error = __( 'tar extraction completed but no files were extracted.', 'museder-restoreone' );
-                    $last_return_code = 1;
-                    continue;
-                }
-            } else {
-                // This method failed, try next one
-                $error_message = ! empty( $output ) ? implode( "\n", $output ) : __( 'tar extraction failed', 'museder-restoreone' );
-                backup_lite_log( 'warning', 'WPRESS tar extraction method failed, trying next method', [
-                    'archive' => basename( $archive ),
-                    'method' => $method_name,
-                    'return_code' => $return_code,
-                    'error' => $error_message,
-                ] );
-                $last_error = $error_message;
-                $last_return_code = $return_code;
-                continue;
-            }
-        }
-
-        // All tar methods failed - try PHP native extraction as last resort
-        // .wpress files may use All-in-One WP Migration's custom format
-        backup_lite_log( 'info', 'WPRESS tar extraction failed, attempting PHP native extraction', [
-            'archive' => basename( $archive ),
-        ] );
-        
-        $php_result = self::extract_wpress_with_php( $archive, $destination );
-        if ( ! empty( $php_result['success'] ) ) {
-            return $php_result;
-        }
-        
-        // All methods failed
-        backup_lite_log( 'error', 'WPRESS extraction failed with all methods (tar and PHP)', [
-            'archive' => basename( $archive ),
-            'last_error' => $last_error,
-            'last_return_code' => $last_return_code,
-            'php_error' => isset( $php_result['error'] ) ? $php_result['error'] : '',
-        ] );
-        
-        // Provide more helpful error message
-        $error_message = __( 'Unable to extract .wpress file. The file may be corrupted, in an unsupported format, or require All-in-One WP Migration plugin to extract. Please try using All-in-One WP Migration plugin to convert the backup to ZIP format first.', 'museder-restoreone' );
-        
         return [
             'success'    => false,
-            'error'      => $error_message,
-            'error_code' => 'wpress_extraction_failed',
+            'error'      => __( '.wpress files are not supported in this build. Please convert the backup to ZIP format first.', 'museder-restoreone' ),
+            'error_code' => 'wpress_not_supported',
         ];
     }
     
     /**
-     * Attempt to extract .wpress file using PHP native functions
-     * This is a fallback when tar command fails
+     * WP.org submission build: .wpress is not supported.
      *
-     * @param string $archive Path to .wpress file
-     * @param string $destination Destination directory
+     * @param string $archive
+     * @param string $destination
      * @return array{success:bool, error?:string, error_code?:string}
      */
     private static function extract_wpress_with_php( $archive, $destination ) {
-        // Ensure destination directory exists
-        $destination = wp_normalize_path( $destination );
-        backup_lite_ensure_directory( $destination );
-        
-        backup_lite_log( 'info', 'Attempting WPRESS extraction with PHP native functions', [
-            'archive' => basename( $archive ),
-            'destination' => $destination,
-        ] );
-        
-        // Check if file is readable
-        if ( ! file_exists( $archive ) || ! is_readable( $archive ) ) {
-            return [
-                'success'    => false,
-                'error'      => __( 'WPRESS file is not readable.', 'museder-restoreone' ),
-                'error_code' => 'file_not_readable',
-            ];
-        }
-        
-        // Read file header to determine format.
-        // Large archive streaming requires direct file operations for performance and compatibility.
-        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-        $file_handle = fopen( $archive, 'rb' ); // Streaming backup file header.
-        if ( ! $file_handle ) {
-            return [
-                'success'    => false,
-                'error'      => __( 'Unable to open WPRESS file for reading.', 'museder-restoreone' ),
-                'error_code' => 'file_open_failed',
-            ];
-        }
-        
-        $header = fread( $file_handle, 1024 ); // Streaming backup file header.
-        fclose( $file_handle ); // Streaming backup file header.
-        
-        // Check for gzip magic bytes (0x1f 0x8b)
-        if ( strlen( $header ) >= 2 && ord( $header[0] ) === 0x1f && ord( $header[1] ) === 0x8b ) {
-            // Try gzopen
-            if ( function_exists( 'gzopen' ) ) {
-                $gz_handle = gzopen( $archive, 'rb' );
-                if ( $gz_handle ) {
-                    // Read and write decompressed data
-                    $output_file = trailingslashit( $destination ) . 'extracted_content';
-                    $output_handle = fopen( $output_file, 'wb' ); // Streaming decompressed output.
-                    if ( $output_handle ) {
-                        $bytes_written = 0;
-                        while ( ! gzeof( $gz_handle ) ) {
-                            $chunk = gzread( $gz_handle, 8192 );
-                            if ( false === $chunk ) {
-                                break;
-                            }
-                            fwrite( $output_handle, $chunk ); // Streaming decompressed output.
-                            $bytes_written += strlen( $chunk );
-                        }
-                        fclose( $output_handle ); // Streaming decompressed output.
-                        gzclose( $gz_handle );
-                        
-                        if ( $bytes_written > 0 ) {
-                            backup_lite_log( 'info', 'WPRESS PHP extraction completed (gzip)', [
-                                'archive' => basename( $archive ),
-                                'bytes_written' => $bytes_written,
-                            ] );
-                            // Note: This extracts to a single file, not a directory structure
-                            // .wpress files may need special handling beyond simple gzip
-                            return [
-                                'success' => true,
-                                'note' => 'Extracted as single file - may need further processing',
-                            ];
-                        }
-                    }
-                    gzclose( $gz_handle );
-                }
-            }
-        }
-        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-        
-        // If we get here, PHP native extraction also failed
-        backup_lite_log( 'warning', 'WPRESS PHP native extraction failed', [
-            'archive' => basename( $archive ),
-            'header_length' => strlen( $header ),
-            'header_start' => bin2hex( substr( $header, 0, 16 ) ),
-        ] );
-        
         return [
             'success'    => false,
-            'error'      => __( 'PHP native extraction failed. .wpress file may use a custom format that requires All-in-One WP Migration plugin.', 'museder-restoreone' ),
-            'error_code' => 'php_extraction_failed',
+            'error'      => __( '.wpress files are not supported in this build. Please convert the backup to ZIP format first.', 'museder-restoreone' ),
+            'error_code' => 'wpress_not_supported',
         ];
     }
 
     private static function extract_with_pclzip( $archive, $destination ) {
-        if ( ! class_exists( 'PclZip' ) ) {
-            require_once ABSPATH . 'wp-admin/includes/class-pclzip.php';
+        if ( function_exists( 'backup_lite_require_pclzip' ) ) {
+            backup_lite_require_pclzip();
         }
 
         self::$pclzip_destination = wp_normalize_path( $destination );
@@ -1771,6 +1595,11 @@ class Backup_Lite_Restore {
     }
 
     private static function locate_database_dump( $directory ) {
+        $candidate = trailingslashit( $directory ) . 'database.ndjson';
+        if ( file_exists( $candidate ) ) {
+            return $candidate;
+        }
+
         $candidate = trailingslashit( $directory ) . 'database.sql';
         if ( file_exists( $candidate ) ) {
             return $candidate;
@@ -1782,7 +1611,8 @@ class Backup_Lite_Restore {
         );
 
         foreach ( $iterator as $file ) {
-            if ( strtolower( $file->getFilename() ) === 'database.sql' ) {
+            $name = strtolower( $file->getFilename() );
+            if ( 'database.ndjson' === $name || 'database.sql' === $name ) {
                 return $file->getPathname();
             }
         }
@@ -1935,211 +1765,8 @@ class Backup_Lite_Restore {
 
         return true;
     }
-
-    /**
-     * Import database using mysql CLI with optimized parameters.
-     * Uses optimized settings for better performance and compatibility.
-     *
-     * @param string $sql_file Path to SQL file to import.
-     * @return bool
-     */
-    private static function import_database_with_cli( $sql_file ) {
-        // Build optimized mysql command
-        // --default-character-set=utf8mb4: Ensure proper character set
-        // --max_allowed_packet=256M: Increase packet size for large queries
-        // --quick: Process rows one at a time, reducing memory usage
-        // Note: --single-transaction is a mysqldump option, not a mysql option
-        $db_host = defined( 'DB_HOST' ) ? DB_HOST : 'localhost';
-        $db_user = escapeshellarg( DB_USER );
-        $db_pass = escapeshellarg( DB_PASSWORD );
-        $db_name = escapeshellarg( DB_NAME );
-        $sql_file_escaped = escapeshellarg( $sql_file );
-
-        // Handle DB_HOST with port or socket
-        $host_parts = explode( ':', $db_host );
-        $host = escapeshellarg( $host_parts[0] );
-        $port = isset( $host_parts[1] ) ? ' -P' . escapeshellarg( $host_parts[1] ) : '';
-
-        // Initialize database connection with proper settings
-        // SET foreign_key_checks=0: Disable foreign key checks for faster import
-        // SET NAMES utf8mb4: Ensure proper character set
-        // SET sql_mode='NO_AUTO_VALUE_ON_ZERO': Match backup export settings
-        $init_command = escapeshellarg( 'SET foreign_key_checks=0; SET NAMES utf8mb4; SET sql_mode=\'NO_AUTO_VALUE_ON_ZERO\';' );
-
-        $command = sprintf(
-            'mysql --default-character-set=utf8mb4 --max_allowed_packet=256M --quick --init-command=%s -h%s%s -u%s -p%s %s < %s 2>&1',
-            $init_command,
-            $host,
-            $port,
-            $db_user,
-            $db_pass,
-            $db_name,
-            $sql_file_escaped
-        );
-
-        $output  = '';
-        $success = Backup_Lite_Backup::run_shell_command( $command, $output );
-
-        if ( ! $success ) {
-            backup_lite_log( 'error', 'mysql command failed.', [
-                'output' => $output,
-                'command' => str_replace( $db_pass, '***', $command ), // Hide password in logs
-            ] );
-        } else {
-            backup_lite_log( 'info', 'Database imported with optimized mysql parameters.', [
-                'file' => basename( $sql_file ),
-            ] );
-        }
-
-        return $success;
-    }
-
-    /**
-     * Import database using PHP with optimized batch processing.
-     * 
-     * Performance optimizations:
-     * - Uses transactions with commits every 1000 queries to reduce I/O
-     * - Processes queries in chunks to manage memory efficiently
-     * - Uses buffered file reading for large SQL files
-     * 
-     * Note: Restore process is synchronous (unlike backup's async batch processing),
-     * so optimizations focus on efficient chunking and transaction management.
-     * 
-     * Batch optimization status: Already optimized with transaction batching.
-     * Unlike backup which processes files in async batches, restore processes
-     * database and files synchronously in a single request. The transaction
-     * commit strategy (every 1000 queries) provides similar I/O reduction
-     * benefits as backup's batch processing.
-     */
-    private static function import_database_with_php( $sql_file, $progress_cb = null ) {
-        global $wpdb;
-
-        // Large SQL streaming requires direct file operations for performance and compatibility.
-        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fgets, WordPress.WP.AlternativeFunctions.file_system_operations_ftell, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-        $handle = fopen( $sql_file, 'r' ); // Streaming SQL file.
-        if ( ! $handle ) {
-            backup_lite_log( 'error', 'Unable to open SQL file for reading.', [ 'path' => $sql_file ] );
-            return false;
-        }
-
-        // Allow longer execution time for large backup/restore jobs when possible.
-        // phpcs:ignore WordPress.PHP.NoSetTimeLimit
-        if ( function_exists( 'set_time_limit' ) ) {
-            // Long-running backup/restore job: attempt to raise time limit for CLI/cron.
-            // @phpcs:disable Squiz.PHP.DiscouragedFunctions.Discouraged
-            if ( function_exists( 'set_time_limit' ) ) {
-                @set_time_limit( 0 );
-            }
-            // @phpcs:enable Squiz.PHP.DiscouragedFunctions.Discouraged
-        }
-        // Adjust memory limit for large restore operations (WP recommended API).
-        if ( function_exists( 'wp_raise_memory_limit' ) ) {
-            wp_raise_memory_limit( 'admin' );
-        }
-
-        $query    = '';
-        $success  = true;
-        $line_num = 0;
-        $file_size = filesize( $sql_file );
-        $last_progress_report = 0;
-        $executed_queries = 0;
-        $progress_report_interval = max( 1, floor( $file_size / 20 ) ); // Report progress ~20 times
-
-        self::run_database_primers();
-
-        // Disable autocommit and start transaction for better performance
-        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-        $wpdb->query( 'SET autocommit = 0' );
-        $wpdb->query( 'START TRANSACTION' );
-        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-
-        while ( false !== ( $line = fgets( $handle ) ) ) { // Streaming SQL file.
-            $line_num++;
-            $trimmed = trim( $line );
-
-            if ( '' === $trimmed || 0 === strpos( $trimmed, '--' ) || 0 === strpos( $trimmed, '/*' ) ) {
-                continue;
-            }
-
-            $query .= $line;
-
-            // Report progress periodically during import (reduced frequency)
-            if ( is_callable( $progress_cb ) && $file_size > 0 ) {
-                $current_pos = ftell( $handle ); // Streaming SQL file.
-                $progress_percent = min( 100, floor( ( $current_pos / $file_size ) * 100 ) );
-                // Only report every 10% change or every 2 seconds (reduced frequency)
-                if ( $progress_percent >= $last_progress_report + 10 ) {
-                    $mapped_percent = 50 + ( $progress_percent * 0.15 ); // Map to 50-65% range
-                    call_user_func( $progress_cb, $mapped_percent, __( 'Importing database…', 'museder-restoreone' ) );
-                    $last_progress_report = $progress_percent;
-                }
-            }
-
-            if ( ';' === substr( rtrim( $line ), -1 ) ) {
-                $prepared = trim( $query );
-                if ( ! empty( $prepared ) ) {
-                    // This method restores a SQL dump that was previously generated by this plugin.
-                    // The .sql file path is resolved and validated by backup_lite_get_backup_path(),
-                    // and cannot be controlled by unprivileged users.
-                    // Cannot use prepare() because this is a complete SQL script with multiple statements.
-                    // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange, PluginCheck.Security.DirectDB.UnescapedDBParameter
-                    // 說明：以下查詢用於備份/還原流程，必須直接操作資料表結構，無法使用高階 API 或快取。
-                    // 所有 table 名稱皆由 $wpdb 提供或白名單，不接受使用者輸入。
-                    $wpdb->flush();
-                    $result = $wpdb->query( $prepared ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- $prepared is a complete SQL script from backup file, cannot use prepare() for multi-statement scripts
-                    // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange, PluginCheck.Security.DirectDB.UnescapedDBParameter
-
-                    if ( false === $result ) {
-                        // Rollback on error
-                        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-                        $wpdb->query( 'ROLLBACK' );
-                        $wpdb->query( 'SET autocommit = 1' );
-                        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-                        $error = $wpdb->last_error ?: 'unknown error';
-                        backup_lite_log( 'error', 'SQL execution failed.', [
-                            'line'  => $line_num,
-                            'error' => $error,
-                        ] );
-                        fclose( $handle ); // Close streaming SQL file on error.
-                        return [
-                            'success' => false,
-                            'message' => __( 'Database restore encountered an error. Check logs.', 'museder-restoreone' ),
-                            'code'    => 'sql_error',
-                            'line'    => $line_num,
-                            'error'   => $error,
-                        ];
-                    }
-
-                    $executed_queries++;
-
-                    // Commit transaction every 1000 queries to avoid large transactions
-                    if ( $executed_queries % 1000 === 0 ) {
-                        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-                        $wpdb->query( 'COMMIT' );
-                        $wpdb->query( 'START TRANSACTION' );
-                        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-                    }
-                }
-                $query = '';
-            }
-        }
-
-        // Commit final transaction
-        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-        $wpdb->query( 'COMMIT' );
-        $wpdb->query( 'SET autocommit = 1' );
-        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-
-        fclose( $handle ); // Close streaming SQL file.
-        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fgets, WordPress.WP.AlternativeFunctions.file_system_operations_ftell, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-
-        self::restore_database_constraints();
-
-        return [
-            'success' => $success,
-            'code'    => $success ? 'database_restored' : 'database_error',
-        ];
-    }
+    
+    // NOTE: Automatic SQL dump import (database.sql) has been removed for WP.org submission compliance.
 
     private static function run_database_primers() {
         global $wpdb;
@@ -2161,71 +1788,6 @@ class Backup_Lite_Restore {
         // This is a MySQL session setting (hardcoded string), not user input.
         $wpdb->query( 'SET foreign_key_checks = 1' );
         // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
-    }
-
-    /**
-     * Extract active_plugins value from SQL file before import.
-     * This is needed because All-in-One WP Migration may have deactivated plugins during backup.
-     *
-     * @param string $sql_file Path to SQL file.
-     * @return array Array of active plugin file paths, or empty array if not found.
-     */
-    private static function extract_active_plugins_from_sql( $sql_file ) {
-        if ( ! file_exists( $sql_file ) || ! is_readable( $sql_file ) ) {
-            return [];
-        }
-
-        $active_plugins = [];
-        // 在備份檔案串流過程中，必須使用底層 fopen/fread/fclose 以確保大檔案（>1GB）在各種主機環境下具有最佳效能與穩定性。
-        // WP_Filesystem 在部分共用主機環境中會受到限制，因此此處保留原生檔案操作。
-        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-        $handle = fopen( $sql_file, 'rb' );
-        if ( ! $handle ) {
-            return [];
-        }
-
-        // Search for active_plugins in the SQL file
-        // Pattern: INSERT INTO `SERVMASK_PREFIX_options` VALUES (...,'active_plugins','a:XX:{...}',...)
-        // We need to handle nested serialized arrays, so we'll use a more robust approach
-        $buffer = '';
-        $chunk_size = 1048576; // 1MB chunks
-        $found = false;
-
-        while ( ! feof( $handle ) && ! $found ) {
-            // Only reads plugin-generated backup files, path is validated and sanitized.
-            $chunk = fread( $handle, $chunk_size );
-            if ( false === $chunk ) {
-                break;
-            }
-
-            $buffer .= $chunk;
-
-            // Look for active_plugins pattern
-            // Match: 'active_plugins' followed by a quoted value
-            // We need to handle the full VALUES format: VALUES (id,'active_plugins','serialized_value','yes')
-            // The serialized value can contain quotes, so we need to parse carefully
-            if ( preg_match( "/'active_plugins'[,\s]+'((?:[^'\\\\]|\\\\.|'')*)'/s", $buffer, $matches ) ) {
-                $serialized_value = str_replace( "''", "'", $matches[1] ); // Unescape SQL quotes
-                
-                // Try to unserialize
-                $unserialized = @unserialize( $serialized_value );
-                if ( is_array( $unserialized ) ) {
-                    $active_plugins = $unserialized;
-                    $found = true;
-                    break;
-                }
-            }
-
-            // Keep last 2MB in buffer to catch cross-chunk matches
-            if ( strlen( $buffer ) > 2097152 ) {
-                $buffer = substr( $buffer, -1048576 );
-            }
-        }
-
-        fclose( $handle );
-        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-
-        return $active_plugins;
     }
 
     private static function run_search_replace( $pairs ) {

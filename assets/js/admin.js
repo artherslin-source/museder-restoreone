@@ -513,6 +513,8 @@ var backupLiteTimer = {
         if (message) {
             var messageEl = document.createElement('div');
             messageEl.className = 'bl-completion-message';
+            // Allow multi-line messages (e.g. skipped files summary) without using HTML injection.
+            messageEl.style.whiteSpace = 'pre-line';
             messageEl.textContent = message;
             dialog.appendChild(messageEl);
         }
@@ -544,10 +546,14 @@ var backupLiteTimer = {
                         }
                         return false;
                     }
+
+                    // Some URLs are HTML-escaped when returned from PHP (e.g. &amp; / &#038;).
+                    // Decode them before parsing or navigating, otherwise WP will treat them as invalid params.
+                    var decodedHref = String(actionHref).replace(/&amp;/g, '&').replace(/&#038;/g, '&');
                     
                     try {
                         // Use window.location.origin as base for relative URLs
-                        var url = new URL(actionHref, window.location.origin);
+                        var url = new URL(decodedHref, window.location.origin);
                         var expires = parseInt(url.searchParams.get('expires'), 10);
                         if (expires && expires < Math.floor(Date.now() / 1000)) {
                             alert(strings.downloadExpired || 'Your download link has expired. Please download from the backup library.');
@@ -568,7 +574,7 @@ var backupLiteTimer = {
                     }
                     
                     // Use current window to trigger download (not new tab)
-                    window.location.href = actionHref;
+                    window.location.href = decodedHref;
                 });
                 
                 actionsEl.appendChild(actionBtn);
@@ -1562,7 +1568,61 @@ var backupLiteTimer = {
         updateBackupProgress(100);
 
         var overlayTitle = strings.backupOverlayTitle || strings.successTitle || 'Backup completed';
-        var overlayMessage = strings.jobComplete || strings.successBackup || 'Backup completed successfully.';
+        var overlayMessage = (job && job.message) ? String(job.message) : (strings.jobComplete || strings.successBackup || 'Backup completed successfully.');
+
+        // If files were skipped, provide a short, actionable summary in the completion overlay.
+        if (job && Number(job.skipped_files || 0) > 0) {
+            var lines = [];
+            lines.push(overlayMessage);
+            lines.push('');
+            lines.push('Skipped files: ' + String(job.skipped_files));
+
+            var reasons = job.skip_reasons || {};
+            var reasonParts = [];
+            try {
+                Object.keys(reasons).forEach(function (key) {
+                    if (!Object.prototype.hasOwnProperty.call(reasons, key)) {
+                        return;
+                    }
+                    var v = Number(reasons[key] || 0);
+                    if (v > 0) {
+                        reasonParts.push(key + '=' + String(v));
+                    }
+                });
+            } catch (e) {}
+            if (reasonParts.length) {
+                lines.push('Reasons: ' + reasonParts.join(', '));
+            }
+            if (reasons && Number(reasons.too_large || 0) > 0) {
+                lines.push('Note: Single files larger than 2GB are skipped for safety.');
+            }
+
+            // Show a couple of examples to avoid confusion.
+            var samples = job.diagnostic_samples || [];
+            if (samples && samples.length) {
+                var shown = 0;
+                for (var i = 0; i < samples.length; i++) {
+                    var s = samples[i] || {};
+                    if (s.type === 'too_large' && s.path) {
+                        if (shown === 0) {
+                            lines.push('');
+                            lines.push('Examples:');
+                        }
+                        shown++;
+                        if (shown > 3) {
+                            break;
+                        }
+                        var sizeText = '';
+                        if (typeof s.size === 'number' && s.size > 0) {
+                            sizeText = ' (' + Math.round(s.size / (1024 * 1024)) + ' MB)';
+                        }
+                        lines.push('- ' + String(s.path) + sizeText);
+                    }
+                }
+            }
+
+            overlayMessage = lines.join('\n');
+        }
 
         showMessage('success', strings.successTitle || '', strings.jobComplete || strings.successBackup || '');
         refreshLogs();
@@ -1875,6 +1935,8 @@ function initRestoreCenter() {
         var skipConfigToggle = document.getElementById('skipConfig');
         var autoBackupToggle = document.getElementById('autoBackup');
         var safeModeToggle = document.getElementById('safeMode');
+        var filesOnlyWrap = document.getElementById('restore-files-only-wrap');
+        var filesOnlyToggle = document.getElementById('filesOnly');
         var historyTable = document.getElementById('restoreHistory');
         var summaryContainer = document.getElementById('fileSummary');
         var wizardSteps = {
@@ -4805,6 +4867,32 @@ function initRestoreCenter() {
                 // Keep JS state in sync for same-page flow (prevents requiring hard reload to enable Step 3).
                 restoreData.summary = payload.summary;
             }
+
+            // If DB payload is missing, surface a clear UI hint and offer files-only restore.
+            try {
+                var s = payload.summary || restoreData.summary || {};
+                var dbPresent = !!s.db_present;
+                var dbType = String(s.db_type || '');
+                if (filesOnlyWrap && filesOnlyToggle) {
+                    if (!dbPresent) {
+                        filesOnlyWrap.style.display = '';
+                        filesOnlyToggle.checked = true; // default to safest option when DB is missing
+                        showToast('⚠️ ' + (strings.dbMissingHint || 'Database file not found in this backup. Files-only restore is recommended.'), 'warning');
+                    } else {
+                        // Hide files-only toggle for normal backups (avoid confusion).
+                        filesOnlyWrap.style.display = 'none';
+                        filesOnlyToggle.checked = false;
+                    }
+                }
+                // If SQL-only, show manual DB hint (still WP-compliant; no auto SQL execution).
+                if (dbPresent && dbType === 'sql') {
+                    if (filesOnlyWrap && filesOnlyToggle) {
+                        filesOnlyWrap.style.display = '';
+                        filesOnlyToggle.checked = true;
+                    }
+                    showToast('⚠️ ' + (strings.dbSqlManualHint || 'This backup contains database.sql. Automatic DB import is disabled; files will be restored and DB must be imported manually.'), 'warning');
+                }
+            } catch (e) {}
             if (payload.progress) {
                 // When step 1 completes, we should NOT set done=true for the progress
                 // This is just file analysis, not restore completion
@@ -4836,6 +4924,49 @@ function initRestoreCenter() {
                 clearStep1Started();
             }
         }
+
+        // If a new Step 1 upload begins (chunk-upload-v2), clear stale summary and lock Step 3 until analysis completes.
+        document.addEventListener('backup-lite-restore-upload-start', function () {
+            try {
+                renderSummary(null);
+            } catch (e) {}
+            try {
+                restoreData.summary = null;
+            } catch (e2) {}
+            isAnalyzing = true;
+            analysisError = false;
+            hasAnalyzed = false;
+            reviewCompleted = false;
+            restoreCompleted = false;
+            // Keep restoreInProgress false here; actual restore is Step 3.
+            restoreInProgress = false;
+            activeRestoreJobId = null;
+            if (filesOnlyWrap && filesOnlyToggle) {
+                filesOnlyWrap.style.display = 'none';
+                filesOnlyToggle.checked = false;
+            }
+            syncWizard();
+            updateRestoreCancelState();
+        });
+
+        // If upload failed/finalize failed, ensure Step 3 cannot proceed with old summary.
+        document.addEventListener('backup-lite-restore-upload-failed', function () {
+            try {
+                renderSummary(null);
+            } catch (e) {}
+            try {
+                restoreData.summary = null;
+            } catch (e2) {}
+            isAnalyzing = false;
+            analysisError = true;
+            hasAnalyzed = false;
+            reviewCompleted = false;
+            restoreCompleted = false;
+            restoreInProgress = false;
+            activeRestoreJobId = null;
+            syncWizard();
+            updateRestoreCancelState();
+        });
         
         // Expose handleSummaryResponse to window.BackupLiteUI for chunk-upload-v2.js
         if (typeof window.BackupLiteUI === 'undefined') {
@@ -5180,6 +5311,7 @@ function initRestoreCenter() {
                 formData.append('autoBackup', autoBackupToggle && autoBackupToggle.checked ? 'true' : 'false');
                 formData.append('skipConfig', skipConfigToggle && skipConfigToggle.checked ? 'true' : 'false');
                 formData.append('safeMode', safeModeToggle && safeModeToggle.checked ? 'true' : 'false');
+                formData.append('filesOnly', filesOnlyToggle && filesOnlyToggle.checked ? 'true' : 'false');
                 if (applyReplaceToggle && applyReplaceToggle.checked) {
                     formData.append('searchReplace', JSON.stringify([]));
                 }
@@ -5866,7 +5998,7 @@ function initRestoreCenter() {
                 $submitBtn.text($submitBtn.data('original-label'));
                 $submitBtn.removeData('original-label');
             } else {
-                var saveLabel = (window.backupLiteSchedulesL10n && backupLiteSchedulesL10n.saveSchedule) ||
+                var saveLabel = (window.musederRestoreoneSchedulesL10n && musederRestoreoneSchedulesL10n.saveSchedule) ||
                                (strings && strings.saveSchedule) ||
                                'Save Schedule';
                 $submitBtn.text(saveLabel);
@@ -6284,7 +6416,7 @@ function initRestoreCenter() {
 
             console.log('[Backup Lite] Delete clicked, scheduleId:', scheduleId);
 
-            var confirmMessage = (window.backupLiteSchedulesL10n && backupLiteSchedulesL10n.confirmDelete) || 
+            var confirmMessage = (window.musederRestoreoneSchedulesL10n && musederRestoreoneSchedulesL10n.confirmDelete) || 
                                  (window.MusederRestoreOne && MusederRestoreOne.i18n_confirm_delete_schedule) || 
                                  'Are you sure you want to delete this schedule?';
             
@@ -6316,13 +6448,13 @@ function initRestoreCenter() {
         function backupLiteStartSchedule(scheduleId) {
             console.log('[Backup Lite] backupLiteStartSchedule called with scheduleId:', scheduleId);
             
-            var ajaxUrl = (window.backupLiteSchedulesL10n && backupLiteSchedulesL10n.ajaxUrl) ||
-                         (window.backupLiteAdmin && backupLiteAdmin.ajax_url) ||
+            var ajaxUrl = (window.musederRestoreoneSchedulesL10n && musederRestoreoneSchedulesL10n.ajaxUrl) ||
+                         (window.musederRestoreoneAdmin && musederRestoreoneAdmin.ajax_url) ||
                          (window.MusederRestoreOne && MusederRestoreOne.ajax_url) ||
                          window.ajaxurl || '';
             
-            var nonce = (window.backupLiteSchedulesL10n && backupLiteSchedulesL10n.nonce) ||
-                       (window.backupLiteAdmin && backupLiteAdmin.nonce) ||
+            var nonce = (window.musederRestoreoneSchedulesL10n && musederRestoreoneSchedulesL10n.nonce) ||
+                       (window.musederRestoreoneAdmin && musederRestoreoneAdmin.nonce) ||
                        (window.MusederRestoreOne && MusederRestoreOne.nonce) || '';
 
             console.log('[Backup Lite] AJAX config:', { ajaxUrl: ajaxUrl, hasNonce: !!nonce });
@@ -6363,14 +6495,14 @@ function initRestoreCenter() {
         function backupLitePopulateScheduleForm(scheduleId, $trigger) {
             console.log('[Backup Lite] backupLitePopulateScheduleForm called with scheduleId:', scheduleId);
             
-            var ajaxUrl = (window.backupLiteSchedulesL10n && backupLiteSchedulesL10n.ajaxUrl) ||
-                         (window.backupLiteAdmin && backupLiteAdmin.ajax_url) ||
+            var ajaxUrl = (window.musederRestoreoneSchedulesL10n && musederRestoreoneSchedulesL10n.ajaxUrl) ||
+                         (window.musederRestoreoneAdmin && musederRestoreoneAdmin.ajax_url) ||
                          (window.MusederRestoreOne && MusederRestoreOne.ajax_url) ||
                          window.ajaxurl || '';
             
             var fetchNonce = (window.MusederRestoreOneAdmin && MusederRestoreOneAdmin.nonce) ||
-                            (window.backupLiteSchedulesL10n && backupLiteSchedulesL10n.nonce) ||
-                            (window.backupLiteAdmin && backupLiteAdmin.nonce) ||
+                            (window.musederRestoreoneSchedulesL10n && musederRestoreoneSchedulesL10n.nonce) ||
+                            (window.musederRestoreoneAdmin && musederRestoreoneAdmin.nonce) ||
                             (window.MusederRestoreOne && MusederRestoreOne.nonce) || '';
 
             console.log('[Backup Lite] AJAX config for edit:', { ajaxUrl: ajaxUrl, hasNonce: !!fetchNonce });
@@ -6468,7 +6600,7 @@ function initRestoreCenter() {
                         // 2. Update submit button text
                         var $submitBtn = $form.find('button[type="submit"]');
                         if ($submitBtn.length) {
-                            var updateLabel = (window.backupLiteSchedulesL10n && backupLiteSchedulesL10n.updateSchedule) || 'Update Schedule';
+                            var updateLabel = (window.musederRestoreoneSchedulesL10n && musederRestoreoneSchedulesL10n.updateSchedule) || 'Update Schedule';
                             $submitBtn.data('original-label', $submitBtn.text());
                             $submitBtn.text(updateLabel);
                         }
@@ -6508,13 +6640,13 @@ function initRestoreCenter() {
         function backupLiteDeleteSchedule(scheduleId) {
             console.log('[Backup Lite] backupLiteDeleteSchedule called with scheduleId:', scheduleId);
             
-            var ajaxUrl = (window.backupLiteSchedulesL10n && backupLiteSchedulesL10n.ajaxUrl) ||
-                         (window.backupLiteAdmin && backupLiteAdmin.ajax_url) ||
+            var ajaxUrl = (window.musederRestoreoneSchedulesL10n && musederRestoreoneSchedulesL10n.ajaxUrl) ||
+                         (window.musederRestoreoneAdmin && musederRestoreoneAdmin.ajax_url) ||
                          (window.MusederRestoreOne && MusederRestoreOne.ajax_url) ||
                          window.ajaxurl || '';
             
-            var nonce = (window.backupLiteSchedulesL10n && backupLiteSchedulesL10n.nonce) ||
-                       (window.backupLiteAdmin && backupLiteAdmin.nonce) ||
+            var nonce = (window.musederRestoreoneSchedulesL10n && musederRestoreoneSchedulesL10n.nonce) ||
+                       (window.musederRestoreoneAdmin && musederRestoreoneAdmin.nonce) ||
                        (window.MusederRestoreOne && MusederRestoreOne.nonce) || '';
 
             console.log('[Backup Lite] AJAX config for delete:', { ajaxUrl: ajaxUrl, hasNonce: !!nonce });
@@ -7133,7 +7265,7 @@ function initRestoreCenter() {
                         }
                     } else if (actionType === 'delete') {
                         if (typeof window.backupLiteDeleteSchedule === 'function') {
-                            var confirmMessage = (window.backupLiteSchedulesL10n && backupLiteSchedulesL10n.confirmDelete) || 
+                            var confirmMessage = (window.musederRestoreoneSchedulesL10n && musederRestoreoneSchedulesL10n.confirmDelete) || 
                                                  (window.MusederRestoreOne && MusederRestoreOne.i18n_confirm_delete_schedule) || 
                                                  'Are you sure you want to delete this schedule?';
                             

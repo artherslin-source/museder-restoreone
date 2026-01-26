@@ -370,8 +370,8 @@ class Backup_Lite_AI_Service {
      * @return int Size in bytes.
      */
     private static function calculate_wp_content_size() {
-        $wp_content = WP_CONTENT_DIR;
-        if ( ! is_dir( $wp_content ) ) {
+        $wp_content = function_exists( 'backup_lite_get_wp_content_dir' ) ? backup_lite_get_wp_content_dir() : '';
+        if ( '' === $wp_content || ! is_dir( $wp_content ) ) {
             return 0;
         }
 
@@ -503,7 +503,11 @@ class Backup_Lite_AI_Service {
         // Common cache directories
         $cache_dirs = [ 'cache', 'w3tc', 'wp-rocket', 'litespeed' ];
         foreach ( $cache_dirs as $dir ) {
-            $path = WP_CONTENT_DIR . '/' . $dir;
+            $content_dir = function_exists( 'backup_lite_get_wp_content_dir' ) ? backup_lite_get_wp_content_dir() : '';
+            if ( '' === $content_dir ) {
+                continue;
+            }
+            $path = trailingslashit( $content_dir ) . $dir;
             if ( is_dir( $path ) ) {
                 $paths[] = [
                     'path'   => 'wp-content/' . $dir,

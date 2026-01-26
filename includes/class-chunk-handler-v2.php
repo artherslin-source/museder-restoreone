@@ -15,6 +15,43 @@ class Backup_Lite_Chunk_V2 {
     const STREAM_CHUNK   = 8192;
     const CLEANUP_WINDOW = DAY_IN_SECONDS;
 
+    /**
+     * Lightweight ZIP integrity heuristic: verify EOCD signature exists near end-of-file.
+     *
+     * This avoids memory-heavy operations like PclZip::listContent() on large archives.
+     *
+     * @param string $path
+     * @return bool
+     */
+    private static function zip_has_eocd_signature( $path ) {
+        $path = wp_normalize_path( (string) $path );
+        if ( '' === $path || ! file_exists( $path ) ) {
+            return false;
+        }
+        $size = (int) filesize( $path );
+        if ( $size <= 0 ) {
+            return false;
+        }
+
+        // EOCD record is located within the last 65,535 bytes + fixed header.
+        $tail = min( 66000, $size );
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- controlled read of plugin-owned temp file
+        $fh = @fopen( $path, 'rb' );
+        if ( ! $fh ) {
+            return false;
+        }
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_read_fseek -- controlled seek
+        @fseek( $fh, -$tail, SEEK_END );
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- controlled read
+        $buf = @fread( $fh, $tail );
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- cleanup
+        @fclose( $fh );
+        if ( ! is_string( $buf ) || '' === $buf ) {
+            return false;
+        }
+        return false !== strpos( $buf, "PK\x05\x06" );
+    }
+
     public static function init() {
         add_action( 'rest_api_init', [ __CLASS__, 'register_routes' ] );
     }
@@ -591,17 +628,42 @@ class Backup_Lite_Chunk_V2 {
 
         for ( $i = $start_chunk; $i < $expected_chunks; $i++ ) {
             $chunk_path = trailingslashit( $chunks_dir ) . sprintf( 'chunk_%06d.bin', $i );
-            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for reading chunk files, path from plugin-controlled directory
-            $chunk_handle = fopen( $chunk_path, 'rb' );
+            // Some shared hosts may temporarily lock or delay visibility of newly-written chunk files.
+            // Retry a few times before failing so finalize is more resilient.
+            $chunk_handle = false;
+            $open_error   = null;
+            for ( $attempt = 0; $attempt < 3; $attempt++ ) {
+                clearstatcache( true, $chunk_path );
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for reading chunk files, path from plugin-controlled directory
+                $chunk_handle = @fopen( $chunk_path, 'rb' );
+                if ( $chunk_handle ) {
+                    break;
+                }
+                $open_error = error_get_last();
+                usleep( 200000 ); // 200ms
+            }
             if ( ! $chunk_handle ) {
                 // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen
                 fclose( $fh );
+
+                // Detailed diagnostics for support (admin-only route; stored in plugin log).
+                backup_lite_log( 'error', 'Finalize failed to open chunk for reading.', [
+                    'upload_id'   => $upload_id,
+                    'chunk_index' => $i,
+                    'exists'      => file_exists( $chunk_path ),
+                    'readable'    => is_readable( $chunk_path ),
+                    'filesize'    => file_exists( $chunk_path ) ? (int) filesize( $chunk_path ) : null,
+                    'php_error'   => is_array( $open_error ) ? $open_error : null,
+                ] );
+
+                // Return retryable error. Do not leak server file paths in the API response.
                 return new WP_REST_Response( [
-                    'ok'      => false,
-                    'code'    => 'chunk_open_failed',
+                    'ok'          => false,
+                    'code'        => 'chunk_open_failed',
                     // @plugin-check: escaped
-                    'message' => esc_html__( 'Unable to open chunk during finalize.', 'museder-restoreone' ),
-                ], 500 );
+                    'message'     => esc_html__( 'Unable to open chunk during finalize.', 'museder-restoreone' ),
+                    'chunk_index' => (int) $i,
+                ], 409 );
             }
 
             // Skip already-written part of the current chunk.
@@ -620,6 +682,14 @@ class Backup_Lite_Chunk_V2 {
                     fclose( $chunk_handle );
                     // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen
                     fclose( $fh );
+                    backup_lite_log( 'error', 'Finalize failed to read chunk.', [
+                        'upload_id'   => $upload_id,
+                        'chunk_index' => $i,
+                        'exists'      => file_exists( $chunk_path ),
+                        'readable'    => is_readable( $chunk_path ),
+                        'filesize'    => file_exists( $chunk_path ) ? (int) filesize( $chunk_path ) : null,
+                        'php_error'   => error_get_last(),
+                    ] );
                     return new WP_REST_Response( [
                         'ok'      => false,
                         'code'    => 'chunk_read_failed',
@@ -709,35 +779,49 @@ class Backup_Lite_Chunk_V2 {
             ], 409 );
         }
 
+        $zip_ok = false;
+        $zip_error_code = null;
         $zip = new ZipArchive();
         $zip_result = $zip->open( $final_path );
-        if ( true !== $zip_result ) {
+        if ( true === $zip_result ) {
+            $zip_ok = true;
+            $zip->close();
+        } else {
+            $zip_error_code = $zip_result;
             self::log_error( '[FINALIZE_V2_ZIP_ERROR]', [
                 'upload_id'      => $upload_id,
                 'zip_error_code' => $zip_result,
             ] );
-            // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
-            // $final_path is from plugin-controlled temp directory
-            // @phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
-            if ( function_exists( 'wp_delete_file' ) ) {
-                wp_delete_file( $final_path );
-            } else {
-                // Fallback for non-standard environments.
-                if ( file_exists( $final_path ) ) {
-                    @unlink( $final_path );
-                }
-            }
-            // @phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
 
-            return new WP_REST_Response( [
-                'ok'          => false,
-                'code'        => 'zip_invalid',
-                // @plugin-check: escaped
-                'message'     => esc_html__( 'ZIP verification failed.', 'museder-restoreone' ),
-                'zip_error'   => $zip_result,
-            ], 422 );
+            // Compatibility fallback: some hosts can merge + hash large ZIPs but ZipArchive cannot open them.
+            // At this point we have already verified:
+            // - all expected chunks exist
+            // - merged file size matches
+            // - SHA1 matches client
+            // So the merged bytes are identical to what the user selected in the browser.
+            // Do not block restore on ZipArchive limitations; proceed and let restore extraction use fallbacks.
+            $zip_ok = false;
+
+            // Record a warning into restore history so admins can see the root cause even if log files aren't writable.
+            if ( function_exists( 'backup_lite_upsert_restore_history' ) ) {
+                $t = time();
+                $file_for_history = isset( $manifest['filename' ] ) ? (string) $manifest['filename'] : basename( $final_path );
+                backup_lite_upsert_restore_history(
+                    [
+                        'job_id'        => 'upload_' . sanitize_text_field( (string) $upload_id ),
+                        'timestamp_utc' => $t,
+                        'date'          => gmdate( 'Y-m-d H:i:s', $t ),
+                        'file'          => $file_for_history,
+                        'result'        => 'pending',
+                        'message'       => 'finalize_ziparchive_unavailable',
+                        'details'       => [
+                            'zip_error_code' => (string) $zip_error_code,
+                            'final_size'     => file_exists( $final_path ) ? (string) (int) filesize( $final_path ) : '0',
+                        ],
+                    ]
+                );
+            }
         }
-        $zip->close();
 
         self::log_info( '[FINALIZE_V2_OK]', [
             'upload_id'   => $upload_id,
@@ -747,7 +831,18 @@ class Backup_Lite_Chunk_V2 {
 
         // Move final file to backup directory and prepare restore session
         $backup_dir = backup_lite_get_backup_dir();
-        $unique     = wp_unique_filename( $backup_dir, basename( $final_path ) );
+        $base_name = '';
+        if ( isset( $manifest['filename'] ) && is_string( $manifest['filename'] ) && '' !== $manifest['filename'] ) {
+            $base_name = sanitize_file_name( $manifest['filename'] );
+        }
+        if ( '' === $base_name ) {
+            $base_name = basename( $final_path );
+        }
+        // Ensure .zip suffix for consistency.
+        if ( 'zip' !== strtolower( pathinfo( $base_name, PATHINFO_EXTENSION ) ) ) {
+            $base_name .= '.zip';
+        }
+        $unique      = wp_unique_filename( $backup_dir, $base_name );
         $destination = trailingslashit( $backup_dir ) . $unique;
 
         // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
@@ -791,7 +886,8 @@ class Backup_Lite_Chunk_V2 {
                 return new WP_REST_Response( [
                     'ok'       => true,
                     'sha1'     => $server_sha1,
-                    'zip_ok'   => true,
+                    'zip_ok'   => (bool) $zip_ok,
+                    'zip_error'=> $zip_error_code,
                     'summary'  => $summary,
                     'progress' => $progress,
                 ], 200 );
@@ -804,7 +900,8 @@ class Backup_Lite_Chunk_V2 {
                 return new WP_REST_Response( [
                     'ok'      => true,
                     'sha1'    => $server_sha1,
-                    'zip_ok'  => true,
+                    'zip_ok'  => (bool) $zip_ok,
+                    'zip_error'=> $zip_error_code,
                     // @plugin-check: escaped
                     'warning' => esc_html__( 'File uploaded successfully, but analysis failed. Please try again.', 'museder-restoreone' ),
                 ], 200 );
@@ -814,7 +911,8 @@ class Backup_Lite_Chunk_V2 {
         return new WP_REST_Response( [
             'ok'      => true,
             'sha1'    => $server_sha1,
-            'zip_ok'  => true,
+            'zip_ok'  => (bool) $zip_ok,
+            'zip_error'=> $zip_error_code,
         ], 200 );
     }
 

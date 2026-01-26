@@ -10,138 +10,70 @@
  * phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
  */
 
-// If WordPress isn't loaded yet, bootstrap it so we can use its APIs safely.
+/**
+ * IMPORTANT:
+ * - Do not bootstrap WordPress from a directly-accessed plugin file.
+ * - This file is a deprecated redirect stub kept only for backward compatibility.
+ * - The real download logic lives in admin-post.php?action=backup_lite_download_backup.
+ */
 if ( ! defined( 'ABSPATH' ) ) {
-    // phpcs:ignore WordPress.Security.ABSPATH_CONSTANTS.NotCheckingConstantName
-    $wp_load = dirname( __FILE__, 4 ) . '/wp-load.php';
+    // WordPress not loaded. We do NOT include core bootstrap files here.
+    // Best-effort: redirect legacy links (file/expires/token) to admin-post.php.
+    // phpcs:disable WordPress.Security.NonceVerification.Recommended -- redirect stub runs without WordPress loaded; no nonce API available here
+    // phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- raw values are sanitized below
+    // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- WordPress not loaded; wp_unslash() unavailable (we use stripslashes() below)
+    $file    = isset( $_GET['file'] ) ? (string) $_GET['file'] : '';
+    // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- WordPress not loaded; wp_unslash() unavailable (we use stripslashes() below)
+    $expires = isset( $_GET['expires'] ) ? (string) $_GET['expires'] : '';
+    // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- WordPress not loaded; wp_unslash() unavailable (we use stripslashes() below)
+    $token   = isset( $_GET['token'] ) ? (string) $_GET['token'] : '';
+    // phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+    // phpcs:enable WordPress.Security.NonceVerification.Recommended
 
-    if ( file_exists( $wp_load ) ) {
-        require_once $wp_load;
-    } else {
-        // If we really cannot locate WordPress, fail with 500.
-        header( 'HTTP/1.1 500 Internal Server Error' );
+    // Best-effort unslash (WordPress is not loaded, so wp_unslash() is not available).
+    $file    = is_string( $file ) ? stripslashes( $file ) : '';
+    $expires = is_string( $expires ) ? stripslashes( $expires ) : '';
+    $token   = is_string( $token ) ? stripslashes( $token ) : '';
+
+    // Minimal sanitization without WP functions.
+    $file    = preg_replace( '/[^a-zA-Z0-9._-]/', '', basename( $file ) );
+    $expires = preg_replace( '/[^0-9]/', '', $expires );
+    $token   = preg_replace( '/[^a-fA-F0-9]/', '', $token );
+
+    if ( '' !== $file ) {
+        $qs = 'action=backup_lite_download_backup&file=' . rawurlencode( $file );
+        if ( '' !== $expires && '' !== $token ) {
+            $qs .= '&expires=' . rawurlencode( $expires ) . '&token=' . rawurlencode( $token );
+        }
+        header( 'Location: /wp-admin/admin-post.php?' . $qs, true, 302 );
         exit;
     }
+
+    header( 'HTTP/1.1 403 Forbidden' );
+    exit;
 }
 
-// Ensure WordPress is fully loaded
-if ( ! function_exists( 'backup_lite_get_backup_path' ) ) {
-    // Load plugin helpers if not already loaded
-    $plugin_path = dirname( __FILE__ );
-    if ( file_exists( $plugin_path . '/includes/helpers.php' ) ) {
-        require_once $plugin_path . '/includes/helpers.php';
-    }
-    if ( file_exists( $plugin_path . '/includes/class-upload-secret.php' ) ) {
-        require_once $plugin_path . '/includes/class-upload-secret.php';
-    }
-}
-
-// Read and sanitize parameters
-// phpcs:disable WordPress.Security.NonceVerification.Recommended -- token-based verification below
-$file    = isset( $_GET['file'] ) ? sanitize_text_field( wp_unslash( $_GET['file'] ) ) : '';
-$expires = isset( $_GET['expires'] ) ? absint( $_GET['expires'] ) : 0;
+// WordPress is loaded; redirect to the official admin-post download handler.
+// phpcs:disable WordPress.Security.NonceVerification.Recommended -- this is a redirect stub; validation happens in admin-post handler
+$file    = isset( $_GET['file'] ) ? sanitize_file_name( wp_unslash( $_GET['file'] ) ) : '';
+$expires = isset( $_GET['expires'] ) ? absint( wp_unslash( $_GET['expires'] ) ) : 0;
 $token   = isset( $_GET['token'] ) ? sanitize_text_field( wp_unslash( $_GET['token'] ) ) : '';
 // phpcs:enable WordPress.Security.NonceVerification.Recommended
 
-// Validate required parameters
-if ( '' === $file || 0 === $expires || '' === $token ) {
-    status_header( 400 );
-    exit;
+if ( '' === $file ) {
+    wp_die( esc_html__( 'Invalid backup file.', 'museder-restoreone' ), esc_html__( 'Download error', 'museder-restoreone' ), 400 );
 }
 
-// Verify token
-if ( ! function_exists( 'backup_lite_verify_download_token' ) ) {
-    /**
-     * Verify download token using HMAC.
-     *
-     * @param string $file    Filename.
-     * @param int    $expires Expiration timestamp.
-     * @param string $token   Provided token.
-     * @return bool True if token is valid and not expired.
-     */
-    function backup_lite_verify_download_token( $file, $expires, $token ) {
-        // Check expiration
-        if ( $expires < time() ) {
-            return false;
-        }
-
-        // Get secret
-        $secret = '';
-        if ( class_exists( 'Backup_Lite_Upload_Secret' ) ) {
-            $secret = (string) Backup_Lite_Upload_Secret::get_secret();
-        }
-
-        if ( empty( $secret ) ) {
-            return false;
-        }
-
-        // Generate expected token
-        $expected_token = hash_hmac( 'sha256', $file . '|' . $expires, $secret );
-
-        // Compare tokens using hash_equals to prevent timing attacks
-        return hash_equals( $expected_token, $token );
-    }
+$url = admin_url( 'admin-post.php?action=backup_lite_download_backup&file=' . rawurlencode( $file ) );
+if ( $expires > 0 && '' !== $token ) {
+    $url = add_query_arg(
+        [
+            'expires' => $expires,
+            'token'   => $token,
+        ],
+        $url
+    );
 }
 
-if ( ! backup_lite_verify_download_token( $file, $expires, $token ) ) {
-    status_header( 403 );
-    exit;
-}
-
-// Get absolute path using helper function
-$archive_path = backup_lite_get_backup_path( $file );
-
-if ( ! $archive_path || ! is_readable( $archive_path ) ) {
-    status_header( 404 );
-    exit;
-}
-
-// Determine MIME type based on file extension
-$ext  = strtolower( pathinfo( $archive_path, PATHINFO_EXTENSION ) );
-$mime = 'application/zip';
-if ( 'wpress' === $ext ) {
-    $mime = 'application/octet-stream';
-}
-
-// Allow longer execution time for large file downloads
-ignore_user_abort( true );
-
-// Clear any output buffers
-if ( function_exists( 'ob_get_level' ) ) {
-    while ( ob_get_level() > 0 ) {
-        ob_end_clean();
-    }
-}
-
-// Set download headers
-nocache_headers();
-status_header( 200 );
-header( 'Content-Type: ' . $mime );
-$download_filename = sanitize_file_name( basename( $archive_path ) );
-header( 'Content-Disposition: attachment; filename="' . $download_filename . '"' );
-header( 'Content-Length: ' . (string) filesize( $archive_path ) );
-header( 'Content-Transfer-Encoding: binary' );
-header( 'X-Content-Type-Options: nosniff' );
-
-// Stream file content
-$chunk_size = 1024 * 1024; // 1MB chunks
-
-// phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen,WordPress.WP.AlternativeFunctions.file_system_operations_fread,WordPress.WP.AlternativeFunctions.file_system_operations_fclose,WordPress.Security.EscapeOutput.OutputNotEscaped
-// 說明：備份檔案下載需要串流讀取大檔案，路徑已通過 backup_lite_get_backup_path() 驗證，檔案內容為二進位資料不需 HTML 轉義。
-$handle = fopen( $archive_path, 'rb' );
-if ( false === $handle ) {
-    status_header( 500 );
-    exit;
-}
-
-while ( ! feof( $handle ) ) {
-    echo fread( $handle, $chunk_size );
-    flush();
-}
-
-fclose( $handle );
-// phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen,WordPress.WP.AlternativeFunctions.file_system_operations_fread,WordPress.WP.AlternativeFunctions.file_system_operations_fclose,WordPress.Security.EscapeOutput.OutputNotEscaped
-
-// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
-
+wp_safe_redirect( $url, 302 );
 exit;

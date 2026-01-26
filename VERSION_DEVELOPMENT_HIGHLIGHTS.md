@@ -43,8 +43,8 @@
   * 恢復實際下載功能，包含正確的 WordPress bootstrap、HMAC token 驗證和檔案串流
 - **Security**: 實作安全 token 驗證
   * 使用 `hash_equals()` 防止時序攻擊
-- **Improvement**: 增強下載處理器
-  * 當直接存取時，透過 `wp-load.php` 正確載入 WordPress
+-- **Improvement**: 增強下載處理器
+  * 當直接存取時，不直接 include WordPress 核心 bootstrap 檔案（改走安全 redirect stub）
   * 確保所有外掛功能可用
 - **Code Quality**: 改進檔案路徑解析
   * 使用 `backup_lite_get_backup_path()` helper 函數進行一致且安全的路徑處理
@@ -471,7 +471,7 @@
   * 所有 JSON 解碼的陣列現在使用遞迴 `array_map()` 和 `sanitize_text_field()` 正確清理
 - **Security**: 修正 REST API permission_callback
   * 所有 REST API 路由現在使用適當的權限檢查（manage_options + nonce 驗證）而非 `'__return_true'`
-- **Security**: 為 `upload-handler.php` 和 `download-handler.php` 新增 ABSPATH 檢查
+- **Security**: 為 `download-handler.php` 新增 ABSPATH 檢查
   * 防止直接檔案存取
 - **Code Quality**: 將所有 `parse_url()` 呼叫替換為 `wp_parse_url()` 以符合 WordPress 相容性
 - **Code Quality**: 將所有 `mkdir()` 呼叫替換為 `wp_mkdir_p()` 以符合 WordPress 相容性

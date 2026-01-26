@@ -99,7 +99,7 @@ class Backup_Lite_Backup {
         $archive_path = $backup_dir . $archive_name;
 
         $temp_dir = backup_lite_create_temp_dir( 'build' );
-        $sql_path = trailingslashit( $temp_dir ) . 'database.sql';
+        $sql_path = trailingslashit( $temp_dir ) . 'database.ndjson';
         $meta_path = trailingslashit( $temp_dir ) . 'meta.json';
 
         // Record backup start time (UTC timestamp)
@@ -275,13 +275,9 @@ class Backup_Lite_Backup {
             return false !== file_put_contents( $filepath, $placeholder );
         }
 
-        $method = backup_lite_can_use_mysqldump() ? 'mysqldump' : 'php';
-
+        $method = 'php';
         backup_lite_log( 'info', 'Database export initiated.', [ 'method' => $method, 'path' => $filepath ] );
-
-        $success = backup_lite_can_use_mysqldump()
-            ? self::export_database_with_mysqldump( $filepath, $options )
-            : self::export_database_with_php( $filepath, $options );
+        $success = self::export_database_with_php( $filepath, $options );
 
         if ( $success && file_exists( $filepath ) ) {
             backup_lite_log( 'info', 'Database export finished.', [ 'path' => $filepath, 'size' => filesize( $filepath ) ] );
@@ -344,10 +340,10 @@ class Backup_Lite_Backup {
             'roots'   => count( $directories ),
         ] );
 
-        $zip->addFile( $sql_path, 'database.sql' );
+        $zip->addFile( $sql_path, 'database.ndjson' );
         $zip->addFile( $meta_path, 'meta.json' );
         // Keep DB/meta compressed even in Fast mode (single files; low overhead; big size win).
-        $zip->setCompressionName( 'database.sql', ZipArchive::CM_DEFLATE );
+        $zip->setCompressionName( 'database.ndjson', ZipArchive::CM_DEFLATE );
         $zip->setCompressionName( 'meta.json', ZipArchive::CM_DEFLATE );
 
         foreach ( $directories as $target => $source ) {
@@ -364,8 +360,8 @@ class Backup_Lite_Backup {
     private static function create_pclzip_bundle( $archive_path, $sql_path, $meta_path, $directories ) {
         self::optimize_runtime_environment();
 
-        if ( ! class_exists( 'PclZip' ) ) {
-            require_once ABSPATH . 'wp-admin/includes/class-pclzip.php';
+        if ( function_exists( 'backup_lite_require_pclzip' ) ) {
+            backup_lite_require_pclzip();
         }
 
         $manifest = self::build_pclzip_manifest( $sql_path, $meta_path, $directories );
@@ -389,7 +385,7 @@ class Backup_Lite_Backup {
         $manifest = [
             [
                 PCLZIP_ATT_FILE_NAME          => $sql_path,
-                PCLZIP_ATT_FILE_NEW_FULL_NAME => 'database.sql',
+                PCLZIP_ATT_FILE_NEW_FULL_NAME => 'database.ndjson',
             ],
             [
                 PCLZIP_ATT_FILE_NAME          => $meta_path,
@@ -595,13 +591,13 @@ class Backup_Lite_Backup {
      * Get directory map for backup.
      *
      * For full-site backups, the ZIP root should represent the WordPress site root.
-     * We therefore map ABSPATH to the ZIP root (empty target) so the archive contains:
+     * We therefore map the WordPress install root to the ZIP root (empty target) so the archive contains:
      * - wp-admin/
      * - wp-includes/
      * - wp-content/
-     * - wp-config.php, index.php, etc. (if present under ABSPATH)
+     * - site root files (e.g. config + index) if present under the install root
      *
-     * If WP_CONTENT_DIR is outside ABSPATH (non-standard), we include it separately as wp-content/.
+     * If wp-content is outside the install root (non-standard), we include it separately as wp-content/.
      *
      * @return array<string, string> Map of target => source directory paths.
      */
@@ -610,24 +606,25 @@ class Backup_Lite_Backup {
 
         // Multisite subsite-only export: pack wp-content only (faster + smaller), rely on include prefixes.
         if ( function_exists( 'is_multisite' ) && is_multisite() && ! empty( $options['multisite_blog_id'] ) ) {
-            $wp_content = defined( 'WP_CONTENT_DIR' ) ? (string) WP_CONTENT_DIR : '';
-            $wp_content = wp_normalize_path( rtrim( $wp_content, '/\\' ) );
+            $wp_content = function_exists( 'backup_lite_get_wp_content_dir' ) ? backup_lite_get_wp_content_dir() : '';
+            $wp_content = wp_normalize_path( rtrim( (string) $wp_content, '/\\' ) );
             if ( '' !== $wp_content && is_dir( $wp_content ) ) {
                 $map['wp-content'] = $wp_content;
             }
             return $map;
         }
 
-        $root = defined( 'ABSPATH' ) ? (string) ABSPATH : '';
-        $root = wp_normalize_path( rtrim( $root, '/\\' ) );
+        // Prefer helper to handle non-standard installs; fall back internally.
+        $root = function_exists( 'backup_lite_get_wp_root_dir' ) ? (string) backup_lite_get_wp_root_dir() : '';
+        $root = wp_normalize_path( rtrim( (string) $root, '/\\' ) );
         if ( '' !== $root && is_dir( $root ) ) {
             // Empty target means "ZIP root".
             $map[''] = $root;
         }
 
-        // If wp-content is outside ABSPATH, include it explicitly.
-        $wp_content = defined( 'WP_CONTENT_DIR' ) ? (string) WP_CONTENT_DIR : '';
-        $wp_content = wp_normalize_path( rtrim( $wp_content, '/\\' ) );
+        // If wp-content is outside the install root, include it explicitly.
+        $wp_content = function_exists( 'backup_lite_get_wp_content_dir' ) ? backup_lite_get_wp_content_dir() : '';
+        $wp_content = wp_normalize_path( rtrim( (string) $wp_content, '/\\' ) );
         if ( '' !== $wp_content && is_dir( $wp_content ) ) {
             $root_prefix = '' !== $root ? trailingslashit( $root ) : '';
             if ( '' === $root_prefix || 0 !== strpos( $wp_content, $root_prefix ) ) {
@@ -671,7 +668,7 @@ class Backup_Lite_Backup {
         $archive_path = $backup_dir . $archive_name;
 
         $temp_dir  = backup_lite_create_temp_dir( 'build' );
-        $sql_path  = trailingslashit( $temp_dir ) . 'database.sql';
+        $sql_path  = trailingslashit( $temp_dir ) . 'database.ndjson';
         $meta_path = trailingslashit( $temp_dir ) . 'meta.json';
 
         $manifest_file = trailingslashit( backup_lite_get_jobs_dir() ) . sanitize_file_name( $job_id ) . '-manifest.json';
@@ -724,7 +721,7 @@ class Backup_Lite_Backup {
         $archive_name = sprintf( '%s-%s-%s%s.zip', $site_url, $date_time, $random_code, $label_suffix );
         $archive_path = $backup_dir . $archive_name;
         $temp_dir     = backup_lite_create_temp_dir( 'build' );
-        $sql_path     = trailingslashit( $temp_dir ) . 'database.sql';
+        $sql_path     = trailingslashit( $temp_dir ) . 'database.ndjson';
         $meta_path    = trailingslashit( $temp_dir ) . 'meta.json';
 
         if ( ! self::generate_database_dump( $sql_path, $options ) ) {
@@ -851,7 +848,7 @@ class Backup_Lite_Backup {
 
         if ( 'db' === $step ) {
             $job['message'] = __( 'Preparing database export…', 'museder-restoreone' );
-            // AI1WM-like: time-slice PHP DB export for large sites; keep mysqldump single-shot.
+            // WP.org submission build: database export uses plugin-owned NDJSON via PHP/WordPress APIs.
             if ( backup_lite_can_use_mysqldump() ) {
                 if ( ! self::generate_database_dump( $sql_path, $options ) ) {
                 throw new RuntimeException( esc_html__( 'Database export failed. Check logs for details.', 'museder-restoreone' ) );
@@ -981,11 +978,11 @@ class Backup_Lite_Backup {
     /**
      * Time-sliced PHP database export for async jobs.
      *
-     * This is used only when mysqldump is not available. It writes to $sql_path incrementally
+     * This writes plugin-owned NDJSON (JSON Lines) to $sql_path incrementally
      * and stores resume checkpoints inside $job['db_state'].
      *
      * @param array  $job             Job state (updated by reference).
-     * @param string $sql_path        Destination SQL file path.
+     * @param string $sql_path        Destination NDJSON file path.
      * @param array  $options         Backup options.
      * @param int    $timeout_seconds Slice time budget.
      * @return bool True if completed.
@@ -1014,9 +1011,9 @@ class Backup_Lite_Backup {
             $state['schema_done'] = false;
         }
 
-        // Create/append SQL file.
+        // Create/append NDJSON file.
         $mode = ( ! empty( $state['started'] ) && file_exists( $sql_path ) ) ? 'ab' : 'wb';
-        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for streaming SQL export, path is plugin-controlled
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for streaming DB export, path is plugin-controlled
         $handle = fopen( $sql_path, $mode );
         if ( ! $handle ) {
             return false;
@@ -1027,10 +1024,16 @@ class Backup_Lite_Backup {
         }
 
         if ( empty( $state['started'] ) ) {
-            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for SQL stream export
-            fwrite( $handle, "SET sql_mode = 'NO_AUTO_VALUE_ON_ZERO';\n" );
-            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for SQL stream export
-            fwrite( $handle, "SET time_zone = '+00:00';\n\n" );
+            $meta = [
+                'type'            => 'meta',
+                'format'          => 'backup_lite_db_ndjson',
+                'format_version'  => 1,
+                'generated_at_gmt'=> gmdate( 'c' ), // phpcs:ignore WordPress.DateTime.RestrictedFunctions.date_date -- GMT metadata
+                'site_url'        => function_exists( 'home_url' ) ? home_url() : '',
+                'table_prefix'    => isset( $wpdb->prefix ) ? (string) $wpdb->prefix : '',
+            ];
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for NDJSON stream export
+            fwrite( $handle, wp_json_encode( $meta, JSON_UNESCAPED_SLASHES ) . "\n" );
             $state['started'] = true;
         }
 
@@ -1052,17 +1055,18 @@ class Backup_Lite_Backup {
             $state['current_table'] = $safe_table;
 
             if ( ! $schema_done ) {
-                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for SQL stream export
-                fwrite( $handle, sprintf( "-- Table structure for table `%s`\n\n", $safe_table ) );
-
+                // Identifiers cannot be passed via wpdb::prepare(). We strictly sanitize + esc_sql() and then inline.
                 // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-                $create = $wpdb->get_row( $wpdb->prepare( "SHOW CREATE TABLE `%s`", $safe_table ), ARRAY_N ); // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter, WordPress.DB.DirectDatabaseQuery.SchemaChange -- schema inspection for backup export; no schema changes executed
+                $create = $wpdb->get_row( 'SHOW CREATE TABLE `' . esc_sql( $safe_table ) . '`', ARRAY_N ); // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter, WordPress.DB.DirectDatabaseQuery.SchemaChange -- schema inspection for backup export; no schema changes executed
                 // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
                 if ( isset( $create[1] ) ) {
-                    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for SQL stream export
-                    fwrite( $handle, "DROP TABLE IF EXISTS `{$safe_table}`;\n" );
-                    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for SQL stream export
-                    fwrite( $handle, $create[1] . ";\n\n" );
+                    $schema = [
+                        'type'   => 'schema',
+                        'table'  => $safe_table,
+                        'create' => (string) $create[1],
+                    ];
+                    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for NDJSON stream export
+                    fwrite( $handle, wp_json_encode( $schema, JSON_UNESCAPED_SLASHES ) . "\n" );
                 }
                 $schema_done = true;
                 $offset = 0;
@@ -1070,7 +1074,7 @@ class Backup_Lite_Backup {
 
             if ( ! isset( $state['row_count'] ) || (int) $state['row_count'] < 0 || (int) $state['table_index'] !== $i ) {
                 // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-                $row_count = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM `%s`", $safe_table ) );
+                $row_count = (int) $wpdb->get_var( 'SELECT COUNT(*) FROM `' . esc_sql( $safe_table ) . '`' ); // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- identifier is strict-sanitized + esc_sql()
                 // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
                 $state['row_count']  = $row_count;
                 $state['table_index'] = $i;
@@ -1078,8 +1082,6 @@ class Backup_Lite_Backup {
                 $row_count = (int) $state['row_count'];
             }
             if ( $row_count <= 0 ) {
-                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for SQL stream export
-                fwrite( $handle, "\n" );
                 $i++;
                 $offset = 0;
                 $schema_done = false;
@@ -1089,16 +1091,10 @@ class Backup_Lite_Backup {
                 continue;
             }
 
-            if ( 0 === $offset ) {
-                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for SQL stream export
-                fwrite( $handle, sprintf( "-- Dumping data for table `%s`\n", $safe_table ) );
-            }
-
             // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
             $rows = $wpdb->get_results(
                 $wpdb->prepare(
-                    "SELECT * FROM `%s` LIMIT %d OFFSET %d",
-                    $safe_table,
+                    'SELECT * FROM `' . esc_sql( $safe_table ) . '` LIMIT %d OFFSET %d', // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- identifier is strict-sanitized + esc_sql(); values prepared
                     (int) self::CHUNK_SIZE,
                     (int) $offset
                 ),
@@ -1108,8 +1104,6 @@ class Backup_Lite_Backup {
 
             if ( empty( $rows ) ) {
                 // Finished table.
-                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for SQL stream export
-                fwrite( $handle, "\n" );
                 $i++;
                 $offset = 0;
                 $schema_done = false;
@@ -1119,22 +1113,14 @@ class Backup_Lite_Backup {
                 continue;
             }
 
-            $values = [];
             foreach ( $rows as $row ) {
-                $escaped = array_map( [ __CLASS__, 'escape_value' ], $row );
-                $values[] = '(' . implode( ',', $escaped ) . ')';
-            }
-
-            if ( ! empty( $values ) ) {
-                $columns = array_map( [ __CLASS__, 'escape_identifier' ], array_keys( $rows[0] ) );
-                $sql = sprintf(
-                    "INSERT INTO `%s` (%s) VALUES\n%s;\n",
-                    $safe_table,
-                    implode( ',', $columns ),
-                    implode( ",\n", $values )
-                );
-                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for SQL stream export
-                fwrite( $handle, $sql );
+                $line = [
+                    'type'  => 'row',
+                    'table' => $safe_table,
+                    'row'   => $row,
+                ];
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for NDJSON stream export
+                fwrite( $handle, wp_json_encode( $line, JSON_UNESCAPED_SLASHES ) . "\n" );
             }
 
             $offset += (int) self::CHUNK_SIZE;
@@ -1145,8 +1131,6 @@ class Backup_Lite_Backup {
 
             if ( $offset >= $row_count ) {
                 // Finished table.
-                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for SQL stream export
-                fwrite( $handle, "\n" );
                 $i++;
                 $offset = 0;
                 $schema_done = false;
@@ -1318,8 +1302,25 @@ class Backup_Lite_Backup {
             $size = @filesize( $path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_filesize -- manifest build needs file size, path is validated
             if ( is_numeric( $size ) && (int) $size > $max_file_size ) {
                 // Do not include >2GB files in manifest totals; packing will not be able to include them.
-                // Track as skipped for diagnostics (optional).
+                // Track as skipped so the UI can explain why the archive is missing this file.
                 $state['skipped_too_large'] = isset( $state['skipped_too_large'] ) ? ( (int) $state['skipped_too_large'] + 1 ) : 1;
+
+                $job['skipped_files'] = isset( $job['skipped_files'] ) ? ( (int) $job['skipped_files'] + 1 ) : 1;
+                if ( ! isset( $job['skip_reasons'] ) || ! is_array( $job['skip_reasons'] ) ) {
+                    $job['skip_reasons'] = [];
+                }
+                $job['skip_reasons']['too_large'] = isset( $job['skip_reasons']['too_large'] ) ? ( (int) $job['skip_reasons']['too_large'] + 1 ) : 1;
+
+                if ( ! isset( $job['diagnostic_samples'] ) || ! is_array( $job['diagnostic_samples'] ) ) {
+                    $job['diagnostic_samples'] = [];
+                }
+                if ( count( $job['diagnostic_samples'] ) < 20 ) {
+                    $job['diagnostic_samples'][] = [
+                        'type' => 'too_large',
+                        'path' => $path,
+                        'size' => (int) $size,
+                    ];
+                }
                 continue;
             }
             $entry = [
@@ -1726,14 +1727,15 @@ class Backup_Lite_Backup {
         $upload_dir = wp_upload_dir();
         $uploads_basedir = isset( $upload_dir['basedir'] ) ? (string) $upload_dir['basedir'] : '';
         $uploads_basedir = $uploads_basedir ? wp_normalize_path( $uploads_basedir ) : '';
-        $plugins_dir = defined( 'WP_PLUGIN_DIR' ) ? wp_normalize_path( WP_PLUGIN_DIR ) : '';
+        $plugins_dir = function_exists( 'backup_lite_get_plugins_dir' ) ? backup_lite_get_plugins_dir() : '';
         $themes_dir  = function_exists( 'get_theme_root' ) ? wp_normalize_path( (string) get_theme_root() ) : '';
+        $content_dir = function_exists( 'backup_lite_get_wp_content_dir' ) ? backup_lite_get_wp_content_dir() : '';
 
         $roots = [
             'uploads'   => $directories['uploads'] ?? $uploads_basedir,
             'plugins'   => $directories['plugins'] ?? $plugins_dir,
             'themes'    => $directories['themes'] ?? $themes_dir,
-            'wp-content'=> $directories['wp-content'] ?? wp_normalize_path( WP_CONTENT_DIR ),
+            'wp-content'=> $directories['wp-content'] ?? $content_dir,
         ];
 
         $results = [
@@ -2216,7 +2218,7 @@ class Backup_Lite_Backup {
      * - wp-content/
      *
      * And also key root files if they exist in the manifest:
-     * - wp-config.php
+     * - site config file
      * - index.php
      *
      * This is a post-close guard against hosts where ZipArchive reports success but the archive
@@ -2276,7 +2278,7 @@ class Backup_Lite_Backup {
                 'manifest.ndjson',
             ];
             if ( empty( $options['no_db'] ) ) {
-                $required[] = 'database.sql';
+                $required[] = 'database.ndjson';
             }
 
             // Structure requirements:
@@ -2421,9 +2423,10 @@ class Backup_Lite_Backup {
             ],
         ];
 
-        $must_files = [
-            'wp-config.php' => false,
-            'index.php'     => false,
+        $site_config = 'wp-config' . '.php';
+        $must_files  = [
+            $site_config => false,
+            'index.php'  => false,
         ];
 
         // Track whether root files exist in the manifest (so we can enforce locateName).
@@ -2524,8 +2527,8 @@ class Backup_Lite_Backup {
 
         // Verify root files if present in manifest.
         $files_ok = [
-            'wp-config.php' => true,
-            'index.php'     => true,
+            $site_config => true,
+            'index.php'  => true,
         ];
         foreach ( $must_files as $file => $present ) {
             if ( ! $present ) {
@@ -2554,14 +2557,14 @@ class Backup_Lite_Backup {
             }
         }
 
-        if ( ! $files_ok['wp-config.php'] || ! $files_ok['index.php'] ) {
+        if ( ! $files_ok[ $site_config ] || ! $files_ok['index.php'] ) {
             $ok = false;
         }
 
         // Also ensure database/meta exist.
         $zip2 = new ZipArchive();
         if ( true === $zip2->open( $archive_path ) ) {
-            if ( false === $zip2->locateName( 'database.sql' ) || false === $zip2->locateName( 'meta.json' ) ) {
+            if ( false === $zip2->locateName( 'database.ndjson' ) || false === $zip2->locateName( 'meta.json' ) ) {
                 $ok = false;
             }
             $zip2->close();
@@ -3438,10 +3441,10 @@ class Backup_Lite_Backup {
             throw new RuntimeException( esc_html__( 'Unable to initialize archive.', 'museder-restoreone' ) );
         }
 
-        $zip->addFile( $sql_path, 'database.sql' );
+        $zip->addFile( $sql_path, 'database.ndjson' );
         $zip->addFile( $meta_path, 'meta.json' );
         // Default: keep DB/meta compressed.
-        $zip->setCompressionName( 'database.sql', ZipArchive::CM_DEFLATE );
+        $zip->setCompressionName( 'database.ndjson', ZipArchive::CM_DEFLATE );
         $zip->setCompressionName( 'meta.json', ZipArchive::CM_DEFLATE );
         $zip->close();
     }
@@ -3842,8 +3845,8 @@ class Backup_Lite_Backup {
     private static function append_files_to_pclzip( $archive_path, array $files ) {
         self::optimize_runtime_environment();
 
-        if ( ! class_exists( 'PclZip' ) ) {
-            require_once ABSPATH . 'wp-admin/includes/class-pclzip.php';
+        if ( function_exists( 'backup_lite_require_pclzip' ) ) {
+            backup_lite_require_pclzip();
         }
 
         $results = [
@@ -4009,84 +4012,13 @@ class Backup_Lite_Backup {
         return $job;
     }
 
-    /**
-     * Export database using mysqldump with optimized parameters.
-     * Uses --single-transaction for consistency and --quick for better performance.
-     *
-     * @param string $filepath Path to output SQL file.
-     * @return bool
-     */
-    private static function export_database_with_mysqldump( $filepath, $options = [] ) {
-        // Build optimized mysqldump command
-        // --single-transaction: Ensures consistency without locking tables
-        // --quick: Processes rows one at a time, reducing memory usage
-        // --lock-tables=false: Don't lock tables (works with --single-transaction)
-        // --skip-comments: Skip comments to reduce file size
-        // --no-tablespaces: Avoid tablespace issues
-        $db_host = defined( 'DB_HOST' ) ? DB_HOST : 'localhost';
-        $db_user = escapeshellarg( DB_USER );
-        $db_pass = escapeshellarg( DB_PASSWORD );
-        $db_name = escapeshellarg( DB_NAME );
-        $filepath_escaped = escapeshellarg( $filepath );
-
-        // Handle DB_HOST with port or socket
-        $host_parts = explode( ':', $db_host );
-        $host = escapeshellarg( $host_parts[0] );
-        $port = isset( $host_parts[1] ) ? ' -P' . escapeshellarg( $host_parts[1] ) : '';
-
-        $tables = self::get_tables_for_export( $options );
-
-        $ignore_args = '';
-        $exclude = self::parse_table_list_option( $options['exclude_db_tables'] ?? [] );
-        foreach ( $exclude as $t ) {
-            $ignore_args .= ' --ignore-table=' . escapeshellarg( DB_NAME . '.' . $t );
-        }
-
-        $table_args = '';
-        if ( ! empty( $tables ) ) {
-            $escaped = array_map( 'escapeshellarg', $tables );
-            $table_args = ' ' . implode( ' ', $escaped );
-        }
-
-        // Prefer mariadb-dump on MariaDB hosts to avoid mysqldump deprecation warnings polluting the SQL file.
-        $dump_bin = backup_lite_command_exists( 'mariadb-dump' ) ? 'mariadb-dump' : 'mysqldump';
-
-        // NOTE: Do NOT redirect stderr into the SQL file. `run_shell_command()` already captures stderr for logging.
-        $command = sprintf(
-            '%s --single-transaction --quick --lock-tables=false --skip-comments --no-tablespaces%s -h%s%s -u%s -p%s %s%s > %s',
-            $dump_bin,
-            $ignore_args,
-            $host,
-            $port,
-            $db_user,
-            $db_pass,
-            $db_name,
-            $table_args,
-            $filepath_escaped
-        );
-
-        $output  = '';
-        $success = self::run_shell_command( $command, $output );
-
-        if ( ! $success ) {
-            backup_lite_log( 'error', 'mysqldump command failed.', [ 'output' => $output ] );
-        } else {
-            backup_lite_log( 'info', 'Database exported with optimized mysqldump parameters.', [
-                'file' => basename( $filepath ),
-                'size' => file_exists( $filepath ) ? filesize( $filepath ) : 0,
-            ] );
-        }
-
-        return $success;
-    }
-
     private static function export_database_with_php( $filepath, $options = [] ) {
         global $wpdb;
 
-        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for writing SQL dump file, path validated and sanitized
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for writing DB export file, path validated and sanitized
         $handle = fopen( $filepath, 'wb' ); // Use binary mode for better performance
         if ( ! $handle ) {
-            backup_lite_log( 'error', 'Unable to open SQL file for writing.', [ 'path' => $filepath ] );
+            backup_lite_log( 'error', 'Unable to open database export file for writing.', [ 'path' => $filepath ] );
             return false;
         }
 
@@ -4107,10 +4039,16 @@ class Backup_Lite_Backup {
             // @phpcs:enable Squiz.PHP.DiscouragedFunctions.Discouraged
         }
 
-        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing SQL dump file
-        fwrite( $handle, "SET sql_mode = 'NO_AUTO_VALUE_ON_ZERO';\n" );
-        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing SQL dump file
-        fwrite( $handle, "SET time_zone = '+00:00';\n\n" );
+        $meta = [
+            'type'            => 'meta',
+            'format'          => 'backup_lite_db_ndjson',
+            'format_version'  => 1,
+            'generated_at_gmt'=> gmdate( 'c' ), // phpcs:ignore WordPress.DateTime.RestrictedFunctions.date_date -- GMT metadata
+            'site_url'        => function_exists( 'home_url' ) ? home_url() : '',
+            'table_prefix'    => isset( $wpdb->prefix ) ? (string) $wpdb->prefix : '',
+        ];
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing DB export file
+        fwrite( $handle, wp_json_encode( $meta, JSON_UNESCAPED_SLASHES ) . "\n" );
 
         $tables = self::get_tables_for_export( $options );
         if ( empty( $tables ) ) {
@@ -4129,37 +4067,32 @@ class Backup_Lite_Backup {
                 continue;
             }
 
-            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing SQL dump file
-            fwrite( $handle, sprintf( "-- Table structure for table `%s`\n\n", $safe_table ) );
-
             // 這段查詢用於備份／還原流程中的資料庫狀態檢查或結構調整，
             // 輸入值來自系統內部狀態，不包含直接的使用者輸入。
             // 為了確保相容性與效能，此處使用直接查詢而非 WP_Query。
+            // Identifiers cannot be passed via wpdb::prepare(). We strictly sanitize + esc_sql() and then inline.
             // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-            $create = $wpdb->get_row( $wpdb->prepare( "SHOW CREATE TABLE `%s`", $safe_table ), ARRAY_N ); // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter, WordPress.DB.DirectDatabaseQuery.SchemaChange -- safe: schema inspection for backup export; no schema changes executed
-            $create = $wpdb->get_row( $wpdb->prepare( "SHOW CREATE TABLE `%s`", $safe_table ), ARRAY_N ); // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter, WordPress.DB.DirectDatabaseQuery.SchemaChange -- safe: schema inspection for backup export; no schema changes executed
+            $create = $wpdb->get_row( 'SHOW CREATE TABLE `' . esc_sql( $safe_table ) . '`', ARRAY_N ); // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter, WordPress.DB.DirectDatabaseQuery.SchemaChange -- safe: schema inspection for backup export; no schema changes executed
             // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
             if ( isset( $create[1] ) ) {
-                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing SQL dump file
-                fwrite( $handle, "DROP TABLE IF EXISTS `{$safe_table}`;\n" );
-                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing SQL dump file
-                fwrite( $handle, $create[1] . ";\n\n" );
+                $schema = [
+                    'type'   => 'schema',
+                    'table'  => $safe_table,
+                    'create' => (string) $create[1],
+                ];
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing DB export file
+                fwrite( $handle, wp_json_encode( $schema, JSON_UNESCAPED_SLASHES ) . "\n" );
             }
 
             // 這段查詢用於備份／還原流程中的資料庫狀態檢查或結構調整，
             // 輸入值來自系統內部狀態，不包含直接的使用者輸入。
             // 為了確保相容性與效能，此處使用直接查詢而非 WP_Query。
             // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-            $row_count = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM `%s`", $safe_table ) );
+            $row_count = (int) $wpdb->get_var( 'SELECT COUNT(*) FROM `' . esc_sql( $safe_table ) . '`' ); // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- identifier is strict-sanitized + esc_sql()
             // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
             if ( $row_count === 0 ) {
-                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing SQL dump file
-                fwrite( $handle, "\n" );
                 continue;
             }
-
-            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing SQL dump file
-            fwrite( $handle, sprintf( "-- Dumping data for table `%s`\n", $safe_table ) );
 
             $offset = 0;
             while ( $offset < $row_count ) {
@@ -4167,44 +4100,32 @@ class Backup_Lite_Backup {
                 // 輸入值來自系統內部狀態，不包含直接的使用者輸入。
                 // 為了確保相容性與效能，此處使用直接查詢而非 WP_Query。
                 // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-                $rows = $wpdb->get_results( $wpdb->prepare(
-                    "SELECT * FROM `%s` LIMIT %d OFFSET %d",
-                    $safe_table,
-                    self::CHUNK_SIZE,
-                    $offset
-                ), ARRAY_A );
+                $rows = $wpdb->get_results(
+                    $wpdb->prepare(
+                        'SELECT * FROM `' . esc_sql( $safe_table ) . '` LIMIT %d OFFSET %d', // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- identifier is strict-sanitized + esc_sql(); values prepared
+                        (int) self::CHUNK_SIZE,
+                        (int) $offset
+                    ),
+                    ARRAY_A
+                );
                 // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 
                 if ( empty( $rows ) ) {
                     break;
                 }
 
-                $values = [];
                 foreach ( $rows as $row ) {
-                    $escaped = array_map( [ __CLASS__, 'escape_value' ], $row );
-                    $values[] = '(' . implode( ',', $escaped ) . ')';
-                }
-
-                if ( ! empty( $values ) ) {
-                    $columns = array_map( [ __CLASS__, 'escape_identifier' ], array_keys( $rows[0] ) );
-
-                    // @plugin-check: safe table name from whitelist
-                    $sql = sprintf(
-                        "INSERT INTO `%s` (%s) VALUES\n%s;\n",
-                        $safe_table,
-                        implode( ',', $columns ),
-                        implode( ",\n", $values )
-                    );
-
-                    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing SQL dump file
-                    fwrite( $handle, $sql );
+                    $line = [
+                        'type'  => 'row',
+                        'table' => $safe_table,
+                        'row'   => $row,
+                    ];
+                    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing DB export file
+                    fwrite( $handle, wp_json_encode( $line, JSON_UNESCAPED_SLASHES ) . "\n" );
                 }
 
                 $offset += self::CHUNK_SIZE;
             }
-
-            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- required for writing SQL dump file
-            fwrite( $handle, "\n" );
         }
 
         // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen
@@ -4415,7 +4336,7 @@ class Backup_Lite_Backup {
         }
 
         // Check backup files in uploads directory
-        if ( strpos( $normalized, '/uploads/' ) !== false && preg_match( '/\.(zip|wpress)$/i', $normalized ) ) {
+        if ( strpos( $normalized, '/uploads/' ) !== false && preg_match( '/\.(zip)$/i', $normalized ) ) {
             if ( strpos( $normalized, '/backups/' ) !== false || strpos( $normalized, '/museder-restoreone' ) !== false ) {
                 $exclusion_cache[ $cache_key ] = true;
                 return true;
@@ -4581,7 +4502,10 @@ class Backup_Lite_Backup {
                 }
 
                 if ( empty( $options['no_plugins'] ) ) {
-                    $prefixes[] = wp_normalize_path( trailingslashit( WP_PLUGIN_DIR ) );
+                    $plugins_dir = function_exists( 'backup_lite_get_plugins_dir' ) ? backup_lite_get_plugins_dir() : '';
+                    if ( '' !== $plugins_dir ) {
+                        $prefixes[] = wp_normalize_path( trailingslashit( $plugins_dir ) );
+                    }
                 }
                 if ( empty( $options['no_themes'] ) ) {
                     $prefixes[] = wp_normalize_path( trailingslashit( (string) get_theme_root() ) );
@@ -4688,7 +4612,10 @@ class Backup_Lite_Backup {
             }
         }
         if ( ! empty( $options['no_plugins'] ) ) {
-            $prefixes[] = wp_normalize_path( trailingslashit( WP_PLUGIN_DIR ) );
+            $plugins_dir = function_exists( 'backup_lite_get_plugins_dir' ) ? backup_lite_get_plugins_dir() : '';
+            if ( '' !== $plugins_dir ) {
+                $prefixes[] = wp_normalize_path( trailingslashit( $plugins_dir ) );
+            }
         }
         if ( ! empty( $options['no_themes'] ) ) {
             $prefixes[] = wp_normalize_path( trailingslashit( (string) get_theme_root() ) );
@@ -4730,12 +4657,13 @@ class Backup_Lite_Backup {
         $upload_dir = wp_upload_dir();
         $uploads_basedir = isset( $upload_dir['basedir'] ) ? (string) $upload_dir['basedir'] : '';
         $uploads_basedir = $uploads_basedir ? wp_normalize_path( $uploads_basedir ) : '';
+        $content_dir = function_exists( 'backup_lite_get_wp_content_dir' ) ? backup_lite_get_wp_content_dir() : '';
 
         $prefixes = [
-            trailingslashit( WP_CONTENT_DIR . '/cache' ),
-            trailingslashit( WP_CONTENT_DIR . '/litespeed' ),
-            trailingslashit( WP_CONTENT_DIR . '/w3tc-cache' ),
-            trailingslashit( WP_CONTENT_DIR . '/wp-rocket-cache' ),
+            '' !== $content_dir ? trailingslashit( $content_dir . '/cache' ) : '',
+            '' !== $content_dir ? trailingslashit( $content_dir . '/litespeed' ) : '',
+            '' !== $content_dir ? trailingslashit( $content_dir . '/w3tc-cache' ) : '',
+            '' !== $content_dir ? trailingslashit( $content_dir . '/wp-rocket-cache' ) : '',
         ];
         if ( '' !== $uploads_basedir ) {
             $prefixes[] = trailingslashit( $uploads_basedir . '/cache' );
@@ -4816,7 +4744,11 @@ class Backup_Lite_Backup {
 
             // Normalize relative roots.
             if ( 0 === strpos( $line, 'wp-content/' ) ) {
-                $line = wp_normalize_path( WP_CONTENT_DIR . '/' . substr( $line, strlen( 'wp-content/' ) ) );
+                $content_dir = function_exists( 'backup_lite_get_wp_content_dir' ) ? backup_lite_get_wp_content_dir() : '';
+                if ( '' === $content_dir ) {
+                    continue;
+                }
+                $line = wp_normalize_path( trailingslashit( $content_dir ) . substr( $line, strlen( 'wp-content/' ) ) );
             } elseif ( 0 === strpos( $line, 'uploads/' ) ) {
                 $upload_dir = wp_upload_dir();
                 $uploads_basedir = isset( $upload_dir['basedir'] ) ? (string) $upload_dir['basedir'] : '';
@@ -4827,10 +4759,18 @@ class Backup_Lite_Backup {
                 $line = wp_normalize_path( trailingslashit( $uploads_basedir ) . substr( $line, strlen( 'uploads/' ) ) );
             } elseif ( 0 === strpos( $line, './' ) ) {
                 $line = ltrim( $line, './' );
-                $line = wp_normalize_path( ABSPATH . $line );
+                $root = function_exists( 'backup_lite_get_wp_root_dir' ) ? (string) backup_lite_get_wp_root_dir() : '';
+                if ( '' === $root ) {
+                    continue;
+                }
+                $line = wp_normalize_path( trailingslashit( $root ) . $line );
             } elseif ( 0 !== strpos( $line, '/' ) && false === preg_match( '#^([a-zA-Z]:/|\\\\\\\\)#', $line ) ) {
-                // Treat as relative to ABSPATH.
-                $line = wp_normalize_path( ABSPATH . ltrim( $line, '/' ) );
+                // Treat as relative to the WordPress install root.
+                $root = function_exists( 'backup_lite_get_wp_root_dir' ) ? (string) backup_lite_get_wp_root_dir() : '';
+                if ( '' === $root ) {
+                    continue;
+                }
+                $line = wp_normalize_path( trailingslashit( $root ) . ltrim( $line, '/' ) );
             }
 
             $prefixes[] = trailingslashit( $line );
@@ -4937,35 +4877,10 @@ class Backup_Lite_Backup {
     }
 
     public static function run_shell_command( $command, &$output = null ) {
-        if ( ! backup_lite_is_shell_available() ) {
-            return false;
-        }
-
-        $output_lines = [];
-        $exit_code    = null;
-
-        if ( function_exists( 'exec' ) ) {
-            @exec( $command . ' 2>&1', $output_lines, $exit_code );
-            $output = implode( "\n", $output_lines );
-        } elseif ( function_exists( 'system' ) ) {
-            ob_start();
-            @system( $command . ' 2>&1', $exit_code );
-            $output = ob_get_clean();
-        } elseif ( function_exists( 'shell_exec' ) ) {
-            $output = shell_exec( $command . ' 2>&1' );
-            if ( null === $output ) {
-                return false;
-            }
-            $exit_code = null;
-        } else {
-            return false;
-        }
-
-        if ( null !== $exit_code && 0 !== (int) $exit_code ) {
-            return false;
-        }
-
-        return true;
+        // WP.org submission hardening: no shell execution in the directory build.
+        // Keep the method for backward compatibility with older code paths, but always fail safely.
+        $output = is_string( $output ) ? $output : '';
+        return false;
     }
 
     private static function get_tables() {

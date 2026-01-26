@@ -12,8 +12,48 @@ class Backup_Lite_Restore_Service {
     const DEFAULT_SLICE_SECONDS = 10;
     const ACTIVE_JOB_OPTION = 'backup_lite_restore_service_active_job_id';
     const ZIP_WP_CONTENT_PREFIX = 'wp-content/';
-    const WPRESS_DB_FILES = [ 'database.sql' ];
-    const WPRESS_FILES_EXCLUDE = [ 'database.sql', 'package.json', 'multisite.json', 'blogs.json' ];
+    const WPRESS_DB_FILES = [ 'database.ndjson' ];
+    const WPRESS_FILES_EXCLUDE = [ 'database.ndjson', 'package.json', 'multisite.json', 'blogs.json' ];
+
+    /**
+     * Find a ZIP entry name by matching basename (case-insensitive).
+     * This allows archives that store db files under subdirectories, e.g. "site/database.ndjson".
+     *
+     * @param string $zip_path
+     * @param string $wanted_basename e.g. "database.ndjson"
+     * @return string Entry name inside the zip, or empty string if not found.
+     */
+    protected static function find_zip_entry_by_basename( $zip_path, $wanted_basename ) {
+        $zip_path        = wp_normalize_path( (string) $zip_path );
+        $wanted_basename = strtolower( (string) $wanted_basename );
+        if ( '' === $zip_path || '' === $wanted_basename || ! file_exists( $zip_path ) ) {
+            return '';
+        }
+        if ( ! class_exists( 'ZipArchive' ) ) {
+            return '';
+        }
+
+        $zip = new ZipArchive();
+        $ok  = $zip->open( $zip_path );
+        $ok_code = defined( 'ZipArchive::ER_OK' ) ? ZipArchive::ER_OK : 0;
+        if ( true !== $ok && $ok_code !== $ok ) {
+            return '';
+        }
+
+        $found = '';
+        for ( $i = 0; $i < (int) $zip->numFiles; $i++ ) {
+            $name = (string) $zip->getNameIndex( $i );
+            if ( '' === $name ) {
+                continue;
+            }
+            if ( $wanted_basename === strtolower( basename( $name ) ) ) {
+                $found = $name;
+                break;
+            }
+        }
+        $zip->close();
+        return (string) $found;
+    }
 
     public static function init() {
         add_action( self::CRON_HOOK_PROCESS, [ __CLASS__, 'cron_process_job' ], 10, 1 );
@@ -41,7 +81,8 @@ class Backup_Lite_Restore_Service {
             throw new InvalidArgumentException( esc_html__( 'Invalid restore file name.', 'museder-restoreone' ) );
         }
 
-        $allowed_ext = [ 'zip', 'wpress' ];
+        // WP.org submission build: only support ZIP archives.
+        $allowed_ext = [ 'zip' ];
         $ext         = strtolower( pathinfo( $file_name, PATHINFO_EXTENSION ) );
         if ( ! in_array( $ext, $allowed_ext, true ) ) {
             throw new InvalidArgumentException( esc_html__( 'Unsupported backup extension.', 'museder-restoreone' ) );
@@ -474,6 +515,17 @@ class Backup_Lite_Restore_Service {
                 case 'cleanup':
                     self::stage_cleanup_and_finish( $job_id, $meta, $slice );
                     break;
+                case 'prepared':
+                case 'validated':
+                case 'dry-run':
+                case 'ready':
+                    // Job not started yet; UI might still poll process endpoint. Do not fail the job.
+                    return [ 'ok' => true, 'meta' => $meta, 'reason' => 'not_started' ];
+                case 'done':
+                case 'rollback':
+                case 'rollback-done':
+                    // Defensive: if stage is already terminal-ish, avoid failing due to an unknown stage.
+                    return [ 'ok' => true, 'meta' => $meta, 'reason' => 'terminal' ];
                 default:
                     // Unknown stage -> fail safely.
                     throw new RuntimeException( esc_html__( 'Restore job is in an unknown stage.', 'museder-restoreone' ) );
@@ -633,11 +685,9 @@ class Backup_Lite_Restore_Service {
     }
 
     protected static function spawn_cron() {
-        if ( ! function_exists( 'spawn_cron' ) ) {
-            require_once ABSPATH . 'wp-includes/cron.php';
-        }
-        if ( function_exists( 'spawn_cron' ) ) {
-            spawn_cron();
+        // Do not include WordPress core files directly. Best-effort: nudge wp-cron via loopback request.
+        if ( function_exists( 'backup_lite_nudge_wp_cron' ) ) {
+            backup_lite_nudge_wp_cron();
         }
     }
 
@@ -678,13 +728,13 @@ class Backup_Lite_Restore_Service {
             $meta['checkpoints']['wpress_archive_offset']  = $archive_offset;
             $meta['checkpoints']['wpress_file_offset']     = $file_offset;
             $meta['checkpoints']['wpress_processed_bytes'] = $processed;
-            $meta['sql_file'] = trailingslashit( $db_dir ) . 'database.sql';
+            $meta['db_file'] = trailingslashit( $db_dir ) . 'database.ndjson';
             $meta['progress'] = 75;
             $meta['message']  = __( 'Extracting database…', 'museder-restoreone' );
             $meta['updated_at'] = current_time( 'mysql' );
             self::write_job_meta( $job_id, $meta );
 
-            if ( $ok && file_exists( $meta['sql_file'] ) ) {
+            if ( $ok && file_exists( $meta['db_file'] ) ) {
             $meta['stage']    = 'restore-db';
                 $meta['progress'] = 80;
                 $meta['message']  = __( 'Preparing database import…', 'museder-restoreone' );
@@ -692,16 +742,51 @@ class Backup_Lite_Restore_Service {
             self::write_job_meta( $job_id, $meta );
             }
         } else {
-            // zip: do a minimal extraction of database.sql into job tmp folder
-            $sql_path = trailingslashit( $db_dir ) . 'database.sql';
-            if ( ! file_exists( $sql_path ) ) {
-                self::extract_zip_entry_to_path( $file_path, 'database.sql', $sql_path );
+            // zip: do a minimal extraction of database.ndjson into job tmp folder
+            $db_path = trailingslashit( $db_dir ) . 'database.ndjson';
+            if ( ! file_exists( $db_path ) ) {
+                // On some hosts, ZipArchive cannot open large archives (ZipArchive error 19).
+                // In that case, avoid directory listing and try extracting the expected root name directly.
+                self::extract_zip_entry_to_path( $file_path, 'database.ndjson', $db_path );
             }
-            if ( ! file_exists( $sql_path ) ) {
-                throw new RuntimeException( esc_html__( 'database.sql not found in archive.', 'museder-restoreone' ) );
+            if ( ! file_exists( $db_path ) ) {
+                // No NDJSON DB. Check if legacy SQL exists in the archive (manual import only).
+                $sql_path = trailingslashit( $db_dir ) . 'database.sql';
+                if ( ! file_exists( $sql_path ) ) {
+                    self::extract_zip_entry_to_path( $file_path, 'database.sql', $sql_path );
+                }
+                if ( file_exists( $sql_path ) ) {
+                    $meta['db_file']    = $sql_path;
+                    $meta['stage']      = 'restore-db';
+                    $meta['progress']   = 80;
+                    $meta['message']    = __( 'Preparing database import…', 'museder-restoreone' );
+                    $meta['updated_at'] = current_time( 'mysql' );
+                    self::write_job_meta( $job_id, $meta );
+                    return;
+                }
+
+                // DB is missing. If files-only was selected, skip DB stages and proceed.
+                $files_only = ! empty( $meta['options'] ) && is_array( $meta['options'] ) && ! empty( $meta['options']['files_only'] );
+                if ( $files_only ) {
+                    $meta['warnings'] = isset( $meta['warnings'] ) && is_array( $meta['warnings'] ) ? $meta['warnings'] : [];
+                    $meta['warnings'][] = 'db_missing_files_only';
+                    $meta['stage']      = 'restore-files';
+                    $meta['progress']   = 85;
+                    $meta['message']    = __( 'Database backup not found in archive. Proceeding with files-only restore…', 'museder-restoreone' );
+                    $meta['updated_at'] = current_time( 'mysql' );
+                    self::write_job_meta( $job_id, $meta );
+                    return;
+                }
+
+                throw new RuntimeException(
+                    esc_html__(
+                        'Database backup not found in archive. Enable “files-only restore” to restore files without database, or recreate the backup with the updated plugin.',
+                        'museder-restoreone'
+                    )
+                );
             }
 
-            $meta['sql_file']   = $sql_path;
+            $meta['db_file']    = $db_path;
             $meta['stage']      = 'restore-db';
             $meta['progress']   = 80;
             $meta['message']    = __( 'Preparing database import…', 'museder-restoreone' );
@@ -711,142 +796,55 @@ class Backup_Lite_Restore_Service {
     }
 
     protected static function stage_import_database( $job_id, array $meta, $slice_seconds ) {
-        $sql_file = isset( $meta['sql_file'] ) ? $meta['sql_file'] : '';
-        if ( empty( $sql_file ) || ! file_exists( $sql_file ) ) {
+        $db_file = isset( $meta['db_file'] ) ? (string) $meta['db_file'] : ( isset( $meta['sql_file'] ) ? (string) $meta['sql_file'] : '' );
+        if ( '' === $db_file || ! file_exists( $db_file ) ) {
             throw new RuntimeException( esc_html__( 'Database file missing for import.', 'museder-restoreone' ) );
         }
 
-        $cp = isset( $meta['checkpoints'] ) && is_array( $meta['checkpoints'] ) ? $meta['checkpoints'] : [];
-        $db_offset       = isset( $cp['db_offset'] ) ? (int) $cp['db_offset'] : 0;
-        $db_query_buffer = isset( $cp['db_query_buffer'] ) ? (string) $cp['db_query_buffer'] : '';
+        // New database format (database.ndjson) is imported directly by Backup_Lite_Restore.
+        // Legacy SQL backups are manual-only (Backup_Lite_Restore::import_database returns manual_db_required).
+        $result = Backup_Lite_Restore::import_database( $db_file );
 
-        // Multisite subsite->single heuristic: if we're restoring into a single site and the SQL tables
-        // use a wp_{blogid}_ prefix, rewrite that prefix to the current $wpdb->prefix.
-        $rewrite_from = '';
-        $rewrite_to   = '';
-        if ( empty( $cp['ms_source_prefix'] ) && 0 === $db_offset ) {
-            $cp['ms_source_prefix'] = self::detect_multisite_blog_prefix_from_sql( $sql_file );
-        }
+        // Manual DB fallback: allow file restore to proceed when backup format is SQL.
+        if ( empty( $result['success'] ) && isset( $result['code'] ) && 'manual_db_required' === (string) $result['code'] ) {
+            $job_dir = self::ensure_job_directory( $job_id );
+            $dest_name = 'database.sql';
+            $dest    = wp_normalize_path( trailingslashit( $job_dir ) . $dest_name );
 
-        // Subsite -> single: rewrite to current prefix.
-        if ( function_exists( 'is_multisite' ) && ! is_multisite() ) {
-            if ( empty( $cp['ms_source_prefix'] ) && 0 === $db_offset ) {
-                $cp['ms_source_prefix'] = self::detect_multisite_blog_prefix_from_sql( $sql_file );
-            }
-            if ( ! empty( $cp['ms_source_prefix'] ) ) {
-                global $wpdb;
-                $rewrite_from = (string) $cp['ms_source_prefix'];
-                $rewrite_to   = (string) $wpdb->prefix;
-            }
-        }
-
-        // Subsite -> multisite: if target blog id is provided, rewrite to that blog prefix.
-        if ( function_exists( 'is_multisite' ) && is_multisite() && ! empty( $cp['ms_source_prefix'] ) ) {
-            $target_blog_id = 0;
-            if ( ! empty( $meta['options']['target_blog_id'] ) ) {
-                $target_blog_id = absint( $meta['options']['target_blog_id'] );
-            }
-            if ( $target_blog_id > 0 ) {
-                global $wpdb;
-                $rewrite_from = (string) $cp['ms_source_prefix'];
-                $rewrite_to   = (string) $wpdb->get_blog_prefix( $target_blog_id );
-            }
-        }
-
-        // General prefix mismatch handling (single-site to single-site, etc.).
-        // If the SQL dump uses a different prefix (e.g., qvj4_) than this site (e.g., ysjb_),
-        // rewrite table identifiers during import so the restored tables match the target site.
-        if ( '' === $rewrite_from && '' === $rewrite_to ) {
-            global $wpdb;
-            $target_prefix = (string) $wpdb->prefix;
-
-            // Prefer Step 1 detection passed via options (from restore handler).
-            if ( empty( $cp['db_source_prefix'] ) && ! empty( $meta['options']['db_source_prefix'] ) ) {
-                $maybe = sanitize_text_field( (string) $meta['options']['db_source_prefix'] );
-                if ( '' !== $maybe ) {
-                    $cp['db_source_prefix'] = $maybe;
-                }
-            }
-            if ( empty( $cp['db_source_prefix'] ) && 0 === $db_offset ) {
-                $cp['db_source_prefix'] = self::detect_table_prefix_from_sql( $sql_file );
+            // Best-effort persist SQL for the admin to download (direct access is blocked via directory protection).
+            if ( file_exists( $db_file ) && is_readable( $db_file ) && ! file_exists( $dest ) ) {
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_copy -- restore file operation, plugin-controlled path
+                @copy( $db_file, $dest );
             }
 
-            if ( ! empty( $cp['db_source_prefix'] ) && $cp['db_source_prefix'] !== $target_prefix ) {
-                $rewrite_from = (string) $cp['db_source_prefix'];
-                $rewrite_to   = $target_prefix;
-            }
+            $meta['manual_db'] = [
+                'required' => true,
+                'file'     => $dest_name,
+            ];
+
+            $meta['stage']      = 'restore-files';
+            $meta['progress']   = 90;
+            $meta['message']    = __( 'Manual database import required. Restoring files now…', 'museder-restoreone' );
+            $meta['updated_at'] = current_time( 'mysql' );
+            self::write_job_meta( $job_id, $meta );
+            return;
         }
 
-        if ( function_exists( 'backup_lite_log' ) && 0 === (int) $db_offset ) {
-            backup_lite_log( 'info', 'DB prefix rewrite decision.', [
-                'job_id'        => $job_id,
-                'source_prefix' => ! empty( $cp['db_source_prefix'] ) ? (string) $cp['db_source_prefix'] : '',
-                'target_prefix' => isset( $target_prefix ) ? (string) $target_prefix : ( function_exists( 'is_multisite' ) && is_multisite() ? 'multisite' : '' ),
-                'rewrite_from'  => (string) $rewrite_from,
-                'rewrite_to'    => (string) $rewrite_to,
-                'ms_source'     => ! empty( $cp['ms_source_prefix'] ) ? (string) $cp['ms_source_prefix'] : '',
-            ] );
+        if ( ! empty( $result['success'] ) ) {
+            $meta['progress'] = 90;
+            $meta['message']  = __( 'Database import completed.', 'museder-restoreone' );
+            $meta['stage']    = 'restore-files';
+        } else {
+            $meta['progress'] = 80;
+            $meta['message']  = isset( $result['message'] ) ? (string) $result['message'] : __( 'Database import failed.', 'museder-restoreone' );
+            $meta['stage']    = 'failed';
         }
-
-        $result = Backup_Lite_Restore::import_database_sliced( $sql_file, $db_offset, $db_query_buffer, (int) $slice_seconds, $rewrite_from, $rewrite_to );
-
-        // Observability: record last statement type and whether we split large INSERTs (no SQL content logged).
-        if ( is_array( $result ) && ! empty( $result['import'] ) && is_array( $result['import'] ) ) {
-            $stmt = isset( $result['import']['stmt'] ) ? sanitize_text_field( (string) $result['import']['stmt'] ) : '';
-            $split = ! empty( $result['import']['split'] );
-            $b_done = isset( $result['import']['batches_done'] ) ? absint( $result['import']['batches_done'] ) : 0;
-            $b_total = isset( $result['import']['batches_total'] ) ? absint( $result['import']['batches_total'] ) : 0;
-
-            $meta['checkpoints']['db_last_stmt'] = $stmt;
-            $meta['checkpoints']['db_split'] = $split;
-            $meta['checkpoints']['db_split_batches_done'] = $b_done;
-            $meta['checkpoints']['db_split_batches_total'] = $b_total;
-
-            if ( function_exists( 'backup_lite_log' ) && ( $stmt || $split ) ) {
-                backup_lite_log( 'info', 'DB import progress.', [
-                    'job_id'        => $job_id,
-                    'stmt'          => $stmt,
-                    'split'         => $split,
-                    'batches_done'  => $b_done,
-                    'batches_total' => $b_total,
-                ] );
-            }
-        }
-
-        $meta['checkpoints']['db_offset']       = $db_offset;
-        $meta['checkpoints']['db_query_buffer'] = $db_query_buffer;
-        if ( ! empty( $cp['ms_source_prefix'] ) ) {
-            $meta['checkpoints']['ms_source_prefix'] = $cp['ms_source_prefix'];
-        }
-        if ( ! empty( $cp['db_source_prefix'] ) ) {
-            $meta['checkpoints']['db_source_prefix'] = $cp['db_source_prefix'];
-        }
-
-        $size = (int) filesize( $sql_file );
-        $pct  = $size > 0 ? min( 100, (int) floor( ( $db_offset / $size ) * 100 ) ) : 0;
-        $meta['progress']   = 80 + (int) floor( $pct * 0.10 ); // 80-90
-        // Add a short, safe hint to the UI (no SQL content) to reduce the “stuck at 89%” ambiguity.
-        $hint = '';
-        if ( ! empty( $meta['checkpoints']['db_split'] ) ) {
-            $done = isset( $meta['checkpoints']['db_split_batches_done'] ) ? absint( $meta['checkpoints']['db_split_batches_done'] ) : 0;
-            $total = isset( $meta['checkpoints']['db_split_batches_total'] ) ? absint( $meta['checkpoints']['db_split_batches_total'] ) : 0;
-            $hint = ( $total > 0 )
-                ? sprintf( 'INSERT %1$d/%2$d', $done, $total )
-                : 'INSERT';
-        } elseif ( ! empty( $meta['checkpoints']['db_last_stmt'] ) ) {
-            $hint = (string) $meta['checkpoints']['db_last_stmt'];
-        }
-        $meta['message']    = $hint
-            ? sprintf(
-                /* translators: %s: progress hint (e.g. INSERT 3/10) */
-                __( 'Importing database… (%s)', 'museder-restoreone' ),
-                esc_html( $hint )
-            )
-            : __( 'Importing database…', 'museder-restoreone' );
         $meta['updated_at'] = current_time( 'mysql' );
             self::write_job_meta( $job_id, $meta );
 
-        if ( ! empty( $result['completed'] ) ) {
+        return;
+
+        if ( ! empty( $result['success'] ) ) {
             // Guard against "restore success but empty content" caused by prefix mis-detection.
             // If we imported SQL without rewriting to the active prefix, the site will appear blank even though the SQL import ran.
             $verify_prefix = '';
@@ -1207,9 +1205,11 @@ class Backup_Lite_Restore_Service {
         if ( 'wpress' === $engine ) {
             $protect_self = (bool) apply_filters( 'backup_lite_restore_protect_self', true );
             $self_exclude = $protect_self ? [ 'plugins/museder-restoreone', 'wp-content/plugins/museder-restoreone' ] : [];
+            $content_dir  = function_exists( 'backup_lite_get_wp_content_dir' ) ? backup_lite_get_wp_content_dir() : '';
+            $site_root    = '' !== $content_dir ? wp_normalize_path( (string) dirname( $content_dir ) ) : '';
             $phases = [
-                [ 'base' => WP_CONTENT_DIR, 'include' => [ 'uploads', 'plugins', 'themes', 'mu-plugins' ] ],
-                [ 'base' => dirname( WP_CONTENT_DIR ), 'include' => [ 'wp-content' ] ],
+                [ 'base' => $content_dir, 'include' => [ 'uploads', 'plugins', 'themes', 'mu-plugins' ] ],
+                [ 'base' => $site_root, 'include' => [ 'wp-content' ] ],
             ];
 
             $cp = isset( $meta['checkpoints'] ) && is_array( $meta['checkpoints'] ) ? $meta['checkpoints'] : [];
@@ -1288,7 +1288,9 @@ class Backup_Lite_Restore_Service {
                 }
             }
 
-            $result = self::extract_zip_prefix_sliced( $file_path, self::ZIP_WP_CONTENT_PREFIX, dirname( WP_CONTENT_DIR ), $zip_index, $zip_offset, (int) $slice_seconds );
+            $content_dir = function_exists( 'backup_lite_get_wp_content_dir' ) ? backup_lite_get_wp_content_dir() : '';
+            $site_root   = '' !== $content_dir ? wp_normalize_path( (string) dirname( $content_dir ) ) : '';
+            $result = self::extract_zip_prefix_sliced( $file_path, self::ZIP_WP_CONTENT_PREFIX, $site_root, $zip_index, $zip_offset, (int) $slice_seconds );
             $meta['checkpoints']['zip_index']        = $zip_index;
             $meta['checkpoints']['zip_entry_offset'] = $zip_offset;
             if ( is_array( $result ) && isset( $result['skipped_self'] ) ) {
@@ -1497,11 +1499,92 @@ class Backup_Lite_Restore_Service {
     }
 
     /**
+     * Create a rewritten copy of an SQL dump for MySQL CLI import when table prefixes differ.
+     *
+     * We only rewrite backticked identifiers (e.g. `wp_options`) to avoid touching data values.
+     * This preserves the existing prefix-rewrite behavior that previously happened during PHP-sliced import.
+     *
+     * @param string $job_id
+     * @param string $sql_file Absolute SQL file path.
+     * @param string $rewrite_from_prefix Source prefix (e.g. "qvj4_").
+     * @param string $rewrite_to_prefix   Target prefix (e.g. "wp_").
+     *
+     * @return array{path:string,temporary:bool}
+     */
+    protected static function rewrite_sql_prefix_file_for_cli( $job_id, $sql_file, $rewrite_from_prefix, $rewrite_to_prefix ) {
+        $sql_file = (string) $sql_file;
+        $rewrite_from_prefix = (string) $rewrite_from_prefix;
+        $rewrite_to_prefix   = (string) $rewrite_to_prefix;
+
+        if ( '' === $sql_file || ! file_exists( $sql_file ) || ! is_readable( $sql_file ) ) {
+            return [ 'path' => $sql_file, 'temporary' => false ];
+        }
+        if ( '' === $rewrite_from_prefix || '' === $rewrite_to_prefix || $rewrite_from_prefix === $rewrite_to_prefix ) {
+            return [ 'path' => $sql_file, 'temporary' => false ];
+        }
+
+        $out = $sql_file . '.rewrite.sql';
+
+        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen
+        $in_fh  = fopen( $sql_file, 'rb' );
+        $out_fh = fopen( $out, 'wb' );
+        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen
+
+        if ( ! $in_fh || ! $out_fh ) {
+            // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+            if ( $in_fh ) {
+                fclose( $in_fh );
+            }
+            if ( $out_fh ) {
+                fclose( $out_fh );
+            }
+            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+            return [ 'path' => $sql_file, 'temporary' => false ];
+        }
+
+        $needle = '`' . $rewrite_from_prefix;
+        $repl   = '`' . $rewrite_to_prefix;
+        $rewritten_lines = 0;
+
+        try {
+            // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_read_fgets
+            while ( false !== ( $line = fgets( $in_fh ) ) ) {
+                if ( false !== strpos( $line, $needle ) ) {
+                    $line = str_replace( $needle, $repl, $line );
+                    $rewritten_lines++;
+                }
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite
+                fwrite( $out_fh, $line );
+            }
+            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_read_fgets
+        } finally {
+            // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+            fclose( $in_fh );
+            fclose( $out_fh );
+            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+        }
+
+        if ( function_exists( 'backup_lite_log' ) ) {
+            backup_lite_log( 'info', 'Prepared SQL file for MySQL CLI import with prefix rewrite.', [
+                'job_id'    => (string) $job_id,
+                'from'      => $rewrite_from_prefix,
+                'to'        => $rewrite_to_prefix,
+                'rewritten' => (int) $rewritten_lines,
+                'file'      => basename( $out ),
+            ] );
+        }
+
+        return [ 'path' => $out, 'temporary' => true ];
+    }
+
+    /**
      * If a ZIP restore produced wp-content/uploads/sites/{id}/..., move it to wp-content/uploads/.
      * This is a helper for multisite subsite->single restores.
      */
     protected static function flatten_multisite_uploads_if_present() {
-        $sites_dir = wp_normalize_path( trailingslashit( WP_CONTENT_DIR ) . 'uploads/sites' );
+        $uploads  = wp_upload_dir();
+        $basedir  = isset( $uploads['basedir'] ) ? wp_normalize_path( (string) $uploads['basedir'] ) : '';
+        $sites_dir = '' !== $basedir ? wp_normalize_path( trailingslashit( $basedir ) . 'sites' ) : '';
         if ( ! is_dir( $sites_dir ) ) {
             return;
         }
@@ -1513,7 +1596,10 @@ class Backup_Lite_Restore_Service {
 
         // Pick the first sites/{id} directory found.
         $source = wp_normalize_path( $entries[0] );
-        $dest   = wp_normalize_path( trailingslashit( WP_CONTENT_DIR ) . 'uploads' );
+        $dest   = '' !== $basedir ? wp_normalize_path( $basedir ) : '';
+        if ( '' === $dest ) {
+            return;
+        }
         if ( ! is_dir( $dest ) ) {
             wp_mkdir_p( $dest );
         }
@@ -1541,7 +1627,9 @@ class Backup_Lite_Restore_Service {
             return;
         }
 
-        $sites_dir = wp_normalize_path( trailingslashit( WP_CONTENT_DIR ) . 'uploads/sites' );
+        $uploads  = wp_upload_dir();
+        $basedir  = isset( $uploads['basedir'] ) ? wp_normalize_path( (string) $uploads['basedir'] ) : '';
+        $sites_dir = '' !== $basedir ? wp_normalize_path( trailingslashit( $basedir ) . 'sites' ) : '';
         if ( ! is_dir( $sites_dir ) ) {
             return;
         }
@@ -1952,15 +2040,12 @@ class Backup_Lite_Restore_Service {
     }
 
     protected static function extract_zip_entry_to_path( $zip_path, $entry_name, $dest_path ) {
-        if ( ! class_exists( 'ZipArchive' ) ) {
-            throw new RuntimeException( esc_html__( 'ZipArchive is not available on this server.', 'museder-restoreone' ) );
-        }
-
+        // Prefer ZipArchive streaming extraction when available; fall back to bundled PclZip on hosts
+        // where ZipArchive cannot open large ZIPs (observed as ZipArchive::open error 19).
+        if ( class_exists( 'ZipArchive' ) ) {
         $zip = new ZipArchive();
-        if ( true !== $zip->open( $zip_path ) ) {
-            throw new RuntimeException( esc_html__( 'Unable to open ZIP archive.', 'museder-restoreone' ) );
-        }
-
+            $open_result = $zip->open( $zip_path );
+            if ( true === $open_result ) {
         $stream = $zip->getStream( $entry_name );
         if ( ! $stream ) {
             $zip->close();
@@ -1983,6 +2068,46 @@ class Backup_Lite_Restore_Service {
         }
         fclose( $stream ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Stream from ZipArchive.
         $zip->close();
+                return;
+            }
+        }
+
+        // Fallback: PclZip extraction by name, stripping directory prefixes.
+        if ( function_exists( 'backup_lite_require_pclzip' ) ) {
+            backup_lite_require_pclzip();
+        }
+        if ( ! class_exists( 'PclZip' ) ) {
+            throw new RuntimeException( esc_html__( 'ZIP extraction is not available on this server.', 'museder-restoreone' ) );
+        }
+
+        backup_lite_ensure_directory( dirname( $dest_path ) );
+        $pcl = new PclZip( $zip_path );
+        $remove_path = dirname( (string) $entry_name );
+        if ( '.' === $remove_path ) {
+            $remove_path = '';
+        }
+
+        // PclZip extracts to a directory; use REMOVE_PATH so subdir entries land as basename.
+        $result = $pcl->extract(
+            PCLZIP_OPT_BY_NAME,
+            (string) $entry_name,
+            PCLZIP_OPT_PATH,
+            dirname( $dest_path ),
+            ( '' !== $remove_path ? PCLZIP_OPT_REMOVE_PATH : PCLZIP_OPT_REMOVE_ALL_PATH ),
+            ( '' !== $remove_path ? $remove_path : true )
+        );
+
+        if ( ! is_array( $result ) || empty( $result ) ) {
+            return;
+        }
+
+        // Ensure extracted file ends up at dest_path; if PclZip wrote to a different name, normalize it.
+        $expected = basename( (string) $dest_path );
+        $candidate = trailingslashit( dirname( $dest_path ) ) . $expected;
+        if ( $candidate !== $dest_path && file_exists( $candidate ) && ! file_exists( $dest_path ) ) {
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- plugin-controlled temp paths
+            @rename( $candidate, $dest_path );
+        }
     }
 
     protected static function extract_zip_prefix_sliced( $zip_path, $prefix, $dest_base, &$entry_index, &$entry_offset, $slice_seconds ) {
@@ -2783,8 +2908,8 @@ class Backup_Lite_Restore_Service {
         }
 
         // Fallback to PclZip
-        if ( ! class_exists( 'PclZip' ) ) {
-            require_once ABSPATH . 'wp-admin/includes/class-pclzip.php';
+        if ( function_exists( 'backup_lite_require_pclzip' ) ) {
+            backup_lite_require_pclzip();
         }
 
         $pcl = new PclZip( $archive_path );
@@ -2825,26 +2950,26 @@ class Backup_Lite_Restore_Service {
     }
 
     protected static function import_database_from_extract( $extract_dir, array $meta ) {
-        $sql_file = self::locate_sql_file( $extract_dir );
-        if ( ! $sql_file ) {
+        $db_file = self::locate_sql_file( $extract_dir );
+        if ( ! $db_file ) {
             return;
         }
 
-        $result = Backup_Lite_Restore::import_database( $sql_file );
+        $result = Backup_Lite_Restore::import_database( $db_file );
         if ( empty( $result['success'] ) ) {
             throw new RuntimeException( esc_html__( 'Database import failed.', 'museder-restoreone' ) );
         }
     }
 
     protected static function locate_sql_file( $extract_dir ) {
-        $sql_path = trailingslashit( $extract_dir ) . 'database.sql';
-        if ( file_exists( $sql_path ) ) {
-            return $sql_path;
+        $db_path = trailingslashit( $extract_dir ) . 'database.ndjson';
+        if ( file_exists( $db_path ) ) {
+            return $db_path;
         }
 
         $iterator = new RecursiveIteratorIterator( new RecursiveDirectoryIterator( $extract_dir, FilesystemIterator::SKIP_DOTS ) );
         foreach ( $iterator as $file ) {
-            if ( strtolower( $file->getFilename() ) === 'database.sql' ) {
+            if ( strtolower( $file->getFilename() ) === 'database.ndjson' ) {
                 return $file->getPathname();
             }
         }
@@ -2858,7 +2983,11 @@ class Backup_Lite_Restore_Service {
             return;
         }
 
-        self::recursive_copy( $content_dir, WP_CONTENT_DIR );
+        $dest_content_dir = function_exists( 'backup_lite_get_wp_content_dir' ) ? backup_lite_get_wp_content_dir() : '';
+        if ( '' === $dest_content_dir ) {
+            return;
+        }
+        self::recursive_copy( $content_dir, $dest_content_dir );
     }
 
     protected static function recursive_copy( $source, $destination ) {
@@ -3319,6 +3448,19 @@ class Backup_Lite_Restore_Service {
         backup_lite_log( 'info', 'Restore completed. Plugin activation status was not modified automatically.', [
             'active_plugins_count' => count( $active_plugins ),
         ] );
+    }
+
+    /**
+     * Legacy hook: restore plugin activation status.
+     *
+     * IMPORTANT: Per WordPress.org policy, we do not change activation state of other plugins automatically.
+     * We keep this method as a no-op/safe recorder so the cleanup pipeline doesn't fatal.
+     *
+     * @return void
+     */
+    protected static function restore_plugin_status() {
+        // Record the restored plugin list for admin visibility (no activation changes).
+        self::record_restored_plugin_list();
     }
 
     protected static function restore_from_snapshot( array $snapshot ) {
