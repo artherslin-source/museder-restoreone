@@ -2,7 +2,7 @@
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-class Backup_Lite_Restore {
+class Museder_Restoreone_Restore {
 
     private static $pclzip_destination = '';
     private static $last_mysql_cli_output = '';
@@ -18,10 +18,10 @@ class Backup_Lite_Restore {
      */
     public static function restore_site( $archive_file, $options = [], $progress_cb = null ) {
         // Resolve archive path from filename or path
-        $archive_path = backup_lite_get_backup_path( $archive_file );
+        $archive_path = museder_restoreone_get_backup_path( $archive_file );
         
         if ( ! $archive_path ) {
-            backup_lite_log( 'Restore failed: archive path could not be resolved.', array( 'archive_file' => $archive_file ) );
+            museder_restoreone_log( 'Restore failed: archive path could not be resolved.', array( 'archive_file' => $archive_file ) );
             
             return array(
                 'success' => false,
@@ -31,7 +31,7 @@ class Backup_Lite_Restore {
         }
         
         if ( ! file_exists( $archive_path ) || ! is_readable( $archive_path ) ) {
-            backup_lite_log( 'Restore failed: archive not readable.', array( 'archive_path' => $archive_path ) );
+            museder_restoreone_log( 'Restore failed: archive not readable.', array( 'archive_path' => $archive_path ) );
             
             return array(
                 'success' => false,
@@ -48,7 +48,7 @@ class Backup_Lite_Restore {
             'message' => __( 'Restore failed.', 'museder-restoreone' ),
         ];
 
-        $log = backup_lite_log( 'info', 'Site restore started.', [
+        $log = museder_restoreone_log( 'info', 'Site restore started.', [
             'archive' => $archive_file,
             'method'  => 'auto',
         ] );
@@ -57,7 +57,7 @@ class Backup_Lite_Restore {
             call_user_func( $progress_cb, 5, __( 'Preparing restore environment…', 'museder-restoreone' ) );
         }
 
-        $temp_dir = backup_lite_create_temp_dir( 'restore' );
+        $temp_dir = museder_restoreone_create_temp_dir( 'restore' );
 
         if ( is_callable( $progress_cb ) ) {
             call_user_func( $progress_cb, 15, __( 'Extracting backup archive…', 'museder-restoreone' ) );
@@ -82,7 +82,7 @@ class Backup_Lite_Restore {
                 }
             }
             
-            backup_lite_log( 'warning', 'extract_archive_exception', [
+            museder_restoreone_log( 'warning', 'extract_archive_exception', [
                 'archive' => $archive_file,
                 'exception' => $extract_exception->getMessage(),
                 'extracted_files' => $extracted_count,
@@ -91,17 +91,17 @@ class Backup_Lite_Restore {
             // If files were extracted, continue with restore
             // PclZip may throw exceptions even when extraction succeeds
             if ( $extracted_count > 0 ) {
-                backup_lite_log( 'info', 'Extraction completed despite exception, continuing with restore.', [
+                museder_restoreone_log( 'info', 'Extraction completed despite exception, continuing with restore.', [
                     'extracted_files' => $extracted_count,
                 ] );
                 $extract_result = [ 'success' => true, 'had_exception' => true ];
             } else {
                 // No files extracted, return failure
-                backup_lite_log( 'error', 'Extraction failed with exception and no files extracted.', [
+                museder_restoreone_log( 'error', 'Extraction failed with exception and no files extracted.', [
                     'archive' => $archive_file,
                     'exception' => $extract_exception->getMessage(),
                 ] );
-                backup_lite_delete_directory( $temp_dir );
+                museder_restoreone_delete_directory( $temp_dir );
                 return [
                     'success' => false,
                     'message' => __( 'Unable to extract backup archive. Check logs for details.', 'museder-restoreone' ),
@@ -122,13 +122,13 @@ class Backup_Lite_Restore {
                 $error_message = __( 'This build does not support .wpress backups. Please convert the backup to ZIP format first.', 'museder-restoreone' );
             }
             
-            backup_lite_log( 'error', 'Failed to extract archive for restore.', [
+            museder_restoreone_log( 'error', 'Failed to extract archive for restore.', [
                 'archive'        => $archive_file,
                 'zip_error_code' => isset( $extract_result['zip_error_code'] ) ? $extract_result['zip_error_code'] : null,
                 'error_code'     => $error_code,
                 'extension'      => $ext,
             ] );
-            backup_lite_delete_directory( $temp_dir );
+            museder_restoreone_delete_directory( $temp_dir );
 
             return [
                 'success' => false,
@@ -145,8 +145,8 @@ class Backup_Lite_Restore {
 
         $sql_path = self::locate_database_dump( $temp_dir );
         if ( ! $sql_path ) {
-            backup_lite_log( 'error', 'database file missing in archive.', [ 'archive' => $archive_file ] );
-            backup_lite_delete_directory( $temp_dir );
+            museder_restoreone_log( 'error', 'database file missing in archive.', [ 'archive' => $archive_file ] );
+            museder_restoreone_delete_directory( $temp_dir );
 
             return [
                 'success' => false,
@@ -162,15 +162,15 @@ class Backup_Lite_Restore {
 
         $db_result = self::import_database( $sql_path, $progress_cb );
         if ( empty( $db_result['success'] ) ) {
-            backup_lite_delete_directory( $temp_dir );
+            museder_restoreone_delete_directory( $temp_dir );
             return $db_result;
         }
 
         // Store active_plugins from database file for later restoration
         if ( ! empty( $db_result['active_plugins'] ) && is_array( $db_result['active_plugins'] ) ) {
             // Store in a temporary option that will be used after restore
-            update_option( 'backup_lite_restored_active_plugins', $db_result['active_plugins'], false );
-            backup_lite_log( 'info', 'Stored active_plugins from backup for restoration.', [
+            update_option( 'museder_restoreone_restored_active_plugins', $db_result['active_plugins'], false );
+            museder_restoreone_log( 'info', 'Stored active_plugins from backup for restoration.', [
                 'count' => count( $db_result['active_plugins'] ),
             ] );
         }
@@ -181,7 +181,7 @@ class Backup_Lite_Restore {
 
         $files_result = self::restore_files_from_extract( $temp_dir );
         if ( empty( $files_result['success'] ) ) {
-            backup_lite_delete_directory( $temp_dir );
+            museder_restoreone_delete_directory( $temp_dir );
             return $files_result;
         }
 
@@ -196,9 +196,9 @@ class Backup_Lite_Restore {
             call_user_func( $progress_cb, 90, __( 'Cleaning up temporary files…', 'museder-restoreone' ) );
         }
 
-        backup_lite_delete_directory( $temp_dir );
+        museder_restoreone_delete_directory( $temp_dir );
 
-        backup_lite_log( 'info', 'Site restore completed.', [ 'archive' => $archive_file ] );
+        museder_restoreone_log( 'info', 'Site restore completed.', [ 'archive' => $archive_file ] );
 
         return [
             'success' => true,
@@ -220,7 +220,7 @@ class Backup_Lite_Restore {
         ];
 
         if ( ! file_exists( $sql_file ) || ! is_readable( $sql_file ) ) {
-            $log               = backup_lite_log( 'error', 'Database file not readable for restore.', [ 'path' => $sql_file ] );
+            $log               = museder_restoreone_log( 'error', 'Database file not readable for restore.', [ 'path' => $sql_file ] );
             $result['message'] = __( 'Database backup file not found or unreadable.', 'museder-restoreone' );
             $result['log']     = $log;
             $result['code']    = 'db_file_missing';
@@ -239,7 +239,7 @@ class Backup_Lite_Restore {
 
         // Legacy SQL backups are manual-only in this build.
         if ( 'sql' === $ext ) {
-            $log = backup_lite_log( 'info', 'Database restore requires manual import (SQL).', [ 'path' => $sql_file ] );
+            $log = museder_restoreone_log( 'info', 'Database restore requires manual import (SQL).', [ 'path' => $sql_file ] );
         if ( is_callable( $progress_cb ) ) {
                 call_user_func( $progress_cb, 50, __( 'Manual database import is required for SQL backups.', 'museder-restoreone' ) );
             }
@@ -249,7 +249,7 @@ class Backup_Lite_Restore {
                 return $result;
         }
 
-        $log               = backup_lite_log( 'error', 'Unsupported database backup format.', [ 'path' => $sql_file ] );
+        $log               = museder_restoreone_log( 'error', 'Unsupported database backup format.', [ 'path' => $sql_file ] );
         $result['message'] = __( 'Unsupported database backup format.', 'museder-restoreone' );
         $result['log']     = $log;
         $result['code']    = 'db_format_unsupported';
@@ -281,7 +281,7 @@ class Backup_Lite_Restore {
         if ( '' === $path || ! file_exists( $path ) || ! is_readable( $path ) ) {
             $result['code']    = 'db_file_missing';
             $result['message'] = __( 'Database backup file not found or unreadable.', 'museder-restoreone' );
-            $result['log']     = backup_lite_log( 'error', 'NDJSON DB file not readable.', [ 'path' => $path ] );
+            $result['log']     = museder_restoreone_log( 'error', 'NDJSON DB file not readable.', [ 'path' => $path ] );
             return $result;
         }
 
@@ -290,7 +290,7 @@ class Backup_Lite_Restore {
         if ( ! $handle ) {
             $result['code']    = 'db_file_open_failed';
             $result['message'] = __( 'Unable to open database backup file.', 'museder-restoreone' );
-            $result['log']     = backup_lite_log( 'error', 'NDJSON DB file open failed.', [ 'path' => $path ] );
+            $result['log']     = museder_restoreone_log( 'error', 'NDJSON DB file open failed.', [ 'path' => $path ] );
             return $result;
         }
 
@@ -401,7 +401,10 @@ class Backup_Lite_Restore {
                         continue;
                     }
 
+                    // Restore: write rows into the target table (direct DB required for bulk import; no caching applicable).
+                    // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
                     $wpdb->replace( $table, $row );
+                    // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
                     $rows_imported++;
 
                     // Capture active_plugins for later restoration (best-effort).
@@ -432,11 +435,11 @@ class Backup_Lite_Restore {
             if ( 'db_format_invalid' === $e->getMessage() ) {
                 $result['code']    = 'db_format_invalid';
                 $result['message'] = __( 'Database backup file is not valid NDJSON. Please re-create the backup with the updated plugin.', 'museder-restoreone' );
-                $result['log']     = backup_lite_log( 'error', 'NDJSON DB format invalid (first line not JSON).', [ 'line' => $line_num, 'path' => $path ] );
+                $result['log']     = museder_restoreone_log( 'error', 'NDJSON DB format invalid (first line not JSON).', [ 'line' => $line_num, 'path' => $path ] );
                 return $result;
             }
             $result['message'] = __( 'Database restore encountered an error. Check logs.', 'museder-restoreone' );
-            $result['log']     = backup_lite_log( 'error', 'NDJSON DB import failed.', [ 'line' => $line_num, 'error' => $e->getMessage() ] );
+            $result['log']     = museder_restoreone_log( 'error', 'NDJSON DB import failed.', [ 'line' => $line_num, 'error' => $e->getMessage() ] );
             // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fgets, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
             return $result;
         }
@@ -448,7 +451,7 @@ class Backup_Lite_Restore {
         if ( $decoded_lines <= 0 || $schemas_imported <= 0 ) {
             $result['code']    = 'db_format_invalid';
             $result['message'] = __( 'Database backup file is invalid or incomplete. Please re-create the backup with the updated plugin.', 'museder-restoreone' );
-            $result['log']     = backup_lite_log( 'error', 'NDJSON DB import produced no schema/data.', [
+            $result['log']     = museder_restoreone_log( 'error', 'NDJSON DB import produced no schema/data.', [
                 'decoded_lines' => $decoded_lines,
                 'schemas'       => $schemas_imported,
                 'rows'          => $rows_imported,
@@ -838,13 +841,13 @@ class Backup_Lite_Restore {
             // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 
             $state['applied'] = true;
-            if ( function_exists( 'backup_lite_log' ) ) {
-                backup_lite_log( 'info', 'DB import session tuning applied.', [ 'fk' => 0, 'uq' => 0, 'names' => 'utf8mb4' ] );
+            if ( function_exists( 'museder_restoreone_log' ) ) {
+                museder_restoreone_log( 'info', 'DB import session tuning applied.', [ 'fk' => 0, 'uq' => 0, 'names' => 'utf8mb4' ] );
             }
         } catch ( Exception $e ) {
-            if ( function_exists( 'backup_lite_log' ) ) {
+            if ( function_exists( 'museder_restoreone_log' ) ) {
                 // @plugin-check: sanitized - log only
-                backup_lite_log( 'warning', 'DB import session tuning apply failed; continuing without tuning.', [
+                museder_restoreone_log( 'warning', 'DB import session tuning apply failed; continuing without tuning.', [
                     'error' => sanitize_text_field( $e->getMessage() ),
                 ] );
             }
@@ -893,17 +896,17 @@ class Backup_Lite_Restore {
             }
             // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 
-            if ( function_exists( 'backup_lite_log' ) ) {
-                backup_lite_log( 'info', 'DB import session tuning restored.', [
+            if ( function_exists( 'museder_restoreone_log' ) ) {
+                museder_restoreone_log( 'info', 'DB import session tuning restored.', [
                     'fk' => $state['orig_fk'],
                     'uq' => $state['orig_uq'],
                     'names' => $charset ? $charset : null,
                 ] );
             }
         } catch ( Exception $e ) {
-            if ( function_exists( 'backup_lite_log' ) ) {
+            if ( function_exists( 'museder_restoreone_log' ) ) {
                 // @plugin-check: sanitized - log only
-                backup_lite_log( 'warning', 'DB import session tuning restore failed (ignored).', [
+                museder_restoreone_log( 'warning', 'DB import session tuning restore failed (ignored).', [
                     'error' => sanitize_text_field( $e->getMessage() ),
                 ] );
             }
@@ -946,7 +949,7 @@ class Backup_Lite_Restore {
         global $wpdb;
         $prefix = isset( $wpdb->prefix ) ? (string) $wpdb->prefix : '';
         if ( '' === $prefix ) {
-            backup_lite_log( 'warning', 'Detected SERVMASK_PREFIX in SQL but database prefix is unknown. Proceeding without normalization.' );
+            museder_restoreone_log( 'warning', 'Detected SERVMASK_PREFIX in SQL but database prefix is unknown. Proceeding without normalization.' );
             return $default;
         }
 
@@ -964,7 +967,7 @@ class Backup_Lite_Restore {
             if ( $out ) {
                 fclose( $out );
             }
-            backup_lite_log( 'warning', 'Unable to create normalized SQL file for SERVMASK export.', [ 'source' => $sql_file ] );
+            museder_restoreone_log( 'warning', 'Unable to create normalized SQL file for SERVMASK export.', [ 'source' => $sql_file ] );
             return $default;
         }
 
@@ -1017,7 +1020,7 @@ class Backup_Lite_Restore {
         // For large files (1GB+), always do a second pass to ensure 100% replacement
         // This is necessary because even with large overlap, edge cases can occur
         if ( $is_large_file ) {
-            backup_lite_log( 'info', 'Large SQL file detected, performing second normalization pass for safety.', [ 
+            museder_restoreone_log( 'info', 'Large SQL file detected, performing second normalization pass for safety.', [ 
                 'file' => basename( $normalized ),
                 'size' => round( $file_size / 1073741824, 2 ) . 'GB'
             ] );
@@ -1086,7 +1089,7 @@ class Backup_Lite_Restore {
                 }
                 // @phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
                 
-                backup_lite_log( 'info', 'Second normalization pass completed for large file.', [ 'file' => basename( $normalized ) ] );
+                museder_restoreone_log( 'info', 'Second normalization pass completed for large file.', [ 'file' => basename( $normalized ) ] );
             }
         } else {
             // For smaller files, verify and do second pass only if needed
@@ -1096,7 +1099,7 @@ class Backup_Lite_Restore {
                 // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
                 $verify_content = file_get_contents( $normalized );
                 if ( false !== $verify_content && false !== strpos( $verify_content, $placeholder ) ) {
-                    backup_lite_log( 'warning', 'SERVMASK placeholder still found after first pass, running second normalization pass.', [ 'file' => basename( $normalized ) ] );
+                    museder_restoreone_log( 'warning', 'SERVMASK placeholder still found after first pass, running second normalization pass.', [ 'file' => basename( $normalized ) ] );
                     
                     $verify_content = str_replace( $placeholder, $prefix, $verify_content );
                     // Using native file APIs on local backup directory; paths are sanitized and constrained.
@@ -1106,7 +1109,7 @@ class Backup_Lite_Restore {
             }
         }
 
-        backup_lite_log(
+        museder_restoreone_log(
             'info',
             'Normalized SERVMASK SQL prefix.',
             [
@@ -1164,7 +1167,7 @@ class Backup_Lite_Restore {
         }
 
         if ( ! empty( $dropped ) ) {
-            backup_lite_log(
+            museder_restoreone_log(
                 'info',
                 'Removed SERVMASK placeholder tables before restore.',
                 [
@@ -1179,7 +1182,7 @@ class Backup_Lite_Restore {
         $wp_content_source = self::find_directory_by_name( $extract_dir, 'wp-content' );
 
         if ( $wp_content_source && is_dir( $wp_content_source ) ) {
-            $content_dir = function_exists( 'backup_lite_get_wp_content_dir' ) ? backup_lite_get_wp_content_dir() : '';
+            $content_dir = function_exists( 'museder_restoreone_get_wp_content_dir' ) ? museder_restoreone_get_wp_content_dir() : '';
             if ( '' !== $content_dir ) {
                 $targets[] = [ $wp_content_source, $content_dir ];
             }
@@ -1187,9 +1190,9 @@ class Backup_Lite_Restore {
             $upload_dir = wp_upload_dir();
             $uploads_basedir = isset( $upload_dir['basedir'] ) ? (string) $upload_dir['basedir'] : '';
             $uploads_basedir = $uploads_basedir ? wp_normalize_path( $uploads_basedir ) : '';
-            $plugins_dir  = function_exists( 'backup_lite_get_plugins_dir' ) ? backup_lite_get_plugins_dir() : '';
+            $plugins_dir  = function_exists( 'museder_restoreone_get_plugins_dir' ) ? museder_restoreone_get_plugins_dir() : '';
             $themes_dir   = function_exists( 'get_theme_root' ) ? wp_normalize_path( (string) get_theme_root() ) : '';
-            $mu_plugins_dir = function_exists( 'backup_lite_get_mu_plugins_dir' ) ? backup_lite_get_mu_plugins_dir() : '';
+            $mu_plugins_dir = function_exists( 'museder_restoreone_get_mu_plugins_dir' ) ? museder_restoreone_get_mu_plugins_dir() : '';
             $fallbacks = [
                 'themes'     => $themes_dir,
                 'plugins'    => $plugins_dir,
@@ -1209,7 +1212,7 @@ class Backup_Lite_Restore {
         }
 
         if ( empty( $targets ) ) {
-            backup_lite_log( 'warning', 'No wp-content data found in archive.', [
+            museder_restoreone_log( 'warning', 'No wp-content data found in archive.', [
                 'extract_dir' => wp_normalize_path( $extract_dir ),
                 'top_level'   => self::summarize_extract_contents( $extract_dir ),
             ] );
@@ -1222,7 +1225,7 @@ class Backup_Lite_Restore {
         foreach ( $targets as $pair ) {
             list( $source, $destination ) = $pair;
             if ( ! self::copy_directory( $source, $destination ) ) {
-                $log = backup_lite_log( 'error', 'Failed to copy files during restore.', [
+                $log = museder_restoreone_log( 'error', 'Failed to copy files during restore.', [
                     'source' => $source,
                     'destination' => $destination,
                 ] );
@@ -1235,7 +1238,7 @@ class Backup_Lite_Restore {
             }
         }
 
-        backup_lite_log( 'info', 'File restore completed.' );
+        museder_restoreone_log( 'info', 'File restore completed.' );
 
         return [
             'success' => true,
@@ -1249,14 +1252,14 @@ class Backup_Lite_Restore {
         // WP.org submission build: .wpress is not supported.
         $ext = strtolower( pathinfo( $archive, PATHINFO_EXTENSION ) );
         if ( 'wpress' === $ext ) {
-            backup_lite_log( 'warning', 'wpress_not_supported', [ 'archive' => basename( $archive ) ] );
+            museder_restoreone_log( 'warning', 'wpress_not_supported', [ 'archive' => basename( $archive ) ] );
                 return [
                 'success' => false,
                 'code'    => 'wpress_not_supported',
             ];
         }
 
-        if ( backup_lite_can_use_ziparchive() ) {
+        if ( museder_restoreone_can_use_ziparchive() ) {
             $zip_result = self::extract_with_ziparchive( $archive, $destination );
             if ( ! empty( $zip_result['success'] ) ) {
                 return [
@@ -1289,7 +1292,7 @@ class Backup_Lite_Restore {
         // If all methods failed, return error
         $error_message = 'Both ZipArchive and PclZip extraction failed';
         
-        backup_lite_log( 'error', $error_message, [
+        museder_restoreone_log( 'error', $error_message, [
             'archive'    => $archive,
             'zip_error_code' => $zip_error_code,
             'pclzip_error' => isset( $pcl_result['error'] ) ? $pcl_result['error'] : '',
@@ -1308,7 +1311,7 @@ class Backup_Lite_Restore {
         $ok_code     = defined( 'ZipArchive::ER_OK' ) ? ZipArchive::ER_OK : 0;
 
         if ( true !== $open_result && $ok_code !== $open_result ) {
-            backup_lite_log( 'error', 'zip_open_failed', [
+            museder_restoreone_log( 'error', 'zip_open_failed', [
                 'archive'    => $archive,
                 'error'      => $zip->getStatusString(),
                 'error_code' => $open_result,
@@ -1325,29 +1328,29 @@ class Backup_Lite_Restore {
             $target = false;
 
             if ( self::is_suspicious_zip_entry( $entry ) ) {
-                backup_lite_log( 'warning', 'zip_entry_skipped', [ 'entry' => $entry, 'reason' => 'suspicious_path' ] );
+                museder_restoreone_log( 'warning', 'zip_entry_skipped', [ 'entry' => $entry, 'reason' => 'suspicious_path' ] );
                 $skipped++;
                 continue;
             }
 
-            $target = backup_lite_safe_path_join( $destination, $entry );
+            $target = museder_restoreone_safe_path_join( $destination, $entry );
 
             if ( ! $target ) {
-                backup_lite_log( 'warning', 'zip_entry_skipped', [ 'entry' => $entry, 'reason' => 'unsafe_join' ] );
+                museder_restoreone_log( 'warning', 'zip_entry_skipped', [ 'entry' => $entry, 'reason' => 'unsafe_join' ] );
                 $skipped++;
                 continue;
             }
 
             if ( substr( $entry, -1 ) === '/' ) {
-                backup_lite_ensure_directory( $target );
+                museder_restoreone_ensure_directory( $target );
                 continue;
             }
 
-            backup_lite_ensure_directory( dirname( $target ) );
+            museder_restoreone_ensure_directory( dirname( $target ) );
 
             $input = $zip->getStream( $entry );
             if ( ! $input ) {
-                backup_lite_log( 'error', 'Unable to read entry during extraction.', [ 'entry' => $entry ] );
+                museder_restoreone_log( 'error', 'Unable to read entry during extraction.', [ 'entry' => $entry ] );
                 $error_code = 'entry_stream_unreadable';
                 break;
             }
@@ -1357,7 +1360,7 @@ class Backup_Lite_Restore {
             // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
             $output = fopen( $target, 'wb' );
             if ( ! $output ) {
-                backup_lite_log( 'error', 'Unable to write extracted file.', [ 'target' => $target ] );
+                museder_restoreone_log( 'error', 'Unable to write extracted file.', [ 'target' => $target ] );
                 fclose( $input );
                 $error_code = 'entry_unwritable';
                 break;
@@ -1367,12 +1370,12 @@ class Backup_Lite_Restore {
                 // Only reads plugin-generated backup files, path is validated and sanitized.
                 $buffer = fread( $input, 1048576 );
                 if ( false === $buffer ) {
-                    backup_lite_log( 'error', 'Error while reading stream during extraction.', [ 'entry' => $entry ] );
+                    museder_restoreone_log( 'error', 'Error while reading stream during extraction.', [ 'entry' => $entry ] );
                     $error_code = 'stream_read_error';
                     break;
                 }
                 if ( false === fwrite( $output, $buffer ) ) {
-                    backup_lite_log( 'error', 'Unable to write buffer during extraction.', [ 'target' => $target ] );
+                    museder_restoreone_log( 'error', 'Unable to write buffer during extraction.', [ 'target' => $target ] );
                     $error_code = 'stream_write_error';
                     break;
                 }
@@ -1390,7 +1393,7 @@ class Backup_Lite_Restore {
         $zip->close();
 
         if ( $skipped > 0 ) {
-            backup_lite_log( 'warning', 'zip_entries_skipped_summary', [ 'count' => $skipped ] );
+            museder_restoreone_log( 'warning', 'zip_entries_skipped_summary', [ 'count' => $skipped ] );
         }
 
         if ( null !== $error_code ) {
@@ -1431,8 +1434,8 @@ class Backup_Lite_Restore {
     }
 
     private static function extract_with_pclzip( $archive, $destination ) {
-        if ( function_exists( 'backup_lite_require_pclzip' ) ) {
-            backup_lite_require_pclzip();
+        if ( function_exists( 'museder_restoreone_require_pclzip' ) ) {
+            museder_restoreone_require_pclzip();
         }
 
         self::$pclzip_destination = wp_normalize_path( $destination );
@@ -1459,7 +1462,7 @@ class Backup_Lite_Restore {
                 $extracted_files = iterator_count( $iterator );
             }
             
-            backup_lite_log( 'warning', 'pclzip_extract_exception', [
+            museder_restoreone_log( 'warning', 'pclzip_extract_exception', [
                 'archive'    => $archive,
                 'exception'   => $e->getMessage(),
                 'extracted_files' => $extracted_files,
@@ -1468,7 +1471,7 @@ class Backup_Lite_Restore {
             // If some files were extracted, consider it partially successful
             // The extraction may have completed despite the exception
             if ( $extracted_files > 0 ) {
-                backup_lite_log( 'info', 'PclZip extraction completed despite exception, continuing with restore.', [
+                museder_restoreone_log( 'info', 'PclZip extraction completed despite exception, continuing with restore.', [
                     'extracted_files' => $extracted_files,
                 ] );
                 // Return success with a note that we had an exception but files were extracted
@@ -1487,7 +1490,7 @@ class Backup_Lite_Restore {
             $error_code = method_exists( $zip, 'errorCode' ) ? $zip->errorCode() : 'pclzip_error';
             $error_info = method_exists( $zip, 'errorInfo' ) ? $zip->errorInfo( true ) : '';
 
-            backup_lite_log( 'error', 'pclzip_extract_failed', [
+            museder_restoreone_log( 'error', 'pclzip_extract_failed', [
                 'archive'    => $archive,
                 'error_code' => $error_code,
                 'error'      => $error_info,
@@ -1522,7 +1525,7 @@ class Backup_Lite_Restore {
                 }
                 
                 if ( self::is_suspicious_zip_entry( $entry_path ) ) {
-                    $target = backup_lite_safe_path_join( self::$pclzip_destination, $entry_path );
+                    $target = museder_restoreone_safe_path_join( self::$pclzip_destination, $entry_path );
                     if ( $target && file_exists( $target ) ) {
                         // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
                         // $target is from plugin-controlled extract directory
@@ -1537,14 +1540,14 @@ class Backup_Lite_Restore {
                         }
                         // @phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
                         $removed_count++;
-                        backup_lite_log( 'warning', 'zip_entry_removed_after_extraction', [
+                        museder_restoreone_log( 'warning', 'zip_entry_removed_after_extraction', [
                             'entry' => $entry_path,
                             'reason' => 'suspicious_path',
                         ] );
                     }
                 } else {
                     // Also check for unsafe path joins
-                    $target = backup_lite_safe_path_join( self::$pclzip_destination, $entry_path );
+                    $target = museder_restoreone_safe_path_join( self::$pclzip_destination, $entry_path );
                     if ( ! $target && isset( $entry['filename'] ) && is_string( $entry['filename'] ) ) {
                         $full_path = trailingslashit( self::$pclzip_destination ) . $entry['filename'];
                         if ( file_exists( $full_path ) ) {
@@ -1561,7 +1564,7 @@ class Backup_Lite_Restore {
                             }
                             // @phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
                             $removed_count++;
-                            backup_lite_log( 'warning', 'zip_entry_removed_after_extraction', [
+                            museder_restoreone_log( 'warning', 'zip_entry_removed_after_extraction', [
                                 'entry' => $entry_path,
                                 'reason' => 'unsafe_join',
                             ] );
@@ -1570,7 +1573,7 @@ class Backup_Lite_Restore {
                 }
             }
             if ( $removed_count > 0 ) {
-                backup_lite_log( 'info', 'zip_entries_filtered_after_extraction', [ 'count' => $removed_count ] );
+                museder_restoreone_log( 'info', 'zip_entries_filtered_after_extraction', [ 'count' => $removed_count ] );
             }
         }
 
@@ -1580,13 +1583,13 @@ class Backup_Lite_Restore {
     public static function pclzip_pre_extract( $event, &$header ) {
          if ( 'check' === $event ) {
             if ( self::is_suspicious_zip_entry( $header['stored_filename'] ) ) {
-                backup_lite_log( 'warning', 'zip_entry_skipped', [ 'entry' => $header['stored_filename'], 'reason' => 'suspicious_path' ] );
+                museder_restoreone_log( 'warning', 'zip_entry_skipped', [ 'entry' => $header['stored_filename'], 'reason' => 'suspicious_path' ] );
                 return 0;
             }
 
-            $target = backup_lite_safe_path_join( self::$pclzip_destination, $header['stored_filename'] );
+            $target = museder_restoreone_safe_path_join( self::$pclzip_destination, $header['stored_filename'] );
             if ( ! $target ) {
-                backup_lite_log( 'warning', 'zip_entry_skipped', [ 'entry' => $header['stored_filename'], 'reason' => 'unsafe_join' ] );
+                museder_restoreone_log( 'warning', 'zip_entry_skipped', [ 'entry' => $header['stored_filename'], 'reason' => 'unsafe_join' ] );
                 return 0;
             }
          }
@@ -1625,7 +1628,7 @@ class Backup_Lite_Restore {
         $destination = rtrim( wp_normalize_path( $destination ), '/' );
 
         if ( ! is_dir( $source ) ) {
-            backup_lite_log( 'error', 'copy_directory_source_not_dir', [
+            museder_restoreone_log( 'error', 'copy_directory_source_not_dir', [
                 'source' => $source,
                 'destination' => $destination,
             ] );
@@ -1633,7 +1636,7 @@ class Backup_Lite_Restore {
         }
 
         if ( ! is_readable( $source ) ) {
-            backup_lite_log( 'error', 'copy_directory_source_not_readable', [
+            museder_restoreone_log( 'error', 'copy_directory_source_not_readable', [
                 'source' => $source,
                 'destination' => $destination,
             ] );
@@ -1641,8 +1644,8 @@ class Backup_Lite_Restore {
         }
 
         if ( ! file_exists( $destination ) ) {
-            if ( ! backup_lite_ensure_directory( $destination ) ) {
-                backup_lite_log( 'error', 'copy_directory_dest_create_failed', [
+            if ( ! museder_restoreone_ensure_directory( $destination ) ) {
+                museder_restoreone_log( 'error', 'copy_directory_dest_create_failed', [
                     'source' => $source,
                     'destination' => $destination,
                 ] );
@@ -1651,7 +1654,7 @@ class Backup_Lite_Restore {
         }
 
         if ( ! wp_is_writable( $destination ) ) {
-            backup_lite_log( 'error', 'copy_directory_dest_not_writable', [
+            museder_restoreone_log( 'error', 'copy_directory_dest_not_writable', [
                 'source' => $source,
                 'destination' => $destination,
                 'dest_perms' => file_exists( $destination ) ? substr( sprintf( '%o', fileperms( $destination ) ), -4 ) : 'N/A',
@@ -1673,7 +1676,7 @@ class Backup_Lite_Restore {
 
             if ( $item->isDir() ) {
                 if ( ! file_exists( $target_path ) ) {
-                    if ( ! backup_lite_ensure_directory( $target_path ) ) {
+                    if ( ! museder_restoreone_ensure_directory( $target_path ) ) {
                         $failed_count++;
                         if ( ! $first_failure ) {
                             $first_failure = [
@@ -1689,7 +1692,7 @@ class Backup_Lite_Restore {
             } else {
                 $dir = dirname( $target_path );
                 if ( ! file_exists( $dir ) ) {
-                    if ( ! backup_lite_ensure_directory( $dir ) ) {
+                    if ( ! museder_restoreone_ensure_directory( $dir ) ) {
                         $failed_count++;
                         if ( ! $first_failure ) {
                             $first_failure = [
@@ -1721,11 +1724,11 @@ class Backup_Lite_Restore {
                         $first_failure = array_merge( [ 'type' => 'file' ], $error_details );
                     }
                     
-                    backup_lite_log( 'error', 'copy_file_failed', $error_details );
+                    museder_restoreone_log( 'error', 'copy_file_failed', $error_details );
                     
                     // If too many files fail, abort to avoid wasting time
                     if ( $failed_count > 10 && $copied_count === 0 ) {
-                        backup_lite_log( 'error', 'copy_directory_aborted_too_many_failures', [
+                        museder_restoreone_log( 'error', 'copy_directory_aborted_too_many_failures', [
                             'source' => $source,
                             'destination' => $destination,
                             'failed_count' => $failed_count,
@@ -1742,7 +1745,7 @@ class Backup_Lite_Restore {
 
         // If we copied some files but had failures, log a warning but continue
         if ( $failed_count > 0 ) {
-            backup_lite_log( 'warning', 'copy_directory_partial_success', [
+            museder_restoreone_log( 'warning', 'copy_directory_partial_success', [
                 'source' => $source,
                 'destination' => $destination,
                 'copied_count' => $copied_count,
@@ -1756,7 +1759,7 @@ class Backup_Lite_Restore {
             }
         }
 
-        backup_lite_log( 'info', 'copy_directory_completed', [
+        museder_restoreone_log( 'info', 'copy_directory_completed', [
             'source' => $source,
             'destination' => $destination,
             'copied_count' => $copied_count,
@@ -2007,12 +2010,12 @@ class Backup_Lite_Restore {
         $plugin_count = count( $active_plugins );
         
         // Store the previous active plugins list so the admin can review it.
-        update_option( 'backup_lite_prev_active_plugins', $active_plugins, false );
+        update_option( 'museder_restoreone_prev_active_plugins', $active_plugins, false );
         
         // Set safe mode flag (note: we do NOT change other plugins' activation status automatically).
-        update_option( 'backup_lite_safe_mode', '1', false );
+        update_option( 'museder_restoreone_safe_mode', '1', false );
 
-        backup_lite_log( 'info', 'Safe mode marker enabled after restore (no automatic plugin activation changes).', [
+        museder_restoreone_log( 'info', 'Safe mode marker enabled after restore (no automatic plugin activation changes).', [
             'previous_plugins_count' => $plugin_count,
         ] );
         
@@ -2026,18 +2029,18 @@ class Backup_Lite_Restore {
      */
     public static function exit_safe_mode() {
         // Check if safe mode is active
-        $safe_mode = get_option( 'backup_lite_safe_mode', '' );
+        $safe_mode = get_option( 'museder_restoreone_safe_mode', '' );
         
         if ( '1' !== $safe_mode ) {
-            backup_lite_log( 'info', 'Safe mode exit called but safe mode is not active.', [] );
+            museder_restoreone_log( 'info', 'Safe mode exit called but safe mode is not active.', [] );
             return false;
         }
 
         // Delete safe mode options (no plugin activation changes are performed here).
-        delete_option( 'backup_lite_safe_mode' );
-        delete_option( 'backup_lite_prev_active_plugins' );
+        delete_option( 'museder_restoreone_safe_mode' );
+        delete_option( 'museder_restoreone_prev_active_plugins' );
         
-        backup_lite_log( 'info', 'Safe mode marker cleared by admin.', [] );
+        museder_restoreone_log( 'info', 'Safe mode marker cleared by admin.', [] );
         
         return true;
     }

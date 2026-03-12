@@ -53,7 +53,13 @@ docker compose exec -T wordpress bash -lc '
     --exclude=./docs \
     --exclude=./dist \
     --exclude=./release \
+    --exclude=./tools \
+    --exclude=./tmp \
+    --exclude=./create-package.sh \
+    --exclude=./docker-compose.yml \
+    --exclude=./VERSION_DEVELOPMENT_HIGHLIGHTS.md \
     --exclude=./.git \
+    --exclude=./.gitignore \
     --exclude=./.cursor \
     -cf - . | tar -C "$dst" -xf -
 '
@@ -68,8 +74,8 @@ docker compose run --rm wpcli theme install /tmp/test-one/museder-blank-theme.zi
 docker compose run --rm wpcli plugin install elementor --activate
 
 # Local premium plugins for test matrix.
-docker compose run --rm wpcli plugin install /tmp/test-one/elementor-pro-3.34.0.zip --activate
-docker compose run --rm wpcli plugin install /tmp/test-one/powerpack-elements-pro_2.12.15.zip --activate
+docker compose run --rm wpcli plugin install /tmp/test-one/elementor-pro-3.34.0.zip --activate || true
+docker compose run --rm wpcli plugin install /tmp/test-one/powerpack-elements-pro_2.12.15.zip --activate || true
 
 # Common ecosystem plugins (from wp.org).
 docker compose run --rm wpcli plugin install woocommerce wordpress-seo contact-form-7 classic-editor wordfence-login-security --activate

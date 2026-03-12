@@ -3,7 +3,7 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-class Backup_Lite_Restore_Report {
+class Museder_Restoreone_Restore_Report {
 
     public static function write_txt( $job_id, $name, array $data ) {
         $path = self::report_path( $job_id, $name, 'txt' );
@@ -21,16 +21,16 @@ class Backup_Lite_Restore_Report {
     public static function download( $job_id, $name, $format ) {
         $path = self::report_path( $job_id, $name, $format );
         if ( ! file_exists( $path ) ) {
-            return new WP_Error( 'backup_lite_missing_report', __( 'Report not found.', 'museder-restoreone' ), [ 'status' => 404 ] );
+            return new WP_Error( 'museder_restoreone_missing_report', __( 'Report not found.', 'museder-restoreone' ), [ 'status' => 404 ] );
         }
 
         return $path;
     }
 
     protected static function report_path( $job_id, $name, $ext ) {
-        $dir = trailingslashit( backup_lite_get_reports_dir() ) . $job_id;
+        $dir = trailingslashit( museder_restoreone_get_reports_dir() ) . $job_id;
         if ( ! file_exists( $dir ) ) {
-            backup_lite_ensure_directory( $dir );
+            museder_restoreone_ensure_directory( $dir );
         }
 
         $sanitized = sanitize_key( $name );

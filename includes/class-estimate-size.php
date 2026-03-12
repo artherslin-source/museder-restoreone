@@ -1,21 +1,21 @@
 <?php
 /**
- * Backup Lite - Estimate Backup Size
+ * Museder RestoreOne - Estimate Backup Size
  * 
  * Provides database and file size estimation for backup planning.
  *
- * @package BackupLite
+ * @package Museder_Restoreone
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-class Backup_Lite_Estimate_Size {
+class Museder_Restoreone_Estimate_Size {
 
-    const JOB_OPTION_KEY = 'backup_lite_scan_filesize_job';
-    const CACHE_SIZE_KEY = 'backup_lite_last_file_scan_size';
-    const CACHE_TIME_KEY = 'backup_lite_last_file_scan_time';
+    const JOB_OPTION_KEY = 'museder_restoreone_scan_filesize_job';
+    const CACHE_SIZE_KEY = 'museder_restoreone_last_file_scan_size';
+    const CACHE_TIME_KEY = 'museder_restoreone_last_file_scan_time';
     const CACHE_TTL = 48 * HOUR_IN_SECONDS; // 48 hours
     const FILES_PER_BATCH = 3000; // Files to scan per batch
     const MAX_EXECUTION_TIME = 1.5; // Maximum seconds per batch
@@ -24,12 +24,12 @@ class Backup_Lite_Estimate_Size {
      * Initialize hooks and AJAX endpoints.
      */
     public static function init() {
-        add_action( 'wp_ajax_backup_lite_estimate_start', [ __CLASS__, 'ajax_start_scan' ] );
-        add_action( 'wp_ajax_backup_lite_estimate_progress', [ __CLASS__, 'ajax_get_progress' ] );
-        add_action( 'wp_ajax_backup_lite_estimate_result', [ __CLASS__, 'ajax_get_result' ] );
+        add_action( 'wp_ajax_museder_restoreone_estimate_start', [ __CLASS__, 'ajax_start_scan' ] );
+        add_action( 'wp_ajax_museder_restoreone_estimate_progress', [ __CLASS__, 'ajax_get_progress' ] );
+        add_action( 'wp_ajax_museder_restoreone_estimate_result', [ __CLASS__, 'ajax_get_result' ] );
         
         // Schedule cron for background processing
-        add_action( 'backup_lite_estimate_scan_cron', [ __CLASS__, 'cron_process_scan' ] );
+        add_action( 'museder_restoreone_estimate_scan_cron', [ __CLASS__, 'cron_process_scan' ] );
     }
 
     /**
@@ -42,7 +42,7 @@ class Backup_Lite_Estimate_Size {
             ], 403 );
         }
 
-        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
+        check_ajax_referer( Museder_Restoreone_UI::NONCE, 'nonce' );
     }
 
     /**
@@ -128,7 +128,7 @@ class Backup_Lite_Estimate_Size {
         ];
 
         // Initialize with wp-content directory only (best-effort derived via wp_upload_dir()).
-        $wp_content_path = function_exists( 'backup_lite_get_wp_content_dir' ) ? backup_lite_get_wp_content_dir() : '';
+        $wp_content_path = function_exists( 'museder_restoreone_get_wp_content_dir' ) ? museder_restoreone_get_wp_content_dir() : '';
         if ( is_dir( $wp_content_path ) && is_readable( $wp_content_path ) ) {
             $job['pending_directories'][] = $wp_content_path;
         } else {
@@ -242,8 +242,8 @@ class Backup_Lite_Estimate_Size {
                 'bytes'     => (int) $total_bytes,
                 'formatted' => size_format( $total_bytes, 2 ),
             ],
-            // @plugin-check: wp_date with local timezone - $file_scan_time is UTC timestamp, backup_lite_format_local_time() handles timezone conversion
-            'last_scanned' => $file_scan_time ? backup_lite_format_local_time( $file_scan_time, 'Y-m-d H:i' ) : null,
+            // @plugin-check: wp_date with local timezone - $file_scan_time is UTC timestamp, museder_restoreone_format_local_time() handles timezone conversion
+            'last_scanned' => $file_scan_time ? museder_restoreone_format_local_time( $file_scan_time, 'Y-m-d H:i' ) : null,
             'cache_valid'  => $file_scan_time && ( time() - $file_scan_time ) < self::CACHE_TTL,
         ];
 
@@ -368,7 +368,7 @@ class Backup_Lite_Estimate_Size {
         $normalized_lower = strtolower( $normalized_path );
 
         // Use shared exclusion paths from backup process
-        $excluded_paths = backup_lite_get_excluded_paths();
+        $excluded_paths = museder_restoreone_get_excluded_paths();
         foreach ( $excluded_paths as $excluded ) {
             if ( '' !== $excluded && 0 === strpos( $normalized_path, $excluded ) ) {
                 return true;
@@ -449,8 +449,8 @@ class Backup_Lite_Estimate_Size {
      */
     private static function enqueue_scan_processing( $job_id ) {
         // Try to schedule immediate cron event
-        if ( ! wp_next_scheduled( 'backup_lite_estimate_scan_cron', [ $job_id ] ) ) {
-            wp_schedule_single_event( time() + 2, 'backup_lite_estimate_scan_cron', [ $job_id ] );
+        if ( ! wp_next_scheduled( 'museder_restoreone_estimate_scan_cron', [ $job_id ] ) ) {
+            wp_schedule_single_event( time() + 2, 'museder_restoreone_estimate_scan_cron', [ $job_id ] );
         }
     }
 

@@ -22,30 +22,30 @@ $museder_restoreone_history_rows = isset( $museder_restoreone_history ) && is_ar
 $museder_restoreone_backups      = isset( $museder_restoreone_backups ) && is_array( $museder_restoreone_backups ) ? $museder_restoreone_backups : [];
 
 // Check if safe mode is active
-$safe_mode_active = get_option( 'backup_lite_safe_mode', '' ) === '1';
+$safe_mode_active = get_option( 'museder_restoreone_safe_mode', '' ) === '1';
 $prev_plugins_count = 0;
 if ( $safe_mode_active ) {
-    $prev_plugins = get_option( 'backup_lite_prev_active_plugins', [] );
+    $prev_plugins = get_option( 'museder_restoreone_prev_active_plugins', [] );
     $prev_plugins_count = is_array( $prev_plugins ) ? count( $prev_plugins ) : 0;
 }
 
 // Manual DB import notice (CLI-only DB restore fallback).
 $manual_db_notice = null;
-if ( class_exists( 'Backup_Lite_Restore_Service' ) && method_exists( 'Backup_Lite_Restore_Service', 'get_active_job_id' ) ) {
-    $active_job_id = (string) Backup_Lite_Restore_Service::get_active_job_id();
+if ( class_exists( 'Museder_Restoreone_Restore_Service' ) && method_exists( 'Museder_Restoreone_Restore_Service', 'get_active_job_id' ) ) {
+    $active_job_id = (string) Museder_Restoreone_Restore_Service::get_active_job_id();
     if ( '' !== $active_job_id ) {
         try {
-            $active_meta = Backup_Lite_Restore_Service::get_job_meta( $active_job_id );
+            $active_meta = Museder_Restoreone_Restore_Service::get_job_meta( $active_job_id );
             if ( is_array( $active_meta ) && ! empty( $active_meta['manual_db']['required'] ) ) {
                 $download_url = wp_nonce_url(
                     add_query_arg(
                         [
-                            'action' => 'backup_lite_download_restore_sql',
+                            'action' => 'museder_restoreone_download_restore_sql',
                             'job_id' => rawurlencode( $active_job_id ),
                         ],
                         admin_url( 'admin-post.php' )
                     ),
-                    'backup_lite_download_restore_sql_' . $active_job_id
+                    'museder_restoreone_download_restore_sql_' . $active_job_id
                 );
                 $manual_db_notice = [
                     'job_id' => $active_job_id,
@@ -96,7 +96,7 @@ if ( class_exists( 'Backup_Lite_Restore_Service' ) && method_exists( 'Backup_Lit
                     </p>
                 </div>
                 <div>
-                    <button type="button" id="backup-lite-exit-safe-mode-btn" class="button button-primary" style="white-space: nowrap;">
+                    <button type="button" id="museder-restoreone-exit-safe-mode-btn" class="button button-primary" style="white-space: nowrap;">
                         <?php esc_html_e( 'Exit Safe Mode & Restore Plugins', 'museder-restoreone' ); ?>
                     </button>
                 </div>
@@ -134,7 +134,7 @@ if ( class_exists( 'Backup_Lite_Restore_Service' ) && method_exists( 'Backup_Lit
                     <span class="step-pill">Step 1</span>
                     <h2><?php esc_html_e( 'Backup Archive Source', 'museder-restoreone' ); ?></h2>
                 </div>
-                <p class="step-description"><?php esc_html_e( 'Upload a backup file, select an existing archive, or provide a remote URL to begin analysis.', 'museder-restoreone' ); ?></p>
+                <p class="step-description"><?php esc_html_e( 'Upload a backup file or select an existing archive to begin analysis.', 'museder-restoreone' ); ?></p>
                 <div class="step-status" id="step-upload-status" data-status="idle">
                     <span class="status-icon"></span>
                     <span class="status-text"><?php esc_html_e( 'Choose a backup and run Step 1.', 'museder-restoreone' ); ?></span>
@@ -143,14 +143,13 @@ if ( class_exists( 'Backup_Lite_Restore_Service' ) && method_exists( 'Backup_Lit
         <div class="method-tabs">
                 <button class="button-primary active" data-method="upload"><?php esc_html_e( 'Upload Local File', 'museder-restoreone' ); ?></button>
                 <button class="button-secondary" data-method="existing"><?php esc_html_e( 'Select from Backups', 'museder-restoreone' ); ?></button>
-                <button class="button-secondary" data-method="remote"><?php esc_html_e( 'Remote URL Restore', 'museder-restoreone' ); ?></button>
         </div>
         <div id="restore-upload" class="method-panel active">
             <form id="backup-lite-restore-form-v2">
                 <input type="file" id="backup-lite-restore-file-v2" accept=".zip">
 
                 <label style="display: block; margin-top: 10px;">
-                    <input type="checkbox" name="backup_lite_confirm" value="1">
+                    <input type="checkbox" name="museder_restoreone_confirm" value="1">
                     <?php esc_html_e( 'I understand this will upload the selected archive for analysis.', 'museder-restoreone' ); ?>
                 </label>
 
@@ -179,10 +178,6 @@ if ( class_exists( 'Backup_Lite_Restore_Service' ) && method_exists( 'Backup_Lit
                 <?php endforeach; ?>
             </select>
                 <button id="selectRestore" class="button-primary step-action"><?php esc_html_e( 'Step 1 – Load Info', 'museder-restoreone' ); ?></button>
-        </div>
-        <div id="restore-remote" class="method-panel">
-            <input type="text" id="remoteUrl" placeholder="https://example.com/backup.zip">
-                <button id="downloadRestore" class="button-primary step-action"><?php esc_html_e( 'Step 1 – Download & Prepare', 'museder-restoreone' ); ?></button>
         </div>
     </section>
 
@@ -375,7 +370,7 @@ if ( class_exists( 'Backup_Lite_Restore_Service' ) && method_exists( 'Backup_Lit
                             <td>
                                 <?php
                                 $duration = isset( $entry['duration'] ) ? (int) $entry['duration'] : -1;
-                                $duration_human = backup_lite_format_duration( $duration );
+                                $duration_human = museder_restoreone_format_duration( $duration );
                                 echo esc_html( '' !== $duration_human ? $duration_human : '—' );
                                 ?>
                             </td>

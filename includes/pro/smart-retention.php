@@ -12,7 +12,7 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 /**
  * Smart Retention class for Backup Lite PRO.
  */
-class Backup_Lite_Smart_Retention {
+class Museder_Restoreone_Smart_Retention {
 
     /**
      * Initialize the smart retention service.
@@ -29,10 +29,10 @@ class Backup_Lite_Smart_Retention {
      * }
      */
     public static function get_recommendations() {
-        if ( ! Backup_Lite_Pro::is_pro_active() ) {
+        if ( ! Museder_Restoreone_Pro::is_pro_active() ) {
             return [
                 'error'   => 'pro_required',
-                'message' => __( 'This feature requires Museder RestoreOne PRO.', 'museder-restoreone' ),
+                'message' => __( 'This feature is unavailable in the current build.', 'museder-restoreone' ),
             ];
         }
 
@@ -53,11 +53,11 @@ class Backup_Lite_Smart_Retention {
      * }
      */
     public static function apply_policy( $policy ) {
-        if ( ! Backup_Lite_Pro::is_pro_active() ) {
+        if ( ! Museder_Restoreone_Pro::is_pro_active() ) {
             return [
                 'success' => false,
                 'error'   => 'pro_required',
-                'message' => __( 'This feature requires Museder RestoreOne PRO.', 'museder-restoreone' ),
+                'message' => __( 'This feature is unavailable in the current build.', 'museder-restoreone' ),
             ];
         }
 

@@ -29,18 +29,22 @@ body.wp-admin #wpcontent {
     background: var(--surface);
 }
 
-.backup-lite-admin {
+.backup-lite-admin,
+.museder-restoreone-admin {
     color: var(--text-dark);
 }
 
 /* Ensure wrap container doesn't interfere with grid */
 .wrap.backup-lite-admin,
-.wrap.backup-lite-dashboard {
+.wrap.backup-lite-dashboard,
+.wrap.museder-restoreone-admin,
+.wrap.museder-restoreone-dashboard {
     max-width: 100%;
     padding: 0 20px 20px;
 }
 
-.backup-lite-page-title {
+.backup-lite-page-title,
+.museder-restoreone-page-title {
     font-size: 26px;
     font-weight: 700;
     display: flex;
@@ -50,17 +54,20 @@ body.wp-admin #wpcontent {
     color: var(--text-dark);
 }
 
-.backup-lite-page-description {
+.backup-lite-page-description,
+.museder-restoreone-page-description {
     margin: 0 0 24px;
     color: var(--text-muted);
 }
 
-.backup-lite-page-description {
+.backup-lite-page-description,
+.museder-restoreone-page-description {
     margin: 0 0 24px;
     color: var(--text-muted);
 }
 
-.backup-lite-dashboard-actions {
+.backup-lite-dashboard-actions,
+.museder-restoreone-dashboard-actions {
     display: flex;
     justify-content: flex-end;
     gap: 12px;
@@ -352,6 +359,7 @@ body.wp-admin #wpcontent {
 }
 
 .backup-lite-table,
+.museder-restoreone-table,
 .backup-lite-admin .bl-table {
     width: 100%;
     border-collapse: collapse;
@@ -360,12 +368,15 @@ body.wp-admin #wpcontent {
     overflow: visible;
 }
 
-.backup-lite-table thead {
+.backup-lite-table thead,
+.museder-restoreone-table thead {
     background: rgba(248, 250, 252, 0.85);
 }
 
 .backup-lite-table th,
 .backup-lite-table td,
+.museder-restoreone-table th,
+.museder-restoreone-table td,
 .backup-lite-admin .bl-table th,
 .backup-lite-admin .bl-table td {
     padding: 12px 14px;
@@ -374,11 +385,13 @@ body.wp-admin #wpcontent {
 }
 
 .backup-lite-table tbody tr:nth-child(even),
+.museder-restoreone-table tbody tr:nth-child(even),
 .backup-lite-admin .bl-table tbody tr:nth-child(even) {
     background: rgba(248, 250, 252, 0.7);
 }
 
 .backup-lite-table tbody tr:hover,
+.museder-restoreone-table tbody tr:hover,
 .backup-lite-admin .bl-table tbody tr:hover {
     background: #eff6ff;
 }
@@ -415,20 +428,25 @@ body.wp-admin #wpcontent {
     position: relative;
 }
 
-.backup-lite-log-layout {
+.backup-lite-log-layout,
+.museder-restoreone-log-layout {
     display: grid;
     grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
     gap: 24px;
 }
 .backup-lite-log-layout .log-table-wrapper,
-.backup-lite-log-layout .bl-table-scroll {
+.backup-lite-log-layout .bl-table-scroll,
+.museder-restoreone-log-layout .log-table-wrapper,
+.museder-restoreone-log-layout .bl-table-scroll {
     overflow: visible;
 }
-.backup-lite-log-layout .bl-actions-menu {
+.backup-lite-log-layout .bl-actions-menu,
+.museder-restoreone-log-layout .bl-actions-menu {
     position: relative;
     z-index: 25;
 }
-.backup-lite-log-layout .bl-actions-list {
+.backup-lite-log-layout .bl-actions-list,
+.museder-restoreone-log-layout .bl-actions-list {
     z-index: 30;
 }
 
@@ -487,7 +505,8 @@ body.bl-extended-log-on pre.log-preview {
 body.bl-restore-v2-off .restore-stepper {
     display: none !important;
 }
-.backup-lite-settings-grid {
+.backup-lite-settings-grid,
+.museder-restoreone-settings-grid {
     display: grid;
     gap: 24px;
     grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
@@ -1291,7 +1310,9 @@ body.bl-modal-open {
     gap: 8px;
     margin: 8px 0;
 }
-.backup-lite-admin #backup-lite-messages {
+.backup-lite-admin #backup-lite-messages,
+.backup-lite-admin #bl-settings-message,
+.museder-restoreone-admin #bl-settings-message {
     display: none;
     margin-bottom: 24px;
     padding: 18px 22px;
@@ -1307,21 +1328,29 @@ body.bl-modal-open {
     line-height: 1.4;
 }
 
-.backup-lite-admin #backup-lite-messages::before {
+.backup-lite-admin #backup-lite-messages::before,
+.backup-lite-admin #bl-settings-message::before,
+.museder-restoreone-admin #bl-settings-message::before {
     content: '⚙️';
     font-size: 20px;
 }
 
-.backup-lite-admin #backup-lite-messages.is-visible {
+.backup-lite-admin #backup-lite-messages.is-visible,
+.backup-lite-admin #bl-settings-message.is-visible,
+.museder-restoreone-admin #bl-settings-message.is-visible {
     display: flex;
 }
 
-.backup-lite-admin #backup-lite-messages.is-success {
+.backup-lite-admin #backup-lite-messages.is-success,
+.backup-lite-admin #bl-settings-message.is-success,
+.museder-restoreone-admin #bl-settings-message.is-success {
     border-color: rgba(59, 183, 126, 0.35);
     background: linear-gradient(120deg, rgba(59, 183, 126, 0.2), rgba(59, 183, 126, 0.05));
 }
 
-.backup-lite-admin #backup-lite-messages.is-error {
+.backup-lite-admin #backup-lite-messages.is-error,
+.backup-lite-admin #bl-settings-message.is-error,
+.museder-restoreone-admin #bl-settings-message.is-error {
     border-color: rgba(214, 54, 56, 0.35);
     background: linear-gradient(120deg, rgba(214, 54, 56, 0.2), rgba(214, 54, 56, 0.05));
 }

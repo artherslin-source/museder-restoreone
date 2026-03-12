@@ -3,14 +3,14 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-class Backup_Lite_Restore_Service {
+class Museder_Restoreone_Restore_Service {
 
     const JOB_META_EXTENSION = '.json';
     const REPORT_TYPE_DRYRUN = 'dryrun';
-    const CRON_HOOK_PROCESS  = 'backup_lite_restore_service_process_job';
-    const CRON_HOOK_BG_CLEANUP = 'backup_lite_restore_service_background_cleanup';
+    const CRON_HOOK_PROCESS  = 'museder_restoreone_restore_service_process_job';
+    const CRON_HOOK_BG_CLEANUP = 'museder_restoreone_restore_service_background_cleanup';
     const DEFAULT_SLICE_SECONDS = 10;
-    const ACTIVE_JOB_OPTION = 'backup_lite_restore_service_active_job_id';
+    const ACTIVE_JOB_OPTION = 'museder_restoreone_restore_service_active_job_id';
     const ZIP_WP_CONTENT_PREFIX = 'wp-content/';
     const WPRESS_DB_FILES = [ 'database.ndjson' ];
     const WPRESS_FILES_EXCLUDE = [ 'database.ndjson', 'package.json', 'multisite.json', 'blogs.json' ];
@@ -89,11 +89,11 @@ class Backup_Lite_Restore_Service {
         }
 
         // Use helper function to get absolute path from file name
-        $file_path = backup_lite_get_backup_path( $file_name );
+        $file_path = museder_restoreone_get_backup_path( $file_name );
 
         if ( ! $file_path ) {
             // Enhanced error logging with more context
-            $backups_dir = backup_lite_get_backup_dir();
+            $backups_dir = museder_restoreone_get_backup_dir();
             $backup_files = [];
             
             // Try to list available backup files for debugging
@@ -104,7 +104,7 @@ class Backup_Lite_Restore_Service {
                 }
             }
             
-            backup_lite_log( 'error', 'Restore archive not readable.', [
+            museder_restoreone_log( 'error', 'Restore archive not readable.', [
                 'filename' => $file_name,
                 'source' => $source,
                 'backups_dir' => $backups_dir,
@@ -138,7 +138,7 @@ class Backup_Lite_Restore_Service {
 
         self::write_job_meta( $job_id, $meta );
 
-        backup_lite_log( 'info', 'Restore job prepared.', [ 'job_id' => $job_id, 'file' => $file_name ] );
+        museder_restoreone_log( 'info', 'Restore job prepared.', [ 'job_id' => $job_id, 'file' => $file_name ] );
 
         return [ 'job_id' => $job_id ];
     }
@@ -163,7 +163,7 @@ class Backup_Lite_Restore_Service {
         $encrypted = ! empty( $metadata['Encrypted'] ) && ! empty( $metadata['EncryptedSignature'] );
         $encryption_error = null;
         if ( $encrypted ) {
-            if ( ! Backup_Lite_Wpress_Crypto::can_decrypt() ) {
+            if ( ! Museder_Restoreone_Wpress_Crypto::can_decrypt() ) {
                 $encryption_error = __( 'This server cannot decrypt encrypted backups (OpenSSL missing).', 'museder-restoreone' );
             }
         }
@@ -199,7 +199,7 @@ class Backup_Lite_Restore_Service {
             'dbScan'   => self::summarise_database_structure( $metadata ),
             'encryption' => [
                 'encrypted' => (bool) $encrypted,
-                'supported' => $encrypted ? Backup_Lite_Wpress_Crypto::can_decrypt() : true,
+                'supported' => $encrypted ? Museder_Restoreone_Wpress_Crypto::can_decrypt() : true,
                 'error'     => $encryption_error,
             ],
         ];
@@ -212,7 +212,7 @@ class Backup_Lite_Restore_Service {
 
         self::write_job_meta( $job_id, $meta );
 
-        backup_lite_log( 'info', 'Restore job validated.', [ 'job_id' => $job_id ] );
+        museder_restoreone_log( 'info', 'Restore job validated.', [ 'job_id' => $job_id ] );
 
         return $result;
     }
@@ -233,8 +233,8 @@ class Backup_Lite_Restore_Service {
 
         $summary = self::calculate_dry_run_summary( $meta );
 
-        $txt_path  = Backup_Lite_Restore_Report::write_txt( $job_id, self::REPORT_TYPE_DRYRUN, $summary );
-        $json_path = Backup_Lite_Restore_Report::write_json( $job_id, self::REPORT_TYPE_DRYRUN, $summary );
+        $txt_path  = Museder_Restoreone_Restore_Report::write_txt( $job_id, self::REPORT_TYPE_DRYRUN, $summary );
+        $json_path = Museder_Restoreone_Restore_Report::write_json( $job_id, self::REPORT_TYPE_DRYRUN, $summary );
 
         $meta['reports'][ self::REPORT_TYPE_DRYRUN ] = [
             'txt'  => $txt_path,
@@ -251,13 +251,13 @@ class Backup_Lite_Restore_Service {
 
         self::write_job_meta( $job_id, $meta );
 
-        backup_lite_log( 'info', 'Restore dry-run completed.', [ 'job_id' => $job_id ] );
+        museder_restoreone_log( 'info', 'Restore dry-run completed.', [ 'job_id' => $job_id ] );
 
         return [
             'summary' => $summary,
             'reports' => [
-                'txt'  => rest_url( 'backup-lite/v2/restore/report/' . $job_id . '?format=txt&type=' . self::REPORT_TYPE_DRYRUN ),
-                'json' => rest_url( 'backup-lite/v2/restore/report/' . $job_id . '?format=json&type=' . self::REPORT_TYPE_DRYRUN ),
+                'txt'  => rest_url( 'museder-restoreone/v2/restore/report/' . $job_id . '?format=txt&type=' . self::REPORT_TYPE_DRYRUN ),
+                'json' => rest_url( 'museder-restoreone/v2/restore/report/' . $job_id . '?format=json&type=' . self::REPORT_TYPE_DRYRUN ),
             ],
         ];
     }
@@ -272,11 +272,11 @@ class Backup_Lite_Restore_Service {
             throw new RuntimeException( esc_html__( 'Please validate the archive before executing the restore.', 'museder-restoreone' ) );
         }
 
-        if ( Backup_Lite_Restore_Lock::is_locked() && ! self::is_current_lock( $job_id ) ) {
+        if ( Museder_Restoreone_Restore_Lock::is_locked() && ! self::is_current_lock( $job_id ) ) {
             throw new RuntimeException( esc_html__( 'Another restore operation is currently running.', 'museder-restoreone' ) );
         }
 
-        if ( ! Backup_Lite_Restore_Lock::acquire( $job_id ) ) {
+        if ( ! Museder_Restoreone_Restore_Lock::acquire( $job_id ) ) {
             throw new RuntimeException( esc_html__( 'Failed to acquire restore lock.', 'museder-restoreone' ) );
         }
 
@@ -293,12 +293,12 @@ class Backup_Lite_Restore_Service {
                 }
 
                 $t0 = microtime( true );
-                backup_lite_log( 'info', 'Restore pre-backup snapshot started.', [ 'job_id' => $job_id ] );
+                museder_restoreone_log( 'info', 'Restore pre-backup snapshot started.', [ 'job_id' => $job_id ] );
         try {
             $pre_backup = self::create_pre_backup();
                 } catch ( Exception $e ) {
                     $elapsed = microtime( true ) - $t0;
-                    backup_lite_log(
+                    museder_restoreone_log(
                         'error',
                         'Restore pre-backup snapshot failed.',
                         [
@@ -317,7 +317,7 @@ class Backup_Lite_Restore_Service {
                 }
 
                 $elapsed = microtime( true ) - $t0;
-                backup_lite_log( 'info', 'Restore pre-backup snapshot finished.', [ 'job_id' => $job_id, 'elapsed' => round( $elapsed, 3 ) ] );
+                museder_restoreone_log( 'info', 'Restore pre-backup snapshot finished.', [ 'job_id' => $job_id, 'elapsed' => round( $elapsed, 3 ) ] );
             }
 
             $file_path = isset( $meta['file'] ) ? $meta['file'] : '';
@@ -362,10 +362,10 @@ class Backup_Lite_Restore_Service {
             self::write_job_meta( $job_id, $meta );
 
             // Restore History: record running entry (upsert by job_id).
-            if ( function_exists( 'backup_lite_upsert_restore_history' ) ) {
+            if ( function_exists( 'museder_restoreone_upsert_restore_history' ) ) {
                 $started = isset( $meta['started_at'] ) ? (int) $meta['started_at'] : time();
                 $file_for_history = isset( $meta['file'] ) ? basename( (string) $meta['file'] ) : '';
-                backup_lite_upsert_restore_history(
+                museder_restoreone_upsert_restore_history(
                     [
                         'job_id'                  => $job_id,
                         'timestamp_utc'           => $started,
@@ -397,13 +397,13 @@ class Backup_Lite_Restore_Service {
                 'rollback_available' => ! empty( $pre_backup ) && ! empty( $pre_backup['file'] ),
             ];
         } catch ( Exception $e ) {
-            backup_lite_log( 'error', 'Restore execution start failed.', [ 'job_id' => $job_id, 'error' => $e->getMessage() ] );
+            museder_restoreone_log( 'error', 'Restore execution start failed.', [ 'job_id' => $job_id, 'error' => $e->getMessage() ] );
             // Best-effort clear active job pointer if we fail to start.
             $active = (string) get_option( self::ACTIVE_JOB_OPTION, '' );
             if ( $active === $job_id ) {
                 delete_option( self::ACTIVE_JOB_OPTION );
             }
-            Backup_Lite_Restore_Lock::release();
+            Museder_Restoreone_Restore_Lock::release();
             throw $e;
         }
     }
@@ -455,14 +455,14 @@ class Backup_Lite_Restore_Service {
                 $meta['completed']  = true;
                 $meta['updated_at'] = current_time( 'mysql' );
                 self::write_job_meta( $job_id, $meta );
-                Backup_Lite_Restore_Lock::release();
+                Museder_Restoreone_Restore_Lock::release();
 
                 // Restore History: mark cancelled.
-                if ( function_exists( 'backup_lite_upsert_restore_history' ) ) {
+                if ( function_exists( 'museder_restoreone_upsert_restore_history' ) ) {
                     $completed_at = time();
                     $started_at = isset( $meta['started_at'] ) ? (int) $meta['started_at'] : 0;
                     $duration = ( $started_at > 0 ) ? max( 0, $completed_at - $started_at ) : 0;
-                    backup_lite_upsert_restore_history(
+                    museder_restoreone_upsert_restore_history(
                         [
                             'job_id'                  => $job_id,
                             'timestamp_utc'           => $completed_at,
@@ -484,12 +484,12 @@ class Backup_Lite_Restore_Service {
             }
 
             // Ensure lock belongs to this job. If not, do not process.
-            if ( Backup_Lite_Restore_Lock::is_locked() && ! self::is_current_lock( $job_id ) ) {
+            if ( Museder_Restoreone_Restore_Lock::is_locked() && ! self::is_current_lock( $job_id ) ) {
                 return [ 'ok' => false, 'meta' => $meta, 'reason' => 'locked_by_other' ];
             }
 
             // Keep lock alive while processing.
-            Backup_Lite_Restore_Lock::refresh( $job_id );
+            Museder_Restoreone_Restore_Lock::refresh( $job_id );
 
             $meta['last_tick']  = time();
             $meta['updated_at'] = current_time( 'mysql' );
@@ -543,7 +543,7 @@ class Backup_Lite_Restore_Service {
 
             return [ 'ok' => true, 'meta' => self::get_job_meta( $job_id ) ];
                 } catch ( Exception $e ) {
-            backup_lite_log( 'error', 'Restore job slice failed.', [ 'job_id' => $job_id, 'source' => $source, 'error' => $e->getMessage() ] );
+            museder_restoreone_log( 'error', 'Restore job slice failed.', [ 'job_id' => $job_id, 'source' => $source, 'error' => $e->getMessage() ] );
             try {
                 $meta = self::get_job_meta( $job_id );
                 $meta['stage']      = 'failed';
@@ -557,13 +557,13 @@ class Backup_Lite_Restore_Service {
             }
 
             // Restore History: mark failed.
-            if ( function_exists( 'backup_lite_upsert_restore_history' ) ) {
+            if ( function_exists( 'museder_restoreone_upsert_restore_history' ) ) {
                 try {
                     $meta2 = self::get_job_meta( $job_id );
                     $completed_at = time();
                     $started_at = isset( $meta2['started_at'] ) ? (int) $meta2['started_at'] : 0;
                     $duration = ( $started_at > 0 ) ? max( 0, $completed_at - $started_at ) : 0;
-                    backup_lite_upsert_restore_history(
+                    museder_restoreone_upsert_restore_history(
                         [
                             'job_id'                  => $job_id,
                             'timestamp_utc'           => $completed_at,
@@ -585,7 +585,7 @@ class Backup_Lite_Restore_Service {
             if ( $active === $job_id ) {
                 delete_option( self::ACTIVE_JOB_OPTION );
             }
-            Backup_Lite_Restore_Lock::release();
+            Museder_Restoreone_Restore_Lock::release();
             return [ 'ok' => false, 'meta' => [], 'reason' => 'failed' ];
         } finally {
             self::release_job_run_lock( $lock_fp );
@@ -662,15 +662,15 @@ class Backup_Lite_Restore_Service {
 
         // Best-effort cleanup.
         try {
-            $tmp = trailingslashit( backup_lite_get_temp_dir() ) . $job_id;
+            $tmp = trailingslashit( museder_restoreone_get_temp_dir() ) . $job_id;
             if ( file_exists( $tmp ) ) {
-                backup_lite_delete_directory( $tmp );
+                museder_restoreone_delete_directory( $tmp );
             }
         } catch ( Exception $e ) {
             // Ignore.
         }
 
-        Backup_Lite_Restore_Lock::release();
+        Museder_Restoreone_Restore_Lock::release();
 
         return [ 'ok' => true, 'message' => __( 'Restore cancelled.', 'museder-restoreone' ) ];
     }
@@ -686,8 +686,8 @@ class Backup_Lite_Restore_Service {
 
     protected static function spawn_cron() {
         // Do not include WordPress core files directly. Best-effort: nudge wp-cron via loopback request.
-        if ( function_exists( 'backup_lite_nudge_wp_cron' ) ) {
-            backup_lite_nudge_wp_cron();
+        if ( function_exists( 'museder_restoreone_nudge_wp_cron' ) ) {
+            museder_restoreone_nudge_wp_cron();
         }
     }
 
@@ -699,7 +699,7 @@ class Backup_Lite_Restore_Service {
 
         $tmp_dir = self::ensure_job_tmp_directory( $job_id );
         $db_dir  = trailingslashit( $tmp_dir ) . 'db';
-        backup_lite_ensure_directory( $db_dir );
+        museder_restoreone_ensure_directory( $db_dir );
 
         $engine = isset( $meta['engine'] ) ? $meta['engine'] : 'zip';
         if ( 'wpress' === $engine ) {
@@ -708,7 +708,7 @@ class Backup_Lite_Restore_Service {
             $file_offset    = isset( $cp['wpress_file_offset'] ) ? (int) $cp['wpress_file_offset'] : 0;
             $processed       = isset( $cp['wpress_processed_bytes'] ) ? (int) $cp['wpress_processed_bytes'] : 0;
 
-            $extractor = new Backup_Lite_Wpress_Extractor( $file_path );
+            $extractor = new Museder_Restoreone_Wpress_Extractor( $file_path );
             if ( ! empty( $meta['options']['decryption_password'] ) ) {
                 $extractor->set_decryption_password( (string) $meta['options']['decryption_password'] );
             }
@@ -801,9 +801,9 @@ class Backup_Lite_Restore_Service {
             throw new RuntimeException( esc_html__( 'Database file missing for import.', 'museder-restoreone' ) );
         }
 
-        // New database format (database.ndjson) is imported directly by Backup_Lite_Restore.
-        // Legacy SQL backups are manual-only (Backup_Lite_Restore::import_database returns manual_db_required).
-        $result = Backup_Lite_Restore::import_database( $db_file );
+        // New database format (database.ndjson) is imported directly by Museder_Restoreone_Restore.
+        // Legacy SQL backups are manual-only (Museder_Restoreone_Restore::import_database returns manual_db_required).
+        $result = Museder_Restoreone_Restore::import_database( $db_file );
 
         // Manual DB fallback: allow file restore to proceed when backup format is SQL.
         if ( empty( $result['success'] ) && isset( $result['code'] ) && 'manual_db_required' === (string) $result['code'] ) {
@@ -864,8 +864,8 @@ class Backup_Lite_Restore_Service {
                 $dst = $verify_prefix;
                 $reason = isset( $verify['reason'] ) ? (string) $verify['reason'] : 'unknown';
 
-                if ( function_exists( 'backup_lite_log' ) ) {
-                    backup_lite_log( 'error', 'DB verify failed after import; refusing to mark restore success.', [
+                if ( function_exists( 'museder_restoreone_log' ) ) {
+                    museder_restoreone_log( 'error', 'DB verify failed after import; refusing to mark restore success.', [
                         'job_id'        => $job_id,
                         'source_prefix' => $src,
                         'target_prefix' => $dst,
@@ -882,8 +882,8 @@ class Backup_Lite_Restore_Service {
                         esc_html( $dst ? $dst : 'unknown' )
                     )
                 );
-            } elseif ( function_exists( 'backup_lite_log' ) ) {
-                backup_lite_log( 'info', 'DB verify ok after import.', [
+            } elseif ( function_exists( 'museder_restoreone_log' ) ) {
+                museder_restoreone_log( 'info', 'DB verify ok after import.', [
                     'job_id'        => $job_id,
                     'target_prefix' => $verify_prefix,
                     'tables'        => isset( $verify['tables'] ) ? $verify['tables'] : [],
@@ -1177,7 +1177,7 @@ class Backup_Lite_Restore_Service {
         }
 
         if ( 'finish' === $phase ) {
-            backup_lite_log( 'info', 'DB prefix migration completed.', [
+            museder_restoreone_log( 'info', 'DB prefix migration completed.', [
                 'job_id' => $job_id,
                 'from'   => $from,
                 'to'     => $to,
@@ -1203,9 +1203,9 @@ class Backup_Lite_Restore_Service {
         $engine = isset( $meta['engine'] ) ? $meta['engine'] : 'zip';
 
         if ( 'wpress' === $engine ) {
-            $protect_self = (bool) apply_filters( 'backup_lite_restore_protect_self', true );
+            $protect_self = (bool) apply_filters( 'museder_restoreone_restore_protect_self', true );
             $self_exclude = $protect_self ? [ 'plugins/museder-restoreone', 'wp-content/plugins/museder-restoreone' ] : [];
-            $content_dir  = function_exists( 'backup_lite_get_wp_content_dir' ) ? backup_lite_get_wp_content_dir() : '';
+            $content_dir  = function_exists( 'museder_restoreone_get_wp_content_dir' ) ? museder_restoreone_get_wp_content_dir() : '';
             $site_root    = '' !== $content_dir ? wp_normalize_path( (string) dirname( $content_dir ) ) : '';
             $phases = [
                 [ 'base' => $content_dir, 'include' => [ 'uploads', 'plugins', 'themes', 'mu-plugins' ] ],
@@ -1227,7 +1227,7 @@ class Backup_Lite_Restore_Service {
                 return;
             }
 
-            $extractor = new Backup_Lite_Wpress_Extractor( $file_path );
+            $extractor = new Museder_Restoreone_Wpress_Extractor( $file_path );
             if ( ! empty( $meta['options']['decryption_password'] ) ) {
                 $extractor->set_decryption_password( (string) $meta['options']['decryption_password'] );
             }
@@ -1288,7 +1288,7 @@ class Backup_Lite_Restore_Service {
                 }
             }
 
-            $content_dir = function_exists( 'backup_lite_get_wp_content_dir' ) ? backup_lite_get_wp_content_dir() : '';
+            $content_dir = function_exists( 'museder_restoreone_get_wp_content_dir' ) ? museder_restoreone_get_wp_content_dir() : '';
             $site_root   = '' !== $content_dir ? wp_normalize_path( (string) dirname( $content_dir ) ) : '';
             $result = self::extract_zip_prefix_sliced( $file_path, self::ZIP_WP_CONTENT_PREFIX, $site_root, $zip_index, $zip_offset, (int) $slice_seconds );
             $meta['checkpoints']['zip_index']        = $zip_index;
@@ -1296,8 +1296,8 @@ class Backup_Lite_Restore_Service {
             if ( is_array( $result ) && isset( $result['skipped_self'] ) ) {
                 $skipped_self_total += (int) $result['skipped_self'];
                 $meta['checkpoints']['zip_skipped_self'] = $skipped_self_total;
-                if ( (int) $result['skipped_self'] > 0 && function_exists( 'backup_lite_log' ) ) {
-                    backup_lite_log( 'info', 'Restore files: self-protect skipped plugin files.', [
+                if ( (int) $result['skipped_self'] > 0 && function_exists( 'museder_restoreone_log' ) ) {
+                    museder_restoreone_log( 'info', 'Restore files: self-protect skipped plugin files.', [
                         'skipped' => (int) $result['skipped_self'],
                         'total'   => (int) $skipped_self_total,
                         'prefix'  => 'wp-content/plugins/museder-restoreone/',
@@ -1564,8 +1564,8 @@ class Backup_Lite_Restore_Service {
             // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fclose
         }
 
-        if ( function_exists( 'backup_lite_log' ) ) {
-            backup_lite_log( 'info', 'Prepared SQL file for MySQL CLI import with prefix rewrite.', [
+        if ( function_exists( 'museder_restoreone_log' ) ) {
+            museder_restoreone_log( 'info', 'Prepared SQL file for MySQL CLI import with prefix rewrite.', [
                 'job_id'    => (string) $job_id,
                 'from'      => $rewrite_from_prefix,
                 'to'        => $rewrite_to_prefix,
@@ -1678,7 +1678,7 @@ class Backup_Lite_Restore_Service {
 
         // Optional: background non-critical cleanup to avoid UI sitting at 99% on huge sites.
         // Default is false; enable via filter in custom integration.
-        $background_cleanup = (bool) apply_filters( 'backup_lite_restore_background_cleanup', false, $job_id, $meta );
+        $background_cleanup = (bool) apply_filters( 'museder_restoreone_restore_background_cleanup', false, $job_id, $meta );
         if ( $background_cleanup && empty( $cleanup['bg_scheduled'] ) ) {
             $cleanup['bg_scheduled'] = 1;
             $cleanup['bg_scheduled_at'] = time();
@@ -1795,10 +1795,10 @@ class Backup_Lite_Restore_Service {
 
                     if ( $want_safe_mode ) {
                         try {
-                            Backup_Lite_Restore::enter_safe_mode_after_import();
+                            Museder_Restoreone_Restore::enter_safe_mode_after_import();
                             $safe_mode_entered = true;
                         } catch ( Exception $e ) {
-                            backup_lite_log( 'warning', 'Failed to enter safe mode after restore.', [
+                            museder_restoreone_log( 'warning', 'Failed to enter safe mode after restore.', [
                                 'job_id' => $job_id,
                                 'error' => $e->getMessage(),
                             ] );
@@ -1806,11 +1806,11 @@ class Backup_Lite_Restore_Service {
                     } else {
                         // If safe mode is disabled for this restore, ensure no stale safe-mode flags linger.
                         if ( function_exists( 'delete_option' ) ) {
-                            delete_option( 'backup_lite_safe_mode' );
-                            delete_option( 'backup_lite_prev_active_plugins' );
+                            delete_option( 'museder_restoreone_safe_mode' );
+                            delete_option( 'museder_restoreone_prev_active_plugins' );
                         }
-                        if ( function_exists( 'backup_lite_log' ) ) {
-                            backup_lite_log( 'info', 'Safe mode disabled by user option; leaving plugins as restored.', [
+                        if ( function_exists( 'museder_restoreone_log' ) ) {
+                            museder_restoreone_log( 'info', 'Safe mode disabled by user option; leaving plugins as restored.', [
                                 'job_id' => $job_id,
                             ] );
                         }
@@ -1826,9 +1826,9 @@ class Backup_Lite_Restore_Service {
                     self::write_job_meta( $job_id, $meta );
 
                     try {
-                        $tmp = trailingslashit( backup_lite_get_temp_dir() ) . $job_id;
+                        $tmp = trailingslashit( museder_restoreone_get_temp_dir() ) . $job_id;
                         if ( file_exists( $tmp ) ) {
-                            backup_lite_delete_directory( $tmp );
+                            museder_restoreone_delete_directory( $tmp );
                         }
                     } catch ( Exception $e ) {
                         // Ignore.
@@ -1852,9 +1852,9 @@ class Backup_Lite_Restore_Service {
                         'safe_mode' => (bool) $safe_mode_entered,
                 'completed_at' => current_time( 'mysql' ),
             ];
-                do_action( 'backup_lite_after_restore', $restore_meta );
+                do_action( 'museder_restoreone_after_restore', $restore_meta );
                 if ( $safe_mode_entered ) {
-                    do_action( 'backup_lite_after_restore_safe_mode', $restore_meta );
+                    do_action( 'museder_restoreone_after_restore_safe_mode', $restore_meta );
                 }
                     $cleanup['step'] = 'finish';
                     break;
@@ -1872,11 +1872,11 @@ class Backup_Lite_Restore_Service {
             self::write_job_meta( $job_id, $meta );
 
                     // Restore History: mark success.
-                    if ( function_exists( 'backup_lite_upsert_restore_history' ) ) {
+                    if ( function_exists( 'museder_restoreone_upsert_restore_history' ) ) {
                         $completed_at = time();
                         $started_at = isset( $meta['started_at'] ) ? (int) $meta['started_at'] : 0;
                         $duration = ( $started_at > 0 ) ? max( 0, $completed_at - $started_at ) : 0;
-                        backup_lite_upsert_restore_history(
+                        museder_restoreone_upsert_restore_history(
                             [
                                 'job_id'                  => $job_id,
                                 'timestamp_utc'           => $completed_at,
@@ -1890,7 +1890,7 @@ class Backup_Lite_Restore_Service {
                         );
                     }
 
-            Backup_Lite_Restore_Lock::release();
+            Museder_Restoreone_Restore_Lock::release();
 
                     $active = (string) get_option( self::ACTIVE_JOB_OPTION, '' );
                     if ( $active === $job_id ) {
@@ -1924,7 +1924,7 @@ class Backup_Lite_Restore_Service {
 
     /**
      * Background cleanup job (non-critical) to avoid blocking the UI at 99% on huge sites.
-     * Default is not enabled; scheduled only when filter backup_lite_restore_background_cleanup returns true.
+     * Default is not enabled; scheduled only when filter museder_restoreone_restore_background_cleanup returns true.
      */
     public static function cron_background_cleanup( $job_id ) {
         try {
@@ -1949,9 +1949,9 @@ class Backup_Lite_Restore_Service {
             $cp['cleanup'] = $cleanup;
             $meta['checkpoints'] = $cp;
             self::write_job_meta( $job_id, $meta );
-            backup_lite_log( 'info', 'Restore background cleanup completed.', [ 'job_id' => $job_id ] );
+            museder_restoreone_log( 'info', 'Restore background cleanup completed.', [ 'job_id' => $job_id ] );
         } catch ( Exception $e ) {
-            backup_lite_log( 'warning', 'Restore background cleanup failed.', [ 'job_id' => $job_id, 'error' => $e->getMessage() ] );
+            museder_restoreone_log( 'warning', 'Restore background cleanup failed.', [ 'job_id' => $job_id, 'error' => $e->getMessage() ] );
         }
     }
 
@@ -1970,11 +1970,11 @@ class Backup_Lite_Restore_Service {
         $current_home_url = get_option( 'home' );
         if ( rtrim( (string) $current_site_url, '/' ) !== rtrim( (string) $expected_site_url, '/' ) ) {
             update_option( 'siteurl', $expected_site_url );
-            backup_lite_log( 'info', 'Updated siteurl option after restore.', [ 'old' => $current_site_url, 'new' => $expected_site_url ] );
+            museder_restoreone_log( 'info', 'Updated siteurl option after restore.', [ 'old' => $current_site_url, 'new' => $expected_site_url ] );
         }
         if ( rtrim( (string) $current_home_url, '/' ) !== rtrim( (string) $expected_home_url, '/' ) ) {
             update_option( 'home', $expected_home_url );
-            backup_lite_log( 'info', 'Updated home option after restore.', [ 'old' => $current_home_url, 'new' => $expected_home_url ] );
+            museder_restoreone_log( 'info', 'Updated home option after restore.', [ 'old' => $current_home_url, 'new' => $expected_home_url ] );
         }
     }
 
@@ -2052,7 +2052,7 @@ class Backup_Lite_Restore_Service {
             return;
         }
 
-        backup_lite_ensure_directory( dirname( $dest_path ) );
+        museder_restoreone_ensure_directory( dirname( $dest_path ) );
 
         // Large ZIP streaming requires direct file operations for performance and compatibility.
         $out = fopen( $dest_path, 'wb' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- Stream extraction to disk.
@@ -2073,14 +2073,14 @@ class Backup_Lite_Restore_Service {
         }
 
         // Fallback: PclZip extraction by name, stripping directory prefixes.
-        if ( function_exists( 'backup_lite_require_pclzip' ) ) {
-            backup_lite_require_pclzip();
+        if ( function_exists( 'museder_restoreone_require_pclzip' ) ) {
+            museder_restoreone_require_pclzip();
         }
         if ( ! class_exists( 'PclZip' ) ) {
             throw new RuntimeException( esc_html__( 'ZIP extraction is not available on this server.', 'museder-restoreone' ) );
         }
 
-        backup_lite_ensure_directory( dirname( $dest_path ) );
+        museder_restoreone_ensure_directory( dirname( $dest_path ) );
         $pcl = new PclZip( $zip_path );
         $remove_path = dirname( (string) $entry_name );
         if ( '.' === $remove_path ) {
@@ -2126,7 +2126,7 @@ class Backup_Lite_Restore_Service {
 
         // Allow sites to disable self-protection if they truly need to restore the plugin itself.
         // Default: true (protect this plugin from being overwritten mid-restore).
-        $protect_self = (bool) apply_filters( 'backup_lite_restore_protect_self', true );
+        $protect_self = (bool) apply_filters( 'museder_restoreone_restore_protect_self', true );
         $self_prefix  = 'wp-content/plugins/museder-restoreone/';
         $skipped_self = 0;
 
@@ -2147,11 +2147,11 @@ class Backup_Lite_Restore_Service {
             if ( substr( $name, -1 ) === '/' ) {
                 continue;
             }
-            if ( backup_lite_safe_path_join( $dest_base, $name ) === false ) {
+            if ( museder_restoreone_safe_path_join( $dest_base, $name ) === false ) {
                 continue;
             }
 
-            $target = backup_lite_safe_path_join( $dest_base, $name );
+            $target = museder_restoreone_safe_path_join( $dest_base, $name );
             if ( ! $target ) {
                 continue;
             }
@@ -2161,7 +2161,7 @@ class Backup_Lite_Restore_Service {
                 continue;
             }
 
-            backup_lite_ensure_directory( dirname( $target ) );
+            museder_restoreone_ensure_directory( dirname( $target ) );
 
             // Large ZIP streaming requires direct file operations for performance and compatibility.
             $out = fopen( $target, ( $entry_offset > 0 ? 'ab' : 'wb' ) ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- Stream extraction to disk.
@@ -2229,11 +2229,11 @@ class Backup_Lite_Restore_Service {
             throw new RuntimeException( esc_html__( 'No pre-restore snapshot available.', 'museder-restoreone' ) );
         }
 
-        if ( Backup_Lite_Restore_Lock::is_locked() && ! self::is_current_lock( $job_id ) ) {
+        if ( Museder_Restoreone_Restore_Lock::is_locked() && ! self::is_current_lock( $job_id ) ) {
             throw new RuntimeException( esc_html__( 'Another restore operation is currently running.', 'museder-restoreone' ) );
         }
 
-        if ( ! Backup_Lite_Restore_Lock::acquire( $job_id ) ) {
+        if ( ! Museder_Restoreone_Restore_Lock::acquire( $job_id ) ) {
             throw new RuntimeException( esc_html__( 'Failed to acquire restore lock.', 'museder-restoreone' ) );
         }
 
@@ -2252,14 +2252,14 @@ class Backup_Lite_Restore_Service {
             $meta['updated_at'] = current_time( 'mysql' );
             self::write_job_meta( $job_id, $meta );
 
-            backup_lite_log( 'info', 'Restore rollback executed.', [ 'job_id' => $job_id ] );
+            museder_restoreone_log( 'info', 'Restore rollback executed.', [ 'job_id' => $job_id ] );
 
             return [ 'ok' => true, 'message' => __( 'Rollback completed successfully.', 'museder-restoreone' ) ];
         } catch ( Exception $e ) {
-            backup_lite_log( 'error', 'Restore rollback failed.', [ 'job_id' => $job_id, 'error' => $e->getMessage() ] );
+            museder_restoreone_log( 'error', 'Restore rollback failed.', [ 'job_id' => $job_id, 'error' => $e->getMessage() ] );
             throw $e;
         } finally {
-            Backup_Lite_Restore_Lock::release();
+            Museder_Restoreone_Restore_Lock::release();
             // Clear active job pointer after rollback completes.
             $active = (string) get_option( self::ACTIVE_JOB_OPTION, '' );
             if ( $active === $job_id ) {
@@ -2642,16 +2642,16 @@ class Backup_Lite_Restore_Service {
      */
     protected static function generate_job_id() {
         $token = function_exists( 'wp_generate_password' ) ? wp_generate_password( 6, false, false ) : wp_rand( 100000, 999999 );
-        return 'rjb_' . backup_lite_local_time( 'Ymd_His' ) . '_' . strtolower( $token );
+        return 'rjb_' . museder_restoreone_local_time( 'Ymd_His' ) . '_' . strtolower( $token );
     }
 
     /**
      * Ensure job directory exists.
      */
     protected static function ensure_job_directory( $job_id ) {
-        $dir = trailingslashit( backup_lite_get_jobs_dir() ) . $job_id;
+        $dir = trailingslashit( museder_restoreone_get_jobs_dir() ) . $job_id;
         if ( ! file_exists( $dir ) ) {
-            backup_lite_ensure_directory( $dir );
+            museder_restoreone_ensure_directory( $dir );
         }
         return $dir;
     }
@@ -2660,9 +2660,9 @@ class Backup_Lite_Restore_Service {
      * Ensure job temp directory exists (within global temp root).
      */
     protected static function ensure_job_tmp_directory( $job_id ) {
-        $dir = trailingslashit( backup_lite_get_temp_dir() ) . $job_id;
+        $dir = trailingslashit( museder_restoreone_get_temp_dir() ) . $job_id;
         if ( ! file_exists( $dir ) ) {
-            backup_lite_ensure_directory( $dir );
+            museder_restoreone_ensure_directory( $dir );
         }
         return $dir;
     }
@@ -2684,7 +2684,7 @@ class Backup_Lite_Restore_Service {
      * Resolve job metadata path.
      */
     protected static function job_meta_path( $job_id ) {
-        return trailingslashit( backup_lite_get_jobs_dir() ) . $job_id . self::JOB_META_EXTENSION;
+        return trailingslashit( museder_restoreone_get_jobs_dir() ) . $job_id . self::JOB_META_EXTENSION;
     }
 
     /**
@@ -2702,7 +2702,7 @@ class Backup_Lite_Restore_Service {
      * Check whether current lock belongs to job.
      */
     protected static function is_current_lock( $job_id ) {
-        $lock = Backup_Lite_Restore_Lock::current_lock();
+        $lock = Museder_Restoreone_Restore_Lock::current_lock();
         return $lock && isset( $lock['job_id'] ) && $lock['job_id'] === $job_id;
     }
 
@@ -2716,12 +2716,12 @@ class Backup_Lite_Restore_Service {
         }
 
         $t0 = microtime( true );
-        backup_lite_log( 'info', 'Pre-restore backup snapshot: backup_site() started.' );
-        $result = Backup_Lite_Backup::backup_site();
+        museder_restoreone_log( 'info', 'Pre-restore backup snapshot: backup_site() started.' );
+        $result = Museder_Restoreone_Backup::backup_site();
         $elapsed = microtime( true ) - $t0;
 
         if ( empty( $result['success'] ) || empty( $result['file'] ) ) {
-            backup_lite_log(
+            museder_restoreone_log(
                 'error',
                 'Pre-restore backup snapshot: backup_site() failed.',
                 [
@@ -2732,7 +2732,7 @@ class Backup_Lite_Restore_Service {
             throw new RuntimeException( esc_html__( 'Failed to create pre-restore backup snapshot.', 'museder-restoreone' ) );
         }
 
-        backup_lite_log(
+        museder_restoreone_log(
             'info',
             'Pre-restore backup snapshot: backup_site() finished.',
             [
@@ -2766,7 +2766,7 @@ class Backup_Lite_Restore_Service {
                 $archive_offset = 0;
                 $file_offset    = 0;
                 $processed       = 0;
-                $extractor = new Backup_Lite_Wpress_Extractor( $file_path );
+                $extractor = new Museder_Restoreone_Wpress_Extractor( $file_path );
                 // Extract package.json only (never encrypted in AI1WM).
                 $extractor->extract_filtered_sliced( $extract_dir, [ 'package.json' ], [], [], $archive_offset, $file_offset, $processed, 30 );
                 $extractor->close();
@@ -2848,9 +2848,9 @@ class Backup_Lite_Restore_Service {
         $target = self::ensure_job_tmp_directory( $job_id );
         $extract_dir = trailingslashit( $target ) . 'extract';
         if ( file_exists( $extract_dir ) ) {
-            backup_lite_delete_directory( $extract_dir );
+            museder_restoreone_delete_directory( $extract_dir );
         }
-        backup_lite_ensure_directory( $extract_dir );
+        museder_restoreone_ensure_directory( $extract_dir );
 
         $result = self::unpack_archive( $file_path, $extract_dir );
         if ( ! $result['success'] ) {
@@ -2862,7 +2862,7 @@ class Backup_Lite_Restore_Service {
 
     protected static function unpack_archive( $archive_path, $destination ) {
         if ( ! file_exists( $archive_path ) || ! is_readable( $archive_path ) ) {
-            backup_lite_log( 'error', 'Archive file not found or not readable for extraction.', [
+            museder_restoreone_log( 'error', 'Archive file not found or not readable for extraction.', [
                 'file' => $archive_path,
                 'exists' => file_exists( $archive_path ),
                 'readable' => file_exists( $archive_path ) ? is_readable( $archive_path ) : false,
@@ -2872,7 +2872,7 @@ class Backup_Lite_Restore_Service {
 
         $file_size = filesize( $archive_path );
         if ( $file_size <= 0 ) {
-            backup_lite_log( 'error', 'Archive file is empty or invalid.', [
+            museder_restoreone_log( 'error', 'Archive file is empty or invalid.', [
                 'file' => basename( $archive_path ),
                 'size' => $file_size,
             ] );
@@ -2889,18 +2889,18 @@ class Backup_Lite_Restore_Service {
                 $zip->close();
                 
                 if ( $extract_result ) {
-                    backup_lite_log( 'info', 'Archive extracted successfully using ZipArchive.', [
+                    museder_restoreone_log( 'info', 'Archive extracted successfully using ZipArchive.', [
                         'file' => basename( $archive_path ),
                         'destination' => $destination,
                     ] );
                     return [ 'success' => true ];
                 } else {
-                    backup_lite_log( 'warning', 'ZipArchive extractTo() returned false, trying PclZip fallback.', [
+                    museder_restoreone_log( 'warning', 'ZipArchive extractTo() returned false, trying PclZip fallback.', [
                         'file' => basename( $archive_path ),
                     ] );
                 }
             } else {
-                backup_lite_log( 'warning', 'ZipArchive failed to open archive, trying PclZip fallback.', [
+                museder_restoreone_log( 'warning', 'ZipArchive failed to open archive, trying PclZip fallback.', [
                     'file' => basename( $archive_path ),
                     'error_code' => $open_result,
                 ] );
@@ -2908,8 +2908,8 @@ class Backup_Lite_Restore_Service {
         }
 
         // Fallback to PclZip
-        if ( function_exists( 'backup_lite_require_pclzip' ) ) {
-            backup_lite_require_pclzip();
+        if ( function_exists( 'museder_restoreone_require_pclzip' ) ) {
+            museder_restoreone_require_pclzip();
         }
 
         $pcl = new PclZip( $archive_path );
@@ -2924,7 +2924,7 @@ class Backup_Lite_Restore_Service {
             $success = ( false !== $result && 0 !== $result );
             
             if ( $success ) {
-                backup_lite_log( 'info', 'Archive extracted successfully using PclZip.', [
+                museder_restoreone_log( 'info', 'Archive extracted successfully using PclZip.', [
                     'file' => basename( $archive_path ),
                     'destination' => $destination,
                     'extracted_count' => is_array( $result ) ? count( $result ) : ( is_numeric( $result ) ? $result : 'unknown' ),
@@ -2932,7 +2932,7 @@ class Backup_Lite_Restore_Service {
             } else {
                 $error_code = method_exists( $pcl, 'errorCode' ) ? $pcl->errorCode() : 'unknown';
                 $error_info = method_exists( $pcl, 'errorInfo' ) ? $pcl->errorInfo( true ) : 'Unknown error';
-                backup_lite_log( 'error', 'PclZip extraction failed.', [
+                museder_restoreone_log( 'error', 'PclZip extraction failed.', [
                     'file' => basename( $archive_path ),
                     'error_code' => $error_code,
                     'error_info' => $error_info,
@@ -2941,7 +2941,7 @@ class Backup_Lite_Restore_Service {
             
             return [ 'success' => $success, 'error_code' => $success ? null : $error_code, 'error_info' => $success ? null : $error_info ];
         } catch ( Exception $pcl_exception ) {
-            backup_lite_log( 'error', 'PclZip extraction threw exception.', [
+            museder_restoreone_log( 'error', 'PclZip extraction threw exception.', [
                 'file' => basename( $archive_path ),
                 'error' => $pcl_exception->getMessage(),
             ] );
@@ -2955,7 +2955,7 @@ class Backup_Lite_Restore_Service {
             return;
         }
 
-        $result = Backup_Lite_Restore::import_database( $db_file );
+        $result = Museder_Restoreone_Restore::import_database( $db_file );
         if ( empty( $result['success'] ) ) {
             throw new RuntimeException( esc_html__( 'Database import failed.', 'museder-restoreone' ) );
         }
@@ -2983,7 +2983,7 @@ class Backup_Lite_Restore_Service {
             return;
         }
 
-        $dest_content_dir = function_exists( 'backup_lite_get_wp_content_dir' ) ? backup_lite_get_wp_content_dir() : '';
+        $dest_content_dir = function_exists( 'museder_restoreone_get_wp_content_dir' ) ? museder_restoreone_get_wp_content_dir() : '';
         if ( '' === $dest_content_dir ) {
             return;
         }
@@ -3021,7 +3021,7 @@ class Backup_Lite_Restore_Service {
         $pairs = self::build_url_replacement_pairs( $meta );
 
         if ( empty( $pairs ) ) {
-            backup_lite_log( 'warning', 'No URL replacement pairs generated.', [
+            museder_restoreone_log( 'warning', 'No URL replacement pairs generated.', [
                 'from' => $from,
                 'to' => $to,
             ] );
@@ -3033,7 +3033,7 @@ class Backup_Lite_Restore_Service {
         foreach ( $pairs as $pair ) {
             $pair_summary[] = $pair['search'] . ' → ' . $pair['replace'];
         }
-        backup_lite_log( 'info', 'Applying URL search & replace.', [
+        museder_restoreone_log( 'info', 'Applying URL search & replace.', [
             'pairs_count' => count( $pairs ),
             'pairs' => $pair_summary,
         ] );
@@ -3361,12 +3361,12 @@ class Backup_Lite_Restore_Service {
 
     protected static function cleanup_job_tmp( $job_id, $extract_dir ) {
         if ( $extract_dir && file_exists( $extract_dir ) ) {
-            backup_lite_delete_directory( $extract_dir );
+            museder_restoreone_delete_directory( $extract_dir );
         }
 
-        $tmp   = trailingslashit( backup_lite_get_temp_dir() ) . $job_id;
+        $tmp   = trailingslashit( museder_restoreone_get_temp_dir() ) . $job_id;
         if ( file_exists( $tmp ) ) {
-            backup_lite_delete_directory( $tmp );
+            museder_restoreone_delete_directory( $tmp );
         }
     }
 
@@ -3417,11 +3417,11 @@ class Backup_Lite_Restore_Service {
             // Only update if URLs don't match (excluding trailing slashes)
             if ( rtrim( $current_site_url, '/' ) !== rtrim( $expected_site_url, '/' ) ) {
                 update_option( 'siteurl', $expected_site_url );
-                backup_lite_log( 'info', 'Updated siteurl option after restore.', [ 'old' => $current_site_url, 'new' => $expected_site_url ] );
+                museder_restoreone_log( 'info', 'Updated siteurl option after restore.', [ 'old' => $current_site_url, 'new' => $expected_site_url ] );
             }
             if ( rtrim( $current_home_url, '/' ) !== rtrim( $expected_home_url, '/' ) ) {
                 update_option( 'home', $expected_home_url );
-                backup_lite_log( 'info', 'Updated home option after restore.', [ 'old' => $current_home_url, 'new' => $expected_home_url ] );
+                museder_restoreone_log( 'info', 'Updated home option after restore.', [ 'old' => $current_home_url, 'new' => $expected_home_url ] );
             }
         }
 
@@ -3429,7 +3429,7 @@ class Backup_Lite_Restore_Service {
         // Store info for the admin to review manually if needed.
         self::record_restored_plugin_list();
 
-        backup_lite_log( 'info', 'Post-restore cleanup completed.', [] );
+        museder_restoreone_log( 'info', 'Post-restore cleanup completed.', [] );
     }
 
     /**
@@ -3439,13 +3439,13 @@ class Backup_Lite_Restore_Service {
     protected static function record_restored_plugin_list() {
         $active_plugins = get_option( 'active_plugins', [] );
         if ( ! is_array( $active_plugins ) || empty( $active_plugins ) ) {
-            backup_lite_log( 'info', 'No active plugins found in restored database.', [] );
+            museder_restoreone_log( 'info', 'No active plugins found in restored database.', [] );
             return;
         }
 
-        update_option( 'backup_lite_restored_active_plugins_last', $active_plugins, false );
+        update_option( 'museder_restoreone_restored_active_plugins_last', $active_plugins, false );
 
-        backup_lite_log( 'info', 'Restore completed. Plugin activation status was not modified automatically.', [
+        museder_restoreone_log( 'info', 'Restore completed. Plugin activation status was not modified automatically.', [
             'active_plugins_count' => count( $active_plugins ),
         ] );
     }

@@ -151,7 +151,7 @@ var backupProgressSmoother = {
 };
 
 // Backup timer for elapsed time display
-var backupLiteTimer = {
+var musederRestoreOneTimer = {
     startTime: null,
     intervalId: null,
     displayEl: null,
@@ -166,7 +166,7 @@ var backupLiteTimer = {
         this.displayEl.style.display = '';
         this.update();
         this.intervalId = window.setInterval(function() {
-            backupLiteTimer.update();
+            musederRestoreOneTimer.update();
         }, 1000);
     },
     
@@ -227,7 +227,7 @@ var backupLiteTimer = {
         }
         return fallback || '';
     }
-    const messages = $('#backup-lite-messages');
+    const messages = $('#museder-restoreone-messages');
     const spinnerMarkup = '<span class="spinner is-active"></span>';
 
     function showMessage(type, title, text) {
@@ -288,7 +288,7 @@ var backupLiteTimer = {
      */
     function collectThirdPartyNotices() {
         try {
-            var wrap = document.querySelector('.wrap.backup-lite-admin');
+            var wrap = document.querySelector('.wrap.museder-restoreone-admin');
             if (!wrap) {
                 return;
             }
@@ -345,7 +345,7 @@ var backupLiteTimer = {
                 var notice = unique[j];
 
                 // Never move our own plugin message box.
-                if (notice.id === 'backup-lite-messages' || notice.classList.contains('backup-lite-messages')) {
+                if (notice.id === 'museder-restoreone-messages' || notice.classList.contains('museder-restoreone-messages')) {
                     continue;
                 }
 
@@ -406,7 +406,7 @@ var backupLiteTimer = {
      * Observe admin notices that may be inserted after initial page load and collect them.
      */
     function observeThirdPartyNotices() {
-        var wrap = document.querySelector('.wrap.backup-lite-admin');
+        var wrap = document.querySelector('.wrap.museder-restoreone-admin');
         var wpbody = document.getElementById('wpbody-content');
         if (!wrap || !wpbody || !window.MutationObserver) {
             return;
@@ -537,10 +537,10 @@ var backupLiteTimer = {
                     if (!actionHref || actionHref === '') {
                         alert(strings.downloadUnavailable || 'Download link is not available. Please download from the backup library.');
                         // Optionally redirect to backups page
-                        if (window.location.href.indexOf('page=backup-lite-backups') === -1) {
-                            var backupsUrl = window.location.href.replace(/page=[^&]*/, 'page=backup-lite-backups');
+                        if (window.location.href.indexOf('page=museder-restoreone-backups') === -1) {
+                            var backupsUrl = window.location.href.replace(/page=[^&]*/, 'page=museder-restoreone-backups');
                             if (backupsUrl === window.location.href) {
-                                backupsUrl += (window.location.href.indexOf('?') === -1 ? '?' : '&') + 'page=backup-lite-backups';
+                                backupsUrl += (window.location.href.indexOf('?') === -1 ? '?' : '&') + 'page=museder-restoreone-backups';
                             }
                             window.location.href = backupsUrl;
                         }
@@ -558,10 +558,10 @@ var backupLiteTimer = {
                         if (expires && expires < Math.floor(Date.now() / 1000)) {
                             alert(strings.downloadExpired || 'Your download link has expired. Please download from the backup library.');
                             // Optionally redirect to backups page
-                            if (window.location.href.indexOf('page=backup-lite-backups') === -1) {
-                                var backupsUrl2 = window.location.href.replace(/page=[^&]*/, 'page=backup-lite-backups');
+                            if (window.location.href.indexOf('page=museder-restoreone-backups') === -1) {
+                                var backupsUrl2 = window.location.href.replace(/page=[^&]*/, 'page=museder-restoreone-backups');
                                 if (backupsUrl2 === window.location.href) {
-                                    backupsUrl2 += (window.location.href.indexOf('?') === -1 ? '?' : '&') + 'page=backup-lite-backups';
+                                    backupsUrl2 += (window.location.href.indexOf('?') === -1 ? '?' : '&') + 'page=museder-restoreone-backups';
                                 }
                                 window.location.href = backupsUrl2;
                             }
@@ -620,8 +620,8 @@ var backupLiteTimer = {
             
             // Reset progress bar and restore state when overlay is closed
             // This ensures the UI is ready for the next restore
-            if (typeof window.BackupLiteUI !== 'undefined' && typeof window.BackupLiteUI.resetRestoreProgress === 'function') {
-                window.BackupLiteUI.resetRestoreProgress();
+            if (typeof window.MusederRestoreOneUI !== 'undefined' && typeof window.MusederRestoreOneUI.resetRestoreProgress === 'function') {
+                window.MusederRestoreOneUI.resetRestoreProgress();
             }
             
             // Refresh page when overlay is closed to ensure clean state
@@ -743,7 +743,7 @@ var backupLiteTimer = {
 
     function refreshLogs() {
         return $.post(settings.ajaxUrl, {
-            action: 'backup_lite_fetch_logs',
+            action: 'museder_restoreone_fetch_logs',
             nonce: settings.nonce
         }).done(function (resp) {
             if (!resp.success) {
@@ -756,7 +756,7 @@ var backupLiteTimer = {
                 return;
             }
 
-            const list = $('.backup-lite-logs ul');
+            const list = $('.museder-restoreone-logs ul');
             if (!list.length) {
                 return;
             }
@@ -831,7 +831,7 @@ var backupLiteTimer = {
         }
     }
 
-    window.BackupLiteUI = {
+    window.MusederRestoreOneUI = {
         showMessage: showMessage,
         handleError: handleError,
         refreshLogs: refreshLogs,
@@ -898,7 +898,7 @@ var backupLiteTimer = {
         if (backupProgressText) {
             backupProgressText.textContent = '0%';
         }
-        backupLiteTimer.reset(); // Reset elapsed time timer
+        musederRestoreOneTimer.reset(); // Reset elapsed time timer
     }
 
     function updateBackupProgress(percent) {
@@ -951,7 +951,7 @@ var backupLiteTimer = {
         }
 
         var payload = new FormData();
-        payload.append('action', 'backup_lite_cancel_backup_job');
+        payload.append('action', 'museder_restoreone_cancel_backup_job');
         payload.append('nonce', settings.nonce);
         payload.append('job_id', backupJobContext.current.id);
 
@@ -969,7 +969,7 @@ var backupLiteTimer = {
             setBackupBusy(false);
             backupJobContext.current = null;
             setBackupCancelable(false);
-            backupLiteTimer.stop(); // Stop elapsed time timer
+            musederRestoreOneTimer.stop(); // Stop elapsed time timer
             resetBackupProgress();
             // Clear the processing banner/message without requiring a full page reload.
             if (messages && messages.length) {
@@ -1075,7 +1075,7 @@ var backupLiteTimer = {
         if ('failed' === job.status) {
             backupProgressSmoother.stop();
             stopBackupJobPolling();
-            backupLiteTimer.stop(); // Stop elapsed time timer
+            musederRestoreOneTimer.stop(); // Stop elapsed time timer
             setBackupBusy(false);
             handleError({ message: job.message || strings.jobFailed || strings.errorGeneric });
             backupJobContext.current = null;
@@ -1086,7 +1086,7 @@ var backupLiteTimer = {
         if ('cancelled' === job.status) {
             backupProgressSmoother.stop();
             stopBackupJobPolling();
-            backupLiteTimer.stop(); // Stop elapsed time timer
+            musederRestoreOneTimer.stop(); // Stop elapsed time timer
             setBackupBusy(false);
             showMessage('', '', strings.jobCancelled || '');
             backupJobContext.current = null;
@@ -1207,7 +1207,7 @@ var backupLiteTimer = {
         backupJobContext.lastNudge = now;
 
         var payload = new FormData();
-        payload.append('action', 'backup_lite_continue_backup_job');
+        payload.append('action', 'museder_restoreone_continue_backup_job');
         payload.append('nonce', settings.nonce);
         payload.append('job_id', jobId);
 
@@ -1297,7 +1297,7 @@ var backupLiteTimer = {
         // Use WordPress-standard AJAX approach with fetch API
         var payload = new FormData();
         // Keep the legacy server action name for maximum compatibility across hosts.
-        payload.append('action', 'backup_lite_get_job_status');
+        payload.append('action', 'museder_restoreone_get_job_status');
         payload.append('nonce', settings.nonce);
         payload.append('job_id', backupJobContext.current.id);
 
@@ -1460,7 +1460,7 @@ var backupLiteTimer = {
         }
 
         const payload = new FormData();
-        payload.append('action', 'backup_lite_start_backup_job');
+        payload.append('action', 'museder_restoreone_start_backup_job');
         payload.append('nonce', settings.nonce);
         appendBackupOptions(payload);
 
@@ -1491,7 +1491,7 @@ var backupLiteTimer = {
             }
             // Normalize via the same handler used by polling for consistent UI behavior.
             handleJobResponse(json.data.job);
-            backupLiteTimer.start(); // Start elapsed time timer
+            musederRestoreOneTimer.start(); // Start elapsed time timer
             scheduleBackupJobPolling(true);
         }).catch(function (error) {
             clearTimeout(timeoutId);
@@ -1522,7 +1522,7 @@ var backupLiteTimer = {
             showToast(strings.jobPreparing || 'Preparing backup…', 'info');
 
             var recoverPayload = new FormData();
-            recoverPayload.append('action', 'backup_lite_get_active_backup_job');
+            recoverPayload.append('action', 'museder_restoreone_get_active_backup_job');
             recoverPayload.append('nonce', settings.nonce);
 
             fetch(settings.ajaxUrl, {
@@ -1536,7 +1536,7 @@ var backupLiteTimer = {
                     throw json && json.data ? json.data : json;
                 }
                 handleJobResponse(json.data.job);
-                backupLiteTimer.start();
+                musederRestoreOneTimer.start();
                 scheduleBackupJobPolling(true);
             }).catch(function (recoverError) {
                 setBackupBusy(false);
@@ -1561,7 +1561,7 @@ var backupLiteTimer = {
             lastCompletedBackupJobId = job.id;
         }
         stopBackupJobPolling();
-        backupLiteTimer.stop(); // Stop elapsed time timer
+        musederRestoreOneTimer.stop(); // Stop elapsed time timer
         setBackupBusy(false);
         backupJobContext.current = null;
         setBackupCancelable(false);
@@ -1627,8 +1627,8 @@ var backupLiteTimer = {
         showMessage('success', strings.successTitle || '', strings.jobComplete || strings.successBackup || '');
         refreshLogs();
 
-        var overlayFunc = window.BackupLiteUI && window.BackupLiteUI.showCompletionOverlay
-            ? window.BackupLiteUI.showCompletionOverlay
+        var overlayFunc = window.MusederRestoreOneUI && window.MusederRestoreOneUI.showCompletionOverlay
+            ? window.MusederRestoreOneUI.showCompletionOverlay
             : showCompletionOverlay;
 
         // Ensure download_url is available and valid
@@ -1675,7 +1675,7 @@ var backupLiteTimer = {
         showMessage('', strings.runningTitle || '', (strings.restoring || 'Restoring backup...') + spinnerMarkup);
 
         const payload = new FormData();
-        payload.append('action', 'backup_lite_restore_existing');
+        payload.append('action', 'museder_restoreone_restore_existing');
         payload.append('nonce', settings.nonce);
         payload.append('filename', filename);
 
@@ -1730,7 +1730,7 @@ $(document).on('click', '.backup-lite-delete-backup', function (event) {
         button.prop('disabled', true);
 
         const payload = new FormData();
-        payload.append('action', 'backup_lite_delete_backup');
+        payload.append('action', 'museder_restoreone_delete_backup');
         payload.append('nonce', settings.nonce);
         payload.append('filename', filename);
 
@@ -1776,15 +1776,15 @@ function initBackupLiteDomReady() {
     observeThirdPartyNotices();
 
     var showToast = function () {
-        if (window.BackupLiteUI && typeof window.BackupLiteUI.showToast === 'function') {
-            return window.BackupLiteUI.showToast.apply(window.BackupLiteUI, arguments);
+        if (window.MusederRestoreOneUI && typeof window.MusederRestoreOneUI.showToast === 'function') {
+            return window.MusederRestoreOneUI.showToast.apply(window.MusederRestoreOneUI, arguments);
         }
         return undefined;
     };
 
     var showCompletionOverlay = function () {
-        if (window.BackupLiteUI && typeof window.BackupLiteUI.showCompletionOverlay === 'function') {
-            return window.BackupLiteUI.showCompletionOverlay.apply(window.BackupLiteUI, arguments);
+        if (window.MusederRestoreOneUI && typeof window.MusederRestoreOneUI.showCompletionOverlay === 'function') {
+            return window.MusederRestoreOneUI.showCompletionOverlay.apply(window.MusederRestoreOneUI, arguments);
         }
         return undefined;
     };
@@ -1845,7 +1845,7 @@ function initBackupLiteDomReady() {
         updateBackupProgress(localizedSettings.activeJob.percentage || 0);
         setBackupStatusMessage(strings.jobResuming || strings.runningMessage || '', 'loading');
         setBackupCancelable(true);
-        backupLiteTimer.start(); // Start elapsed time timer for resumed job
+        musederRestoreOneTimer.start(); // Start elapsed time timer for resumed job
         scheduleBackupJobPolling(true);
     }
 
@@ -1883,13 +1883,13 @@ function initBackupLiteDomReady() {
     // Listen for summary-ready event from chunk-upload-v2.js
 document.addEventListener('backup-lite-summary-ready', function(event) {
     if (event.detail && event.detail.data) {
-        var handleSummaryResponse = window.BackupLiteUI && window.BackupLiteUI.handleSummaryResponse;
+        var handleSummaryResponse = window.MusederRestoreOneUI && window.MusederRestoreOneUI.handleSummaryResponse;
         if (typeof handleSummaryResponse === 'function') {
             handleSummaryResponse(event.detail);
         } else {
             // If handleSummaryResponse is not yet available, wait a bit and try again
             setTimeout(function() {
-                handleSummaryResponse = window.BackupLiteUI && window.BackupLiteUI.handleSummaryResponse;
+                handleSummaryResponse = window.MusederRestoreOneUI && window.MusederRestoreOneUI.handleSummaryResponse;
                 if (typeof handleSummaryResponse === 'function') {
                     handleSummaryResponse(event.detail);
                 } else {
@@ -1923,8 +1923,6 @@ function initRestoreCenter() {
         var uploadButton = document.getElementById('uploadRestore');
         var existingSelect = document.getElementById('existingBackup');
         var existingButton = document.getElementById('selectRestore');
-        var remoteInput = document.getElementById('remoteUrl');
-        var remoteButton = document.getElementById('downloadRestore');
         var progressBar = document.querySelector('.restore-progress .progress-bar-fill');
         var currentProgress = 0; // Track current displayed progress for smooth transitions
         var progressAnimationId = null; // Track animation frame ID
@@ -1953,7 +1951,7 @@ function initRestoreCenter() {
             review: document.querySelector('[data-step-card="review"]'),
             execute: document.querySelector('[data-step-card="execute"]')
         };
-        var reviewCompleted = false;
+        var reviewCompleted = !!(restoreData.summary && (restoreData.summary.name || restoreData.summary.size));
         var restoreCompletionShown = false;
         var hasAnalyzed = !!(restoreData.summary && (restoreData.summary.name || restoreData.summary.size));
         var restoreInProgress = false;
@@ -2039,7 +2037,7 @@ function initRestoreCenter() {
             }
             restoreTickLastAttemptMs = now;
             restoreTickInFlight = true;
-            var formData = prepareFormData('backup_lite_restore_tick');
+            var formData = prepareFormData('museder_restoreone_restore_tick');
             formData.append('job_id', jobId);
             formData.append('slice', '8');
             return ajaxRequest(formData).then(function (json) {
@@ -2093,7 +2091,7 @@ function initRestoreCenter() {
             return String(minutes) + ':' + String(seconds).padStart(2, '0');
         }
         function getStep1TimerKey() {
-            return 'backup_lite_restore_step1_started_at';
+            return 'museder_restoreone_restore_step1_started_at';
         }
         function setStep1StartedNow() {
             try {
@@ -2148,7 +2146,7 @@ function initRestoreCenter() {
             node.textContent = '⏱ ' + formatDurationMs(Date.now() - startedAt);
         }
         function getStep3TimerKey(jobId) {
-            return 'backup_lite_restore_step3_started_at_' + String(jobId || '');
+            return 'museder_restoreone_restore_step3_started_at_' + String(jobId || '');
         }
         function setStep3StartedAt(jobId, startedAtMs) {
             try {
@@ -2220,7 +2218,7 @@ function initRestoreCenter() {
             }
         }
         function getAutotuneKey() {
-            return 'backup_lite_restore_autotune_' + safeHostKey();
+            return 'museder_restoreone_restore_autotune_' + safeHostKey();
         }
         function loadAutotune() {
             try {
@@ -2273,7 +2271,7 @@ function initRestoreCenter() {
             return 'unknown';
         }
         function fetchEnvCaps() {
-            var fd = prepareFormData('backup_lite_restore_env_caps');
+            var fd = prepareFormData('museder_restoreone_restore_env_caps');
             return ajaxRequest(fd).then(function (json) {
                 return getJsonPayload(json) || {};
             }).catch(function () {
@@ -2366,7 +2364,7 @@ function initRestoreCenter() {
                 return refreshingNonce;
             }
             var fd = new FormData();
-            fd.append('action', 'backup_lite_refresh_nonce');
+            fd.append('action', 'museder_restoreone_refresh_nonce');
             refreshingNonce = fetch(ajaxUrl, {
                 method: 'POST',
                 credentials: 'same-origin',
@@ -2419,7 +2417,7 @@ function initRestoreCenter() {
             
             // Try to get history directly via a simple fetch (without nonce if possible)
             // Or use the job status endpoint with fresh nonce
-            var formData = prepareFormData('backup_lite_restore_job_status');
+            var formData = prepareFormData('museder_restoreone_restore_job_status');
             formData.append('job_id', jobId);
             
             ajaxRequest(formData).then(function (json) {
@@ -2490,7 +2488,7 @@ function initRestoreCenter() {
                 
                 // Check history for success/failure entry
                 // Use stored job info if job is null (job was deleted but restore completed)
-                var storedJobInfo = window.backupLiteRestoreJobInfo || {};
+                var storedJobInfo = window.musederRestoreOneRestoreJobInfo || {};
                 var jobStartRaw = (job && (job.started_at_raw || job.created_at_raw)) || storedJobInfo.started_at_raw || storedJobInfo.created_at_raw || 0;
                 var archiveMatch = storedJobInfo.archive || restoreMonitor.archive;
                 
@@ -2649,7 +2647,7 @@ function initRestoreCenter() {
                     if (latestHistory && latestHistory.result === 'success') {
                         var historyTime = latestHistory.timestamp_raw || 0;
                         if (historyTime) {
-                            var storageKey = 'backup_lite_restore_shown_' + (latestHistory.file || '') + '_' + historyTime;
+                            var storageKey = 'museder_restoreone_restore_shown_' + (latestHistory.file || '') + '_' + historyTime;
                             var alreadyShown = sessionStorage.getItem(storageKey);
                             if (alreadyShown) {
                                 console.log('[Backup Lite] Completion was already shown and dismissed, not showing again');
@@ -2702,7 +2700,7 @@ function initRestoreCenter() {
                             url: ajaxUrl,
                             type: 'POST',
                             data: {
-                                action: 'backup_lite_exit_safe_mode',
+                                action: 'museder_restoreone_exit_safe_mode',
                                 nonce: nonce
                             },
                             success: function (response) {
@@ -2806,7 +2804,7 @@ function initRestoreCenter() {
             restoreMonitor.lastStatus = 'running';
             
             // Store job info for history matching when job is deleted
-            window.backupLiteRestoreJobInfo = {
+            window.musederRestoreOneRestoreJobInfo = {
                 id: job.id,
                 started_at_raw: job.started_at_raw || job.created_at_raw || 0,
                 created_at_raw: job.created_at_raw || 0,
@@ -2844,7 +2842,7 @@ function initRestoreCenter() {
             // Only trigger if job is not already failed, cancelled, or completed
             if (job.status === 'pending' && jobStatus !== 'failed' && jobStatus !== 'cancelled' && jobStatus !== 'success' && jobStatus !== 'completed') {
                 // Trigger cron execution immediately via AJAX
-                var triggerFormData = prepareFormData('backup_lite_trigger_restore_job');
+                var triggerFormData = prepareFormData('museder_restoreone_trigger_restore_job');
                 triggerFormData.append('job_id', job.id);
                 ajaxRequest(triggerFormData).catch(function(err) {
                     // If trigger fails, continue with normal polling
@@ -2875,7 +2873,7 @@ function initRestoreCenter() {
                             try {
                                 var heartbeatData = { 'wp_autosave': false };
                                 if (typeof jQuery !== 'undefined' && jQuery.heartbeat) {
-                                    jQuery.heartbeat.enqueue('backup_lite_keep_alive', heartbeatData);
+                                    jQuery.heartbeat.enqueue('museder_restoreone_keep_alive', heartbeatData);
                                 }
                             } catch (e) {
                                 // Ignore heartbeat errors
@@ -2888,8 +2886,8 @@ function initRestoreCenter() {
                 }, 30000); // Every 30 seconds
                 
                 // Store interval ID for cleanup
-                if (!window.backupLiteHeartbeatInterval) {
-                    window.backupLiteHeartbeatInterval = heartbeatInterval;
+                if (!window.musederRestoreOneHeartbeatInterval) {
+                    window.musederRestoreOneHeartbeatInterval = heartbeatInterval;
                 }
             }
 
@@ -2945,13 +2943,13 @@ function initRestoreCenter() {
                 restoreJobProgressTimer = null;
             }
             // Stop heartbeat interval if running
-            if (window.backupLiteHeartbeatInterval) {
-                clearInterval(window.backupLiteHeartbeatInterval);
-                window.backupLiteHeartbeatInterval = null;
+            if (window.musederRestoreOneHeartbeatInterval) {
+                clearInterval(window.musederRestoreOneHeartbeatInterval);
+                window.musederRestoreOneHeartbeatInterval = null;
             }
-            if (window.backupLiteRestoreKeepAliveInterval) {
-                clearInterval(window.backupLiteRestoreKeepAliveInterval);
-                window.backupLiteRestoreKeepAliveInterval = null;
+            if (window.musederRestoreOneRestoreKeepAliveInterval) {
+                clearInterval(window.musederRestoreOneRestoreKeepAliveInterval);
+                window.musederRestoreOneRestoreKeepAliveInterval = null;
             }
             if (restoreAutoResumeInterval) {
                 clearInterval(restoreAutoResumeInterval);
@@ -2968,7 +2966,7 @@ function initRestoreCenter() {
             restoreJobFileSize = 0;
             restoreJobEstimatedDuration = 0;
             // Clear stored job info
-            window.backupLiteRestoreJobInfo = null;
+            window.musederRestoreOneRestoreJobInfo = null;
             // Note: Don't reset restoreMonitor here - it should persist until next restore starts
         }
 
@@ -2982,28 +2980,28 @@ function initRestoreCenter() {
                 clearInterval(restoreJobProgressTimer);
                 restoreJobProgressTimer = null;
             }
-            if (window.backupLiteHeartbeatInterval) {
-                clearInterval(window.backupLiteHeartbeatInterval);
-                window.backupLiteHeartbeatInterval = null;
+            if (window.musederRestoreOneHeartbeatInterval) {
+                clearInterval(window.musederRestoreOneHeartbeatInterval);
+                window.musederRestoreOneHeartbeatInterval = null;
             }
-            if (window.backupLiteRestoreKeepAliveInterval) {
-                clearInterval(window.backupLiteRestoreKeepAliveInterval);
-                window.backupLiteRestoreKeepAliveInterval = null;
+            if (window.musederRestoreOneRestoreKeepAliveInterval) {
+                clearInterval(window.musederRestoreOneRestoreKeepAliveInterval);
+                window.musederRestoreOneRestoreKeepAliveInterval = null;
             }
             restoreMonitorPaused = true;
         }
 
         function startRestoreKeepAlive(jobId) {
-            if (window.backupLiteRestoreKeepAliveInterval) {
+            if (window.musederRestoreOneRestoreKeepAliveInterval) {
                 return;
             }
-            window.backupLiteRestoreKeepAliveInterval = setInterval(function () {
+            window.musederRestoreOneRestoreKeepAliveInterval = setInterval(function () {
                 if (activeRestoreJobId === jobId && restoreInProgress) {
-                    var ka = prepareFormData('backup_lite_keep_alive');
+                    var ka = prepareFormData('museder_restoreone_keep_alive');
                     ajaxRequest(ka).catch(function () {});
                 } else {
-                    clearInterval(window.backupLiteRestoreKeepAliveInterval);
-                    window.backupLiteRestoreKeepAliveInterval = null;
+                    clearInterval(window.musederRestoreOneRestoreKeepAliveInterval);
+                    window.musederRestoreOneRestoreKeepAliveInterval = null;
                 }
             }, 60000);
         }
@@ -3075,7 +3073,7 @@ function initRestoreCenter() {
                 return;
             }
             
-            var formData = prepareFormData('backup_lite_restore_job_status');
+            var formData = prepareFormData('museder_restoreone_restore_job_status');
             formData.append('job_id', jobId);
             ajaxRequest(formData).then(function (json) {
                 // Check again if we have final result (may have been set by another poll)
@@ -3105,7 +3103,7 @@ function initRestoreCenter() {
                 if (!job) {
                     if (payload.history && Array.isArray(payload.history) && payload.history.length > 0) {
                         // Get the job start timestamp from stored job info
-                        var storedJobInfo = window.backupLiteRestoreJobInfo || {};
+                        var storedJobInfo = window.musederRestoreOneRestoreJobInfo || {};
                         var jobStartRaw = storedJobInfo.started_at_raw || storedJobInfo.created_at_raw || 0;
                         
                         // Check latest history entry
@@ -3189,7 +3187,7 @@ function initRestoreCenter() {
                     var timeSinceStart = Date.now() - restoreJobPollStartTime;
                     if (timeSinceStart > 10000) {
                         // Job has been pending for more than 10 seconds, try to trigger it
-                        var triggerFormData = prepareFormData('backup_lite_trigger_restore_job');
+                        var triggerFormData = prepareFormData('museder_restoreone_trigger_restore_job');
                         triggerFormData.append('job_id', job.id);
                         ajaxRequest(triggerFormData).catch(function(err) {
                             console.warn('Could not trigger restore job:', err);
@@ -3657,7 +3655,7 @@ function initRestoreCenter() {
                         console.warn('[Backup Lite] Received 404 error, checking restore history directly', { jobId, error });
                         // Try to check history directly by making a request without job_id
                         // This will return history which we can use to determine restore status
-                        var historyCheckFormData = prepareFormData('backup_lite_restore_job_status');
+                        var historyCheckFormData = prepareFormData('museder_restoreone_restore_job_status');
                         // Don't append job_id - backend will return history only
                         ajaxRequest(historyCheckFormData).then(function(json) {
                             var payload = getJsonPayload(json) || {};
@@ -3780,7 +3778,7 @@ function initRestoreCenter() {
                         console.log('[Backup Lite] Polling timeout reached, checking history for final status');
                         setTimeout(function() {
                             if (activeRestoreJobId === jobId && !restoreMonitor.hasFinalResult) {
-                                var historyCheckFormData = prepareFormData('backup_lite_restore_job_status');
+                                var historyCheckFormData = prepareFormData('museder_restoreone_restore_job_status');
                                 ajaxRequest(historyCheckFormData).then(function(json) {
                                     var payload = getJsonPayload(json) || {};
                                     if (payload.history && payload.history.length > 0) {
@@ -3846,7 +3844,7 @@ function initRestoreCenter() {
                     // This handles the case where job_id was lost but restore might have completed
                     console.log('[Backup Lite] Job ID missing in request, checking history for completion');
                     // Try to get history without job_id
-                    var historyFormData = prepareFormData('backup_lite_restore_job_status');
+                    var historyFormData = prepareFormData('museder_restoreone_restore_job_status');
                     // Don't append job_id - backend will return history only
                     ajaxRequest(historyFormData).then(function(json) {
                         var payload = getJsonPayload(json) || {};
@@ -3916,7 +3914,7 @@ function initRestoreCenter() {
             if (!sessionId) {
                 return;
             }
-            var abortForm = prepareFormData('backup_lite_restore_chunk_abort');
+            var abortForm = prepareFormData('museder_restoreone_restore_chunk_abort');
             abortForm.append('session_id', sessionId);
             ajaxRequest(abortForm).catch(function () {});
         }
@@ -3930,7 +3928,7 @@ function initRestoreCenter() {
             return runChunkUpload(file);
         }
         function runSimpleUpload(file) {
-            var formData = prepareFormData('backup_lite_restore_upload');
+            var formData = prepareFormData('museder_restoreone_restore_upload');
             formData.append('file', file);
             return ajaxRequest(formData).then(function (json) {
                 handleSummaryResponse(json);
@@ -3962,7 +3960,7 @@ function initRestoreCenter() {
                 activeUploadControllers = [];
             }
             function queryChunkStatus(sessionId) {
-                var fd = prepareFormData('backup_lite_restore_chunk_status');
+                var fd = prepareFormData('museder_restoreone_restore_chunk_status');
                 fd.append('session_id', sessionId);
                 return ajaxRequest(fd).then(function (json) {
                     return getJsonPayload(json) || {};
@@ -3973,7 +3971,7 @@ function initRestoreCenter() {
             function startChunkSession(chunkSize) {
                 var totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
             updateUploadStatus(chunkStrings.preparing);
-            var prepareForm = prepareFormData('backup_lite_restore_chunk_prepare');
+            var prepareForm = prepareFormData('museder_restoreone_restore_chunk_prepare');
             prepareForm.append('filename', file.name);
             prepareForm.append('filesize', file.size);
                 prepareForm.append('chunk_size', chunkSize);
@@ -3996,7 +3994,7 @@ function initRestoreCenter() {
                 var start = chunkIndex * chunkSize;
                 var end = Math.min(start + chunkSize, file.size);
                             var chunkBlob = file.slice(start, end);
-                            var uploadForm = prepareFormData('backup_lite_restore_chunk_upload');
+                            var uploadForm = prepareFormData('museder_restoreone_restore_chunk_upload');
                             uploadForm.append('session_id', sessionId);
                             uploadForm.append('chunk_index', chunkIndex);
                             uploadForm.append('chunk', chunkBlob, file.name + '.part');
@@ -4016,7 +4014,7 @@ function initRestoreCenter() {
                     // Nonce issues: try refresh once.
                     if (error && parseInt(error.status, 10) === 403) {
                         return refreshAjaxNonce().then(function () {
-                            var retryForm = prepareFormData('backup_lite_restore_chunk_upload');
+                            var retryForm = prepareFormData('museder_restoreone_restore_chunk_upload');
                             retryForm.append('session_id', sessionId);
                             retryForm.append('chunk_index', chunkIndex);
                             retryForm.append('chunk', chunkBlob, file.name + '.part');
@@ -4101,7 +4099,7 @@ function initRestoreCenter() {
             }
             function finalizeSession(sessionId) {
                     updateUploadStatus(chunkStrings.merging);
-                    var finalizeForm = prepareFormData('backup_lite_restore_chunk_finalize');
+                    var finalizeForm = prepareFormData('museder_restoreone_restore_chunk_finalize');
                     finalizeForm.append('session_id', sessionId);
                 return ajaxRequest(finalizeForm);
             }
@@ -4228,7 +4226,7 @@ function initRestoreCenter() {
                 activeChunkSession = null;
             }
 
-            var cancelForm = prepareFormData(activeRestoreJobId ? 'backup_lite_restore_job_cancel' : 'backup_lite_restore_cancel');
+            var cancelForm = prepareFormData(activeRestoreJobId ? 'museder_restoreone_restore_job_cancel' : 'museder_restoreone_restore_cancel');
             if (activeRestoreJobId) {
                 cancelForm.append('job_id', activeRestoreJobId);
             }
@@ -4490,7 +4488,7 @@ function initRestoreCenter() {
             var originalHTML = existingSelect.innerHTML;
             existingSelect.innerHTML = '<option value="">' + (strings.loadingBackups || 'Loading backups...') + '</option>';
             
-            var formData = prepareFormData('backup_lite_get_backups_list');
+            var formData = prepareFormData('museder_restoreone_get_backups_list');
             
             ajaxRequest(formData).then(function (json) {
                 existingSelect.disabled = false;
@@ -4523,9 +4521,6 @@ function initRestoreCenter() {
             existingSelect.addEventListener('change', resetAnalysisState);
             // Load backups once on page load so the dropdown is always current
             loadBackupsList();
-        }
-        if (remoteInput) {
-            remoteInput.addEventListener('input', resetAnalysisState);
         }
 
         function setProgress(percent, message, done) {
@@ -4968,11 +4963,11 @@ function initRestoreCenter() {
             updateRestoreCancelState();
         });
         
-        // Expose handleSummaryResponse to window.BackupLiteUI for chunk-upload-v2.js
-        if (typeof window.BackupLiteUI === 'undefined') {
-            window.BackupLiteUI = {};
+        // Expose handleSummaryResponse to window.MusederRestoreOneUI for chunk-upload-v2.js
+        if (typeof window.MusederRestoreOneUI === 'undefined') {
+            window.MusederRestoreOneUI = {};
         }
-        window.BackupLiteUI.handleSummaryResponse = handleSummaryResponse;
+        window.MusederRestoreOneUI.handleSummaryResponse = handleSummaryResponse;
 
         if (restoreData.summary) {
             renderSummary(restoreData.summary);
@@ -5046,7 +5041,7 @@ function initRestoreCenter() {
                 // Check if the latest history entry shows a successful restore within the last 5 minutes
                 if (latestHistory && latestHistory.result === 'success' && historyTime && (now - historyTime) < 300) {
                     // Use sessionStorage to track if we've already shown completion for this restore
-                    var storageKey = 'backup_lite_restore_shown_' + (latestHistory.file || '') + '_' + historyTime;
+                    var storageKey = 'museder_restoreone_restore_shown_' + (latestHistory.file || '') + '_' + historyTime;
                     var alreadyShown = sessionStorage.getItem(storageKey);
                     
                     if (!alreadyShown && !restoreCompletionShown) {
@@ -5064,7 +5059,7 @@ function initRestoreCenter() {
                 // Check if the latest history entry shows a failed restore within the last 5 minutes
                 else if (latestHistory && latestHistory.result === 'failed' && historyTime && (now - historyTime) < 300) {
                     // Use sessionStorage to track if we've already shown failure for this restore
-                    var storageKey = 'backup_lite_restore_shown_' + (latestHistory.file || '') + '_' + historyTime;
+                    var storageKey = 'museder_restoreone_restore_shown_' + (latestHistory.file || '') + '_' + historyTime;
                     var alreadyShown = sessionStorage.getItem(storageKey);
                     
                     if (!alreadyShown && !restoreCompletionShown) {
@@ -5181,7 +5176,7 @@ function initRestoreCenter() {
                     notifyError({ message: strings.noFileSelected || 'Please select a backup file first.' });
                     return;
                 }
-                var formData = prepareFormData('backup_lite_restore_from_backup');
+                var formData = prepareFormData('museder_restoreone_restore_from_backup');
                 formData.append('filename', value);
 
                 existingButton.disabled = true;
@@ -5199,44 +5194,6 @@ function initRestoreCenter() {
                     handleSummaryResponse(json);
                 }).catch(function (error) {
                     existingButton.disabled = false;
-                    isAnalyzing = false;
-                    analysisError = true;
-                    hasAnalyzed = false;
-                    restoreCompleted = false;
-                    syncWizard();
-                    updateRestoreCancelState();
-                    notifyError({ message: (error && error.message) ? error.message : (strings.errorGeneric || 'Request failed. Please try again.') });
-                    clearStep1Started();
-                    updateStep1TimerDisplay('');
-                });
-            });
-        }
-
-        if (remoteButton) {
-            remoteButton.addEventListener('click', function () {
-                var value = remoteInput ? remoteInput.value.trim() : '';
-                if (!value) {
-                    notifyError({ message: strings.noRemoteUrl || 'Please enter a valid URL.' });
-                    return;
-                }
-                var formData = prepareFormData('backup_lite_restore_remote_url');
-                formData.append('url', value);
-
-                remoteButton.disabled = true;
-                isAnalyzing = true;
-                analysisError = false;
-                hasAnalyzed = false;
-                restoreCompleted = false;
-                reviewCompleted = false;
-                syncWizard();
-                updateRestoreCancelState();
-                setStep1StartedNow();
-                updateStep1TimerDisplay();
-                ajaxRequest(formData).then(function (json) {
-                    remoteButton.disabled = false;
-                    handleSummaryResponse(json);
-                }).catch(function (error) {
-                    remoteButton.disabled = false;
                     isAnalyzing = false;
                     analysisError = true;
                     hasAnalyzed = false;
@@ -5306,7 +5263,7 @@ function initRestoreCenter() {
                 }
                 markReviewCompleted();
 
-                var formData = prepareFormData('backup_lite_restore_enqueue');
+                var formData = prepareFormData('museder_restoreone_restore_enqueue');
                 formData.append('overwrite', overwriteToggle.checked ? 'true' : 'false');
                 formData.append('autoBackup', autoBackupToggle && autoBackupToggle.checked ? 'true' : 'false');
                 formData.append('skipConfig', skipConfigToggle && skipConfigToggle.checked ? 'true' : 'false');
@@ -5422,7 +5379,7 @@ function initRestoreCenter() {
                 }
 
                 forceUnlockBtn.disabled = true;
-                var fd = prepareFormData('backup_lite_restore_force_unlock');
+                var fd = prepareFormData('museder_restoreone_restore_force_unlock');
                 ajaxRequest(fd).then(function (json) {
                     var payload = getJsonPayload(json) || {};
                     showToast('✅ ' + ((payload && payload.message) ? payload.message : 'Restore lock cleared.'), 'success');
@@ -5445,7 +5402,7 @@ function initRestoreCenter() {
                             showToast('⚠️ Hard unlock cancelled.', 'warning');
                             return;
                         }
-                        var fd2 = prepareFormData('backup_lite_restore_force_unlock');
+                        var fd2 = prepareFormData('museder_restoreone_restore_force_unlock');
                         fd2.append('force', 'true');
                         ajaxRequest(fd2).then(function (json2) {
                             var payload2 = getJsonPayload(json2) || {};
@@ -5493,7 +5450,7 @@ function initRestoreCenter() {
         });
     }
 
-    if (currentPage === 'backup-lite-restore') {
+    if (currentPage === 'museder-restoreone-restore') {
         initRestoreCenter();
         
         // Check for completed restore job on page load (e.g., after re-login)
@@ -5606,6 +5563,12 @@ function initRestoreCenter() {
         return selected;
     }
 
+    function replaceCountPlaceholder(template, count) {
+        var output = String(template || '');
+        output = output.replace(/%([0-9]+)\$s/g, String(count));
+        return output.replace('%s', String(count));
+    }
+
     if (downloadSelectedBtn) {
         downloadSelectedBtn.addEventListener('click', function () {
             var rows = getSelectedRows();
@@ -5618,10 +5581,7 @@ function initRestoreCenter() {
                 window.open(row.download, '_blank');
             }
         });
-        var downloadingMessage = formatString(
-            getString('downloadingBackups', 'Downloading %s backup(s)...'),
-            rows.length
-        );
+        var downloadingMessage = replaceCountPlaceholder(getString('downloadingBackups', 'Downloading %s backup(s)...'), rows.length);
         showToast('⬇️ ' + downloadingMessage, 'info');
         });
     }
@@ -5638,7 +5598,7 @@ function initRestoreCenter() {
                 return;
             }
             var payload = new FormData();
-            payload.append('action', 'backup_lite_delete_backups');
+            payload.append('action', 'museder_restoreone_delete_backups');
             payload.append('nonce', localizedSettings.nonce || '');
             payload.append('filenames', JSON.stringify(rows.map(function (row) { return row.filename; })));
 
@@ -5668,18 +5628,12 @@ function initRestoreCenter() {
                             }
                         });
                     });
-                    var deletedMessage = formatString(
-                        getString('deletedBackups', 'Deleted %s backup(s).'),
-                        deleted.length
-                    );
+                    var deletedMessage = replaceCountPlaceholder(getString('deletedBackups', 'Deleted %s backup(s).'), deleted.length);
                     showToast('🗑️ ' + deletedMessage, 'error');
                 }
 
                 if (errors.length) {
-                    var failedMessage = formatString(
-                        getString('failedDeleteBackups', 'Failed to delete %s backup(s). Check logs.'),
-                        errors.length
-                    );
+                    var failedMessage = replaceCountPlaceholder(getString('failedDeleteBackups', 'Failed to delete %s backup(s). Check logs.'), errors.length);
                     showToast('⚠️ ' + failedMessage, 'warning');
                 }
 
@@ -5779,7 +5733,7 @@ function initRestoreCenter() {
     }
 
     function fetchSchedules() {
-        ajaxRequest('backup_lite_fetch_schedules').then(function (data) {
+        ajaxRequest('museder_restoreone_fetch_schedules').then(function (data) {
             schedules = data.schedules || [];
             renderSchedules();
         }).catch(function () {
@@ -6118,7 +6072,7 @@ function initRestoreCenter() {
             return;
         }
         
-        ajaxRequest('backup_lite_delete_schedule', { id: id }).then(function () {
+        ajaxRequest('museder_restoreone_delete_schedule', { id: id }).then(function () {
             removeScheduleLocally(id);
             if (typeof showToast === 'function') {
                 showToast('🗑️ ' + getString('scheduleDeleted', 'Schedule deleted.'), 'error');
@@ -6141,7 +6095,7 @@ function initRestoreCenter() {
             return;
         }
         
-        ajaxRequest('backup_lite_run_schedule_now', { id: id }).then(function (data) {
+        ajaxRequest('museder_restoreone_run_schedule_now', { id: id }).then(function (data) {
             if (data.schedule) {
                 upsertSchedule(data.schedule);
             }
@@ -6188,7 +6142,7 @@ function initRestoreCenter() {
                 return;
             }
             var scheduleId = modalFormContext && modalFormContext.id ? modalFormContext.id.value : '';
-            var action = scheduleId ? 'backup_lite_update_schedule' : 'backup_lite_add_schedule';
+            var action = scheduleId ? 'museder_restoreone_update_schedule' : 'museder_restoreone_add_schedule';
             var requestPayload = {
                 schedule: JSON.stringify(payload)
             };
@@ -6237,7 +6191,7 @@ function initRestoreCenter() {
             
             var isEdit = scheduleId && scheduleId.trim() !== '';
             
-            // Use backup_lite_save_schedule which handles both create and update
+            // Use museder_restoreone_save_schedule which handles both create and update
             var requestPayload = {
                 schedule: JSON.stringify(payload)
             };
@@ -6246,7 +6200,7 @@ function initRestoreCenter() {
                 requestPayload.schedule_id = scheduleId; // Also send as schedule_id for compatibility
             }
             
-            ajaxRequest('backup_lite_save_schedule', requestPayload).then(function (data) {
+            ajaxRequest('museder_restoreone_save_schedule', requestPayload).then(function (data) {
                 if (data.schedule) {
                     upsertSchedule(data.schedule);
                 } else {
@@ -6301,7 +6255,7 @@ function initRestoreCenter() {
 
     if (refreshLogsButton) {
         refreshLogsButton.addEventListener('click', function () {
-            window.BackupLiteUI.refreshLogs().then(function () {
+            window.MusederRestoreOneUI.refreshLogs().then(function () {
                 updateLogPreview('', '', false);
                 showToast(strings.logsRefreshed || 'Logs refreshed.', 'success');
             });
@@ -6473,7 +6427,7 @@ function initRestoreCenter() {
 
             console.log('[Backup Lite] Sending AJAX request to start schedule');
             $.post(ajaxUrl, {
-                action: 'backup_lite_schedule_action',
+                action: 'museder_restoreone_schedule_action',
                 schedule_action: 'start_now',
                 schedule_id: scheduleId,
                 nonce: nonce
@@ -6530,7 +6484,7 @@ function initRestoreCenter() {
 
             console.log('[Backup Lite] Sending AJAX request to fetch schedules');
             $.post(ajaxUrl, {
-                action: 'backup_lite_fetch_schedules',
+                action: 'museder_restoreone_fetch_schedules',
                 nonce: fetchNonce
             }).done(function (response) {
                 console.log('[Backup Lite] Fetch schedules response:', response);
@@ -6665,7 +6619,7 @@ function initRestoreCenter() {
 
             console.log('[Backup Lite] Sending AJAX request to delete schedule');
             $.post(ajaxUrl, {
-                action: 'backup_lite_schedule_action',
+                action: 'museder_restoreone_schedule_action',
                 schedule_action: 'delete',
                 schedule_id: scheduleId,
                 nonce: nonce
@@ -6728,7 +6682,7 @@ function initRestoreCenter() {
                 
                 // If still not found, fetch from server
                 if (!scheduleData && scheduleId) {
-                    ajaxRequest('backup_lite_fetch_schedules').then(function (data) {
+                    ajaxRequest('museder_restoreone_fetch_schedules').then(function (data) {
                         schedules = data.schedules || [];
                         var found = findScheduleById(scheduleId);
                         if (found) {
@@ -6758,7 +6712,7 @@ function initRestoreCenter() {
         }
 
         // Optional hard-scope: only act when we're on Logs page.
-        if (currentPage && currentPage !== 'backup-lite-logs') {
+        if (currentPage && currentPage !== 'museder-restoreone-logs') {
             return;
         }
 
@@ -6778,7 +6732,7 @@ function initRestoreCenter() {
         }
 
         if (action === 'view') {
-            ajaxRequest('backup_lite_view_log', { log: logName }).then(function (data) {
+            ajaxRequest('museder_restoreone_view_log', { log: logName }).then(function (data) {
                 if (data.log) {
                     updateLogPreview(data.log.name, data.log.content, data.log.truncated);
                 }
@@ -6796,7 +6750,7 @@ function initRestoreCenter() {
             }
             
             var formData = new FormData();
-            formData.append('action', 'backup_lite_get_log_download_url');
+            formData.append('action', 'museder_restoreone_get_log_download_url');
             formData.append('nonce', settings.nonce || '');
             formData.append('log', logName);
             
@@ -6830,9 +6784,9 @@ function initRestoreCenter() {
             if (!window.confirm(strings.confirmDeleteLog || 'Delete this log file?')) {
                 return;
             }
-            ajaxRequest('backup_lite_delete_log', { log: logName }).then(function () {
+            ajaxRequest('museder_restoreone_delete_log', { log: logName }).then(function () {
                 showToast('🗑️ ' + (strings.logDeleted || 'Log deleted.'), 'error');
-                window.BackupLiteUI.refreshLogs();
+                window.MusederRestoreOneUI.refreshLogs();
                 if (logPreviewTitle && logPreviewTitle.textContent && logPreviewTitle.textContent.indexOf(logName) !== -1) {
                     updateLogPreview('', '', false);
                 }
@@ -6865,7 +6819,7 @@ function initRestoreCenter() {
                     'Content-Type': 'application/x-www-form-urlencoded',
                 },
                 body: new URLSearchParams({
-                    action: 'backup_lite_verify_license',
+                    action: 'museder_restoreone_verify_license',
                     nonce: settings.nonce,
                     license_key: licenseKey.value,
                 }),
@@ -6900,7 +6854,7 @@ function initRestoreCenter() {
             }
             return;
         }
-        settingsMessage.className = 'backup-lite-messages';
+        settingsMessage.className = 'museder-restoreone-messages';
         settingsMessage.classList.add('is-visible');
         if (type === 'error') {
             settingsMessage.classList.add('is-error');
@@ -6968,7 +6922,7 @@ function initRestoreCenter() {
         settingsForm.addEventListener('submit', function (event) {
             event.preventDefault();
             var payload = gatherSettings();
-            ajaxRequest('backup_lite_save_settings', { settings: JSON.stringify(payload) }).then(function () {
+            ajaxRequest('museder_restoreone_save_settings', { settings: JSON.stringify(payload) }).then(function () {
                 showSettingsMessage(strings.settingsSaved || 'Settings saved successfully.', 'success');
                 showToast('⚙️ ' + (strings.settingsSaved || 'Settings saved successfully.'), 'success');
             }).catch(function (error) {
@@ -6977,7 +6931,7 @@ function initRestoreCenter() {
             });
         });
 
-        ajaxRequest('backup_lite_fetch_settings').then(function (data) {
+        ajaxRequest('museder_restoreone_fetch_settings').then(function (data) {
             if (!data.settings) {
                 return;
             }
@@ -7040,7 +6994,7 @@ function initRestoreCenter() {
 
     if (testEmailButton) {
         testEmailButton.addEventListener('click', function () {
-            ajaxRequest('backup_lite_test_email').then(function () {
+            ajaxRequest('museder_restoreone_test_email').then(function () {
                 showToast(strings.testEmailSuccess || '✅ Test email sent successfully', 'success');
             }).catch(function (error) {
                 var message = (error && error.message) ? error.message : 'Unable to send test email.';
@@ -7059,8 +7013,8 @@ function initRestoreCenter() {
         }
     }
 
-    if (currentPage === 'backup-lite-logs' && window.BackupLiteUI && typeof window.BackupLiteUI.refreshLogs === 'function') {
-        window.BackupLiteUI.refreshLogs();
+    if (currentPage === 'museder-restoreone-logs' && window.MusederRestoreOneUI && typeof window.MusederRestoreOneUI.refreshLogs === 'function') {
+        window.MusederRestoreOneUI.refreshLogs();
     }
 
     // Floating Actions Menu to avoid clipping under rounded/scrollable containers
@@ -7363,7 +7317,7 @@ function initRestoreCenter() {
                 url: ajaxUrl,
                 type: 'POST',
                 data: {
-                    action: 'backup_lite_estimate_result',
+                    action: 'museder_restoreone_estimate_result',
                     nonce: nonce
                 },
                 success: function (response) {
@@ -7439,7 +7393,7 @@ function initRestoreCenter() {
                 url: ajaxUrl,
                 type: 'POST',
                 data: {
-                    action: 'backup_lite_estimate_start',
+                    action: 'museder_restoreone_estimate_start',
                     nonce: nonce,
                     force: force ? 'true' : 'false'
                 },
@@ -7483,7 +7437,7 @@ function initRestoreCenter() {
                     url: ajaxUrl,
                     type: 'POST',
                     data: {
-                        action: 'backup_lite_estimate_progress',
+                        action: 'museder_restoreone_estimate_progress',
                         nonce: nonce
                     },
                     success: function (response) {
@@ -7566,7 +7520,8 @@ function initRestoreCenter() {
     })();
 
     // Handle exit safe mode button
-    var exitSafeModeBtn = document.getElementById('backup-lite-exit-safe-mode-btn');
+    var exitSafeModeBtn = document.getElementById('museder-restoreone-exit-safe-mode-btn') ||
+        document.getElementById('backup-lite-exit-safe-mode-btn');
     if (exitSafeModeBtn) {
         exitSafeModeBtn.addEventListener('click', function () {
             var button = this;
@@ -7581,14 +7536,14 @@ function initRestoreCenter() {
                 url: ajaxUrl,
                 type: 'POST',
                 data: {
-                    action: 'backup_lite_exit_safe_mode',
+                    action: 'museder_restoreone_exit_safe_mode',
                     nonce: nonce
                 },
                 success: function (response) {
                     if (response.success) {
                         showToast('✅ ' + (response.data.message || 'Safe mode exited and plugins restored successfully.'), 'success');
                         // Hide the notice
-                        var notice = document.getElementById('backup-lite-safe-mode-notice');
+                        var notice = document.getElementById('museder-restoreone-safe-mode-notice');
                         if (notice) {
                             notice.style.transition = 'opacity 0.3s';
                             notice.style.opacity = '0';
@@ -7705,7 +7660,7 @@ if (document.readyState === 'loading') {
                 deleteButton.disabled = true;
                 
                 var payload = new FormData();
-                payload.append('action', 'backup_lite_delete_restore_history');
+                payload.append('action', 'museder_restoreone_delete_restore_history');
                 payload.append('nonce', localizedSettings.nonce || '');
                 payload.append('timestamps', JSON.stringify(timestamps));
                 

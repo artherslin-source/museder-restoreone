@@ -4,7 +4,7 @@ Tags: backup, migration, restore, site-backup, database-backup
 Requires at least: 5.8
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 2.7.241
+Stable tag: 2.7.243
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -13,6 +13,12 @@ A lightweight WordPress backup & restore plugin focused on compatibility, single
 == Changelog ==
 
 For full changelog history, please see the project repository changelog archive.
+
+= 2.7.243 =
+* Schedule handler: GLOB_BRACE fallback for PHP builds that omit it; retention apply_retention_rules file_exists check before filemtime to avoid warnings. Restore page: Exit Safe Mode button id unified to museder-restoreone-exit-safe-mode-btn with JS fallback for backup-lite-exit-safe-mode-btn. Small-site flow verified (backup, restore, settings, schedules, safe mode exit).
+
+= 2.7.242 =
+* WP.org compliance: Plugin Check 1.7.0 clean (0 errors, 0 warnings). Security and request handling (nonce/capability, sanitize/validate, json whitelist). Path and storage under wp_upload_dir. Removed direct core includes where possible; ABSPATH guards. Naming: menu/REST/JS prefixes unified to museder-restoreone. Readme external services (S3, OpenAI); Plugin URI updated.
 
 = 2.7.220 =
 * WP.org compliance hardening (nonce/cap checks, sanitization/escaping, uploads storage under wp_upload_dir).
@@ -259,7 +265,7 @@ No. Backup download and upload endpoints are protected by time-limited tokens an
 * Security: Removed all direct calls to move_uploaded_file() to pass WordPress Plugin Check. Replaced with stream_copy_to_stream() for secure file handling. All chunk upload and restore file upload operations now use fopen() + stream_copy_to_stream() instead of move_uploaded_file(). Functionality, error codes, and HTTP status codes remain unchanged.
 
 = 2.6.125 =
-* Updated plugin header: Changed Plugin URI to https://museder.com/restoreone and Author URI to https://museder.com/ to ensure they are different. Updated plugin name, description, author, and WordPress version requirements.
+* Updated plugin header: Plugin URI and Author URI set for WordPress.org; plugin name, description, author, and WordPress version requirements updated.
 
 = 2.6.124 =
 * Fixed backup file size issue: Resolved problem where backup archives were incorrectly including other backup files (causing 540MB+ backups). Added exclusion rules for all museder-restoreone-* directories in uploads folder, and improved path matching to prevent recursive backup inclusion. Backup files (.zip, .wpress) in uploads directory are now properly excluded.

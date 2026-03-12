@@ -93,7 +93,7 @@
     };
 
     // ============================================
-    // PRO Features Lock & Upgrade Modal
+    // Feature unavailable modal
     // ============================================
 
     var proUpgradeModal = null;
@@ -109,21 +109,13 @@
         modal.innerHTML = [
             '<div class="backup-lite-pro-modal-content">',
             '  <div class="backup-lite-pro-modal-header">',
-            '    <h2>' + (window.MusederRestoreOnePro && window.MusederRestoreOnePro.strings ? window.MusederRestoreOnePro.strings.modalTitle : 'Museder RestoreOne PRO Required') + '</h2>',
-            '    <p class="backup-lite-pro-modal-subtitle">' + (window.MusederRestoreOnePro && window.MusederRestoreOnePro.strings ? window.MusederRestoreOnePro.strings.modalSubtitle : 'This feature requires Museder RestoreOne PRO to activate.') + '</p>',
+            '    <h2>' + (window.MusederRestoreOnePro && window.MusederRestoreOnePro.strings ? window.MusederRestoreOnePro.strings.modalTitle : 'Feature unavailable') + '</h2>',
+            '    <p class="backup-lite-pro-modal-subtitle">' + (window.MusederRestoreOnePro && window.MusederRestoreOnePro.strings ? window.MusederRestoreOnePro.strings.modalSubtitle : 'This option is not available in the current build.') + '</p>',
             '    <p class="backup-lite-pro-modal-feature"></p>',
-            '  </div>',
-            '  <div class="backup-lite-pro-modal-body">',
-            '    <ul>',
-            '      <li>AI Backup Copilot</li>',
-            '      <li>Cloud Storage Integration</li>',
-            '      <li>Advanced Filters & Smart Retention</li>',
-            '      <li>System Reports & Analytics</li>',
-            '    </ul>',
             '  </div>',
             '  <div class="backup-lite-pro-modal-footer">',
             '    <button class="backup-lite-pro-modal-close">' + (window.MusederRestoreOnePro && window.MusederRestoreOnePro.strings ? window.MusederRestoreOnePro.strings.close : 'Close') + '</button>',
-            '    <button class="backup-lite-pro-modal-upgrade">' + (window.MusederRestoreOnePro && window.MusederRestoreOnePro.strings ? window.MusederRestoreOnePro.strings.upgrade : 'Upgrade to PRO') + '</button>',
+            '    <button class="backup-lite-pro-modal-upgrade">' + (window.MusederRestoreOnePro && window.MusederRestoreOnePro.strings ? window.MusederRestoreOnePro.strings.upgrade : 'OK') + '</button>',
             '  </div>',
             '</div>'
         ].join('');
@@ -150,13 +142,17 @@
             });
         }
 
-        // Upgrade button
+        // Secondary button: only shown when the current edition exposes a destination URL.
         var upgradeBtn = modal.querySelector('.backup-lite-pro-modal-upgrade');
         if (upgradeBtn) {
-            upgradeBtn.addEventListener('click', function () {
-                var upgradeUrl = (window.MusederRestoreOnePro && window.MusederRestoreOnePro.upgradeUrl) || 'https://your-site.com/pro';
-                window.open(upgradeUrl, '_blank');
-            });
+            var upgradeUrl = (window.MusederRestoreOnePro && window.MusederRestoreOnePro.upgradeUrl) || '';
+            if (!upgradeUrl) {
+                upgradeBtn.style.display = 'none';
+            } else {
+                upgradeBtn.addEventListener('click', function () {
+                    window.open(upgradeUrl, '_blank');
+                });
+            }
         }
 
         // Close on backdrop click
@@ -196,7 +192,7 @@
         if (proFeatureNotice) {
             var label = formatFeatureLabel(featureKey);
             if (label) {
-                var template = (window.MusederRestoreOnePro && window.MusederRestoreOnePro.strings && window.MusederRestoreOnePro.strings.featureLocked) ? window.MusederRestoreOnePro.strings.featureLocked : 'Feature "%s" is available in Museder RestoreOne PRO.';
+                var template = (window.MusederRestoreOnePro && window.MusederRestoreOnePro.strings && window.MusederRestoreOnePro.strings.featureLocked) ? window.MusederRestoreOnePro.strings.featureLocked : 'Feature "%s" is not available in the current build.';
                 proFeatureNotice.textContent = template.replace('%s', label);
                 proFeatureNotice.style.display = 'block';
             } else {
@@ -215,32 +211,6 @@
             proUpgradeModal.classList.remove('active');
         }
     }
-
-    // Handle data-upgrade="pro" clicks
-    document.addEventListener('click', function (e) {
-        var target = e.target.closest('[data-upgrade="pro"]');
-        if (!target) {
-            return;
-        }
-
-        e.preventDefault();
-        e.stopPropagation();
-        showProModal(target.getAttribute('data-pro-feature'));
-    }, true);
-
-    document.addEventListener('click', function (e) {
-        var locked = e.target.closest('.js-bl-pro-locked');
-        if (!locked) {
-            return;
-        }
-        e.preventDefault();
-        var featureKey = locked.getAttribute('data-pro-feature') || 'pro_feature';
-        if (window.BackupLiteUI && typeof window.BackupLiteUI.openProUpgradeModal === 'function') {
-            window.BackupLiteUI.openProUpgradeModal(featureKey);
-        } else {
-            showProModal(featureKey);
-        }
-    }, true);
 
     // Expose functions globally
     window.BackupLiteUI.showProModal = showProModal;

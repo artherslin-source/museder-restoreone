@@ -43,9 +43,9 @@ class Museder_AI_Provider_Free implements Museder_AI_Provider_Interface {
             'meta'    => [
                 'generated_at_gmt' => $generated_at_gmt,
                 'provider'         => 'free',
-                'version'          => defined( 'BACKUP_LITE_VERSION' ) ? BACKUP_LITE_VERSION : '',
+                'version'          => defined( 'MUSEDER_RESTOREONE_VERSION' ) ? MUSEDER_RESTOREONE_VERSION : '',
             ],
-            'summary' => __( 'Preview scan completed. Upgrade to Pro to unlock deeper analysis and advanced recommendations.', 'museder-restoreone' ),
+            'summary' => __( 'Preview scan completed. Review the recommendations below to improve backup readiness.', 'museder-restoreone' ),
             'items'   => $items,
         ];
     }

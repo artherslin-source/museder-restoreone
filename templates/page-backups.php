@@ -12,9 +12,9 @@
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
-$status  = isset( $status ) ? $status : Backup_Lite_UI::get_environment_status();
-$backups = isset( $backups ) ? $backups : Backup_Lite_UI::get_backups_list();
-$settings = class_exists( 'Backup_Lite_Settings' ) ? Backup_Lite_Settings::get_settings() : [];
+$status  = isset( $status ) ? $status : Museder_Restoreone_UI::get_environment_status();
+$backups = isset( $backups ) ? $backups : Museder_Restoreone_UI::get_backups_list();
+$settings = class_exists( 'Museder_Restoreone_Settings' ) ? Museder_Restoreone_Settings::get_settings() : [];
 ?>
 
 <div class="wrap backup-lite-admin backup-lite-backups">
@@ -24,7 +24,7 @@ $settings = class_exists( 'Backup_Lite_Settings' ) ? Backup_Lite_Settings::get_s
     <div id="backup-lite-messages" class="backup-lite-messages" role="status" aria-live="polite"></div>
 
     <?php
-    $is_pro = Backup_Lite_Pro::is_pro_active();
+    $is_pro = Museder_Restoreone_Pro::is_pro_active();
     ?>
     
     <!-- Estimated Backup Size Card -->
@@ -93,7 +93,7 @@ $settings = class_exists( 'Backup_Lite_Settings' ) ? Backup_Lite_Settings::get_s
             <?php esc_html_e( 'Note: Single files larger than 2GB are skipped for safety. If files are skipped, the backup completion message will show the reason and examples.', 'museder-restoreone' ); ?>
         </p>
         <form id="backup-lite-backup-form" method="post">
-            <?php wp_nonce_field( Backup_Lite_UI::NONCE, 'backup_lite_nonce' ); ?>
+            <?php wp_nonce_field( Museder_Restoreone_UI::NONCE, 'museder_restoreone_nonce' ); ?>
             
             <?php
             $bl_backup_mode_default = isset( $settings['backup_mode_default'] ) ? (string) $settings['backup_mode_default'] : 'auto';
@@ -163,7 +163,7 @@ $settings = class_exists( 'Backup_Lite_Settings' ) ? Backup_Lite_Settings::get_s
                 <!-- PRO: Backup Label -->
                 <div class="bl-form-control" style="margin-bottom: 16px;">
                     <label>
-                        <span><?php esc_html_e( 'Backup Label', 'museder-restoreone' ); ?> <span class="pro-badge">PRO</span></span>
+                        <span><?php esc_html_e( 'Backup Label', 'museder-restoreone' ); ?></span>
                         <input type="text" id="bl-backup-label" name="backup_label" placeholder="<?php esc_attr_e( 'e.g., Before major update', 'museder-restoreone' ); ?>" />
                         <small class="description"><?php esc_html_e( 'Add a label to identify this backup (optional).', 'museder-restoreone' ); ?></small>
                     </label>
@@ -175,7 +175,6 @@ $settings = class_exists( 'Backup_Lite_Settings' ) ? Backup_Lite_Settings::get_s
                         <input type="checkbox" id="bl-backup-encrypt" name="backup_encrypt" />
                         <span>
                             <?php esc_html_e( 'Encrypt backup with AES-256', 'museder-restoreone' ); ?>
-                            <span class="pro-badge">PRO</span>
                         </span>
                     </label>
                     <small class="description"><?php esc_html_e( 'Encrypt the backup archive for additional security.', 'museder-restoreone' ); ?></small>
@@ -187,7 +186,6 @@ $settings = class_exists( 'Backup_Lite_Settings' ) ? Backup_Lite_Settings::get_s
                         <input type="checkbox" id="bl-backup-dual" name="backup_dual" />
                         <span>
                             <?php esc_html_e( 'Create dual version (Snapshot + Full)', 'museder-restoreone' ); ?>
-                            <span class="pro-badge">PRO</span>
                         </span>
                     </label>
                     <small class="description"><?php esc_html_e( 'Create both a quick snapshot and a full backup.', 'museder-restoreone' ); ?></small>
@@ -196,43 +194,14 @@ $settings = class_exists( 'Backup_Lite_Settings' ) ? Backup_Lite_Settings::get_s
                 <!-- PRO: Cloud Storage Destinations -->
                 <div class="bl-form-control" style="margin-bottom: 16px;">
                     <label>
-                        <span><?php esc_html_e( 'Cloud Storage', 'museder-restoreone' ); ?> <span class="pro-badge">PRO</span></span>
+                        <span><?php esc_html_e( 'Cloud Storage', 'museder-restoreone' ); ?></span>
                         <select id="bl-backup-cloud" name="backup_cloud" multiple style="min-height: 100px;">
                             <option value="local" selected><?php esc_html_e( 'Local Storage', 'museder-restoreone' ); ?></option>
-                            <option value="google_drive" disabled><?php esc_html_e( 'Google Drive (Coming Soon)', 'museder-restoreone' ); ?></option>
-                            <option value="s3" disabled><?php esc_html_e( 'Amazon S3 (Coming Soon)', 'museder-restoreone' ); ?></option>
-                            <option value="dropbox" disabled><?php esc_html_e( 'Dropbox (Coming Soon)', 'museder-restoreone' ); ?></option>
+                            <option value="google_drive" disabled><?php esc_html_e( 'Google Drive', 'museder-restoreone' ); ?></option>
+                            <option value="s3" disabled><?php esc_html_e( 'Amazon S3', 'museder-restoreone' ); ?></option>
+                            <option value="dropbox" disabled><?php esc_html_e( 'Dropbox', 'museder-restoreone' ); ?></option>
                         </select>
                         <small class="description"><?php esc_html_e( 'Select cloud storage destinations (multiple selection supported).', 'museder-restoreone' ); ?></small>
-                    </label>
-                </div>
-            <?php else : ?>
-                <!-- Free: Locked PRO Features -->
-                <div class="bl-form-control pro-locked" style="margin-bottom: 16px; opacity: 0.5;" data-upgrade="pro">
-                    <label>
-                        <span><?php esc_html_e( 'Backup Label', 'museder-restoreone' ); ?> <span class="pro-badge">PRO</span></span>
-                        <input type="text" disabled placeholder="<?php esc_attr_e( 'e.g., Before major update', 'museder-restoreone' ); ?>" />
-                        <small class="description"><?php esc_html_e( 'Add a label to identify this backup (PRO feature).', 'museder-restoreone' ); ?></small>
-                    </label>
-                </div>
-
-                <div class="bl-form-control pro-locked" style="margin-bottom: 16px; opacity: 0.5;" data-upgrade="pro">
-                    <label class="backup-lite-toggle">
-                        <input type="checkbox" disabled />
-                        <span>
-                            <?php esc_html_e( 'Encrypt backup with AES-256', 'museder-restoreone' ); ?>
-                            <span class="pro-badge">PRO</span>
-                        </span>
-                    </label>
-                </div>
-
-                <div class="bl-form-control pro-locked" style="margin-bottom: 16px; opacity: 0.5;" data-upgrade="pro">
-                    <label>
-                        <span><?php esc_html_e( 'Cloud Storage', 'museder-restoreone' ); ?> <span class="pro-badge">PRO</span></span>
-                        <select disabled>
-                            <option><?php esc_html_e( 'Local Storage Only (Free)', 'museder-restoreone' ); ?></option>
-                        </select>
-                        <small class="description"><?php esc_html_e( 'Upgrade to PRO for cloud storage integration.', 'museder-restoreone' ); ?></small>
                     </label>
                 </div>
             <?php endif; ?>
@@ -308,7 +277,7 @@ $settings = class_exists( 'Backup_Lite_Settings' ) ? Backup_Lite_Settings::get_s
                                 <?php
                                 $duration_seconds = isset( $item['duration_seconds'] ) && is_numeric( $item['duration_seconds'] ) ? (int) $item['duration_seconds'] : null;
                                 if ( $duration_seconds !== null && $duration_seconds > 0 ) {
-                                    echo esc_html( backup_lite_format_duration( $duration_seconds ) );
+                                    echo esc_html( museder_restoreone_format_duration( $duration_seconds ) );
                                 } else {
                                     echo '—';
                                 }

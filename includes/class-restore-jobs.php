@@ -3,16 +3,16 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-class Backup_Lite_Restore_Jobs {
+class Museder_Restoreone_Restore_Jobs {
 
-    const OPTION_KEY          = 'backup_lite_restore_jobs';
-    const CRON_HOOK           = 'backup_lite_run_restore_job';
+    const OPTION_KEY          = 'museder_restoreone_restore_jobs';
+    const CRON_HOOK           = 'museder_restoreone_run_restore_job';
     const MAX_HISTORY_JOBS    = 8;
     const CLEANUP_AGE_SECONDS = WEEK_IN_SECONDS;
 
     public static function init() {
         add_action( self::CRON_HOOK, [ __CLASS__, 'handle_job' ], 10, 1 );
-        add_action( 'backup_lite_cleanup_cron', [ __CLASS__, 'cleanup_jobs' ] );
+        add_action( 'museder_restoreone_cleanup_cron', [ __CLASS__, 'cleanup_jobs' ] );
     }
 
     /**
@@ -47,7 +47,7 @@ class Backup_Lite_Restore_Jobs {
             'log'        => '',
             'error'      => '',
             'history'    => [
-                'timestamp' => backup_lite_local_time( 'Y-m-d H:i:s' ),
+                'timestamp' => museder_restoreone_local_time( 'Y-m-d H:i:s' ),
                 'file'      => isset( $state['filename'] ) ? $state['filename'] : ( isset( $state['file'] ) ? basename( $state['file'] ) : '' ),
                 'result'    => 'pending',
                 'log'       => '',
@@ -82,7 +82,7 @@ class Backup_Lite_Restore_Jobs {
         ] );
 
         try {
-            $result = Backup_Lite_Restore_Handler::run_job( $job_id, self::get_job( $job_id ) );
+            $result = Museder_Restoreone_Restore_Handler::run_job( $job_id, self::get_job( $job_id ) );
 
             $updates = [
                 'finished_at' => current_time( 'mysql' ),
@@ -212,7 +212,7 @@ class Backup_Lite_Restore_Jobs {
             }
             $parsed = strtotime( $timestamp_str );
             if ( false !== $parsed ) {
-                return backup_lite_local_time( 
+                return museder_restoreone_local_time( 
                     get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), 
                     $parsed 
                 );
@@ -240,8 +240,8 @@ class Backup_Lite_Restore_Jobs {
 
         if ( ! empty( $job['log'] ) ) {
             $response['log_url'] = wp_nonce_url(
-                admin_url( 'admin-post.php?action=backup_lite_download_log&log=' . rawurlencode( basename( $job['log'] ) ) ),
-                'backup_lite_download_log_' . basename( $job['log'] )
+                admin_url( 'admin-post.php?action=museder_restoreone_download_log&log=' . rawurlencode( basename( $job['log'] ) ) ),
+                'museder_restoreone_download_log_' . basename( $job['log'] )
             );
         } else {
             $response['log_url'] = '';
@@ -267,8 +267,8 @@ class Backup_Lite_Restore_Jobs {
 
     public static function spawn_cron() {
         // Do not include WordPress core files directly. Best-effort: nudge wp-cron via loopback request.
-        if ( function_exists( 'backup_lite_nudge_wp_cron' ) ) {
-            backup_lite_nudge_wp_cron();
+        if ( function_exists( 'museder_restoreone_nudge_wp_cron' ) ) {
+            museder_restoreone_nudge_wp_cron();
         }
     }
 

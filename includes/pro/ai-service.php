@@ -12,17 +12,17 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 /**
  * AI Service class for Backup Lite PRO.
  */
-class Backup_Lite_AI_Service {
+class Museder_Restoreone_AI_Service {
 
     /**
      * Initialize the AI service.
      */
     public static function init() {
         // Register anomaly detection cron
-        if ( ! wp_next_scheduled( 'backup_lite_ai_anomaly_detection' ) ) {
-            wp_schedule_event( time(), 'backup_lite_6hours', 'backup_lite_ai_anomaly_detection' );
+        if ( ! wp_next_scheduled( 'museder_restoreone_ai_anomaly_detection' ) ) {
+            wp_schedule_event( time(), 'museder_restoreone_6hours', 'museder_restoreone_ai_anomaly_detection' );
         }
-        add_action( 'backup_lite_ai_anomaly_detection', [ __CLASS__, 'cron_anomaly_detection' ] );
+        add_action( 'museder_restoreone_ai_anomaly_detection', [ __CLASS__, 'cron_anomaly_detection' ] );
 
         // Register custom cron interval
         add_filter( 'cron_schedules', [ __CLASS__, 'add_cron_intervals' ] );
@@ -35,7 +35,7 @@ class Backup_Lite_AI_Service {
      * @return array
      */
     public static function add_cron_intervals( $schedules ) {
-        $schedules['backup_lite_6hours'] = [
+        $schedules['museder_restoreone_6hours'] = [
             'interval' => 6 * HOUR_IN_SECONDS,
             'display'  => __( 'Every 6 Hours', 'museder-restoreone' ),
         ];
@@ -46,14 +46,14 @@ class Backup_Lite_AI_Service {
      * Cron job for anomaly detection.
      */
     public static function cron_anomaly_detection() {
-        if ( ! Backup_Lite_Pro::is_pro_active() ) {
+        if ( ! Museder_Restoreone_Pro::is_pro_active() ) {
             return;
         }
 
         $anomalies = self::detect_anomalies();
         if ( ! empty( $anomalies['anomalies'] ) ) {
             // Store anomalies for dashboard display
-            update_option( 'backup_lite_ai_anomalies', $anomalies['anomalies'], false );
+            update_option( 'museder_restoreone_ai_anomalies', $anomalies['anomalies'], false );
         }
     }
 
@@ -70,10 +70,10 @@ class Backup_Lite_AI_Service {
      * }
      */
     public static function analyze_site( $site_meta = [], $backup_history = [] ) {
-        if ( ! Backup_Lite_Pro::is_pro_active() ) {
+        if ( ! Museder_Restoreone_Pro::is_pro_active() ) {
             return [
                 'error'   => 'pro_required',
-                'message' => __( 'This feature requires Museder RestoreOne PRO.', 'museder-restoreone' ),
+                'message' => __( 'This feature is unavailable in the current build.', 'museder-restoreone' ),
             ];
         }
 
@@ -83,7 +83,7 @@ class Backup_Lite_AI_Service {
         $db_version = $GLOBALS['wpdb']->db_version();
         $site_url = home_url();
         $wp_content_size = self::calculate_wp_content_size();
-        $backup_count = count( Backup_Lite_UI::get_backups_list() );
+        $backup_count = count( Museder_Restoreone_UI::get_backups_list() );
         $last_backup = self::get_last_backup_time();
 
         // Analyze and generate recommendations
@@ -110,10 +110,10 @@ class Backup_Lite_AI_Service {
      * }
      */
     public static function get_health_score() {
-        if ( ! Backup_Lite_Pro::is_pro_active() ) {
+        if ( ! Museder_Restoreone_Pro::is_pro_active() ) {
             return [
                 'error'   => 'pro_required',
-                'message' => __( 'This feature requires Museder RestoreOne PRO.', 'museder-restoreone' ),
+                'message' => __( 'This feature is unavailable in the current build.', 'museder-restoreone' ),
             ];
         }
 
@@ -145,7 +145,7 @@ class Backup_Lite_AI_Service {
         }
 
         // Factor 2: Schedule configuration
-        $schedules = Backup_Lite_Schedule_Handler::list_schedules();
+        $schedules = Museder_Restoreone_Schedule_Handler::list_schedules();
         if ( empty( $schedules ) ) {
             $factors['schedule'] = 30;
             $risks[] = [
@@ -159,7 +159,7 @@ class Backup_Lite_AI_Service {
         }
 
         // Factor 3: Backup count
-        $backup_count = count( Backup_Lite_UI::get_backups_list() );
+        $backup_count = count( Museder_Restoreone_UI::get_backups_list() );
         if ( $backup_count === 0 ) {
             $factors['backup_count'] = 0;
             $risks[] = [
@@ -216,10 +216,10 @@ class Backup_Lite_AI_Service {
      * }
      */
     public static function get_restore_summary( $job_id ) {
-        if ( ! Backup_Lite_Pro::is_pro_active() ) {
+        if ( ! Museder_Restoreone_Pro::is_pro_active() ) {
             return [
                 'error'   => 'pro_required',
-                'message' => __( 'This feature requires Museder RestoreOne PRO.', 'museder-restoreone' ),
+                'message' => __( 'This feature is unavailable in the current build.', 'museder-restoreone' ),
             ];
         }
 
@@ -242,10 +242,10 @@ class Backup_Lite_AI_Service {
      * }
      */
     public static function diagnose_log( $log_content ) {
-        if ( ! Backup_Lite_Pro::is_pro_active() ) {
+        if ( ! Museder_Restoreone_Pro::is_pro_active() ) {
             return [
                 'error'   => 'pro_required',
-                'message' => __( 'This feature requires Museder RestoreOne PRO.', 'museder-restoreone' ),
+                'message' => __( 'This feature is unavailable in the current build.', 'museder-restoreone' ),
             ];
         }
 
@@ -264,10 +264,10 @@ class Backup_Lite_AI_Service {
      * }
      */
     public static function get_smart_schedule() {
-        if ( ! Backup_Lite_Pro::is_pro_active() ) {
+        if ( ! Museder_Restoreone_Pro::is_pro_active() ) {
             return [
                 'error'   => 'pro_required',
-                'message' => __( 'This feature requires Museder RestoreOne PRO.', 'museder-restoreone' ),
+                'message' => __( 'This feature is unavailable in the current build.', 'museder-restoreone' ),
             ];
         }
 
@@ -286,10 +286,10 @@ class Backup_Lite_AI_Service {
      * }
      */
     public static function process_nl_command( $command ) {
-        if ( ! Backup_Lite_Pro::is_pro_active() ) {
+        if ( ! Museder_Restoreone_Pro::is_pro_active() ) {
             return [
                 'error'   => 'pro_required',
-                'message' => __( 'This feature requires Museder RestoreOne PRO.', 'museder-restoreone' ),
+                'message' => __( 'This feature is unavailable in the current build.', 'museder-restoreone' ),
             ];
         }
 
@@ -307,7 +307,7 @@ class Backup_Lite_AI_Service {
      * }
      */
     public static function detect_anomalies() {
-        if ( ! Backup_Lite_Pro::is_pro_active() ) {
+        if ( ! Museder_Restoreone_Pro::is_pro_active() ) {
             return [];
         }
 
@@ -315,7 +315,7 @@ class Backup_Lite_AI_Service {
         $anomalies = [];
 
         // Check for backup size anomalies
-        $backups = Backup_Lite_UI::get_backups_list();
+        $backups = Museder_Restoreone_UI::get_backups_list();
         if ( count( $backups ) > 1 ) {
             $sizes = array_column( $backups, 'size' );
             $avg_size = array_sum( $sizes ) / count( $sizes );
@@ -332,7 +332,7 @@ class Backup_Lite_AI_Service {
         }
 
         // Check for consecutive failures
-        $recent_logs = Backup_Lite_Log_Handler::get_recent_events( 'backup_result', 5 );
+        $recent_logs = Museder_Restoreone_Log_Handler::get_recent_events( 'backup_result', 5 );
         $failures = 0;
         foreach ( $recent_logs as $log ) {
             if ( isset( $log['context']['status'] ) && $log['context']['status'] === 'failed' ) {
@@ -370,7 +370,7 @@ class Backup_Lite_AI_Service {
      * @return int Size in bytes.
      */
     private static function calculate_wp_content_size() {
-        $wp_content = function_exists( 'backup_lite_get_wp_content_dir' ) ? backup_lite_get_wp_content_dir() : '';
+        $wp_content = function_exists( 'museder_restoreone_get_wp_content_dir' ) ? museder_restoreone_get_wp_content_dir() : '';
         if ( '' === $wp_content || ! is_dir( $wp_content ) ) {
             return 0;
         }
@@ -396,7 +396,7 @@ class Backup_Lite_AI_Service {
      * @return int|false Timestamp or false if no backup.
      */
     private static function get_last_backup_time() {
-        $backups = Backup_Lite_UI::get_backups_list();
+        $backups = Museder_Restoreone_UI::get_backups_list();
         if ( empty( $backups ) ) {
             return false;
         }
@@ -503,7 +503,7 @@ class Backup_Lite_AI_Service {
         // Common cache directories
         $cache_dirs = [ 'cache', 'w3tc', 'wp-rocket', 'litespeed' ];
         foreach ( $cache_dirs as $dir ) {
-            $content_dir = function_exists( 'backup_lite_get_wp_content_dir' ) ? backup_lite_get_wp_content_dir() : '';
+            $content_dir = function_exists( 'museder_restoreone_get_wp_content_dir' ) ? museder_restoreone_get_wp_content_dir() : '';
             if ( '' === $content_dir ) {
                 continue;
             }

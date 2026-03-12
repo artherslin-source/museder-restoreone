@@ -6,7 +6,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 // Note: Do not change global PHP ini settings here (e.g., display_errors) as it can affect other plugins/routes.
 // JSON responses are protected by proper output handling in the endpoint implementation.
 
-class Backup_Lite_Chunk_V2 {
+class Museder_Restoreone_Chunk_V2 {
 
     const TEMP_FOLDER    = 'v2-uploads';
     const MANIFEST_FILE  = 'manifest.json';
@@ -58,7 +58,7 @@ class Backup_Lite_Chunk_V2 {
 
     public static function register_routes() {
         register_rest_route(
-            'backup-lite/v2',
+            'museder-restoreone/v2',
             '/prepare',
             [
                 'methods'             => WP_REST_Server::CREATABLE,
@@ -68,7 +68,7 @@ class Backup_Lite_Chunk_V2 {
         );
 
         register_rest_route(
-            'backup-lite/v2',
+            'museder-restoreone/v2',
             '/chunk',
             [
                 'methods'             => WP_REST_Server::CREATABLE,
@@ -78,7 +78,7 @@ class Backup_Lite_Chunk_V2 {
         );
 
         register_rest_route(
-            'backup-lite/v2',
+            'museder-restoreone/v2',
             '/status',
             [
                 'methods'             => WP_REST_Server::READABLE,
@@ -88,7 +88,7 @@ class Backup_Lite_Chunk_V2 {
         );
 
         register_rest_route(
-            'backup-lite/v2',
+            'museder-restoreone/v2',
             '/finalize',
             [
                 'methods'             => WP_REST_Server::CREATABLE,
@@ -98,7 +98,7 @@ class Backup_Lite_Chunk_V2 {
         );
 
         register_rest_route(
-            'backup-lite/v2',
+            'museder-restoreone/v2',
             '/abort',
             [
                 'methods'             => WP_REST_Server::CREATABLE,
@@ -226,7 +226,7 @@ class Backup_Lite_Chunk_V2 {
             'total_chunks' => $total_chunks,
             'file_sha1'    => $file_sha1,
             'received'     => [],
-            'created_at'   => backup_lite_local_time( 'c' ),
+            'created_at'   => museder_restoreone_local_time( 'c' ),
         ];
 
         if ( ! self::save_manifest( $upload_id, $manifest ) ) {
@@ -647,7 +647,7 @@ class Backup_Lite_Chunk_V2 {
                 fclose( $fh );
 
                 // Detailed diagnostics for support (admin-only route; stored in plugin log).
-                backup_lite_log( 'error', 'Finalize failed to open chunk for reading.', [
+                museder_restoreone_log( 'error', 'Finalize failed to open chunk for reading.', [
                     'upload_id'   => $upload_id,
                     'chunk_index' => $i,
                     'exists'      => file_exists( $chunk_path ),
@@ -682,7 +682,7 @@ class Backup_Lite_Chunk_V2 {
                     fclose( $chunk_handle );
                     // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen
                     fclose( $fh );
-                    backup_lite_log( 'error', 'Finalize failed to read chunk.', [
+                    museder_restoreone_log( 'error', 'Finalize failed to read chunk.', [
                         'upload_id'   => $upload_id,
                         'chunk_index' => $i,
                         'exists'      => file_exists( $chunk_path ),
@@ -803,10 +803,10 @@ class Backup_Lite_Chunk_V2 {
             $zip_ok = false;
 
             // Record a warning into restore history so admins can see the root cause even if log files aren't writable.
-            if ( function_exists( 'backup_lite_upsert_restore_history' ) ) {
+            if ( function_exists( 'museder_restoreone_upsert_restore_history' ) ) {
                 $t = time();
                 $file_for_history = isset( $manifest['filename' ] ) ? (string) $manifest['filename'] : basename( $final_path );
-                backup_lite_upsert_restore_history(
+                museder_restoreone_upsert_restore_history(
                     [
                         'job_id'        => 'upload_' . sanitize_text_field( (string) $upload_id ),
                         'timestamp_utc' => $t,
@@ -830,7 +830,7 @@ class Backup_Lite_Chunk_V2 {
         ] );
 
         // Move final file to backup directory and prepare restore session
-        $backup_dir = backup_lite_get_backup_dir();
+        $backup_dir = museder_restoreone_get_backup_dir();
         $base_name = '';
         if ( isset( $manifest['filename'] ) && is_string( $manifest['filename'] ) && '' !== $manifest['filename'] ) {
             $base_name = sanitize_file_name( $manifest['filename'] );
@@ -878,10 +878,10 @@ class Backup_Lite_Chunk_V2 {
         self::cleanup_upload( $upload_id );
 
         // Prepare restore session (analyze the backup file)
-        if ( class_exists( 'Backup_Lite_Restore_Handler' ) ) {
+        if ( class_exists( 'Museder_Restoreone_Restore_Handler' ) ) {
             try {
-                $summary = Backup_Lite_Restore_Handler::prepare_session( $destination, 'upload' );
-                $progress = Backup_Lite_Restore_Handler::format_progress();
+                $summary = Museder_Restoreone_Restore_Handler::prepare_session( $destination, 'upload' );
+                $progress = Museder_Restoreone_Restore_Handler::format_progress();
                 
                 return new WP_REST_Response( [
                     'ok'       => true,
@@ -892,7 +892,7 @@ class Backup_Lite_Chunk_V2 {
                     'progress' => $progress,
                 ], 200 );
             } catch ( Exception $e ) {
-                backup_lite_log( 'error', 'Failed to prepare restore session after finalize', [
+                museder_restoreone_log( 'error', 'Failed to prepare restore session after finalize', [
                     'error' => $e->getMessage(),
                     'file'  => $destination,
                 ] );
@@ -1001,7 +1001,7 @@ class Backup_Lite_Chunk_V2 {
     }
 
     private static function get_root_dir() {
-        $base = backup_lite_get_temp_dir();
+        $base = museder_restoreone_get_temp_dir();
         $dir  = trailingslashit( $base ) . self::TEMP_FOLDER;
         if ( ! is_dir( $dir ) && ! wp_mkdir_p( $dir ) ) {
             return false;
@@ -1142,12 +1142,12 @@ class Backup_Lite_Chunk_V2 {
             // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- debug logging only when WP_DEBUG is enabled
             error_log( sprintf( '%s %s', $label, $payload ) );
         }
-        if ( function_exists( 'backup_lite_log' ) ) {
-            backup_lite_log( $label, $context, $level );
+        if ( function_exists( 'museder_restoreone_log' ) ) {
+            museder_restoreone_log( $label, $context, $level );
         }
     }
 }
 
-if ( ! class_exists( 'Backup_Lite_Chunk_Handler_V2', false ) ) {
-    class_alias( 'Backup_Lite_Chunk_V2', 'Backup_Lite_Chunk_Handler_V2' );
+if ( ! class_exists( 'Museder_Restoreone_Chunk_Handler_V2', false ) ) {
+    class_alias( 'Museder_Restoreone_Chunk_V2', 'Museder_Restoreone_Chunk_Handler_V2' );
 }

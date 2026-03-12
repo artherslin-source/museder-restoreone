@@ -1,4 +1,9 @@
 <?php
-// Silence is golden.
-
-
+/**
+ * Silence is golden.
+ *
+ * @package Museder_Restoreone
+ */
+if ( ! defined( 'ABSPATH' ) ) {
+    exit;
+}

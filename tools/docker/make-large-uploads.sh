@@ -21,6 +21,7 @@ docker compose exec -T wordpress bash -lc "
   for i in \$(seq 1 20); do
     test -f \"zero-\$i.bin\" || dd if=/dev/zero of=\"zero-\$i.bin\" bs=1M count=50 status=none
   done
+  chown -R www-data:www-data \"$TARGET_DIR\"
   du -sh .
 "
 

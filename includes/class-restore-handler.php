@@ -3,46 +3,45 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-class Backup_Lite_Restore_Handler {
+class Museder_Restoreone_Restore_Handler {
 
-    const OPTION_STATE = 'backup_lite_restore_state';
+    const OPTION_STATE = 'museder_restoreone_restore_state';
 
     public static function init() {
-        add_action( 'wp_ajax_backup_lite_restore_upload', [ __CLASS__, 'upload' ] );
-        add_action( 'wp_ajax_backup_lite_restore_from_backup', [ __CLASS__, 'restore_from_backup' ] );
-        add_action( 'wp_ajax_backup_lite_restore_remote_url', [ __CLASS__, 'restore_remote' ] );
-        add_action( 'wp_ajax_backup_lite_restore_progress', [ __CLASS__, 'progress' ] );
-        add_action( 'wp_ajax_backup_lite_restore_enqueue', [ __CLASS__, 'enqueue_restore_job' ] );
-        add_action( 'wp_ajax_backup_lite_restore_job_status', [ __CLASS__, 'job_status' ] );
-        add_action( 'wp_ajax_backup_lite_restore_job_cancel', [ __CLASS__, 'job_cancel' ] );
-        add_action( 'wp_ajax_backup_lite_restore_tick', [ __CLASS__, 'restore_tick' ] );
-        add_action( 'wp_ajax_backup_lite_restore_confirm', [ __CLASS__, 'confirm' ] );
-        add_action( 'wp_ajax_backup_lite_restore_cancel', [ __CLASS__, 'cancel_restore' ] );
-        add_action( 'wp_ajax_backup_lite_trigger_restore_job', [ __CLASS__, 'trigger_restore_job' ] );
-        add_action( 'wp_ajax_backup_lite_restore_chunk_prepare', [ __CLASS__, 'chunk_prepare' ] );
-        add_action( 'wp_ajax_backup_lite_restore_chunk_upload', [ __CLASS__, 'chunk_upload' ] );
-        add_action( 'wp_ajax_backup_lite_restore_chunk_finalize', [ __CLASS__, 'chunk_finalize' ] );
-        add_action( 'wp_ajax_backup_lite_restore_chunk_abort', [ __CLASS__, 'chunk_abort' ] );
-        add_action( 'wp_ajax_backup_lite_restore_chunk_status', [ __CLASS__, 'chunk_status' ] );
-        add_action( 'wp_ajax_backup_lite_restore_env_caps', [ __CLASS__, 'env_caps' ] );
-        add_action( 'wp_ajax_backup_lite_exit_safe_mode', [ __CLASS__, 'exit_safe_mode' ] );
-        add_action( 'wp_ajax_backup_lite_restore_force_unlock', [ __CLASS__, 'force_unlock' ] );
+        add_action( 'wp_ajax_museder_restoreone_restore_upload', [ __CLASS__, 'upload' ] );
+        add_action( 'wp_ajax_museder_restoreone_restore_from_backup', [ __CLASS__, 'restore_from_backup' ] );
+        add_action( 'wp_ajax_museder_restoreone_restore_progress', [ __CLASS__, 'progress' ] );
+        add_action( 'wp_ajax_museder_restoreone_restore_enqueue', [ __CLASS__, 'enqueue_restore_job' ] );
+        add_action( 'wp_ajax_museder_restoreone_restore_job_status', [ __CLASS__, 'job_status' ] );
+        add_action( 'wp_ajax_museder_restoreone_restore_job_cancel', [ __CLASS__, 'job_cancel' ] );
+        add_action( 'wp_ajax_museder_restoreone_restore_tick', [ __CLASS__, 'restore_tick' ] );
+        add_action( 'wp_ajax_museder_restoreone_restore_confirm', [ __CLASS__, 'confirm' ] );
+        add_action( 'wp_ajax_museder_restoreone_restore_cancel', [ __CLASS__, 'cancel_restore' ] );
+        add_action( 'wp_ajax_museder_restoreone_trigger_restore_job', [ __CLASS__, 'trigger_restore_job' ] );
+        add_action( 'wp_ajax_museder_restoreone_restore_chunk_prepare', [ __CLASS__, 'chunk_prepare' ] );
+        add_action( 'wp_ajax_museder_restoreone_restore_chunk_upload', [ __CLASS__, 'chunk_upload' ] );
+        add_action( 'wp_ajax_museder_restoreone_restore_chunk_finalize', [ __CLASS__, 'chunk_finalize' ] );
+        add_action( 'wp_ajax_museder_restoreone_restore_chunk_abort', [ __CLASS__, 'chunk_abort' ] );
+        add_action( 'wp_ajax_museder_restoreone_restore_chunk_status', [ __CLASS__, 'chunk_status' ] );
+        add_action( 'wp_ajax_museder_restoreone_restore_env_caps', [ __CLASS__, 'env_caps' ] );
+        add_action( 'wp_ajax_museder_restoreone_exit_safe_mode', [ __CLASS__, 'exit_safe_mode' ] );
+        add_action( 'wp_ajax_museder_restoreone_restore_force_unlock', [ __CLASS__, 'force_unlock' ] );
     }
 
     /**
      * Force unlock a stuck restore lock/active job pointer (admin-only).
      * This is a manual escape hatch for cases where restore crashed or the lock persisted after failure.
      *
-     * @wp_ajax backup_lite_restore_force_unlock
+     * @wp_ajax museder_restoreone_restore_force_unlock
      */
     public static function force_unlock() {
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
+        Museder_Restoreone_UI::verify_ajax_request();
         // Additional nonce verification for plugin-check.
-        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
+        check_ajax_referer( Museder_Restoreone_UI::NONCE, 'nonce' );
 
-        $active_job_id = class_exists( 'Backup_Lite_Restore_Service' ) ? Backup_Lite_Restore_Service::get_active_job_id() : '';
-        $lock = class_exists( 'Backup_Lite_Restore_Lock' ) ? Backup_Lite_Restore_Lock::current_lock() : null;
+        $active_job_id = class_exists( 'Museder_Restoreone_Restore_Service' ) ? Museder_Restoreone_Restore_Service::get_active_job_id() : '';
+        $lock = class_exists( 'Museder_Restoreone_Restore_Lock' ) ? Museder_Restoreone_Restore_Lock::current_lock() : null;
         $lock_job_id = ( is_array( $lock ) && ! empty( $lock['job_id'] ) ) ? (string) $lock['job_id'] : '';
 
         // Optional hard-force mode: allow bypassing the running-job safety check.
@@ -67,7 +66,7 @@ class Backup_Lite_Restore_Handler {
         if ( ! $hard_force ) {
             foreach ( $candidates as $job_id ) {
                 try {
-                    $st = Backup_Lite_Restore_Service::status( $job_id );
+                    $st = Museder_Restoreone_Restore_Service::status( $job_id );
                     $completed = is_array( $st ) && ! empty( $st['completed'] );
                     $stage = is_array( $st ) && isset( $st['stage'] ) ? (string) $st['stage'] : '';
                     if ( ! $completed && ! in_array( $stage, [ 'done', 'failed', 'cancelled' ], true ) ) {
@@ -97,13 +96,13 @@ class Backup_Lite_Restore_Handler {
             'cleared_state' => false,
         ];
 
-        if ( class_exists( 'Backup_Lite_Restore_Lock' ) ) {
-            Backup_Lite_Restore_Lock::release();
+        if ( class_exists( 'Museder_Restoreone_Restore_Lock' ) ) {
+            Museder_Restoreone_Restore_Lock::release();
             $cleared['cleared_lock'] = true;
         }
 
-        if ( class_exists( 'Backup_Lite_Restore_Service' ) ) {
-            delete_option( Backup_Lite_Restore_Service::ACTIVE_JOB_OPTION );
+        if ( class_exists( 'Museder_Restoreone_Restore_Service' ) ) {
+            delete_option( Museder_Restoreone_Restore_Service::ACTIVE_JOB_OPTION );
             $cleared['cleared_active'] = true;
         }
 
@@ -117,7 +116,7 @@ class Backup_Lite_Restore_Handler {
             }
         }
 
-        backup_lite_log( 'warning', 'Force unlock invoked for restore.', $cleared );
+        museder_restoreone_log( 'warning', 'Force unlock invoked for restore.', $cleared );
 
         wp_send_json_success(
             [
@@ -131,14 +130,14 @@ class Backup_Lite_Restore_Handler {
     /**
      * Return safe environment capability limits for client-side upload tuning.
      *
-     * @wp_ajax backup_lite_restore_env_caps
+     * @wp_ajax museder_restoreone_restore_env_caps
      */
     public static function env_caps() {
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
+        Museder_Restoreone_UI::verify_ajax_request();
 
         // Additional nonce verification for plugin-check.
-        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
+        check_ajax_referer( Museder_Restoreone_UI::NONCE, 'nonce' );
 
         // Only expose minimal, non-sensitive values needed for upload tuning.
         $upload_max = (string) ini_get( 'upload_max_filesize' );
@@ -190,9 +189,9 @@ class Backup_Lite_Restore_Handler {
 
     public static function upload() {
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
+        Museder_Restoreone_UI::verify_ajax_request();
         // Additional nonce verification for plugin-check
-        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
+        check_ajax_referer( Museder_Restoreone_UI::NONCE, 'nonce' );
 
         // Optimize runtime environment for large file processing
         self::optimize_runtime_environment();
@@ -227,7 +226,7 @@ class Backup_Lite_Restore_Handler {
         $uploaded  = wp_handle_upload( $file, $overrides );
 
         if ( isset( $uploaded['error'] ) ) {
-            backup_lite_log( 'error', 'restore_upload_failed', [ 'error' => $uploaded['error'] ] );
+            museder_restoreone_log( 'error', 'restore_upload_failed', [ 'error' => $uploaded['error'] ] );
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'Failed to upload restore file.', 'museder-restoreone' ) ], 500 );
         }
@@ -249,7 +248,7 @@ class Backup_Lite_Restore_Handler {
             wp_send_json_error( [ 'message' => esc_html__( 'Unsupported file type. Allowed: zip.', 'museder-restoreone' ) ], 415 );
         }
 
-        $backup_dir = backup_lite_get_backup_dir();
+        $backup_dir = museder_restoreone_get_backup_dir();
         $unique     = wp_unique_filename( $backup_dir, basename( $file_path ) );
         $destination = trailingslashit( $backup_dir ) . $unique;
 
@@ -267,17 +266,17 @@ class Backup_Lite_Restore_Handler {
         // For very large files (>1GB), we skip automatic conversion to avoid timeouts
         // For large files (500MB-1GB), we attempt conversion with extended timeout
         // The restore process will attempt to handle the file directly if conversion is skipped
-        require_once BACKUP_LITE_PATH . 'includes/class-ai1wm-converter.php';
+        require_once MUSEDER_RESTOREONE_PATH . 'includes/class-ai1wm-converter.php';
         
         $should_attempt_conversion = true;
         if ( $file_size > $very_large_file_threshold ) {
-            backup_lite_log( 'info', 'Very large file detected, skipping automatic conversion to avoid timeout. Restore will attempt to handle file directly.', [
+            museder_restoreone_log( 'info', 'Very large file detected, skipping automatic conversion to avoid timeout. Restore will attempt to handle file directly.', [
                 'file' => basename( $destination ),
                 'size' => size_format( $file_size, 2 ),
             ] );
             $should_attempt_conversion = false;
         } elseif ( $file_size > $large_file_threshold ) {
-            backup_lite_log( 'info', 'Large file detected, conversion may take longer than usual.', [
+            museder_restoreone_log( 'info', 'Large file detected, conversion may take longer than usual.', [
                 'file' => basename( $destination ),
                 'size' => size_format( $file_size, 2 ),
             ] );
@@ -285,8 +284,8 @@ class Backup_Lite_Restore_Handler {
         
         if ( $should_attempt_conversion ) {
             try {
-                if ( class_exists( 'Backup_Lite_AI1WM_Converter' ) && Backup_Lite_AI1WM_Converter::is_ai1wm_backup( $destination ) ) {
-                    backup_lite_log( 'info', 'Detected All-in-One WP Migration backup, converting to Museder RestoreOne format.', [
+                if ( class_exists( 'Museder_Restoreone_AI1WM_Converter' ) && Museder_Restoreone_AI1WM_Converter::is_ai1wm_backup( $destination ) ) {
+                    museder_restoreone_log( 'info', 'Detected All-in-One WP Migration backup, converting to Museder RestoreOne format.', [
                         'file' => basename( $destination ),
                         'size' => size_format( $file_size, 2 ),
                     ] );
@@ -302,7 +301,7 @@ class Backup_Lite_Restore_Handler {
                         // @phpcs:enable Squiz.PHP.DiscouragedFunctions.Discouraged
                     }
                     
-                    $convert_result = Backup_Lite_AI1WM_Converter::convert( $destination );
+                    $convert_result = Museder_Restoreone_AI1WM_Converter::convert( $destination );
                     
                     if ( ! empty( $convert_result['success'] ) && ! empty( $convert_result['file'] ) && file_exists( $convert_result['file'] ) ) {
                         // Delete original file and use converted file
@@ -316,13 +315,13 @@ class Backup_Lite_Restore_Handler {
                         }
                         
                         $destination = $convert_result['file'];
-                        backup_lite_log( 'info', 'Successfully converted All-in-One backup.', [
+                        museder_restoreone_log( 'info', 'Successfully converted All-in-One backup.', [
                             'converted_file' => basename( $destination ),
                         ] );
                     } else {
                         // Conversion failed, but we can still try to restore the original file
                         // Some All-in-One formats might be compatible even without conversion
-                        backup_lite_log( 'warning', 'All-in-One conversion failed, attempting to restore original file.', [
+                        museder_restoreone_log( 'warning', 'All-in-One conversion failed, attempting to restore original file.', [
                             'error' => isset( $convert_result['error'] ) ? $convert_result['error'] : 'unknown',
                             'message' => isset( $convert_result['message'] ) ? $convert_result['message'] : '',
                         ] );
@@ -334,7 +333,7 @@ class Backup_Lite_Restore_Handler {
             } catch ( Exception $e ) {
                 // Log conversion error but continue with original file
                 // @plugin-check: sanitized - exception message is for logging only, not user-facing
-                backup_lite_log( 'error', 'Exception during All-in-One conversion, continuing with original file.', [
+                museder_restoreone_log( 'error', 'Exception during All-in-One conversion, continuing with original file.', [
                     'error' => sanitize_text_field( $e->getMessage() ),
                     'trace' => sanitize_text_field( $e->getTraceAsString() ),
                 ] );
@@ -356,7 +355,7 @@ class Backup_Lite_Restore_Handler {
             ] );
         } catch ( Exception $e ) {
             // @plugin-check: sanitized - exception message is for logging only, not user-facing
-            backup_lite_log( 'error', 'Failed to prepare restore session after upload.', [
+            museder_restoreone_log( 'error', 'Failed to prepare restore session after upload.', [
                 'error' => sanitize_text_field( $e->getMessage() ),
                 'file' => basename( $destination ),
                 'trace' => sanitize_text_field( $e->getTraceAsString() ),
@@ -371,9 +370,9 @@ class Backup_Lite_Restore_Handler {
 
     public static function restore_from_backup() {
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
+        Museder_Restoreone_UI::verify_ajax_request();
         // Additional nonce verification for plugin-check
-        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
+        check_ajax_referer( Museder_Restoreone_UI::NONCE, 'nonce' );
 
         // Nonce verified above
         // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
@@ -385,11 +384,11 @@ class Backup_Lite_Restore_Handler {
         }
 
         // Use helper function to get absolute path from file name
-        $path = backup_lite_get_backup_path( $filename );
+        $path = museder_restoreone_get_backup_path( $filename );
 
         if ( ! $path ) {
             // Enhanced error logging with more context
-            $backups_dir = backup_lite_get_backup_dir();
+            $backups_dir = museder_restoreone_get_backup_dir();
             $backup_files = [];
             
             // Try to list available backup files for debugging
@@ -400,7 +399,7 @@ class Backup_Lite_Restore_Handler {
                 }
             }
             
-            backup_lite_log( 'error', 'Restore archive not readable.', [
+            museder_restoreone_log( 'error', 'Restore archive not readable.', [
                 'filename' => $filename,
                 'backups_dir' => $backups_dir,
                 'backups_dir_exists' => is_dir( $backups_dir ),
@@ -416,42 +415,42 @@ class Backup_Lite_Restore_Handler {
         }
 
         // Check if this is an All-in-One WP Migration backup and convert it
-        require_once BACKUP_LITE_PATH . 'includes/class-ai1wm-converter.php';
+        require_once MUSEDER_RESTOREONE_PATH . 'includes/class-ai1wm-converter.php';
         
         try {
-            if ( class_exists( 'Backup_Lite_AI1WM_Converter' ) && Backup_Lite_AI1WM_Converter::is_ai1wm_backup( $path ) ) {
-                backup_lite_log( 'info', 'Detected All-in-One WP Migration backup, converting to Museder RestoreOne format.', [
+            if ( class_exists( 'Museder_Restoreone_AI1WM_Converter' ) && Museder_Restoreone_AI1WM_Converter::is_ai1wm_backup( $path ) ) {
+                museder_restoreone_log( 'info', 'Detected All-in-One WP Migration backup, converting to Museder RestoreOne format.', [
                     'file' => basename( $path ),
                 ] );
                 
-                $convert_result = Backup_Lite_AI1WM_Converter::convert( $path );
+                $convert_result = Museder_Restoreone_AI1WM_Converter::convert( $path );
                 
                 if ( ! empty( $convert_result['success'] ) && ! empty( $convert_result['file'] ) ) {
                     // Use helper to get absolute path - handles both full paths and filenames
-                    $converted_file = backup_lite_get_backup_path( $convert_result['file'] );
+                    $converted_file = museder_restoreone_get_backup_path( $convert_result['file'] );
                     
                     if ( $converted_file ) {
                         // Use converted file instead of original
                         $path = $converted_file;
-                        backup_lite_log( 'info', 'Successfully converted All-in-One backup.', [
+                        museder_restoreone_log( 'info', 'Successfully converted All-in-One backup.', [
                             'converted_file' => basename( $path ),
                             'converted_path' => $path,
                         ] );
                     } else {
-                        backup_lite_log( 'warning', 'Converted file not found or unreadable, using original file.', [
+                        museder_restoreone_log( 'warning', 'Converted file not found or unreadable, using original file.', [
                             'converted_file' => $convert_result['file'],
                             'original_file' => basename( $path ),
                         ] );
                     }
                 } else {
                     // Conversion failed, log warning but continue with original
-                    backup_lite_log( 'warning', 'All-in-One conversion failed, attempting to restore original file.', [
+                    museder_restoreone_log( 'warning', 'All-in-One conversion failed, attempting to restore original file.', [
                         'error' => isset( $convert_result['error'] ) ? $convert_result['error'] : 'unknown',
                     ] );
                 }
             }
         } catch ( Exception $e ) {
-            backup_lite_log( 'error', 'Exception during All-in-One conversion, continuing with original file.', [
+            museder_restoreone_log( 'error', 'Exception during All-in-One conversion, continuing with original file.', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
             ] );
@@ -472,7 +471,7 @@ class Backup_Lite_Restore_Handler {
             ] );
         } catch ( Exception $e ) {
             // @plugin-check: sanitized - exception message is for logging only, not user-facing
-            backup_lite_log( 'error', 'Failed to prepare restore session.', [
+            museder_restoreone_log( 'error', 'Failed to prepare restore session.', [
                 'error' => sanitize_text_field( $e->getMessage() ),
                 'file' => basename( $path ),
                 'trace' => sanitize_text_field( $e->getTraceAsString() ),
@@ -487,140 +486,13 @@ class Backup_Lite_Restore_Handler {
 
     public static function restore_remote() {
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
-        // Additional nonce verification for plugin-check
-        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
+        Museder_Restoreone_UI::verify_ajax_request();
+        check_ajax_referer( Museder_Restoreone_UI::NONCE, 'nonce' );
 
-        // Nonce verified above
-        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
-        $url = isset( $_POST['url'] ) ? esc_url_raw( wp_unslash( $_POST['url'] ) ) : '';
-        // phpcs:enable WordPress.Security.NonceVerification.Missing
-        if ( empty( $url ) || ! wp_http_validate_url( $url ) ) {
-            // @plugin-check: escaped
-            wp_send_json_error( [ 'message' => esc_html__( 'Please enter a valid URL.', 'museder-restoreone' ) ], 400 );
-        }
-
-        if ( defined( 'ABSPATH' ) ) {
-            // Guard core includes to reduce WP.org review risk (admin-only, nonce+cap protected).
-            if ( ! function_exists( 'download_url' ) ) {
-                require_once ABSPATH . 'wp-admin/includes/file.php';
-            }
-            if ( ! function_exists( 'media_handle_sideload' ) ) {
-                require_once ABSPATH . 'wp-admin/includes/media.php';
-            }
-        }
-
-        $temp = download_url( $url, 300 );
-        if ( is_wp_error( $temp ) ) {
-            backup_lite_log( 'error', 'restore_remote_download_failed', [ 'url' => $url, 'error' => $temp->get_error_message() ] );
-            // @plugin-check: escaped
-            wp_send_json_error( [ 'message' => esc_html__( 'Unable to download remote backup.', 'museder-restoreone' ) ], 500 );
-        }
-
-        $ext = strtolower( pathinfo( $temp, PATHINFO_EXTENSION ) );
-        if ( ! in_array( $ext, [ 'zip' ], true ) ) {
-            // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
-            // $temp is from wp_handle_upload() result, validated and sanitized
-            if ( function_exists( 'wp_delete_file' ) ) {
-                wp_delete_file( $temp );
-            } else {
-                // phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
-                // Unlinking temporary backup/restore artifact. WP_Filesystem is not practical here.
-                @unlink( $temp );
-                // phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
-            }
-            wp_send_json_error( [ 'message' => esc_html__( 'Downloaded file is not a supported backup format.', 'museder-restoreone' ) ], 415 );
-        }
-
-        $backup_dir = backup_lite_get_backup_dir();
-        $unique     = wp_unique_filename( $backup_dir, basename( $temp ) );
-        $destination = trailingslashit( $backup_dir ) . $unique;
-
-        if ( ! self::move_file( $temp, $destination ) ) {
-            // @plugin-check: escaped
-            wp_send_json_error( [ 'message' => esc_html__( 'Unable to store downloaded file for restore.', 'museder-restoreone' ) ], 500 );
-        }
-
-        // Check if this is an All-in-One WP Migration backup and convert it
-        require_once BACKUP_LITE_PATH . 'includes/class-ai1wm-converter.php';
-        
-        try {
-            if ( class_exists( 'Backup_Lite_AI1WM_Converter' ) && Backup_Lite_AI1WM_Converter::is_ai1wm_backup( $destination ) ) {
-                backup_lite_log( 'info', 'Detected All-in-One WP Migration backup, converting to Museder RestoreOne format.', [
-                    'file' => basename( $destination ),
-                    'url' => $url,
-                ] );
-                
-                $convert_result = Backup_Lite_AI1WM_Converter::convert( $destination );
-                
-                if ( ! empty( $convert_result['success'] ) && ! empty( $convert_result['file'] ) ) {
-                    // Use helper to get absolute path - handles both full paths and filenames
-                    $converted_file = backup_lite_get_backup_path( $convert_result['file'] );
-                    
-                    if ( $converted_file ) {
-                        // Delete original file and use converted file
-                        if ( function_exists( 'wp_delete_file' ) ) {
-                            wp_delete_file( $destination );
-                        } else {
-                            // phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
-                            // Unlinking temporary backup/restore artifact. WP_Filesystem is not practical here.
-                            @unlink( $destination );
-                            // phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
-                        }
-
-                        $destination = $converted_file;
-                        backup_lite_log( 'info', 'Successfully converted All-in-One backup.', [
-                            'converted_file' => basename( $destination ),
-                            'converted_path' => $destination,
-                        ] );
-                    } else {
-                        backup_lite_log( 'warning', 'Converted file not found or unreadable, using original file.', [
-                            'converted_file' => $convert_result['file'],
-                            'original_file' => basename( $destination ),
-                        ] );
-                    }
-                } else {
-                    // Conversion failed, but continue with original file
-                    backup_lite_log( 'warning', 'All-in-One conversion failed, attempting to restore original file.', [
-                        'error' => isset( $convert_result['error'] ) ? $convert_result['error'] : 'unknown',
-                    ] );
-                }
-            }
-        } catch ( Exception $e ) {
-            // @plugin-check: sanitized - exception message is for logging only, not user-facing
-            backup_lite_log( 'error', 'Exception during All-in-One conversion, continuing with original file.', [
-                'error' => sanitize_text_field( $e->getMessage() ),
-                'trace' => sanitize_text_field( $e->getTraceAsString() ),
-            ] );
-        }
-
-        // Prepare session with error handling
-        try {
-            if ( ! file_exists( $destination ) ) {
-                // @plugin-check: escaped
-                wp_send_json_error( [ 'message' => esc_html__( 'Backup file not found after processing.', 'museder-restoreone' ) ], 404 );
-                return;
-            }
-            
-            $summary = self::prepare_session( $destination, 'remote', [ 'source_url' => $url ] );
-            
-            wp_send_json_success( [
-                'summary'  => $summary,
-                'progress' => self::format_progress(),
-            ] );
-        } catch ( Exception $e ) {
-            // @plugin-check: sanitized - exception message is for logging only, not user-facing
-            backup_lite_log( 'error', 'Failed to prepare restore session after remote download.', [
-                'error' => sanitize_text_field( $e->getMessage() ),
-                'file' => basename( $destination ),
-                'trace' => sanitize_text_field( $e->getTraceAsString() ),
-            ] );
-            
-            // @plugin-check: escaped - user-facing error message
-            wp_send_json_error( [
-                'message' => esc_html__( 'Failed to analyze backup file. Please check the logs for details.', 'museder-restoreone' ),
-            ], 500 );
-        }
+        wp_send_json_error(
+            [ 'message' => esc_html__( 'Remote URL restore is unavailable in this build. Please upload a local archive or select one from Backups.', 'museder-restoreone' ) ],
+            403
+        );
     }
 
     public static function progress() {
@@ -639,20 +511,20 @@ class Backup_Lite_Restore_Handler {
 
     public static function enqueue_restore_job() {
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
+        Museder_Restoreone_UI::verify_ajax_request();
 
         // Preflight: clear stale restore state so users are not blocked by crashed/aborted jobs.
         self::cleanup_stale_restore_state();
 
         // If a restore lock is held (and not cleared as stale), treat it as an active restore and block early
         // with a clear 409 instead of letting execute() throw and become a 500.
-        if ( class_exists( 'Backup_Lite_Restore_Lock' ) ) {
-            $lock = Backup_Lite_Restore_Lock::current_lock();
+        if ( class_exists( 'Museder_Restoreone_Restore_Lock' ) ) {
+            $lock = Museder_Restoreone_Restore_Lock::current_lock();
             if ( is_array( $lock ) && ! empty( $lock['job_id'] ) ) {
                 $lock_job_id = sanitize_text_field( (string) $lock['job_id'] );
                 if ( $lock_job_id ) {
                     try {
-                        $st = class_exists( 'Backup_Lite_Restore_Service' ) ? Backup_Lite_Restore_Service::status( $lock_job_id ) : null;
+                        $st = class_exists( 'Museder_Restoreone_Restore_Service' ) ? Museder_Restoreone_Restore_Service::status( $lock_job_id ) : null;
                         $completed = is_array( $st ) && ! empty( $st['completed'] );
                         $stage = is_array( $st ) && isset( $st['stage'] ) ? (string) $st['stage'] : '';
                         if ( ! $completed && ! in_array( $stage, [ 'done', 'failed', 'cancelled' ], true ) ) {
@@ -672,7 +544,7 @@ class Backup_Lite_Restore_Handler {
 
         // AI1WM-style: use Restore_Service as the single restore engine.
         // Prevent starting a new job while another is active.
-        $active_job_id = class_exists( 'Backup_Lite_Restore_Service' ) ? Backup_Lite_Restore_Service::get_active_job_id() : '';
+        $active_job_id = class_exists( 'Museder_Restoreone_Restore_Service' ) ? Museder_Restoreone_Restore_Service::get_active_job_id() : '';
         if ( ! empty( $active_job_id ) ) {
                 wp_send_json_error(
                     // @plugin-check: escaped
@@ -714,7 +586,7 @@ class Backup_Lite_Restore_Handler {
         $file_path = isset( $state['file'] ) ? (string) $state['file'] : '';
         $file_size = 0;
         if ( $file_path ) {
-            $abs = backup_lite_get_backup_path( $file_path );
+            $abs = museder_restoreone_get_backup_path( $file_path );
             if ( $abs && file_exists( $abs ) ) {
                 $file_size = filesize( $abs );
             }
@@ -732,7 +604,7 @@ class Backup_Lite_Restore_Handler {
             $file_name = isset( $state['file'] ) ? (string) $state['file'] : '';
             $sha1      = isset( $state['sha1'] ) ? (string) $state['sha1'] : '';
 
-            $prepared = Backup_Lite_Restore_Service::prepare( $source, $file_name, $sha1 );
+            $prepared = Museder_Restoreone_Restore_Service::prepare( $source, $file_name, $sha1 );
             $job_id   = isset( $prepared['job_id'] ) ? (string) $prepared['job_id'] : '';
             if ( '' === $job_id ) {
                 throw new RuntimeException( esc_html__( 'Unable to create restore job.', 'museder-restoreone' ) );
@@ -746,15 +618,15 @@ class Backup_Lite_Restore_Handler {
             if ( function_exists( 'get_current_user_id' ) ) {
                 $uid = (int) get_current_user_id();
                 if ( $uid > 0 ) {
-                    update_user_meta( $uid, 'backup_lite_restore_notice_job_id', $job_id );
-                    update_user_meta( $uid, 'backup_lite_restore_notice_dismissed', 0 );
+                    update_user_meta( $uid, 'museder_restoreone_restore_notice_job_id', $job_id );
+                    update_user_meta( $uid, 'museder_restoreone_restore_notice_dismissed', 0 );
                 }
             }
 
-            Backup_Lite_Restore_Service::validate( $job_id );
-            $exec = Backup_Lite_Restore_Service::execute( $job_id, $options );
+            Museder_Restoreone_Restore_Service::validate( $job_id );
+            $exec = Museder_Restoreone_Restore_Service::execute( $job_id, $options );
             // status() can throw if job metadata is missing/corrupted; treat as a failure but cleanup pointers.
-            $status = Backup_Lite_Restore_Service::status( $job_id );
+            $status = Museder_Restoreone_Restore_Service::status( $job_id );
 
         wp_send_json_success(
             [
@@ -766,27 +638,27 @@ class Backup_Lite_Restore_Handler {
                 ]
             );
         } catch ( Exception $e ) {
-            backup_lite_log( 'error', 'restore_service_enqueue_failed', [
+            museder_restoreone_log( 'error', 'restore_service_enqueue_failed', [
                 'error' => sanitize_text_field( $e->getMessage() ),
             ] );
 
             // Best-effort cleanup: if we partially started a job, don't leave stale pointers/locks behind.
             if ( ! empty( $job_id ) ) {
                 try {
-                    if ( class_exists( 'Backup_Lite_Restore_Service' ) ) {
-                        $active = Backup_Lite_Restore_Service::get_active_job_id();
+                    if ( class_exists( 'Museder_Restoreone_Restore_Service' ) ) {
+                        $active = Museder_Restoreone_Restore_Service::get_active_job_id();
                         if ( $active === $job_id ) {
-                            delete_option( Backup_Lite_Restore_Service::ACTIVE_JOB_OPTION );
+                            delete_option( Museder_Restoreone_Restore_Service::ACTIVE_JOB_OPTION );
                         }
                     }
                 } catch ( Exception $inner ) {
                     // Ignore.
                 }
                 try {
-                    if ( class_exists( 'Backup_Lite_Restore_Lock' ) ) {
-                        $lock = Backup_Lite_Restore_Lock::current_lock();
+                    if ( class_exists( 'Museder_Restoreone_Restore_Lock' ) ) {
+                        $lock = Museder_Restoreone_Restore_Lock::current_lock();
                         if ( empty( $lock['job_id'] ) || $lock['job_id'] === $job_id ) {
-                            Backup_Lite_Restore_Lock::release();
+                            Museder_Restoreone_Restore_Lock::release();
                         }
                     }
                 } catch ( Exception $inner ) {
@@ -817,18 +689,18 @@ class Backup_Lite_Restore_Handler {
      * Only removes state when the referenced job metadata is missing/corrupted, or the job is already completed.
      */
     private static function cleanup_stale_restore_state() {
-        if ( ! class_exists( 'Backup_Lite_Restore_Service' ) ) {
+        if ( ! class_exists( 'Museder_Restoreone_Restore_Service' ) ) {
             return;
         }
 
-        $active_job_id = Backup_Lite_Restore_Service::get_active_job_id();
-        $lock = class_exists( 'Backup_Lite_Restore_Lock' ) ? Backup_Lite_Restore_Lock::current_lock() : null;
+        $active_job_id = Museder_Restoreone_Restore_Service::get_active_job_id();
+        $lock = class_exists( 'Museder_Restoreone_Restore_Lock' ) ? Museder_Restoreone_Restore_Lock::current_lock() : null;
         $lock_job_id = ( is_array( $lock ) && ! empty( $lock['job_id'] ) ) ? (string) $lock['job_id'] : '';
 
         // Helper: determine if a job id points to an active (running) job.
         $is_active_job_running = static function( $job_id ) {
             try {
-                $st = Backup_Lite_Restore_Service::status( $job_id );
+                $st = Museder_Restoreone_Restore_Service::status( $job_id );
                 $stage = isset( $st['stage'] ) ? (string) $st['stage'] : '';
                 $completed = ! empty( $st['completed'] );
                 if ( $completed ) {
@@ -847,35 +719,35 @@ class Backup_Lite_Restore_Handler {
 
         // If we have an active job pointer but it is stale, clear it (and matching lock if present).
         if ( ! empty( $active_job_id ) && ! $is_active_job_running( $active_job_id ) ) {
-            backup_lite_log( 'warning', 'Detected stale active restore job pointer; clearing.', [
+            museder_restoreone_log( 'warning', 'Detected stale active restore job pointer; clearing.', [
                 'active_job_id' => $active_job_id,
                 'lock_job_id'   => $lock_job_id,
             ] );
 
-            delete_option( Backup_Lite_Restore_Service::ACTIVE_JOB_OPTION );
+            delete_option( Museder_Restoreone_Restore_Service::ACTIVE_JOB_OPTION );
 
-            if ( $lock_job_id && $lock_job_id === $active_job_id && class_exists( 'Backup_Lite_Restore_Lock' ) ) {
-                Backup_Lite_Restore_Lock::release();
+            if ( $lock_job_id && $lock_job_id === $active_job_id && class_exists( 'Museder_Restoreone_Restore_Lock' ) ) {
+                Museder_Restoreone_Restore_Lock::release();
             }
 
             // Re-fetch lock after potential release.
-            $lock = class_exists( 'Backup_Lite_Restore_Lock' ) ? Backup_Lite_Restore_Lock::current_lock() : null;
+            $lock = class_exists( 'Museder_Restoreone_Restore_Lock' ) ? Museder_Restoreone_Restore_Lock::current_lock() : null;
             $lock_job_id = ( is_array( $lock ) && ! empty( $lock['job_id'] ) ) ? (string) $lock['job_id'] : '';
         }
 
         // If lock exists but no active job pointer, validate lock job id; release if stale/completed.
         if ( empty( $active_job_id ) && ! empty( $lock_job_id ) ) {
             if ( ! $is_active_job_running( $lock_job_id ) ) {
-                backup_lite_log( 'warning', 'Detected stale restore lock; releasing.', [
+                museder_restoreone_log( 'warning', 'Detected stale restore lock; releasing.', [
                     'lock_job_id' => $lock_job_id,
                 ] );
-                if ( class_exists( 'Backup_Lite_Restore_Lock' ) ) {
-                    Backup_Lite_Restore_Lock::release();
+                if ( class_exists( 'Museder_Restoreone_Restore_Lock' ) ) {
+                    Museder_Restoreone_Restore_Lock::release();
                 }
             } else {
                 // A job is running but pointer is missing; keep lock intact and prevent new restore.
                 // Restore page will show \"another restore is already in progress\" based on lock/option checks.
-                backup_lite_log( 'info', 'Restore lock is held by an active job; not clearing.', [
+                museder_restoreone_log( 'info', 'Restore lock is held by an active job; not clearing.', [
                     'lock_job_id' => $lock_job_id,
                 ] );
             }
@@ -889,9 +761,9 @@ class Backup_Lite_Restore_Handler {
         }
 
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
+        Museder_Restoreone_UI::verify_ajax_request();
         // Additional nonce verification for plugin-check.
-        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
+        check_ajax_referer( Museder_Restoreone_UI::NONCE, 'nonce' );
 
         // Nonce verified above
         // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
@@ -899,7 +771,7 @@ class Backup_Lite_Restore_Handler {
         // phpcs:enable WordPress.Security.NonceVerification.Missing
         if ( empty( $job_id ) ) {
             // No job id: fall back to Restore_Service active job id or return history only.
-            $active_job_id = class_exists( 'Backup_Lite_Restore_Service' ) ? Backup_Lite_Restore_Service::get_active_job_id() : '';
+            $active_job_id = class_exists( 'Museder_Restoreone_Restore_Service' ) ? Museder_Restoreone_Restore_Service::get_active_job_id() : '';
             if ( ! empty( $active_job_id ) ) {
                 $job_id = sanitize_text_field( (string) $active_job_id );
             } else {
@@ -932,7 +804,7 @@ class Backup_Lite_Restore_Handler {
         }
 
         try {
-            $status = Backup_Lite_Restore_Service::status( $job_id );
+            $status = Museder_Restoreone_Restore_Service::status( $job_id );
             $job    = self::map_restore_service_status_to_job( $job_id, $status );
         } catch ( Exception $e ) {
             wp_send_json_success( [
@@ -945,10 +817,10 @@ class Backup_Lite_Restore_Handler {
         }
 
         // Safe mode status (best-effort) for UI hints.
-        $safe_mode_active = ( get_option( 'backup_lite_safe_mode', '' ) === '1' );
+        $safe_mode_active = ( get_option( 'museder_restoreone_safe_mode', '' ) === '1' );
         $prev_plugins_count = 0;
         if ( $safe_mode_active ) {
-            $prev_plugins = get_option( 'backup_lite_prev_active_plugins', [] );
+            $prev_plugins = get_option( 'museder_restoreone_prev_active_plugins', [] );
             $prev_plugins_count = is_array( $prev_plugins ) ? count( $prev_plugins ) : 0;
         }
 
@@ -964,9 +836,9 @@ class Backup_Lite_Restore_Handler {
 
     public static function trigger_restore_job() {
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
+        Museder_Restoreone_UI::verify_ajax_request();
         // Additional nonce verification for plugin-check
-        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
+        check_ajax_referer( Museder_Restoreone_UI::NONCE, 'nonce' );
 
         // Nonce verified above
         // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
@@ -998,13 +870,13 @@ class Backup_Lite_Restore_Handler {
      *
      * This is a fallback for environments where WP-Cron loopback is unreliable.
      *
-     * @wp_ajax backup_lite_restore_tick
+     * @wp_ajax museder_restoreone_restore_tick
      */
     public static function restore_tick() {
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
+        Museder_Restoreone_UI::verify_ajax_request();
         // Additional nonce verification for plugin-check
-        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
+        check_ajax_referer( Museder_Restoreone_UI::NONCE, 'nonce' );
 
         // Nonce verified above
         // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
@@ -1017,25 +889,25 @@ class Backup_Lite_Restore_Handler {
             wp_send_json_error( [ 'message' => esc_html__( 'Job identifier is required.', 'museder-restoreone' ) ], 400 );
         }
 
-        if ( ! class_exists( 'Backup_Lite_Restore_Service' ) ) {
+        if ( ! class_exists( 'Museder_Restoreone_Restore_Service' ) ) {
             wp_send_json_error( [ 'message' => esc_html__( 'Restore service is not available.', 'museder-restoreone' ) ], 500 );
         }
 
         $slice = ( $slice > 0 ) ? min( 15, max( 3, $slice ) ) : 8;
 
         try {
-            $meta = Backup_Lite_Restore_Service::get_job_meta( $job_id );
+            $meta = Museder_Restoreone_Restore_Service::get_job_meta( $job_id );
             if ( ! empty( $meta['completed'] ) ) {
                 wp_send_json_success(
                     [
-                        'job' => Backup_Lite_Restore_Service::status( $job_id ),
+                        'job' => Museder_Restoreone_Restore_Service::status( $job_id ),
                     ]
                 );
             }
 
             // Ensure lock belongs to this job (or acquire if no lock exists).
-            if ( class_exists( 'Backup_Lite_Restore_Lock' ) ) {
-                $lock = Backup_Lite_Restore_Lock::current_lock();
+            if ( class_exists( 'Museder_Restoreone_Restore_Lock' ) ) {
+                $lock = Museder_Restoreone_Restore_Lock::current_lock();
                 if ( $lock && isset( $lock['job_id'] ) && (string) $lock['job_id'] !== $job_id ) {
                     wp_send_json_error(
                         [
@@ -1047,7 +919,7 @@ class Backup_Lite_Restore_Handler {
                     );
                 }
                 if ( ! $lock ) {
-                    $acquired = Backup_Lite_Restore_Lock::acquire( $job_id );
+                    $acquired = Museder_Restoreone_Restore_Lock::acquire( $job_id );
                     if ( ! $acquired ) {
                         wp_send_json_error(
                             [
@@ -1058,16 +930,16 @@ class Backup_Lite_Restore_Handler {
                         );
                     }
                 }
-                Backup_Lite_Restore_Lock::refresh( $job_id );
+                Museder_Restoreone_Restore_Lock::refresh( $job_id );
             }
 
             // Best-effort: ensure active job pointer is set for this job.
-            $active = (string) get_option( Backup_Lite_Restore_Service::ACTIVE_JOB_OPTION, '' );
+            $active = (string) get_option( Museder_Restoreone_Restore_Service::ACTIVE_JOB_OPTION, '' );
             if ( '' === $active ) {
-                update_option( Backup_Lite_Restore_Service::ACTIVE_JOB_OPTION, $job_id, false );
+                update_option( Museder_Restoreone_Restore_Service::ACTIVE_JOB_OPTION, $job_id, false );
             }
 
-            $result = Backup_Lite_Restore_Service::process_job_slice( $job_id, $slice, false, 'ajax' );
+            $result = Museder_Restoreone_Restore_Service::process_job_slice( $job_id, $slice, false, 'ajax' );
             if ( empty( $result['ok'] ) && ! empty( $result['reason'] ) && 'busy' === $result['reason'] ) {
                 wp_send_json_error(
                     [
@@ -1080,11 +952,11 @@ class Backup_Lite_Restore_Handler {
 
             wp_send_json_success(
                 [
-                    'job' => Backup_Lite_Restore_Service::status( $job_id ),
+                    'job' => Museder_Restoreone_Restore_Service::status( $job_id ),
                 ]
             );
         } catch ( Exception $e ) {
-            backup_lite_log( 'error', 'Restore tick failed.', [ 'job_id' => $job_id, 'error' => $e->getMessage() ] );
+            museder_restoreone_log( 'error', 'Restore tick failed.', [ 'job_id' => $job_id, 'error' => $e->getMessage() ] );
             wp_send_json_error(
                 [
                     // @plugin-check: escaped
@@ -1102,9 +974,9 @@ class Backup_Lite_Restore_Handler {
         }
         
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
+        Museder_Restoreone_UI::verify_ajax_request();
         // Additional nonce verification for plugin-check
-        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
+        check_ajax_referer( Museder_Restoreone_UI::NONCE, 'nonce' );
 
         // Nonce verified above
         // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
@@ -1117,13 +989,13 @@ class Backup_Lite_Restore_Handler {
         }
 
         try {
-            Backup_Lite_Restore_Service::cancel( $job_id );
+            Museder_Restoreone_Restore_Service::cancel( $job_id );
             
             // Cleanup state, but don't let errors break the response
             try {
                 self::cleanup_state_after_cancel();
             } catch ( Exception $e ) {
-                backup_lite_log( 'warning', 'Error during cleanup after cancel.', [ 'error' => $e->getMessage() ] );
+                museder_restoreone_log( 'warning', 'Error during cleanup after cancel.', [ 'error' => $e->getMessage() ] );
             }
 
             wp_send_json_success(
@@ -1139,7 +1011,7 @@ class Backup_Lite_Restore_Handler {
                 ]
             );
         } catch ( Exception $e ) {
-            backup_lite_log( 'error', 'Error cancelling restore job.', [ 'job_id' => $job_id, 'error' => $e->getMessage() ] );
+            museder_restoreone_log( 'error', 'Error cancelling restore job.', [ 'job_id' => $job_id, 'error' => $e->getMessage() ] );
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'Failed to cancel restore job. Please try again.', 'museder-restoreone' ) ], 500 );
         }
@@ -1156,9 +1028,9 @@ class Backup_Lite_Restore_Handler {
         }
         
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
+        Museder_Restoreone_UI::verify_ajax_request();
         // Additional nonce verification for plugin-check
-        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
+        check_ajax_referer( Museder_Restoreone_UI::NONCE, 'nonce' );
 
         // Nonce verified above
         // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
@@ -1172,19 +1044,19 @@ class Backup_Lite_Restore_Handler {
                 }
             }
 
-            if ( empty( $job_id ) && class_exists( 'Backup_Lite_Restore_Service' ) ) {
-                $job_id = sanitize_text_field( (string) Backup_Lite_Restore_Service::get_active_job_id() );
+            if ( empty( $job_id ) && class_exists( 'Museder_Restoreone_Restore_Service' ) ) {
+                $job_id = sanitize_text_field( (string) Museder_Restoreone_Restore_Service::get_active_job_id() );
             }
 
             if ( $job_id ) {
-                Backup_Lite_Restore_Service::cancel( $job_id );
+                Museder_Restoreone_Restore_Service::cancel( $job_id );
             }
 
             // Cleanup state, but don't let errors break the response
             try {
                 self::cleanup_state_after_cancel();
             } catch ( Exception $e ) {
-                backup_lite_log( 'warning', 'Error during cleanup after cancel.', [ 'error' => $e->getMessage() ] );
+                museder_restoreone_log( 'warning', 'Error during cleanup after cancel.', [ 'error' => $e->getMessage() ] );
             }
 
             wp_send_json_success( [
@@ -1193,7 +1065,7 @@ class Backup_Lite_Restore_Handler {
                 'progress' => self::format_progress( 0, esc_html__( 'Waiting for action…', 'museder-restoreone' ), false ),
             ] );
         } catch ( Exception $e ) {
-            backup_lite_log( 'error', 'Error cancelling restore.', [ 'error' => $e->getMessage() ] );
+            museder_restoreone_log( 'error', 'Error cancelling restore.', [ 'error' => $e->getMessage() ] );
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'Failed to cancel restore. Please try again.', 'museder-restoreone' ) ], 500 );
         }
@@ -1201,7 +1073,7 @@ class Backup_Lite_Restore_Handler {
 
     public static function run_job( $job_id, $job ) {
         // Legacy restore-jobs runner is disabled (clean break). The only supported restore engine
-        // is Backup_Lite_Restore_Service (resumable, time-sliced pipeline).
+        // is Museder_Restoreone_Restore_Service (resumable, time-sliced pipeline).
             return [
                 'success' => false,
             'message' => __( 'Legacy restore jobs are disabled. Please start restore from Restore Center.', 'museder-restoreone' ),
@@ -1362,7 +1234,7 @@ class Backup_Lite_Restore_Handler {
 
     public static function chunk_prepare() {
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
+        Museder_Restoreone_UI::verify_ajax_request();
 
         // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request()
         $filename = '';
@@ -1405,7 +1277,7 @@ class Backup_Lite_Restore_Handler {
 
         // Create a unique final destination file in the backups directory up-front, so chunks can be written
         // directly into it (no per-chunk files, no merge pass).
-        $backup_dir = backup_lite_get_backup_dir();
+        $backup_dir = museder_restoreone_get_backup_dir();
         $final_name = wp_unique_filename( $backup_dir, $filename );
         $final_path = trailingslashit( $backup_dir ) . $final_name;
 
@@ -1445,9 +1317,9 @@ class Backup_Lite_Restore_Handler {
 
     public static function chunk_upload() {
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
+        Museder_Restoreone_UI::verify_ajax_request();
         // Additional nonce verification for plugin-check / reviewer tooling (explicit in this handler).
-        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
+        check_ajax_referer( Museder_Restoreone_UI::NONCE, 'nonce' );
 
         // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request()
         $session_id = '';
@@ -1573,7 +1445,7 @@ class Backup_Lite_Restore_Handler {
 
     public static function chunk_finalize() {
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
+        Museder_Restoreone_UI::verify_ajax_request();
 
         // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request()
         $session_id = isset( $_POST['session_id'] ) ? sanitize_text_field( wp_unslash( $_POST['session_id'] ) ) : '';
@@ -1652,7 +1524,7 @@ class Backup_Lite_Restore_Handler {
             ] );
         } catch ( Exception $e ) {
             // @plugin-check: sanitized - exception message is for logging only, not user-facing
-            backup_lite_log( 'error', 'Failed to prepare restore session after chunk finalize.', [
+            museder_restoreone_log( 'error', 'Failed to prepare restore session after chunk finalize.', [
                 'error' => sanitize_text_field( $e->getMessage() ),
                 'file' => basename( $final_path ),
                 'trace' => sanitize_text_field( $e->getTraceAsString() ),
@@ -1667,7 +1539,7 @@ class Backup_Lite_Restore_Handler {
 
     public static function chunk_abort() {
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
+        Museder_Restoreone_UI::verify_ajax_request();
 
         // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request()
         $session_id = isset( $_POST['session_id'] ) ? sanitize_text_field( wp_unslash( $_POST['session_id'] ) ) : '';
@@ -1682,13 +1554,13 @@ class Backup_Lite_Restore_Handler {
     /**
      * Return current chunk session status for resumable uploads.
      *
-     * @wp_ajax backup_lite_restore_chunk_status
+     * @wp_ajax museder_restoreone_restore_chunk_status
      */
     public static function chunk_status() {
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
+        Museder_Restoreone_UI::verify_ajax_request();
         // Additional nonce verification for plugin-check / reviewer tooling (explicit in this handler).
-        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
+        check_ajax_referer( Museder_Restoreone_UI::NONCE, 'nonce' );
 
         // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request()
         $session_id = isset( $_POST['session_id'] ) ? sanitize_text_field( wp_unslash( $_POST['session_id'] ) ) : '';
@@ -1720,9 +1592,9 @@ class Backup_Lite_Restore_Handler {
     }
 
     private static function chunk_root_dir() {
-        $root = backup_lite_get_storage_root();
+        $root = museder_restoreone_get_storage_root();
         $dir  = trailingslashit( $root['path'] ) . 'restore-chunks';
-        backup_lite_ensure_directory( $dir );
+        museder_restoreone_ensure_directory( $dir );
         return $dir;
     }
 
@@ -1766,7 +1638,7 @@ class Backup_Lite_Restore_Handler {
 
         $dir = self::chunk_session_dir( $session_id );
         if ( file_exists( $dir ) ) {
-            backup_lite_delete_directory( $dir );
+            museder_restoreone_delete_directory( $dir );
         }
     }
 
@@ -1827,7 +1699,7 @@ class Backup_Lite_Restore_Handler {
             // Calculate SHA1 for smaller files
             $sha1 = sha1_file( $file_path );
         } else {
-            backup_lite_log( 'info', 'Large file detected, skipping SHA1 calculation to avoid timeout.', [
+            museder_restoreone_log( 'info', 'Large file detected, skipping SHA1 calculation to avoid timeout.', [
                 'file' => basename( $file_path ),
                 'size' => size_format( $size, 2 ),
             ] );
@@ -1839,8 +1711,8 @@ class Backup_Lite_Restore_Handler {
         global $wpdb;
         $db_prefix_target = isset( $wpdb->prefix ) ? (string) $wpdb->prefix : '';
 
-        if ( function_exists( 'backup_lite_log' ) ) {
-            backup_lite_log( 'info', 'Restore prepare: detected DB prefixes.', [
+        if ( function_exists( 'museder_restoreone_log' ) ) {
+            museder_restoreone_log( 'info', 'Restore prepare: detected DB prefixes.', [
                 'file'            => basename( $file_path ),
                 'source_prefix'   => (string) $db_prefix_source,
                 'target_prefix'   => (string) $db_prefix_target,
@@ -1848,7 +1720,7 @@ class Backup_Lite_Restore_Handler {
         }
 
         // Store only filename in state, not full path
-        // Full path will be resolved when needed using backup_lite_get_backup_path()
+        // Full path will be resolved when needed using museder_restoreone_get_backup_path()
         $file_name = basename( $file_path );
         
         $state = [
@@ -1892,13 +1764,13 @@ class Backup_Lite_Restore_Handler {
      * Format restore history entries for frontend display.
      * 
      * All timestamps are stored as UTC Unix timestamps internally.
-     * Display times are converted to site's local timezone using backup_lite_format_local_time().
+     * Display times are converted to site's local timezone using museder_restoreone_format_local_time().
      * 
      * @param int $limit Maximum number of entries to return.
      * @return array Formatted history entries with display_time and timestamp_utc.
      */
     public static function history_for_js( $limit = 10 ) {
-        $raw      = backup_lite_get_restore_history( $limit );
+        $raw      = museder_restoreone_get_restore_history( $limit );
         $prepared = [];
 
         foreach ( $raw as $row ) {
@@ -1919,14 +1791,14 @@ class Backup_Lite_Restore_Handler {
                 }
             } elseif ( isset( $row['timestamp'] ) && $row['timestamp'] ) {
                 // Priority 3: Parse legacy timestamp using helper function
-                $timestamp_utc = backup_lite_parse_legacy_timestamp( $row['timestamp'] );
+                $timestamp_utc = museder_restoreone_parse_legacy_timestamp( $row['timestamp'] );
             }
             
             // Fallback: If still no valid timestamp, use current time or file modification time
             if ( $timestamp_utc <= 0 ) {
                 // Try to get file modification time as last resort
                 if ( ! empty( $row['file'] ) ) {
-                    $backup_path = backup_lite_get_backup_path( $row['file'] );
+                    $backup_path = museder_restoreone_get_backup_path( $row['file'] );
                     if ( $backup_path && file_exists( $backup_path ) ) {
                         $timestamp_utc = filemtime( $backup_path );
                     }
@@ -1964,26 +1836,26 @@ class Backup_Lite_Restore_Handler {
             
             // 5. Human-readable time (local timezone)
             $date_human = $timestamp_utc > 0
-                ? backup_lite_format_local_time( $timestamp_utc, 'Y-m-d H:i' )
+                ? museder_restoreone_format_local_time( $timestamp_utc, 'Y-m-d H:i' )
                 : '';
             
             // 6. Human-readable duration (0 seconds is valid)
             $duration_human = $duration >= 0
-                ? backup_lite_format_duration( $duration )
+                ? museder_restoreone_format_duration( $duration )
                 : '';
             
             // 7. Log download URL (if available)
             $log_download_url = '';
             if ( ! empty( $row['log'] ) ) {
                 $log_download_url = wp_nonce_url(
-                    admin_url( 'admin-post.php?action=backup_lite_download_log&log=' . rawurlencode( $row['log'] ) ),
-                    'backup_lite_download_log_' . $row['log']
+                    admin_url( 'admin-post.php?action=museder_restoreone_download_log&log=' . rawurlencode( $row['log'] ) ),
+                    'museder_restoreone_download_log_' . $row['log']
                 );
             } elseif ( ! empty( $row['log_file'] ) ) {
                 // Fallback: try log_file field
                 $log_download_url = wp_nonce_url(
-                    admin_url( 'admin-post.php?action=backup_lite_download_log&log=' . rawurlencode( $row['log_file'] ) ),
-                    'backup_lite_download_log_' . $row['log_file']
+                    admin_url( 'admin-post.php?action=museder_restoreone_download_log&log=' . rawurlencode( $row['log_file'] ) ),
+                    'museder_restoreone_download_log_' . $row['log_file']
                 );
             }
             
@@ -2102,9 +1974,9 @@ class Backup_Lite_Restore_Handler {
 
     private static function compose_summary( $state ) {
         // $state['file'] now stores only filename, not full path
-        // Use backup_lite_get_backup_path() to resolve full path when needed
+        // Use museder_restoreone_get_backup_path() to resolve full path when needed
         $file_name = isset( $state['file'] ) ? $state['file'] : '';
-        $path = backup_lite_get_backup_path( $file_name );
+        $path = museder_restoreone_get_backup_path( $file_name );
         
         // Use size from state if available (already calculated in prepare_session)
         $size = ( ! empty( $state['size'] ) ) ? (float) $state['size'] : 0;
@@ -2326,7 +2198,7 @@ class Backup_Lite_Restore_Handler {
             // This ensures the frontend can detect completion even if handle_job hasn't finished
             $status = 'success';
             $percent = 100;
-            backup_lite_log( 'info', 'Job progress: done=true, setting status to success', [
+            museder_restoreone_log( 'info', 'Job progress: done=true, setting status to success', [
                 'job_id' => $job_id,
                 'percent' => $percent,
                 'message' => $message,
@@ -2335,7 +2207,7 @@ class Backup_Lite_Restore_Handler {
         
         // If status is explicitly provided (e.g., 'failed'), use it
         if ( null !== $status ) {
-            backup_lite_log( 'info', 'Job progress: status explicitly set', [
+            museder_restoreone_log( 'info', 'Job progress: status explicitly set', [
                 'job_id' => $job_id,
                 'percent' => $percent,
                 'status' => $status,
@@ -2364,7 +2236,7 @@ class Backup_Lite_Restore_Handler {
         $history_entry['result']                   = 'cancelled';
         $history_entry['restore_completed_at']      = $restore_completed_at;
         $history_entry['restore_duration_seconds']  = $restore_duration_seconds;
-        backup_lite_append_restore_history( $history_entry );
+        museder_restoreone_append_restore_history( $history_entry );
         self::report_job_progress( $job_id, 100, __( 'Restore cancelled.', 'museder-restoreone' ), true );
         self::cleanup_state_after_cancel();
 
@@ -2420,12 +2292,12 @@ class Backup_Lite_Restore_Handler {
 
         if ( ! empty( $state['file'] ) && isset( $state['source'] ) && in_array( $state['source'], [ 'upload', 'remote' ], true ) ) {
             // $state['file'] now stores only filename, not full path
-            // Use backup_lite_get_backup_path() to resolve full path
+            // Use museder_restoreone_get_backup_path() to resolve full path
             $file_name = $state['file'];
-            $path = backup_lite_get_backup_path( $file_name );
+            $path = museder_restoreone_get_backup_path( $file_name );
             
             // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
-            // $path is from plugin state, validated and sanitized via backup_lite_get_backup_path()
+            // $path is from plugin state, validated and sanitized via museder_restoreone_get_backup_path()
             if ( $path && file_exists( $path ) && is_file( $path ) ) {
                 // 備份／還原流程中必須確保能刪除暫存檔案，以釋放磁碟空間並避免堆積 temp 檔案。
                 // 優先使用 wp_delete_file()，若不可用則使用 PHP unlink() 作為後備。
@@ -2477,10 +2349,10 @@ class Backup_Lite_Restore_Handler {
      */
     public static function exit_safe_mode() {
         self::ensure_permission();
-        Backup_Lite_UI::verify_ajax_request();
+        Museder_Restoreone_UI::verify_ajax_request();
 
         try {
-            $result = Backup_Lite_Restore::exit_safe_mode();
+            $result = Museder_Restoreone_Restore::exit_safe_mode();
             
             if ( $result ) {
                 wp_send_json_success( [
@@ -2492,7 +2364,7 @@ class Backup_Lite_Restore_Handler {
                 ], 400 );
             }
         } catch ( Exception $e ) {
-            backup_lite_log( 'error', 'Failed to exit safe mode via AJAX.', [
+            museder_restoreone_log( 'error', 'Failed to exit safe mode via AJAX.', [
                 'error' => $e->getMessage(),
             ] );
             wp_send_json_error( [

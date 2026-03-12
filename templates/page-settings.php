@@ -15,13 +15,13 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 // Template context: These variables are scoped to this template file and provided by the rendering function.
 // They use short names for template readability but are not global namespace pollution.
-$settings         = Backup_Lite_Settings::get_settings();
-$roles            = Backup_Lite_Settings::get_available_roles();
-$logs_url         = admin_url( 'admin.php?page=backup-lite-logs' );
-$is_pro           = class_exists( 'Backup_Lite_Pro' ) && Backup_Lite_Pro::is_pro_active();
-$backup_dir       = backup_lite_get_backup_dir();
+$settings         = Museder_Restoreone_Settings::get_settings();
+$roles            = Museder_Restoreone_Settings::get_available_roles();
+$logs_url         = admin_url( 'admin.php?page=museder-restoreone-logs' );
+$is_pro           = class_exists( 'Museder_Restoreone_Pro' ) && Museder_Restoreone_Pro::is_pro_active();
+$backup_dir       = museder_restoreone_get_backup_dir();
 $backup_writable  = wp_is_writable( $backup_dir );
-$temp_dir         = function_exists( 'get_temp_dir' ) ? get_temp_dir() : ( function_exists( 'sys_get_temp_dir' ) ? sys_get_temp_dir() : ABSPATH );
+$temp_dir         = function_exists( 'museder_restoreone_get_temp_dir' ) ? museder_restoreone_get_temp_dir() : ( function_exists( 'get_temp_dir' ) ? get_temp_dir() : '' );
 $temp_writable    = wp_is_writable( $temp_dir );
 $uploads_dir      = wp_upload_dir();
 $uploads_writable = wp_is_writable( $uploads_dir['basedir'] );
@@ -31,30 +31,30 @@ $php_memory       = ini_get( 'memory_limit' );
 $selected_role    = isset( $settings['min_role'], $roles[ $settings['min_role'] ] ) ? $settings['min_role'] : 'administrator';
 ?>
 
-<div class="wrap backup-lite-admin backup-lite-settings">
+<div class="wrap backup-lite-admin backup-lite-settings museder-restoreone-admin museder-restoreone-settings">
     <div class="bl-page-header">
         <div>
-            <h1 class="backup-lite-page-title"><?php esc_html_e( 'Museder RestoreOne Settings', 'museder-restoreone' ); ?></h1>
-            <p class="backup-lite-page-description"><?php esc_html_e( 'Configure global preferences, AI modules, and system-level options.', 'museder-restoreone' ); ?></p>
+            <h1 class="backup-lite-page-title museder-restoreone-page-title"><?php esc_html_e( 'Museder RestoreOne Settings', 'museder-restoreone' ); ?></h1>
+            <p class="backup-lite-page-description museder-restoreone-page-description"><?php esc_html_e( 'Configure global preferences, AI modules, and system-level options.', 'museder-restoreone' ); ?></p>
         </div>
         <div class="bl-page-actions">
             <a class="bl-btn bl-btn--ghost" href="<?php echo esc_url( $logs_url ); ?>">
                 📜 <?php esc_html_e( 'View Logs', 'museder-restoreone' ); ?>
             </a>
-            <span class="bl-badge" title="Plugin version" style="background: rgba(59,130,246,.12); color:#1d4ed8;"><?php echo esc_html( defined( 'BACKUP_LITE_VERSION' ) ? BACKUP_LITE_VERSION : '' ); ?></span>
+            <span class="bl-badge" title="Plugin version" style="background: rgba(59,130,246,.12); color:#1d4ed8;"><?php echo esc_html( defined( 'MUSEDER_RESTOREONE_VERSION' ) ? MUSEDER_RESTOREONE_VERSION : '' ); ?></span>
         </div>
     </div>
 
-    <div id="bl-settings-message" class="backup-lite-messages" role="status" aria-live="polite"></div>
+        <div id="bl-settings-message" class="backup-lite-messages museder-restoreone-messages" role="status" aria-live="polite"></div>
 
     <form id="bl-settings-form" class="bl-container">
         <?php wp_nonce_field( 'museder_restoreone_save_settings', 'museder_restoreone_settings_nonce' ); ?>
         <div class="bl-card">
             <div class="bl-card-heading">
                 <h3><span class="bl-icon-circle">🌐</span><?php esc_html_e( 'General Settings', 'museder-restoreone' ); ?></h3>
-                <p class="bl-card-subtitle"><?php esc_html_e( 'Global preferences that apply to all Backup Lite / RestoreOne features.', 'museder-restoreone' ); ?></p>
+                <p class="bl-card-subtitle"><?php esc_html_e( 'Global preferences that apply to all Museder RestoreOne features.', 'museder-restoreone' ); ?></p>
             </div>
-            <div class="backup-lite-settings-grid">
+            <div class="backup-lite-settings-grid museder-restoreone-settings-grid">
                 <label class="bl-form-control">
                     <span><?php esc_html_e( 'Backup directory', 'museder-restoreone' ); ?></span>
                     <input type="text" id="bl-setting-backup-dir" value="<?php echo esc_attr( $settings['backup_directory'] ); ?>" />
@@ -85,21 +85,8 @@ $selected_role    = isset( $settings['min_role'], $roles[ $settings['min_role'] 
                     </select>
                     <small class="description"><?php esc_html_e( 'Only affects Museder RestoreOne admin pages.', 'museder-restoreone' ); ?></small>
                 </label>
-                <label class="bl-toggle-row js-bl-pro-locked" data-pro-feature="debug_mode">
-                    <div>
-                        <span class="bl-toggle-title">
-                            <?php esc_html_e( 'Debug Mode', 'museder-restoreone' ); ?>
-                            <span class="bl-badge bl-badge--pro">PRO</span>
-                        </span>
-                        <p class="bl-toggle-description"><?php esc_html_e( 'Log verbose restore/backup events for troubleshooting.', 'museder-restoreone' ); ?></p>
-                    </div>
-                    <div class="bl-toggle bl-toggle--disabled">
-                        <input type="checkbox" id="bl-setting-debug-mode" disabled />
-                        <span class="bl-toggle-slider" aria-hidden="true"></span>
-                    </div>
-                </label>
             </div>
-            <p class="bl-note bl-note--muted"><?php esc_html_e( 'All changes here affect how Backup Lite behaves on this site.', 'museder-restoreone' ); ?></p>
+            <p class="bl-note bl-note--muted"><?php esc_html_e( 'All changes here affect how Museder RestoreOne behaves on this site.', 'museder-restoreone' ); ?></p>
             <div class="settings-actions">
                 <button type="button" class="bl-btn bl-btn--ghost" id="bl-test-email">📧 <?php esc_html_e( 'Send Test Email', 'museder-restoreone' ); ?></button>
                 <button type="submit" class="bl-btn bl-btn--primary" id="bl-settings-save"><?php esc_html_e( 'Save Settings', 'museder-restoreone' ); ?></button>
