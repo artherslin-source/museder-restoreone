@@ -8,7 +8,10 @@ Before making changes, read and apply:
 
 - `.cursor/skills/museder-wporg-compliance/SKILL.md`
 - `.cursor/skills/museder-wporg-compliance/REFERENCE.md`
+- `docs/DEVELOPMENT_WORKFLOW.md`
 - `docs/WORDPRESS_ORG_DEVELOPMENT_GUIDE.md`
+- `docs/RELEASE_CHECKLIST.md` before release-facing work
+- `docs/NEW_MACHINE_BOOTSTRAP.md` before machine handoff or environment setup
 
 ## Core Rules
 
@@ -24,6 +27,8 @@ Before making changes, read and apply:
 ## Cloud Agent Notes
 
 - Treat GitHub as the development repository and WordPress.org SVN as a release repository.
+- Work on a feature/agent branch by default; do not push directly to `main` unless the user explicitly requests it.
+- Formal packaging is triggered by pushing a `v*` Git tag; only do this after explicit user approval.
 - Commit only source and project guidance files, not generated release zip files.
 - If a task requires secrets, credentials, WordPress.org SVN access, or external service keys, stop and ask for the required Cloud Agent environment configuration.
 

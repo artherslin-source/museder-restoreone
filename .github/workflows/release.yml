@@ -4,12 +4,19 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      include_addon:
+        description: 'Build optional Add-on package when source exists'
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: write
 
 jobs:
-  build-and-release:
+  build-packages:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,12 +26,71 @@ jobs:
         with:
           php-version: '8.2'
 
-      - name: Build release ZIPs
+      - name: Build Lite package
         run: |
           bash create-package.sh
-          bash create-package-pro.sh
 
-      - name: Publish GitHub Release
+      - name: Build Add-on package when available
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.include_addon }}" != "true" ]; then
+            echo "Manual run disabled Add-on packaging."
+          elif [ -f "museder-restoreone-pro/museder-restoreone-pro.php" ]; then
+            bash create-package-pro.sh
+          else
+            echo "Add-on source not present in this checkout; skipping Add-on package."
+          fi
+
+      - name: Verify Lite package boundaries
+        run: |
+          python - <<'PY'
+          import glob
+          import sys
+          import zipfile
+
+          forbidden = (
+              '.cursor/',
+              '.github/',
+              'AGENTS.md',
+              'docs/',
+              'tools/',
+              'logs/',
+              'dist/',
+              'museder-restoreone-pro/',
+          )
+
+          files = glob.glob('dist/museder-restoreone-*.zip')
+          lite_files = [path for path in files if 'museder-restoreone-pro-' not in path]
+          if not lite_files:
+              print('No Lite package found in dist/.', file=sys.stderr)
+              sys.exit(1)
+
+          for path in lite_files:
+              with zipfile.ZipFile(path) as archive:
+                  names = archive.namelist()
+              bad = []
+              for name in names:
+                  relative = name.split('/', 1)[1] if '/' in name else name
+                  if any(relative == item.rstrip('/') or relative.startswith(item) for item in forbidden):
+                      bad.append(name)
+              if bad:
+                  print(f'{path} contains forbidden entries:', file=sys.stderr)
+                  for entry in bad:
+                      print(f'  {entry}', file=sys.stderr)
+                  sys.exit(1)
+              print(f'Verified Lite package boundaries: {path}')
+          PY
+
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-packages
+          path: |
+            dist/museder-restoreone-*.zip
+            dist/museder-restoreone-pro-*.zip
+          if-no-files-found: error
+
+      - name: Publish GitHub Release for version tags
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: |
