@@ -1,10 +1,9 @@
 <?php
 /**
- * Backup Lite PRO - AI Controller
- * 
+ * Museder RestoreOne PRO - AI Controller
  * REST API endpoints for AI features.
  *
- * @package BackupLite
+ * @package Museder_Restoreone
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
@@ -12,9 +11,9 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 /**
  * AI Controller class for REST API endpoints.
  */
-class Backup_Lite_AI_Controller {
+class Museder_Restoreone_AI_Controller {
 
-    const NAMESPACE = 'backup-lite/v2';
+    const NAMESPACE = 'museder-restoreone/v2';
     const BASE      = 'pro/ai';
 
     /**
@@ -135,7 +134,7 @@ class Backup_Lite_AI_Controller {
         $site_meta      = $request->get_param( 'site_meta' ) ?: [];
         $backup_history = $request->get_param( 'backup_history' ) ?: [];
 
-        $result = Backup_Lite_AI_Service::analyze_site( $site_meta, $backup_history );
+        $result = Museder_Restoreone_AI_Service::analyze_site( $site_meta, $backup_history );
 
         if ( isset( $result['error'] ) ) {
             return new WP_Error( 'pro_required', $result['message'], [ 'status' => 403 ] );
@@ -151,7 +150,7 @@ class Backup_Lite_AI_Controller {
      * @return WP_REST_Response|WP_Error
      */
     public static function handle_health_score( $request ) {
-        $result = Backup_Lite_AI_Service::get_health_score();
+        $result = Museder_Restoreone_AI_Service::get_health_score();
 
         if ( isset( $result['error'] ) ) {
             return new WP_Error( 'pro_required', $result['message'], [ 'status' => 403 ] );
@@ -169,7 +168,7 @@ class Backup_Lite_AI_Controller {
     public static function handle_restore_summary( $request ) {
         $job_id = $request->get_param( 'job_id' );
 
-        $result = Backup_Lite_AI_Service::get_restore_summary( $job_id );
+        $result = Museder_Restoreone_AI_Service::get_restore_summary( $job_id );
 
         if ( isset( $result['error'] ) ) {
             return new WP_Error( 'pro_required', $result['message'], [ 'status' => 403 ] );
@@ -187,7 +186,7 @@ class Backup_Lite_AI_Controller {
     public static function handle_diagnose_log( $request ) {
         $log_content = $request->get_param( 'log_content' ) ?: '';
 
-        $result = Backup_Lite_AI_Service::diagnose_log( $log_content );
+        $result = Museder_Restoreone_AI_Service::diagnose_log( $log_content );
 
         if ( isset( $result['error'] ) ) {
             return new WP_Error( 'pro_required', $result['message'], [ 'status' => 403 ] );
@@ -203,7 +202,7 @@ class Backup_Lite_AI_Controller {
      * @return WP_REST_Response|WP_Error
      */
     public static function handle_smart_schedule( $request ) {
-        $result = Backup_Lite_AI_Service::get_smart_schedule();
+        $result = Museder_Restoreone_AI_Service::get_smart_schedule();
 
         if ( isset( $result['error'] ) ) {
             return new WP_Error( 'pro_required', $result['message'], [ 'status' => 403 ] );
@@ -221,7 +220,7 @@ class Backup_Lite_AI_Controller {
     public static function handle_nl_command( $request ) {
         $command = $request->get_param( 'command' ) ?: '';
 
-        $result = Backup_Lite_AI_Service::process_nl_command( $command );
+        $result = Museder_Restoreone_AI_Service::process_nl_command( $command );
 
         if ( isset( $result['error'] ) ) {
             return new WP_Error( 'pro_required', $result['message'], [ 'status' => 403 ] );

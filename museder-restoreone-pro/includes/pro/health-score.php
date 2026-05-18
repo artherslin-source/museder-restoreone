@@ -12,7 +12,7 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 /**
  * Health Score class for Backup Lite PRO.
  */
-class Backup_Lite_Health_Score {
+class Museder_Restoreone_Health_Score {
 
     /**
      * Initialize the health score service.
@@ -31,10 +31,10 @@ class Backup_Lite_Health_Score {
      * }
      */
     public static function calculate() {
-        if ( ! Backup_Lite_Pro::is_pro_active() ) {
+        if ( ! Museder_Restoreone_Pro::is_pro_active() ) {
             return [
                 'error'   => 'pro_required',
-                'message' => __( 'This feature requires Museder RestoreOne PRO.', 'museder-restoreone' ),
+                'message' => __( 'This feature is unavailable in the current build.', 'museder-restoreone' ),
             ];
         }
 
@@ -55,10 +55,10 @@ class Backup_Lite_Health_Score {
      * }
      */
     public static function get_history( $days = 30 ) {
-        if ( ! Backup_Lite_Pro::is_pro_active() ) {
+        if ( ! Museder_Restoreone_Pro::is_pro_active() ) {
             return [
                 'error'   => 'pro_required',
-                'message' => __( 'This feature requires Museder RestoreOne PRO.', 'museder-restoreone' ),
+                'message' => __( 'This feature is unavailable in the current build.', 'museder-restoreone' ),
             ];
         }
 

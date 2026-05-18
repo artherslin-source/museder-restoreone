@@ -1,21 +1,21 @@
 <?php
 /**
- * Email handler for Backup Lite notifications.
+ * Email handler for Museder RestoreOne notifications.
  *
- * @package BackupLite
+ * @package Museder_Restoreone
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-class Backup_Lite_Email_Handler {
+class Museder_Restoreone_Email_Handler {
 
     /**
      * Bootstraps hooks.
      */
     public static function init() {
-        add_action( 'wp_ajax_backup_lite_test_email', [ __CLASS__, 'ajax_test_email' ] );
+        add_action( 'wp_ajax_museder_restoreone_test_email', [ __CLASS__, 'ajax_test_email' ] );
     }
 
     /**
@@ -29,7 +29,7 @@ class Backup_Lite_Email_Handler {
      */
     public static function send( $subject, $message, $to = null ) {
         if ( null === $to ) {
-            $settings = Backup_Lite_Settings::get_settings();
+            $settings = Museder_Restoreone_Settings::get_settings();
             $to       = ! empty( $settings['notification_email'] ) ? $settings['notification_email'] : get_option( 'admin_email' );
         }
 
@@ -45,8 +45,8 @@ class Backup_Lite_Email_Handler {
      */
     public static function test_email() {
         return self::send(
-            __( 'Backup Lite Test Email', 'museder-restoreone' ),
-            __( '✅ This is a test message from Backup Lite. Your email notifications are working.', 'museder-restoreone' )
+            __( 'Museder RestoreOne Test Email', 'museder-restoreone' ),
+            __( 'This is a test message from Museder RestoreOne. Your email notifications are working.', 'museder-restoreone' )
         );
     }
 
@@ -54,7 +54,8 @@ class Backup_Lite_Email_Handler {
      * AJAX endpoint for sending test emails.
      */
     public static function ajax_test_email() {
-        Backup_Lite_UI::verify_ajax_request();
+        Museder_Restoreone_UI::verify_ajax_request();
+        check_ajax_referer( Museder_Restoreone_UI::NONCE, 'nonce' );
 
         $result = self::test_email();
 

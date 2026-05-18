@@ -12,7 +12,7 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 /**
  * Cloud Storage class for Backup Lite PRO.
  */
-class Backup_Lite_Cloud_Storage {
+class Museder_Restoreone_Cloud_Storage {
 
     /**
      * Initialize the cloud storage service.
@@ -29,10 +29,10 @@ class Backup_Lite_Cloud_Storage {
      * }
      */
     public static function get_providers() {
-        if ( ! Backup_Lite_Pro::is_pro_active() ) {
+        if ( ! Museder_Restoreone_Pro::is_pro_active() ) {
             return [
                 'error'   => 'pro_required',
-                'message' => __( 'This feature requires Museder RestoreOne PRO.', 'museder-restoreone' ),
+                'message' => __( 'This feature is unavailable in the current build.', 'museder-restoreone' ),
             ];
         }
 
@@ -73,10 +73,10 @@ class Backup_Lite_Cloud_Storage {
      * }
      */
     public static function get_connection_status( $provider_id ) {
-        if ( ! Backup_Lite_Pro::is_pro_active() ) {
+        if ( ! Museder_Restoreone_Pro::is_pro_active() ) {
             return [
                 'error'   => 'pro_required',
-                'message' => __( 'This feature requires Museder RestoreOne PRO.', 'museder-restoreone' ),
+                'message' => __( 'This feature is unavailable in the current build.', 'museder-restoreone' ),
             ];
         }
 
@@ -99,11 +99,11 @@ class Backup_Lite_Cloud_Storage {
      * }
      */
     public static function upload_backup( $backup_path, $provider_id ) {
-        if ( ! Backup_Lite_Pro::is_pro_active() ) {
+        if ( ! Museder_Restoreone_Pro::is_pro_active() ) {
             return [
                 'success' => false,
                 'error'   => 'pro_required',
-                'message' => __( 'This feature requires Museder RestoreOne PRO.', 'museder-restoreone' ),
+                'message' => __( 'This feature is unavailable in the current build.', 'museder-restoreone' ),
             ];
         }
 

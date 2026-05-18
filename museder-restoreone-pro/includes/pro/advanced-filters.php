@@ -12,7 +12,7 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 /**
  * Advanced Filters class for Backup Lite PRO.
  */
-class Backup_Lite_Advanced_Filters {
+class Museder_Restoreone_Advanced_Filters {
 
     /**
      * Initialize the advanced filters service.
@@ -31,10 +31,10 @@ class Backup_Lite_Advanced_Filters {
      * }
      */
     public static function get_exclusion_rules() {
-        if ( ! Backup_Lite_Pro::is_pro_active() ) {
+        if ( ! Museder_Restoreone_Pro::is_pro_active() ) {
             return [
                 'error'   => 'pro_required',
-                'message' => __( 'This feature requires Museder RestoreOne PRO.', 'museder-restoreone' ),
+                'message' => __( 'This feature is unavailable in the current build.', 'museder-restoreone' ),
             ];
         }
 
@@ -56,11 +56,11 @@ class Backup_Lite_Advanced_Filters {
      * }
      */
     public static function save_exclusion_rules( $rules ) {
-        if ( ! Backup_Lite_Pro::is_pro_active() ) {
+        if ( ! Museder_Restoreone_Pro::is_pro_active() ) {
             return [
                 'success' => false,
                 'error'   => 'pro_required',
-                'message' => __( 'This feature requires Museder RestoreOne PRO.', 'museder-restoreone' ),
+                'message' => __( 'This feature is unavailable in the current build.', 'museder-restoreone' ),
             ];
         }
 
@@ -78,7 +78,7 @@ class Backup_Lite_Advanced_Filters {
      * @return bool True if excluded, false otherwise.
      */
     public static function is_excluded( $path ) {
-        if ( ! Backup_Lite_Pro::is_pro_active() ) {
+        if ( ! Museder_Restoreone_Pro::is_pro_active() ) {
             return false;
         }
 

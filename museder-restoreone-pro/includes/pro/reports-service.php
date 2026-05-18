@@ -12,7 +12,7 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 /**
  * Reports Service class for Backup Lite PRO.
  */
-class Backup_Lite_Reports_Service {
+class Museder_Restoreone_Reports_Service {
 
     /**
      * Initialize the reports service.
@@ -32,16 +32,16 @@ class Backup_Lite_Reports_Service {
      * }
      */
     public static function get_system_check() {
-        if ( ! Backup_Lite_Pro::is_pro_active() ) {
+        if ( ! Museder_Restoreone_Pro::is_pro_active() ) {
             return [
                 'error'   => 'pro_required',
-                'message' => __( 'This feature requires Museder RestoreOne PRO.', 'museder-restoreone' ),
+                'message' => __( 'This feature is unavailable in the current build.', 'museder-restoreone' ),
             ];
         }
 
-        $status = Backup_Lite_UI::get_environment_status();
-        $backups = Backup_Lite_UI::get_backups_list();
-        $schedules = Backup_Lite_Schedule_Handler::list_schedules();
+        $status = Museder_Restoreone_UI::get_environment_status();
+        $backups = Museder_Restoreone_UI::get_backups_list();
+        $schedules = Museder_Restoreone_Schedule_Handler::list_schedules();
 
         $backup_count = count( $backups );
         $total_size = 0;
@@ -73,7 +73,7 @@ class Backup_Lite_Reports_Service {
                 'enabled' => $enabled_schedules,
             ],
             'storage' => [
-                'backup_dir'      => backup_lite_get_backup_dir(),
+                'backup_dir'      => museder_restoreone_get_backup_dir(),
                 'available_space' => self::get_available_disk_space(),
             ],
         ];
@@ -89,14 +89,14 @@ class Backup_Lite_Reports_Service {
      * }
      */
     public static function get_backup_trends( $days = 30 ) {
-        if ( ! Backup_Lite_Pro::is_pro_active() ) {
+        if ( ! Museder_Restoreone_Pro::is_pro_active() ) {
             return [
                 'error'   => 'pro_required',
-                'message' => __( 'This feature requires Museder RestoreOne PRO.', 'museder-restoreone' ),
+                'message' => __( 'This feature is unavailable in the current build.', 'museder-restoreone' ),
             ];
         }
 
-        $backups = Backup_Lite_UI::get_backups_list();
+        $backups = Museder_Restoreone_UI::get_backups_list();
         $cutoff = time() - ( $days * DAY_IN_SECONDS );
         
         $data = [];
@@ -161,14 +161,14 @@ class Backup_Lite_Reports_Service {
      * }
      */
     public static function get_ai_event_analysis() {
-        if ( ! Backup_Lite_Pro::is_pro_active() ) {
+        if ( ! Museder_Restoreone_Pro::is_pro_active() ) {
             return [
                 'error'   => 'pro_required',
-                'message' => __( 'This feature requires Museder RestoreOne PRO.', 'museder-restoreone' ),
+                'message' => __( 'This feature is unavailable in the current build.', 'museder-restoreone' ),
             ];
         }
 
-        $recent_logs = Backup_Lite_Log_Handler::get_recent_events( 'backup_result', 50 );
+        $recent_logs = Museder_Restoreone_Log_Handler::get_recent_events( 'backup_result', 50 );
         $events = [];
         $insights = [];
 
@@ -213,10 +213,10 @@ class Backup_Lite_Reports_Service {
      * }
      */
     public static function generate_pdf_report() {
-        if ( ! Backup_Lite_Pro::is_pro_active() ) {
+        if ( ! Museder_Restoreone_Pro::is_pro_active() ) {
             return [
                 'error'   => 'pro_required',
-                'message' => __( 'This feature requires Museder RestoreOne PRO.', 'museder-restoreone' ),
+                'message' => __( 'This feature is unavailable in the current build.', 'museder-restoreone' ),
             ];
         }
 
@@ -236,10 +236,10 @@ class Backup_Lite_Reports_Service {
      * }
      */
     public static function generate_json_report() {
-        if ( ! Backup_Lite_Pro::is_pro_active() ) {
+        if ( ! Museder_Restoreone_Pro::is_pro_active() ) {
             return [
                 'error'   => 'pro_required',
-                'message' => __( 'This feature requires Museder RestoreOne PRO.', 'museder-restoreone' ),
+                'message' => __( 'This feature is unavailable in the current build.', 'museder-restoreone' ),
             ];
         }
 
@@ -261,8 +261,8 @@ class Backup_Lite_Reports_Service {
             'ai_analysis' => $ai_analysis,
         ];
 
-        $reports_dir = backup_lite_get_pro_reports_dir();
-        $filename = 'backup-report-' . backup_lite_local_time( 'Y-m-d-His' ) . '.json';
+        $reports_dir = museder_restoreone_get_pro_reports_dir();
+        $filename = 'backup-report-' . museder_restoreone_local_time( 'Y-m-d-His' ) . '.json';
         $file_path = trailingslashit( $reports_dir ) . $filename;
 
         $json = wp_json_encode( $report, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES );
@@ -273,13 +273,13 @@ class Backup_Lite_Reports_Service {
             ];
         }
 
-        $nonce = wp_create_nonce( 'backup_lite_download_report_' . $filename );
+        $nonce = wp_create_nonce( 'museder_restoreone_download_report_' . $filename );
         return [
             'file_path' => $file_path,
             'filename'  => $filename,
             'url'       => wp_nonce_url(
-                admin_url( 'admin-post.php?action=backup_lite_download_report&file=' . rawurlencode( $filename ) ),
-                'backup_lite_download_report_' . $filename
+                admin_url( 'admin-post.php?action=museder_restoreone_download_report&file=' . rawurlencode( $filename ) ),
+                'museder_restoreone_download_report_' . $filename
             ),
         ];
     }

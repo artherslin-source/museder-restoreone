@@ -1,64 +1,51 @@
-#!/bin/bash
-# 创建 Museder RestoreOne 插件打包文件
+#!/usr/bin/env bash
+# Build the WordPress.org Lite release ZIP for Museder RestoreOne.
+set -euo pipefail
 
-PLUGIN_NAME="museder-restoreone"
-VERSION="$(php -r '$c=file_get_contents("museder-restoreone.php"); if(preg_match("/^\\s*Version:\\s*(.+)$/m",$c,$m)) { echo trim($m[1]); }')"
-PACKAGE_NAME="${PLUGIN_NAME}-${VERSION}.zip"
-TEMP_DIR=$(mktemp -d)
-PLUGIN_DIR="${TEMP_DIR}/${PLUGIN_NAME}"
-
-echo "正在创建插件打包文件: ${PACKAGE_NAME}"
-
-# 创建临时目录
-mkdir -p "${PLUGIN_DIR}"
-
-# 复制必要的文件
-echo "复制文件..."
-cp -r assets "${PLUGIN_DIR}/"
-cp -r includes "${PLUGIN_DIR}/"
-cp -r languages "${PLUGIN_DIR}/"
-cp -r templates "${PLUGIN_DIR}/"
-cp -r docs "${PLUGIN_DIR}/"
-cp museder-restoreone.php "${PLUGIN_DIR}/"
-cp readme.txt "${PLUGIN_DIR}/"
-cp download-handler.php "${PLUGIN_DIR}/"
-
-# 排除的文件和目录
-exclude_items=(
-    ".git"
-    ".gitignore"
-    "logs"
-    "node_modules"
-    ".DS_Store"
-    "*.zip"
-    "*.log"
-    "*.swp"
-    "*.swo"
-    "*~"
-    ".idea"
-    ".vscode"
-)
-
-# 创建 ZIP 文件（在项目根目录）
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-mkdir -p "${SCRIPT_DIR}/dist"
-OUTPUT_FILE="${SCRIPT_DIR}/dist/${PACKAGE_NAME}"
+PLUGIN_SLUG="museder-restoreone"
+MAIN_FILE="${SCRIPT_DIR}/museder-restoreone.php"
 
-cd "${TEMP_DIR}"
-echo "正在压缩..."
-zip -r "${OUTPUT_FILE}" "${PLUGIN_NAME}" -q
-
-# 清理临时目录
-cd "${SCRIPT_DIR}"
-rm -rf "${TEMP_DIR}"
-
-if [ -f "${OUTPUT_FILE}" ]; then
-    echo "打包完成！"
-    echo "文件位置: ${OUTPUT_FILE}"
-    echo "文件大小: $(du -h "${OUTPUT_FILE}" | cut -f1)"
-    ls -lh "${OUTPUT_FILE}"
-else
-    echo "错误：打包文件创建失败！"
-    exit 1
+if [[ ! -f "${MAIN_FILE}" ]]; then
+	echo "error: ${MAIN_FILE} not found" >&2
+	exit 1
 fi
 
+VERSION="$(php -r '$c=file_get_contents($argv[1]); if(preg_match("/define\(\s*'\''MUSEDER_RESTOREONE_VERSION'\''\s*,\s*'\''([^'\'']+)'\''\s*\)/",$c,$m)){echo $m[1];} elseif(preg_match("/^\s*Version:\s*(.+)$/m",$c,$m)){echo trim($m[1]);} else {fwrite(STDERR,"version not found\n"); exit(1);}' "${MAIN_FILE}")"
+
+PACKAGE_NAME="${PLUGIN_SLUG}-${VERSION}.zip"
+TEMP_DIR="$(mktemp -d)"
+PLUGIN_DIR="${TEMP_DIR}/${PLUGIN_SLUG}"
+
+mkdir -p "${PLUGIN_DIR}" "${SCRIPT_DIR}/dist"
+
+echo "Packaging ${PACKAGE_NAME} ..."
+
+cp -r "${SCRIPT_DIR}/assets" "${SCRIPT_DIR}/includes" "${SCRIPT_DIR}/templates" "${PLUGIN_DIR}/"
+if [[ -d "${SCRIPT_DIR}/languages" ]]; then
+	cp -r "${SCRIPT_DIR}/languages" "${PLUGIN_DIR}/"
+fi
+
+cp "${SCRIPT_DIR}/museder-restoreone.php" "${SCRIPT_DIR}/readme.txt" "${PLUGIN_DIR}/"
+if [[ -f "${SCRIPT_DIR}/uninstall.php" ]]; then
+	cp "${SCRIPT_DIR}/uninstall.php" "${PLUGIN_DIR}/"
+fi
+if [[ -f "${SCRIPT_DIR}/download-handler.php" ]]; then
+	cp "${SCRIPT_DIR}/download-handler.php" "${PLUGIN_DIR}/"
+fi
+
+OUTPUT_FILE="${SCRIPT_DIR}/dist/${PACKAGE_NAME}"
+(
+	cd "${TEMP_DIR}"
+	zip -r "${OUTPUT_FILE}" "${PLUGIN_SLUG}" -q
+)
+
+rm -rf "${TEMP_DIR}"
+
+if [[ -f "${OUTPUT_FILE}" ]]; then
+	echo "Created ${OUTPUT_FILE}"
+	ls -lh "${OUTPUT_FILE}"
+else
+	echo "error: zip was not created" >&2
+	exit 1
+fi

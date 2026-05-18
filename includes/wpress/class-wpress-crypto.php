@@ -16,7 +16,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-class Backup_Lite_Wpress_Crypto {
+class Museder_Restoreone_Wpress_Crypto {
 	public const CIPHER_NAME = 'AES-256-CBC';
 
 	/**
@@ -49,12 +49,12 @@ class Backup_Lite_Wpress_Crypto {
 	}
 
 	/**
-	 * @throws Backup_Lite_Wpress_Not_Encryptable_Exception
+	 * @throws Museder_Restoreone_Wpress_Not_Encryptable_Exception
 	 */
 	public static function iv_length(): int {
 		$iv_length = openssl_cipher_iv_length( self::CIPHER_NAME );
 		if ( $iv_length === false ) {
-			throw new Backup_Lite_Wpress_Not_Encryptable_Exception(
+			throw new Museder_Restoreone_Wpress_Not_Encryptable_Exception(
 				esc_html__( 'Could not obtain cipher IV length. The process cannot continue.', 'museder-restoreone' )
 			);
 		}
@@ -65,7 +65,7 @@ class Backup_Lite_Wpress_Crypto {
 	/**
 	 * AI1WM derives the cipher key as: substr( sha1(password, true), 0, iv_length )
 	 *
-	 * @throws Backup_Lite_Wpress_Not_Encryptable_Exception
+	 * @throws Museder_Restoreone_Wpress_Not_Encryptable_Exception
 	 */
 	private static function derive_key( string $password ): string {
 		$iv_length = self::iv_length();
@@ -75,11 +75,11 @@ class Backup_Lite_Wpress_Crypto {
 	/**
 	 * Encrypt bytes (returns iv + ciphertext).
 	 *
-	 * @throws Backup_Lite_Wpress_Not_Encryptable_Exception
+	 * @throws Museder_Restoreone_Wpress_Not_Encryptable_Exception
 	 */
 	public static function encrypt_bytes( string $bytes, string $password ): string {
 		if ( ! self::can_encrypt() ) {
-			throw new Backup_Lite_Wpress_Not_Encryptable_Exception(
+			throw new Museder_Restoreone_Wpress_Not_Encryptable_Exception(
 				esc_html__( 'This server cannot encrypt backups (OpenSSL missing).', 'museder-restoreone' )
 			);
 		}
@@ -88,7 +88,7 @@ class Backup_Lite_Wpress_Crypto {
 
 		$iv = openssl_random_pseudo_bytes( self::iv_length() );
 		if ( $iv === false ) {
-			throw new Backup_Lite_Wpress_Not_Encryptable_Exception(
+			throw new Museder_Restoreone_Wpress_Not_Encryptable_Exception(
 				esc_html__( 'Could not generate random bytes. The process cannot continue.', 'museder-restoreone' )
 			);
 		}
@@ -96,7 +96,7 @@ class Backup_Lite_Wpress_Crypto {
 		// phpcs:ignore PHPCompatibility.FunctionUse.NewFunctionParameters, PHPCompatibility.Constants.NewConstants
 		$ciphertext = openssl_encrypt( $bytes, self::CIPHER_NAME, $key, OPENSSL_RAW_DATA, $iv );
 		if ( $ciphertext === false ) {
-			throw new Backup_Lite_Wpress_Not_Encryptable_Exception(
+			throw new Museder_Restoreone_Wpress_Not_Encryptable_Exception(
 				esc_html__( 'Could not encrypt data. The process cannot continue.', 'museder-restoreone' )
 			);
 		}
@@ -107,19 +107,19 @@ class Backup_Lite_Wpress_Crypto {
 	/**
 	 * Decrypt bytes (expects iv + ciphertext).
 	 *
-	 * @throws Backup_Lite_Wpress_Not_Encryptable_Exception
-	 * @throws Backup_Lite_Wpress_Not_Decryptable_Exception
+	 * @throws Museder_Restoreone_Wpress_Not_Encryptable_Exception
+	 * @throws Museder_Restoreone_Wpress_Not_Decryptable_Exception
 	 */
 	public static function decrypt_bytes( string $encrypted_bytes, string $password ): string {
 		if ( ! self::can_decrypt() ) {
-			throw new Backup_Lite_Wpress_Not_Decryptable_Exception(
+			throw new Museder_Restoreone_Wpress_Not_Decryptable_Exception(
 				esc_html__( 'This server cannot decrypt backups (OpenSSL missing).', 'museder-restoreone' )
 			);
 		}
 
 		$iv_length = self::iv_length();
 		if ( strlen( $encrypted_bytes ) < $iv_length ) {
-			throw new Backup_Lite_Wpress_Not_Decryptable_Exception(
+			throw new Museder_Restoreone_Wpress_Not_Decryptable_Exception(
 				esc_html__( 'Encrypted data is too short. The process cannot continue.', 'museder-restoreone' )
 			);
 		}
@@ -130,7 +130,7 @@ class Backup_Lite_Wpress_Crypto {
 		// phpcs:ignore PHPCompatibility.Constants.NewConstants, PHPCompatibility.FunctionUse.NewFunctionParameters
 		$plaintext = openssl_decrypt( substr( $encrypted_bytes, $iv_length ), self::CIPHER_NAME, $key, OPENSSL_RAW_DATA, $iv );
 		if ( $plaintext === false ) {
-			throw new Backup_Lite_Wpress_Not_Decryptable_Exception(
+			throw new Museder_Restoreone_Wpress_Not_Decryptable_Exception(
 				esc_html__( 'Could not decrypt data. The process cannot continue.', 'museder-restoreone' )
 			);
 		}

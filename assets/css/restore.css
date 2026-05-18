@@ -90,6 +90,10 @@
     color: #228a4b;
 }
 
+[data-bl-theme="dark"] .bl-restore-step.is-completed .bl-restore-step__label {
+    color: #4ade80;
+}
+
 .bl-restore-step.is-disabled {
     opacity: 0.5;
 }

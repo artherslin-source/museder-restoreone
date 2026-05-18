@@ -1,19 +1,19 @@
 <?php
 /**
- * Schedule handler for Backup Lite.
+ * Schedule handler for Museder RestoreOne.
  *
- * @package BackupLite
+ * @package Museder_Restoreone
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-class Backup_Lite_Schedule_Handler {
+class Museder_Restoreone_Schedule_Handler {
 
-    const OPTION_KEY      = 'backup_lite_schedules';
-    const CRON_HOOK       = 'backup_lite_cron_event';
-    const MONTHLY_INTERVAL = 'backup_lite_monthly';
+    const OPTION_KEY      = 'museder_restoreone_schedules';
+    const CRON_HOOK       = 'museder_restoreone_cron_event';
+    const MONTHLY_INTERVAL = 'museder_restoreone_monthly';
 
     /**
      * Bootstraps hooks.
@@ -24,19 +24,19 @@ class Backup_Lite_Schedule_Handler {
         add_action( 'init', [ __CLASS__, 'synchronise_cron_events' ] );
         add_action( self::CRON_HOOK, [ __CLASS__, 'run_scheduled_backup' ], 10, 2 );
 
-        add_action( 'wp_ajax_backup_lite_fetch_schedules', [ __CLASS__, 'ajax_fetch_schedules' ] );
-        add_action( 'wp_ajax_backup_lite_save_schedule', [ __CLASS__, 'ajax_save_schedule' ] );
-        add_action( 'wp_ajax_backup_lite_delete_schedule', [ __CLASS__, 'ajax_delete_schedule' ] );
-        add_action( 'wp_ajax_backup_lite_run_schedule_now', [ __CLASS__, 'ajax_run_schedule_now' ] );
+        add_action( 'wp_ajax_museder_restoreone_fetch_schedules', [ __CLASS__, 'ajax_fetch_schedules' ] );
+        add_action( 'wp_ajax_museder_restoreone_save_schedule', [ __CLASS__, 'ajax_save_schedule' ] );
+        add_action( 'wp_ajax_museder_restoreone_delete_schedule', [ __CLASS__, 'ajax_delete_schedule' ] );
+        add_action( 'wp_ajax_museder_restoreone_run_schedule_now', [ __CLASS__, 'ajax_run_schedule_now' ] );
         
         // Unified schedule action handler
-        add_action( 'wp_ajax_backup_lite_schedule_action', [ __CLASS__, 'handle_schedule_action' ] );
+        add_action( 'wp_ajax_museder_restoreone_schedule_action', [ __CLASS__, 'handle_schedule_action' ] );
 
         // Backwards compatibility with previous AJAX endpoints.
-        add_action( 'wp_ajax_backup_lite_add_schedule', [ __CLASS__, 'ajax_add_schedule' ] );
-        add_action( 'wp_ajax_backup_lite_update_schedule', [ __CLASS__, 'ajax_update_schedule' ] );
-        add_action( 'wp_ajax_backup_lite_start_schedule', [ __CLASS__, 'ajax_start_schedule' ] );
-        add_action( 'wp_ajax_backup_lite_toggle_schedule', [ __CLASS__, 'ajax_toggle_schedule' ] );
+        add_action( 'wp_ajax_museder_restoreone_add_schedule', [ __CLASS__, 'ajax_add_schedule' ] );
+        add_action( 'wp_ajax_museder_restoreone_update_schedule', [ __CLASS__, 'ajax_update_schedule' ] );
+        add_action( 'wp_ajax_museder_restoreone_start_schedule', [ __CLASS__, 'ajax_start_schedule' ] );
+        add_action( 'wp_ajax_museder_restoreone_toggle_schedule', [ __CLASS__, 'ajax_toggle_schedule' ] );
     }
 
     /**
@@ -82,8 +82,8 @@ class Backup_Lite_Schedule_Handler {
             }
         } catch ( Exception $e ) {
             // Silently fail during activation to prevent blocking plugin activation
-            if ( function_exists( 'backup_lite_log' ) ) {
-                backup_lite_log( 'error', 'Failed to synchronise cron events: ' . $e->getMessage() );
+            if ( function_exists( 'museder_restoreone_log' ) ) {
+                museder_restoreone_log( 'error', 'Failed to synchronise cron events: ' . $e->getMessage() );
             }
         }
     }
@@ -149,7 +149,7 @@ class Backup_Lite_Schedule_Handler {
         }
 
         // Verify nonce with schedule-specific nonce
-        check_ajax_referer( 'backup_lite_schedule_action_' . $schedule_id, '_ajax_nonce' );
+        check_ajax_referer( 'museder_restoreone_schedule_action_' . $schedule_id, '_ajax_nonce' );
 
         $deleted = self::delete_schedule( $schedule_id );
 
@@ -164,7 +164,7 @@ class Backup_Lite_Schedule_Handler {
      * Unified AJAX handler for schedule actions (start_now, delete, edit).
      */
     public static function handle_schedule_action() {
-        check_ajax_referer( 'backup_lite_admin_actions', 'nonce' );
+        check_ajax_referer( 'museder_restoreone_admin_actions', 'nonce' );
 
         if ( ! current_user_can( 'manage_options' ) ) {
             wp_send_json_error(
@@ -282,19 +282,6 @@ class Backup_Lite_Schedule_Handler {
 
         $is_edit = ( '' !== $effective_id );
 
-        // Check PRO limit for Free users - ONLY on create (not edit)
-        if ( ! $is_edit ) {
-            $is_pro = Backup_Lite_Pro::is_pro_active();
-            $existing = self::get_schedules();
-            
-            if ( ! $is_pro && count( $existing ) >= 1 ) {
-                wp_send_json_error( [
-                    'message' => __( 'Free version supports only 1 schedule. Delete the existing schedule or upgrade to PRO to add more.', 'museder-restoreone' ),
-                    'code'    => 'schedule_limit_reached',
-                ], 403 );
-            }
-        }
-
         if ( $is_edit ) {
             // Edit mode: Update existing schedule
             $schedule = self::update_schedule( $effective_id, $data );
@@ -340,7 +327,7 @@ class Backup_Lite_Schedule_Handler {
         }
 
         // Verify nonce with schedule-specific nonce
-        check_ajax_referer( 'backup_lite_schedule_action_' . $schedule_id, '_ajax_nonce' );
+        check_ajax_referer( 'museder_restoreone_schedule_action_' . $schedule_id, '_ajax_nonce' );
 
         $result = self::run_schedule_now( $schedule_id );
 
@@ -377,7 +364,7 @@ class Backup_Lite_Schedule_Handler {
         // Store last_run as UTC timestamp (use current_time with GMT flag)
         $schedule['last_run_timestamp_utc'] = current_time( 'timestamp', true );
 
-        $result = Backup_Lite_Backup::backup_site();
+        $result = Museder_Restoreone_Backup::backup_site();
 
         if ( ! empty( $result['success'] ) ) {
             $schedule['last_result'] = 'success';
@@ -386,7 +373,7 @@ class Backup_Lite_Schedule_Handler {
             // Update last_run timestamp on success (use current_time with GMT flag)
             $schedule['last_run_timestamp_utc'] = current_time( 'timestamp', true );
 
-            Backup_Lite_Log_Handler::record_event(
+            Museder_Restoreone_Log_Handler::record_event(
                 'schedule_result',
                 [
                     'schedule_id' => $schedule_id,
@@ -403,7 +390,7 @@ class Backup_Lite_Schedule_Handler {
             $schedule['last_error']  = $result['message'] ?? __( 'Unknown failure.', 'museder-restoreone' );
             $schedule['retry_count'] = $attempt;
 
-            Backup_Lite_Log_Handler::record_event(
+            Museder_Restoreone_Log_Handler::record_event(
                 'schedule_result',
                 [
                     'schedule_id' => $schedule_id,
@@ -417,7 +404,7 @@ class Backup_Lite_Schedule_Handler {
             );
 
             if ( $attempt < 2 ) {
-                backup_lite_retry_cron( $schedule_id, $attempt + 1 );
+                museder_restoreone_retry_cron( $schedule_id, $attempt + 1 );
             }
         }
 
@@ -460,22 +447,17 @@ class Backup_Lite_Schedule_Handler {
             'next_run' => $next_timestamp,
         ];
 
-        // PRO features
-        if ( Backup_Lite_Pro::is_pro_active() ) {
-            // Custom cron pattern
-            if ( ! empty( $data['cron_pattern'] ) ) {
-                $schedule['cron_pattern'] = sanitize_text_field( $data['cron_pattern'] );
-            }
+        // Extended schedule fields (local-only; not gated behind a separate add-on for WordPress.org review).
+        if ( ! empty( $data['cron_pattern'] ) ) {
+            $schedule['cron_pattern'] = sanitize_text_field( $data['cron_pattern'] );
+        }
 
-            // Exclusion paths
-            if ( ! empty( $data['exclude_paths'] ) && is_array( $data['exclude_paths'] ) ) {
-                $schedule['exclude_paths'] = array_map( 'sanitize_text_field', $data['exclude_paths'] );
-            }
+        if ( ! empty( $data['exclude_paths'] ) && is_array( $data['exclude_paths'] ) ) {
+            $schedule['exclude_paths'] = array_map( 'sanitize_text_field', $data['exclude_paths'] );
+        }
 
-            // Smart retention policy
-            if ( ! empty( $data['retention_policy'] ) ) {
-                $schedule['retention_policy'] = sanitize_text_field( $data['retention_policy'] );
-            }
+        if ( ! empty( $data['retention_policy'] ) ) {
+            $schedule['retention_policy'] = sanitize_text_field( $data['retention_policy'] );
         }
 
         $next_timestamp = self::compute_next_timestamp( $schedule );
@@ -526,24 +508,18 @@ class Backup_Lite_Schedule_Handler {
         $schedule['max_age'] = (int) $data['max_age'];
         $schedule['notify']  = $data['notify'];
 
-        // PRO features
-        if ( Backup_Lite_Pro::is_pro_active() ) {
-            // Custom cron pattern
-            if ( isset( $data['cron_pattern'] ) ) {
-                $schedule['cron_pattern'] = ! empty( $data['cron_pattern'] ) ? sanitize_text_field( $data['cron_pattern'] ) : '';
-            }
+        if ( isset( $data['cron_pattern'] ) ) {
+            $schedule['cron_pattern'] = ! empty( $data['cron_pattern'] ) ? sanitize_text_field( $data['cron_pattern'] ) : '';
+        }
 
-            // Exclusion paths
-            if ( isset( $data['exclude_paths'] ) ) {
-                $schedule['exclude_paths'] = ! empty( $data['exclude_paths'] ) && is_array( $data['exclude_paths'] ) 
-                    ? array_map( 'sanitize_text_field', $data['exclude_paths'] ) 
-                    : [];
-            }
+        if ( isset( $data['exclude_paths'] ) ) {
+            $schedule['exclude_paths'] = ! empty( $data['exclude_paths'] ) && is_array( $data['exclude_paths'] )
+                ? array_map( 'sanitize_text_field', $data['exclude_paths'] )
+                : [];
+        }
 
-            // Smart retention policy
-            if ( isset( $data['retention_policy'] ) ) {
-                $schedule['retention_policy'] = ! empty( $data['retention_policy'] ) ? sanitize_text_field( $data['retention_policy'] ) : '';
-            }
+        if ( isset( $data['retention_policy'] ) ) {
+            $schedule['retention_policy'] = ! empty( $data['retention_policy'] ) ? sanitize_text_field( $data['retention_policy'] ) : '';
         }
 
         // Compute next run using UTC timestamp
@@ -676,7 +652,7 @@ class Backup_Lite_Schedule_Handler {
         $schedule['last_run_timestamp_utc'] = current_time( 'timestamp', true );
         $schedule['retry_count'] = 0;
 
-        $result = Backup_Lite_Backup::backup_site();
+        $result = Museder_Restoreone_Backup::backup_site();
 
         if ( empty( $result['success'] ) ) {
             $schedule['last_result'] = 'failed';
@@ -684,7 +660,7 @@ class Backup_Lite_Schedule_Handler {
             $schedules[ $schedule_id ] = $schedule;
             update_option( self::OPTION_KEY, $schedules );
 
-            Backup_Lite_Log_Handler::record_event(
+            Museder_Restoreone_Log_Handler::record_event(
                 'schedule_result',
                 [
                     'schedule_id' => $schedule_id,
@@ -717,7 +693,7 @@ class Backup_Lite_Schedule_Handler {
         }
 
         self::apply_retention_rules( $schedule );
-        Backup_Lite_Log_Handler::record_event(
+        Museder_Restoreone_Log_Handler::record_event(
             'schedule_result',
             [
                 'schedule_id' => $schedule_id,
@@ -737,13 +713,21 @@ class Backup_Lite_Schedule_Handler {
      * @param array $schedule Schedule.
      */
     private static function apply_retention_rules( array $schedule ) {
-        $backup_dir = trailingslashit( backup_lite_get_backup_dir() );
-        $files      = glob( $backup_dir . '*.{zip,wpress}', GLOB_BRACE );
+        $backup_dir = trailingslashit( museder_restoreone_get_backup_dir() );
+        if ( defined( 'GLOB_BRACE' ) ) {
+            $files = glob( $backup_dir . '*.{zip,wpress}', GLOB_BRACE );
+        } else {
+            $files = array_merge(
+                glob( $backup_dir . '*.zip' ) ?: [],
+                glob( $backup_dir . '*.wpress' ) ?: []
+            );
+        }
 
         if ( empty( $files ) ) {
             return;
         }
 
+        $files = array_values( array_unique( $files ) );
         rsort( $files ); // newest first.
 
         $retain  = isset( $schedule['retain'] ) ? (int) $schedule['retain'] : 0;
@@ -773,6 +757,10 @@ class Backup_Lite_Schedule_Handler {
         if ( $max_age > 0 ) {
             $threshold = $now - ( $max_age * DAY_IN_SECONDS );
             foreach ( $files as $file ) {
+                if ( ! file_exists( $file ) ) {
+                    continue;
+                }
+
                 if ( filemtime( $file ) < $threshold ) {
                     // @plugin-check: allowed - required for backup/restore file operations
                     // Path is validated and sanitized before use
@@ -954,27 +942,19 @@ class Backup_Lite_Schedule_Handler {
      * @return array
      */
     private static function read_schedule_data() {
-        // Nonce verified via verify_ajax() in calling method
-        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified via verify_ajax() in calling method
-        // phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
-        $raw_schedule = isset( $_POST['schedule'] ) ? wp_unslash( $_POST['schedule'] ) : array();
-        // phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
-        // phpcs:enable WordPress.Security.NonceVerification.Missing
+        $decoded = array();
 
-        if ( empty( $raw_schedule ) ) {
-            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- reading JSON from php://input stream
-            $raw = file_get_contents( 'php://input' ); // Fallback for JSON payload.
-            $decoded = json_decode( $raw, true );
-        } else {
-            // If schedule is already an array, sanitize it directly
-            if ( is_array( $raw_schedule ) ) {
-                $decoded = self::sanitize_schedule_value( $raw_schedule );
-            } else {
-                // If it's a JSON string, decode first then sanitize
-                $decoded = json_decode( $raw_schedule, true );
-                if ( is_array( $decoded ) ) {
-                    $decoded = self::sanitize_schedule_value( $decoded );
-                }
+        // Nonce verified via verify_ajax() in the calling method.
+        // Only process the declared `schedule` field instead of parsing the full request body.
+        $raw_schedule_json  = filter_input( INPUT_POST, 'schedule', FILTER_UNSAFE_RAW );
+        $raw_schedule_array = filter_input( INPUT_POST, 'schedule', FILTER_DEFAULT, FILTER_REQUIRE_ARRAY );
+
+        if ( is_array( $raw_schedule_array ) ) {
+            $decoded = self::sanitize_schedule_value( wp_unslash( $raw_schedule_array ) );
+        } elseif ( is_string( $raw_schedule_json ) && '' !== $raw_schedule_json ) {
+            $decoded = json_decode( sanitize_textarea_field( wp_unslash( $raw_schedule_json ) ), true );
+            if ( is_array( $decoded ) ) {
+                $decoded = self::sanitize_schedule_value( $decoded );
             }
         }
 
@@ -982,7 +962,11 @@ class Backup_Lite_Schedule_Handler {
             $decoded = array();
         }
 
-        $settings = Backup_Lite_Settings::get_settings();
+        // Whitelist: only use known keys; drop any extra keys from json_decode/POST.
+        $allowed_keys = array( 'title', 'type', 'period', 'time', 'retain', 'max_age', 'notify', 'status', 'cron_pattern', 'exclude_paths', 'retention_policy' );
+        $decoded      = array_intersect_key( $decoded, array_flip( $allowed_keys ) );
+
+        $settings = Museder_Restoreone_Settings::get_settings();
 
         $result = [
             'title'   => isset( $decoded['title'] ) ? sanitize_text_field( $decoded['title'] ) : __( 'Scheduled Backup', 'museder-restoreone' ),
@@ -995,22 +979,16 @@ class Backup_Lite_Schedule_Handler {
             'status'  => ( isset( $decoded['status'] ) && 'disabled' === $decoded['status'] ) ? 'disabled' : 'enabled',
         ];
 
-        // PRO features
-        if ( Backup_Lite_Pro::is_pro_active() ) {
-            // Custom cron pattern
-            if ( isset( $decoded['cron_pattern'] ) ) {
-                $result['cron_pattern'] = sanitize_text_field( $decoded['cron_pattern'] );
-            }
+        if ( isset( $decoded['cron_pattern'] ) ) {
+            $result['cron_pattern'] = sanitize_text_field( $decoded['cron_pattern'] );
+        }
 
-            // Exclusion paths
-            if ( isset( $decoded['exclude_paths'] ) && is_array( $decoded['exclude_paths'] ) ) {
-                $result['exclude_paths'] = array_map( 'sanitize_text_field', $decoded['exclude_paths'] );
-            }
+        if ( isset( $decoded['exclude_paths'] ) && is_array( $decoded['exclude_paths'] ) ) {
+            $result['exclude_paths'] = array_map( 'sanitize_text_field', $decoded['exclude_paths'] );
+        }
 
-            // Smart retention policy
-            if ( isset( $decoded['retention_policy'] ) ) {
-                $result['retention_policy'] = sanitize_text_field( $decoded['retention_policy'] );
-            }
+        if ( isset( $decoded['retention_policy'] ) ) {
+            $result['retention_policy'] = sanitize_text_field( $decoded['retention_policy'] );
         }
 
         if ( empty( $result['time'] ) || ! preg_match( '/^\d{2}:\d{2}$/', $result['time'] ) ) {
@@ -1036,7 +1014,7 @@ class Backup_Lite_Schedule_Handler {
             wp_send_json_error( [ 'message' => __( 'Unauthorized.', 'museder-restoreone' ) ], 403 );
         }
 
-        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
+        check_ajax_referer( Museder_Restoreone_UI::NONCE, 'nonce' );
     }
 
     /**
@@ -1089,17 +1067,14 @@ class Backup_Lite_Schedule_Handler {
             $schedule['next_run'] = $schedule['next_run_timestamp_utc'];
         }
 
-        // PRO features defaults
-        if ( class_exists( 'Backup_Lite_Pro' ) && method_exists( 'Backup_Lite_Pro', 'is_pro_active' ) && Backup_Lite_Pro::is_pro_active() ) {
-            if ( ! isset( $schedule['cron_pattern'] ) ) {
-                $schedule['cron_pattern'] = '';
-            }
-            if ( ! isset( $schedule['exclude_paths'] ) ) {
-                $schedule['exclude_paths'] = [];
-            }
-            if ( ! isset( $schedule['retention_policy'] ) ) {
-                $schedule['retention_policy'] = '';
-            }
+        if ( ! isset( $schedule['cron_pattern'] ) ) {
+            $schedule['cron_pattern'] = '';
+        }
+        if ( ! isset( $schedule['exclude_paths'] ) ) {
+            $schedule['exclude_paths'] = [];
+        }
+        if ( ! isset( $schedule['retention_policy'] ) ) {
+            $schedule['retention_policy'] = '';
         }
 
         return $schedule;
@@ -1111,14 +1086,21 @@ class Backup_Lite_Schedule_Handler {
      * @return array
      */
     public static function get_ai_recommendations() {
-        if ( ! Backup_Lite_Pro::is_pro_active() ) {
+        if ( ! museder_is_pro_active() ) {
             return [
-                'error'   => 'pro_required',
-                'message' => __( 'This feature requires Museder RestoreOne PRO.', 'museder-restoreone' ),
+                'error'   => 'addon_not_active',
+                'message' => __( 'AI schedule recommendations require the separate RestoreOne Add-on plugin.', 'museder-restoreone' ),
             ];
         }
 
-        return Backup_Lite_AI_Service::get_smart_schedule();
+        if ( ! class_exists( 'Museder_Restoreone_AI_Service' ) ) {
+            return [
+                'error'   => 'addon_service_missing',
+                'message' => __( 'The RestoreOne Add-on is active but its AI schedule module is not available. Please update or reinstall the add-on.', 'museder-restoreone' ),
+            ];
+        }
+
+        return Museder_Restoreone_AI_Service::get_smart_schedule();
     }
 }
 

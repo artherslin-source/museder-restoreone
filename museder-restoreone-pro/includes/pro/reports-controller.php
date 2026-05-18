@@ -1,10 +1,10 @@
 <?php
 /**
- * Backup Lite PRO - Reports Controller
+ * Museder RestoreOne PRO - Reports Controller
  * 
  * REST API endpoints for Reports features.
  *
- * @package BackupLite
+ * @package Museder_Restoreone
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
@@ -12,9 +12,9 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 /**
  * Reports Controller class for REST API endpoints.
  */
-class Backup_Lite_Reports_Controller {
+class Museder_Restoreone_Reports_Controller {
 
-    const NAMESPACE = 'backup-lite/v2';
+    const NAMESPACE = 'museder-restoreone/v2';
     const BASE      = 'pro/reports';
 
     /**
@@ -22,7 +22,7 @@ class Backup_Lite_Reports_Controller {
      */
     public static function init() {
         add_action( 'rest_api_init', [ __CLASS__, 'register_routes' ] );
-        add_action( 'admin_post_backup_lite_download_report', [ __CLASS__, 'handle_report_download' ] );
+        add_action( 'admin_post_museder_restoreone_download_report', [ __CLASS__, 'handle_report_download' ] );
     }
 
     /**
@@ -123,7 +123,7 @@ class Backup_Lite_Reports_Controller {
      * @return WP_REST_Response|WP_Error
      */
     public static function handle_system_check( $request ) {
-        $result = Backup_Lite_Reports_Service::get_system_check();
+        $result = Museder_Restoreone_Reports_Service::get_system_check();
 
         if ( isset( $result['error'] ) ) {
             return new WP_Error( 'pro_required', $result['message'], [ 'status' => 403 ] );
@@ -140,7 +140,7 @@ class Backup_Lite_Reports_Controller {
      */
     public static function handle_trends( $request ) {
         $days = $request->get_param( 'days' ) ?: 30;
-        $result = Backup_Lite_Reports_Service::get_backup_trends( $days );
+        $result = Museder_Restoreone_Reports_Service::get_backup_trends( $days );
 
         if ( isset( $result['error'] ) ) {
             return new WP_Error( 'pro_required', $result['message'], [ 'status' => 403 ] );
@@ -156,7 +156,7 @@ class Backup_Lite_Reports_Controller {
      * @return WP_REST_Response|WP_Error
      */
     public static function handle_ai_analysis( $request ) {
-        $result = Backup_Lite_Reports_Service::get_ai_event_analysis();
+        $result = Museder_Restoreone_Reports_Service::get_ai_event_analysis();
 
         if ( isset( $result['error'] ) ) {
             return new WP_Error( 'pro_required', $result['message'], [ 'status' => 403 ] );
@@ -172,7 +172,7 @@ class Backup_Lite_Reports_Controller {
      * @return WP_REST_Response|WP_Error
      */
     public static function handle_generate_json( $request ) {
-        $result = Backup_Lite_Reports_Service::generate_json_report();
+        $result = Museder_Restoreone_Reports_Service::generate_json_report();
 
         if ( isset( $result['error'] ) ) {
             return new WP_Error( 'generation_failed', $result['message'], [ 'status' => 500 ] );
@@ -188,7 +188,7 @@ class Backup_Lite_Reports_Controller {
      * @return WP_REST_Response|WP_Error
      */
     public static function handle_generate_pdf( $request ) {
-        $result = Backup_Lite_Reports_Service::generate_pdf_report();
+        $result = Museder_Restoreone_Reports_Service::generate_pdf_report();
 
         if ( isset( $result['error'] ) ) {
             return new WP_Error( 'generation_failed', $result['message'], [ 'status' => 500 ] );
@@ -214,7 +214,7 @@ class Backup_Lite_Reports_Controller {
             wp_die( esc_html__( 'File not specified.', 'museder-restoreone' ) );
         }
 
-        $reports_dir = backup_lite_get_pro_reports_dir();
+        $reports_dir = museder_restoreone_get_pro_reports_dir();
         $path = trailingslashit( $reports_dir ) . basename( $file );
         $path = wp_normalize_path( $path );
 
@@ -228,7 +228,7 @@ class Backup_Lite_Reports_Controller {
         }
 
         // Verify nonce - use basename for action to match the nonce generation
-        check_admin_referer( 'backup_lite_download_report_' . basename( $path ) );
+        check_admin_referer( 'museder_restoreone_download_report_' . basename( $path ) );
 
         $ext = strtolower( pathinfo( $path, PATHINFO_EXTENSION ) );
         $mime = 'application/json';

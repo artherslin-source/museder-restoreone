@@ -25,22 +25,53 @@
     --bl-radius: var(--radius);
 }
 
+/* 與 admin-style 的 [data-bl-theme="dark"] 對齊：避免深色模式下仍用淺色字／淺底造成對比不足 */
+[data-bl-theme="dark"] {
+    --text-dark: rgba(244, 245, 250, 0.96);
+    --text-muted: rgba(203, 213, 225, 0.78);
+    --surface: #13151a;
+    --glass-border: rgba(255, 255, 255, 0.11);
+    --glass-shadow: 0 18px 46px rgba(0, 0, 0, 0.42);
+}
+
+/* Dark: Settings "General" labels used hardcoded light-theme hex elsewhere — force readable contrast on dark cards. */
+[data-bl-theme="dark"] .backup-lite-admin .bl-form-control span,
+[data-bl-theme="dark"] .museder-restoreone-admin .bl-form-control span {
+    color: var(--text-dark);
+}
+
+[data-bl-theme="dark"] .backup-lite-admin .bl-form-control small.description,
+[data-bl-theme="dark"] .museder-restoreone-admin .bl-form-control small.description {
+    color: rgba(226, 232, 240, 0.9);
+}
+
+/* Dark: environment / status success pills — slightly brighter fg + border for WCAG-friendly contrast on tinted bg */
+[data-bl-theme="dark"] .badge.success {
+    background: rgba(52, 211, 153, 0.2);
+    color: #6ee7b7;
+    border: 1px solid rgba(16, 185, 129, 0.38);
+}
+
 body.wp-admin #wpcontent {
     background: var(--surface);
 }
 
-.backup-lite-admin {
+.backup-lite-admin,
+.museder-restoreone-admin {
     color: var(--text-dark);
 }
 
 /* Ensure wrap container doesn't interfere with grid */
 .wrap.backup-lite-admin,
-.wrap.backup-lite-dashboard {
+.wrap.backup-lite-dashboard,
+.wrap.museder-restoreone-admin,
+.wrap.museder-restoreone-dashboard {
     max-width: 100%;
     padding: 0 20px 20px;
 }
 
-.backup-lite-page-title {
+.backup-lite-page-title,
+.museder-restoreone-page-title {
     font-size: 26px;
     font-weight: 700;
     display: flex;
@@ -50,17 +81,20 @@ body.wp-admin #wpcontent {
     color: var(--text-dark);
 }
 
-.backup-lite-page-description {
+.backup-lite-page-description,
+.museder-restoreone-page-description {
     margin: 0 0 24px;
     color: var(--text-muted);
 }
 
-.backup-lite-page-description {
+.backup-lite-page-description,
+.museder-restoreone-page-description {
     margin: 0 0 24px;
     color: var(--text-muted);
 }
 
-.backup-lite-dashboard-actions {
+.backup-lite-dashboard-actions,
+.museder-restoreone-dashboard-actions {
     display: flex;
     justify-content: flex-end;
     gap: 12px;
@@ -352,6 +386,7 @@ body.wp-admin #wpcontent {
 }
 
 .backup-lite-table,
+.museder-restoreone-table,
 .backup-lite-admin .bl-table {
     width: 100%;
     border-collapse: collapse;
@@ -360,12 +395,15 @@ body.wp-admin #wpcontent {
     overflow: visible;
 }
 
-.backup-lite-table thead {
+.backup-lite-table thead,
+.museder-restoreone-table thead {
     background: rgba(248, 250, 252, 0.85);
 }
 
 .backup-lite-table th,
 .backup-lite-table td,
+.museder-restoreone-table th,
+.museder-restoreone-table td,
 .backup-lite-admin .bl-table th,
 .backup-lite-admin .bl-table td {
     padding: 12px 14px;
@@ -374,11 +412,13 @@ body.wp-admin #wpcontent {
 }
 
 .backup-lite-table tbody tr:nth-child(even),
+.museder-restoreone-table tbody tr:nth-child(even),
 .backup-lite-admin .bl-table tbody tr:nth-child(even) {
     background: rgba(248, 250, 252, 0.7);
 }
 
 .backup-lite-table tbody tr:hover,
+.museder-restoreone-table tbody tr:hover,
 .backup-lite-admin .bl-table tbody tr:hover {
     background: #eff6ff;
 }
@@ -415,20 +455,25 @@ body.wp-admin #wpcontent {
     position: relative;
 }
 
-.backup-lite-log-layout {
+.backup-lite-log-layout,
+.museder-restoreone-log-layout {
     display: grid;
     grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
     gap: 24px;
 }
 .backup-lite-log-layout .log-table-wrapper,
-.backup-lite-log-layout .bl-table-scroll {
+.backup-lite-log-layout .bl-table-scroll,
+.museder-restoreone-log-layout .log-table-wrapper,
+.museder-restoreone-log-layout .bl-table-scroll {
     overflow: visible;
 }
-.backup-lite-log-layout .bl-actions-menu {
+.backup-lite-log-layout .bl-actions-menu,
+.museder-restoreone-log-layout .bl-actions-menu {
     position: relative;
     z-index: 25;
 }
-.backup-lite-log-layout .bl-actions-list {
+.backup-lite-log-layout .bl-actions-list,
+.museder-restoreone-log-layout .bl-actions-list {
     z-index: 30;
 }
 
@@ -487,7 +532,8 @@ body.bl-extended-log-on pre.log-preview {
 body.bl-restore-v2-off .restore-stepper {
     display: none !important;
 }
-.backup-lite-settings-grid {
+.backup-lite-settings-grid,
+.museder-restoreone-settings-grid {
     display: grid;
     gap: 24px;
     grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
@@ -1291,7 +1337,9 @@ body.bl-modal-open {
     gap: 8px;
     margin: 8px 0;
 }
-.backup-lite-admin #backup-lite-messages {
+.backup-lite-admin #backup-lite-messages,
+.backup-lite-admin #bl-settings-message,
+.museder-restoreone-admin #bl-settings-message {
     display: none;
     margin-bottom: 24px;
     padding: 18px 22px;
@@ -1307,21 +1355,29 @@ body.bl-modal-open {
     line-height: 1.4;
 }
 
-.backup-lite-admin #backup-lite-messages::before {
+.backup-lite-admin #backup-lite-messages::before,
+.backup-lite-admin #bl-settings-message::before,
+.museder-restoreone-admin #bl-settings-message::before {
     content: '⚙️';
     font-size: 20px;
 }
 
-.backup-lite-admin #backup-lite-messages.is-visible {
+.backup-lite-admin #backup-lite-messages.is-visible,
+.backup-lite-admin #bl-settings-message.is-visible,
+.museder-restoreone-admin #bl-settings-message.is-visible {
     display: flex;
 }
 
-.backup-lite-admin #backup-lite-messages.is-success {
+.backup-lite-admin #backup-lite-messages.is-success,
+.backup-lite-admin #bl-settings-message.is-success,
+.museder-restoreone-admin #bl-settings-message.is-success {
     border-color: rgba(59, 183, 126, 0.35);
     background: linear-gradient(120deg, rgba(59, 183, 126, 0.2), rgba(59, 183, 126, 0.05));
 }
 
-.backup-lite-admin #backup-lite-messages.is-error {
+.backup-lite-admin #backup-lite-messages.is-error,
+.backup-lite-admin #bl-settings-message.is-error,
+.museder-restoreone-admin #bl-settings-message.is-error {
     border-color: rgba(214, 54, 56, 0.35);
     background: linear-gradient(120deg, rgba(214, 54, 56, 0.2), rgba(214, 54, 56, 0.05));
 }
@@ -1515,6 +1571,102 @@ body.bl-modal-open {
 
 .step-status[data-status="locked"] {
     color: #94a3b8;
+}
+
+/* Restore Center：深色模式下 step 卡片與內文對比 */
+[data-bl-theme="dark"] .restore-step-node {
+    border-color: rgba(255, 255, 255, 0.12);
+    background: rgba(255, 255, 255, 0.06);
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+}
+
+[data-bl-theme="dark"] .restore-step-node[data-bl-state="done"] {
+    border-color: rgba(34, 197, 94, 0.5);
+    background: linear-gradient(125deg, rgba(34, 197, 94, 0.22), rgba(34, 197, 94, 0.08));
+}
+
+[data-bl-theme="dark"] .restore-step-node strong,
+[data-bl-theme="dark"] .restore-step-node p {
+    color: var(--text-dark);
+}
+
+[data-bl-theme="dark"] .step-card-header .step-pill {
+    background: rgba(96, 165, 250, 0.2);
+    color: #93c5fd;
+}
+
+[data-bl-theme="dark"] .step-status[data-status="processing"],
+[data-bl-theme="dark"] .step-status[data-status="ready"] {
+    color: #93c5fd;
+}
+
+[data-bl-theme="dark"] .step-status[data-status="done"] {
+    color: #4ade80;
+}
+
+[data-bl-theme="dark"] .step-status[data-status="error"] {
+    color: #fb923c;
+}
+
+[data-bl-theme="dark"] .step-status[data-status="locked"] {
+    color: #94a3b8;
+}
+
+[data-bl-theme="dark"] .step-locked-message {
+    color: #fcd34d;
+    border-color: rgba(250, 204, 21, 0.45);
+    background: rgba(250, 204, 21, 0.12);
+}
+
+[data-bl-theme="dark"] .backup-lite-card,
+[data-bl-theme="dark"] .backup-lite-admin .bl-card {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: var(--glass-border);
+    color: var(--text-dark);
+}
+
+[data-bl-theme="dark"] .backup-lite-card h2 {
+    color: var(--text-dark);
+}
+
+[data-bl-theme="dark"] .wrap.backup-lite-restore > h1 {
+    color: var(--text-dark);
+}
+
+/* 還原進度區：軌道加深、百分比加陰影，避免低進度時白字貼淺底 */
+.restore-progress-panel {
+    padding: 24px;
+    border-radius: 12px;
+    margin: 16px 0;
+    border: 2px solid rgba(58, 123, 255, 0.22);
+    background: linear-gradient(135deg, rgba(58, 123, 255, 0.1) 0%, rgba(36, 93, 255, 0.05) 100%);
+}
+
+[data-bl-theme="dark"] .restore-progress-panel {
+    border-color: rgba(96, 165, 250, 0.35);
+    background: linear-gradient(135deg, rgba(58, 123, 255, 0.18) 0%, rgba(36, 93, 255, 0.09) 100%);
+}
+
+.restore-upload-progress-track,
+.restore-execute-progress-track {
+    background: rgba(15, 23, 42, 0.16);
+}
+
+[data-bl-theme="dark"] .restore-upload-progress-track,
+[data-bl-theme="dark"] .restore-execute-progress-track {
+    background: rgba(0, 0, 0, 0.42);
+}
+
+#restore-progress-text.restore-progress-percent {
+    color: #fff;
+    text-shadow:
+        0 0 4px rgba(0, 0, 0, 0.85),
+        0 1px 2px rgba(0, 0, 0, 0.75);
+}
+
+[data-bl-theme="dark"] pre.log-preview {
+    background: #0f172a;
+    color: #e2e8f0;
 }
 
 @keyframes stepPulse {

@@ -4,10 +4,11 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-class Backup_Lite_Backup_Jobs {
+class Museder_Restoreone_Backup_Jobs {
 
-    const STATE_OPTION      = 'backup_lite_active_job';
-    const CRON_HOOK         = 'backup_lite_process_job';
+    const STATE_OPTION      = 'museder_restoreone_active_job';
+    const OPTION_LOCK_PREFIX = 'museder_restoreone_job_lock_';
+    const CRON_HOOK         = 'museder_restoreone_process_job';
     const LOCK_TTL          = 60;
     const OPTION_LOCK_TTL   = 180;
     const AJAX_BATCH_FILES  = 400; // Increased from 200 to improve backup speed
@@ -35,7 +36,7 @@ class Backup_Lite_Backup_Jobs {
 
         $job_id = wp_generate_uuid4();
 
-        $context = Backup_Lite_Backup::create_async_job_stub_context( $job_id, $options );
+        $context = Museder_Restoreone_Backup::create_async_job_stub_context( $job_id, $options );
 
         $job = [
             'id'              => $job_id,
@@ -59,11 +60,11 @@ class Backup_Lite_Backup_Jobs {
             'skipped_bytes'   => 0,
             'skip_reasons'    => [],
             'diagnostic_samples' => [],
-            'pack_method'     => backup_lite_can_use_ziparchive() ? 'ziparchive' : 'pclzip',
+            'pack_method'     => museder_restoreone_can_use_ziparchive() ? 'ziparchive' : 'pclzip',
             'selfcheck'       => [],
             'prep_step'       => 'db',
             'archive_path'    => $context['archive_path'],
-            'download_url'    => backup_lite_get_download_url( $context['archive_path'] ),
+            'download_url'    => museder_restoreone_get_download_url( $context['archive_path'] ),
             'temp_dir'        => $context['temp_dir'],
             'manifest_file'   => $context['manifest_file'],
             'manifest_ndjson_file' => $context['manifest_ndjson_file'] ?? '',
@@ -251,20 +252,27 @@ class Backup_Lite_Backup_Jobs {
         $save_interval_batches = 5;
         $save_interval_seconds = 3.0;
 
-        // Open ZipArchive once for the entire time budget loop to reduce I/O overhead
+        // Open ZipArchive once for the entire time budget loop to reduce I/O overhead.
+        // Never keep ZipArchive open while pack_method is pclzip: PclZip mutates the same file and
+        // ZipArchive::close() can take minutes on huge archives or clobber PclZip's central directory.
         $zip = null;
+        $pack_method_for_handle = isset( $job['pack_method'] ) ? (string) $job['pack_method'] : '';
+        $reuse_zip_handle        = museder_restoreone_can_use_ziparchive()
+            && 'pclzip' !== $pack_method_for_handle
+            && ! empty( $job['archive_path'] )
+            && file_exists( (string) $job['archive_path'] );
         // Only keep ZipArchive open while we are actively packing.
         // Finalizing should run after close (and may be sliced across multiple cron ticks).
-        if ( isset( $job['stage'] ) && 'packing' === $job['stage'] && backup_lite_can_use_ziparchive() && ! empty( $job['archive_path'] ) && file_exists( $job['archive_path'] ) ) {
+        if ( isset( $job['stage'] ) && 'packing' === $job['stage'] && $reuse_zip_handle ) {
             $zip = new ZipArchive();
             if ( true === $zip->open( $job['archive_path'], ZipArchive::CREATE ) ) {
-                backup_lite_log( 'info', 'Opened ZipArchive for time budget loop.', [
+                museder_restoreone_log( 'info', 'Opened ZipArchive for time budget loop.', [
                     'job_id' => $job_id,
                 ] );
             } else {
                 // If opening fails, set to null so we fall back to per-batch opening
                 $zip = null;
-                backup_lite_log( 'warning', 'Failed to open ZipArchive for time budget loop, will open per batch.', [
+                museder_restoreone_log( 'warning', 'Failed to open ZipArchive for time budget loop, will open per batch.', [
                     'job_id' => $job_id,
                 ] );
             }
@@ -315,7 +323,7 @@ class Backup_Lite_Backup_Jobs {
                 // Check if we've exceeded time budget (using microtime for precision)
                 $elapsed = microtime( true ) - $start_microtime;
                 if ( $elapsed >= $time_budget ) {
-                    backup_lite_log( 'info', 'Time budget reached, scheduling next batch.', [
+                    museder_restoreone_log( 'info', 'Time budget reached, scheduling next batch.', [
                         'job_id' => $job_id,
                         'elapsed' => round( $elapsed, 2 ),
                         'time_budget' => $time_budget,
@@ -336,7 +344,7 @@ class Backup_Lite_Backup_Jobs {
 
                 // Preparing stage runs before packing to avoid long initial AJAX requests.
                 if ( isset( $job['stage'] ) && 'preparing' === $job['stage'] ) {
-                    $job = Backup_Lite_Backup::run_preparing_stage( $job );
+                    $job = Museder_Restoreone_Backup::run_preparing_stage( $job );
                     $batch_count++;
 
                     // Move to packing when preparing is done.
@@ -345,8 +353,9 @@ class Backup_Lite_Backup_Jobs {
                         $job['status'] = 'running';
                     }
 
-                    // If archive is now available and we can reuse ZipArchive, open it.
-                    if ( null === $zip && 'packing' === $job['stage'] && backup_lite_can_use_ziparchive() && ! empty( $job['archive_path'] ) && file_exists( $job['archive_path'] ) ) {
+                    // If archive is now available and we can reuse ZipArchive, open it (never alongside PclZip packing).
+                    $pm = isset( $job['pack_method'] ) ? (string) $job['pack_method'] : '';
+                    if ( null === $zip && 'packing' === $job['stage'] && museder_restoreone_can_use_ziparchive() && 'pclzip' !== $pm && ! empty( $job['archive_path'] ) && file_exists( $job['archive_path'] ) ) {
                         $zip = new ZipArchive();
                         if ( true !== $zip->open( $job['archive_path'], ZipArchive::CREATE ) ) {
                             $zip = null;
@@ -378,7 +387,7 @@ class Backup_Lite_Backup_Jobs {
                 $batch_started_at = microtime( true );
                 $pointer_before   = isset( $job['pointer'] ) ? (int) $job['pointer'] : 0;
                 $processed_before = isset( $job['processed_bytes'] ) ? (int) $job['processed_bytes'] : 0;
-                $job = Backup_Lite_Backup::process_job_batch( $job, $max_files, $max_bytes, $zip );
+                $job = Museder_Restoreone_Backup::process_job_batch( $job, $max_files, $max_bytes, $zip );
                 $batch_elapsed = microtime( true ) - $batch_started_at;
                 $pointer_after   = isset( $job['pointer'] ) ? (int) $job['pointer'] : $pointer_before;
                 $processed_after = isset( $job['processed_bytes'] ) ? (int) $job['processed_bytes'] : $processed_before;
@@ -395,7 +404,7 @@ class Backup_Lite_Backup_Jobs {
                         'max_bytes' => $new_max_bytes,
                         'last_batch_seconds' => round( $batch_elapsed, 2 ),
                     ];
-                    backup_lite_log( 'warning', 'Packing batch exceeded time budget; shrinking batch limits for next tick.', [
+                    museder_restoreone_log( 'warning', 'Packing batch exceeded time budget; shrinking batch limits for next tick.', [
                         'job_id' => $job_id,
                         'time_budget' => $time_budget,
                         'batch_seconds' => round( $batch_elapsed, 2 ),
@@ -451,12 +460,12 @@ class Backup_Lite_Backup_Jobs {
                     // This avoids re-opening a huge ZIP during finalize (slow on many shared hosts).
                     if ( $job_needs_finalize && isset( $job['status'] ) && 'running' === $job['status'] ) {
                         try {
-                            if ( class_exists( 'Backup_Lite_Backup' ) ) {
-                                Backup_Lite_Backup::embed_metadata_into_archive_before_close( $job, $zip );
+                            if ( class_exists( 'Museder_Restoreone_Backup' ) ) {
+                                Museder_Restoreone_Backup::embed_metadata_into_archive_before_close( $job, $zip );
                                 $job['finalize_step'] = 'verify';
                             }
                         } catch ( Throwable $embed_throwable ) {
-                            backup_lite_log( 'error', 'Failed to embed backup metadata before closing ZipArchive.', [
+                            museder_restoreone_log( 'error', 'Failed to embed backup metadata before closing ZipArchive.', [
                                 'job_id' => $job_id,
                                 'error'  => $embed_throwable->getMessage(),
                             ] );
@@ -471,14 +480,14 @@ class Backup_Lite_Backup_Jobs {
                     if ( false === $closed ) {
                         throw new RuntimeException( 'ZipArchive::close() returned false.' );
                     }
-                    backup_lite_log( 'info', 'Closed ZipArchive after time budget loop.', [
+                    museder_restoreone_log( 'info', 'Closed ZipArchive after time budget loop.', [
                         'job_id' => $job_id,
                         'batches_processed' => $batch_count,
                         'completed' => $job_completed_in_loop,
                     ] );
                 } catch ( Throwable $throwable ) {
                     // Prevent fatal "Invalid or uninitialized Zip object" from breaking AJAX polling (500).
-                    backup_lite_log( 'warning', 'Failed to close ZipArchive after time budget loop.', [
+                    museder_restoreone_log( 'warning', 'Failed to close ZipArchive after time budget loop.', [
                         'job_id' => $job_id,
                         'error' => $throwable->getMessage(),
                     ] );
@@ -514,7 +523,7 @@ class Backup_Lite_Backup_Jobs {
 
                 if ( $total_files > 0 && max( $pointer, $processed_files ) < $total_files ) {
                     // Safety: do not finalize early (would produce an incomplete archive).
-                    backup_lite_log( 'warning', 'Deferring finalize because packing is not complete.', [
+                    museder_restoreone_log( 'warning', 'Deferring finalize because packing is not complete.', [
                         'job_id'          => $job_id,
                         'total_files'     => $total_files,
                         'pointer'         => $pointer,
@@ -525,7 +534,7 @@ class Backup_Lite_Backup_Jobs {
                     $job['message'] = __( 'Backup running…', 'museder-restoreone' );
                     $job_needs_finalize = false;
                 } else {
-                    $job = Backup_Lite_Backup::finalize_async_job_after_close( $job );
+                    $job = Museder_Restoreone_Backup::finalize_async_job_after_close( $job );
                     // Finalize may be sliced (still "running"); only treat as completed if the job is terminal.
                     $job_completed_in_loop = isset( $job['status'] ) && in_array( $job['status'], [ 'completed', 'failed', 'cancelled' ], true );
                     $job_needs_finalize = false;
@@ -563,7 +572,7 @@ class Backup_Lite_Backup_Jobs {
                 if ( isset( $job['options'] ) && is_array( $job['options'] ) ) {
                     $mode = isset( $job['options']['backup_mode'] ) ? (string) $job['options']['backup_mode'] : '';
                 }
-                backup_lite_log( 'info', 'Processed multiple batches in single request.', [
+                museder_restoreone_log( 'info', 'Processed multiple batches in single request.', [
                     'job_id' => $job_id,
                     'batches' => $batch_count,
                     'elapsed' => round( $total_elapsed, 2 ),
@@ -581,7 +590,7 @@ class Backup_Lite_Backup_Jobs {
                 } catch ( Throwable $ignored ) {
                     // ignore
                 }
-                backup_lite_log( 'warning', 'Closed ZipArchive after exception.', [
+                museder_restoreone_log( 'warning', 'Closed ZipArchive after exception.', [
                     'job_id' => $job_id,
                     'error' => $exception->getMessage(),
                 ] );
@@ -643,7 +652,7 @@ class Backup_Lite_Backup_Jobs {
 
         wp_schedule_single_event( $next_run, self::CRON_HOOK, [ $job_id ] );
 
-        backup_lite_log( 'info', 'Scheduled next batch with short interval.', [
+        museder_restoreone_log( 'info', 'Scheduled next batch with short interval.', [
             'job_id' => $job_id,
             'interval' => $interval,
             'next_run' => $next_run,
@@ -678,7 +687,7 @@ class Backup_Lite_Backup_Jobs {
             return false;
         }
 
-        backup_lite_log( 'info', 'Backup job cancelled by user.', [
+        museder_restoreone_log( 'info', 'Backup job cancelled by user.', [
             'job_id' => $job_id,
             'stage'  => $job['stage'] ?? '',
             'status' => $job['status'] ?? '',
@@ -718,7 +727,7 @@ class Backup_Lite_Backup_Jobs {
      */
     public static function cleanup_job( $job ) {
         if ( ! empty( $job['temp_dir'] ) && is_dir( $job['temp_dir'] ) ) {
-            backup_lite_delete_directory( $job['temp_dir'] );
+            museder_restoreone_delete_directory( $job['temp_dir'] );
         }
 
         if ( ! empty( $job['manifest_file'] ) && file_exists( $job['manifest_file'] ) ) {
@@ -764,7 +773,7 @@ class Backup_Lite_Backup_Jobs {
             return;
         }
 
-        $backup_dir = backup_lite_get_backup_dir();
+        $backup_dir = museder_restoreone_get_backup_dir();
         if ( empty( $backup_dir ) ) {
             return;
         }
@@ -800,7 +809,7 @@ class Backup_Lite_Backup_Jobs {
         $path = self::job_state_path( $job['id'] );
         $dir  = dirname( $path );
         if ( ! file_exists( $dir ) ) {
-            backup_lite_ensure_directory( $dir );
+            museder_restoreone_ensure_directory( $dir );
         }
 
         $encoded = wp_json_encode( $job, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES );
@@ -950,21 +959,22 @@ class Backup_Lite_Backup_Jobs {
      * @return string Lock token when acquired; empty string otherwise.
      */
     private static function acquire_option_lock( $job_id ) {
-        $key   = self::get_option_lock_key( $job_id );
-        $now   = time();
-        $token = wp_generate_uuid4();
-        $value = [
+        // WordPress.org review: option name prefix must be literal at add_option() call sites (not only via indirect $key).
+        $option_key = self::OPTION_LOCK_PREFIX . sanitize_key( (string) $job_id );
+        $now        = time();
+        $token      = wp_generate_uuid4();
+        $value      = [
             'ts'    => $now,
             'token' => $token,
         ];
 
-        // Atomic attempt.
-        if ( add_option( $key, $value, '', 'no' ) ) {
+        // Atomic attempt (prefix visible above for static analysis).
+        if ( add_option( $option_key, $value, '', 'no' ) ) {
             return $token;
         }
 
         // Check staleness and try to recover.
-        $existing = get_option( $key );
+        $existing = get_option( $option_key );
         $ts       = 0;
         if ( is_array( $existing ) && isset( $existing['ts'] ) ) {
             $ts = (int) $existing['ts'];
@@ -975,8 +985,8 @@ class Backup_Lite_Backup_Jobs {
         }
 
         if ( $ts > 0 && ( $now - $ts ) > self::OPTION_LOCK_TTL ) {
-            delete_option( $key );
-            if ( add_option( $key, $value, '', 'no' ) ) {
+            delete_option( $option_key );
+            if ( add_option( $option_key, $value, '', 'no' ) ) {
                 return $token;
             }
         }
@@ -1011,9 +1021,9 @@ class Backup_Lite_Backup_Jobs {
      * @return string
      */
     private static function get_option_lock_key( $job_id ) {
-        // Use a unique, plugin-specific option prefix to avoid collisions with other plugins.
+        // Keep the plugin-specific option prefix statically visible for review tooling and human audits.
         // Job IDs are generated by our plugin, but we still sanitize defensively for storage.
-        return 'museder_restoreone_job_lock_' . sanitize_key( (string) $job_id );
+        return self::OPTION_LOCK_PREFIX . sanitize_key( (string) $job_id );
     }
 
     /**
@@ -1093,7 +1103,7 @@ class Backup_Lite_Backup_Jobs {
          * }
          * @param array $job Current job state.
          */
-        $limits = apply_filters( 'backup_lite_job_batch_limits', $limits, $job );
+        $limits = apply_filters( 'museder_restoreone_job_batch_limits', $limits, $job );
 
         $limits['max_files'] = (int) max( 50, $limits['max_files'] );
         $limits['max_bytes'] = (int) max( 10 * 1024 * 1024, $limits['max_bytes'] );
@@ -1102,7 +1112,7 @@ class Backup_Lite_Backup_Jobs {
     }
 
     private static function job_state_path( $job_id ) {
-        return trailingslashit( backup_lite_get_jobs_dir() ) . $job_id . '.json';
+        return trailingslashit( museder_restoreone_get_jobs_dir() ) . $job_id . '.json';
     }
 
     private static function set_active_job( $job_id ) {

@@ -3,7 +3,7 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-class Backup_Lite_Restore_Controller {
+class Museder_Restoreone_Restore_Controller {
 
     public static function init() {
         add_action( 'rest_api_init', [ __CLASS__, 'register_routes' ] );
@@ -11,7 +11,7 @@ class Backup_Lite_Restore_Controller {
 
     public static function register_routes() {
         register_rest_route(
-            'backup-lite/v2',
+            'museder-restoreone/v2',
             '/restore/prepare',
             [
                 'methods'             => WP_REST_Server::CREATABLE,
@@ -21,7 +21,7 @@ class Backup_Lite_Restore_Controller {
         );
 
         register_rest_route(
-            'backup-lite/v2',
+            'museder-restoreone/v2',
             '/restore/validate/(?P<job_id>[a-zA-Z0-9_\-]+)',
             [
                 'methods'             => WP_REST_Server::READABLE,
@@ -31,7 +31,7 @@ class Backup_Lite_Restore_Controller {
         );
 
         register_rest_route(
-            'backup-lite/v2',
+            'museder-restoreone/v2',
             '/restore/dry-run/(?P<job_id>[a-zA-Z0-9_\-]+)',
             [
                 'methods'             => WP_REST_Server::CREATABLE,
@@ -41,7 +41,7 @@ class Backup_Lite_Restore_Controller {
         );
 
         register_rest_route(
-            'backup-lite/v2',
+            'museder-restoreone/v2',
             '/restore/status/(?P<job_id>[a-zA-Z0-9_\-]+)',
             [
                 'methods'             => WP_REST_Server::READABLE,
@@ -51,7 +51,7 @@ class Backup_Lite_Restore_Controller {
         );
 
         register_rest_route(
-            'backup-lite/v2',
+            'museder-restoreone/v2',
             '/restore/execute/(?P<job_id>[a-zA-Z0-9_\-]+)',
             [
                 'methods'             => WP_REST_Server::CREATABLE,
@@ -61,7 +61,7 @@ class Backup_Lite_Restore_Controller {
         );
 
         register_rest_route(
-            'backup-lite/v2',
+            'museder-restoreone/v2',
             '/restore/rollback/(?P<job_id>[a-zA-Z0-9_\-]+)',
             [
                 'methods'             => WP_REST_Server::CREATABLE,
@@ -71,7 +71,7 @@ class Backup_Lite_Restore_Controller {
         );
 
         register_rest_route(
-            'backup-lite/v2',
+            'museder-restoreone/v2',
             '/restore/report/(?P<job_id>[a-zA-Z0-9_\-]+)',
             [
                 'methods'             => WP_REST_Server::READABLE,
@@ -83,7 +83,7 @@ class Backup_Lite_Restore_Controller {
                         'sanitize_callback' => 'sanitize_text_field',
                     ],
                     'type'   => [
-                        'default'           => Backup_Lite_Restore_Service::REPORT_TYPE_DRYRUN,
+                        'default'           => Museder_Restoreone_Restore_Service::REPORT_TYPE_DRYRUN,
                         'sanitize_callback' => 'sanitize_key',
                     ],
                 ],
@@ -98,7 +98,7 @@ class Backup_Lite_Restore_Controller {
             $file   = isset( $params['file'] ) ? $params['file'] : '';
             $sha1   = isset( $params['sha1'] ) ? $params['sha1'] : '';
 
-            $result = Backup_Lite_Restore_Service::prepare( $source, $file, $sha1 );
+            $result = Museder_Restoreone_Restore_Service::prepare( $source, $file, $sha1 );
 
             return rest_ensure_response( [
                 'ok'     => true,
@@ -113,7 +113,7 @@ class Backup_Lite_Restore_Controller {
         try {
             $job_id = $request->get_param( 'job_id' );
 
-            $result = Backup_Lite_Restore_Service::validate( $job_id );
+            $result = Museder_Restoreone_Restore_Service::validate( $job_id );
 
             return rest_ensure_response( [
                 'ok'     => true,
@@ -128,7 +128,7 @@ class Backup_Lite_Restore_Controller {
         try {
             $job_id = $request->get_param( 'job_id' );
 
-            $result = Backup_Lite_Restore_Service::dry_run( $job_id );
+            $result = Museder_Restoreone_Restore_Service::dry_run( $job_id );
 
             return rest_ensure_response( [
                 'ok'              => true,
@@ -144,7 +144,7 @@ class Backup_Lite_Restore_Controller {
     public static function status( WP_REST_Request $request ) {
         try {
             $job_id = $request->get_param( 'job_id' );
-            $status = Backup_Lite_Restore_Service::status( $job_id );
+            $status = Museder_Restoreone_Restore_Service::status( $job_id );
 
             return rest_ensure_response( $status );
         } catch ( Exception $e ) {
@@ -156,7 +156,7 @@ class Backup_Lite_Restore_Controller {
         try {
             $job_id = $request->get_param( 'job_id' );
             $options = $request->get_json_params();
-            $result = Backup_Lite_Restore_Service::execute( $job_id, is_array( $options ) ? $options : [] );
+            $result = Museder_Restoreone_Restore_Service::execute( $job_id, is_array( $options ) ? $options : [] );
 
             return rest_ensure_response( $result );
         } catch ( Exception $e ) {
@@ -167,7 +167,7 @@ class Backup_Lite_Restore_Controller {
     public static function rollback( WP_REST_Request $request ) {
         try {
             $job_id = $request->get_param( 'job_id' );
-            $result = Backup_Lite_Restore_Service::rollback( $job_id );
+            $result = Museder_Restoreone_Restore_Service::rollback( $job_id );
 
             return rest_ensure_response( $result );
         } catch ( Exception $e ) {
@@ -181,10 +181,10 @@ class Backup_Lite_Restore_Controller {
         $type   = $request->get_param( 'type' );
 
         if ( ! in_array( $format, [ 'txt', 'json' ], true ) ) {
-            return new WP_Error( 'backup_lite_invalid_format', __( 'Invalid report format.', 'museder-restoreone' ), [ 'status' => 400 ] );
+            return new WP_Error( 'museder_restoreone_invalid_format', __( 'Invalid report format.', 'museder-restoreone' ), [ 'status' => 400 ] );
         }
 
-        $path = Backup_Lite_Restore_Report::download( $job_id, $type, $format );
+        $path = Museder_Restoreone_Restore_Report::download( $job_id, $type, $format );
         if ( is_wp_error( $path ) ) {
             return $path;
         }
@@ -208,12 +208,21 @@ class Backup_Lite_Restore_Controller {
 
     public static function check_permissions( WP_REST_Request $request ) {
         if ( ! current_user_can( 'manage_options' ) ) {
-            return new WP_Error( 'backup_lite_forbidden', __( 'You are not allowed to perform this action.', 'museder-restoreone' ), [ 'status' => 403 ] );
+            return new WP_Error( 'museder_restoreone_forbidden', __( 'You are not allowed to perform this action.', 'museder-restoreone' ), [ 'status' => 403 ] );
         }
 
-        $nonce = $request->get_header( 'X-WP-Nonce' );
-        if ( empty( $nonce ) || ! wp_verify_nonce( $nonce, 'wp_rest' ) ) {
-            return new WP_Error( 'backup_lite_invalid_nonce', __( 'Invalid security token.', 'museder-restoreone' ), [ 'status' => 401 ] );
+        $nonce = (string) $request->get_header( 'X-WP-Nonce' );
+        if ( '' === $nonce ) {
+            $nonce = (string) $request->get_param( '_wpnonce' );
+        }
+
+        // WordPress.org review: empty check and verify_nonce as separate steps (same pattern as AI REST).
+        if ( '' === $nonce ) {
+            return new WP_Error( 'museder_restoreone_invalid_nonce', __( 'Invalid security token.', 'museder-restoreone' ), [ 'status' => 401 ] );
+        }
+
+        if ( ! wp_verify_nonce( $nonce, 'wp_rest' ) ) {
+            return new WP_Error( 'museder_restoreone_invalid_nonce', __( 'Invalid security token.', 'museder-restoreone' ), [ 'status' => 401 ] );
         }
 
         return true;

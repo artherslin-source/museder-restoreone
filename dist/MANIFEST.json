@@ -1,0 +1,27 @@
+{
+  "description": "Historical release ZIPs stored locally; upload matching files to GitHub Releases. Do not commit *.zip to git.",
+  "latest": "2.7.262",
+  "artifacts": [
+    { "version": "2.7.219", "file": "museder-restoreone-2.7.219.zip", "prefix": "backup_lite" },
+    { "version": "2.7.220", "file": "museder-restoreone-2.7.220.zip", "prefix": "backup_lite" },
+    { "version": "2.7.221", "file": "museder-restoreone-2.7.221.zip", "prefix": "backup_lite" },
+    { "version": "2.7.221-0", "file": "museder-restoreone-2.7.221-0.zip", "prefix": "backup_lite" },
+    { "version": "2.7.222-submission", "file": "museder-restoreone-2.7.222-submission.zip", "prefix": "backup_lite" },
+    { "version": "2.7.224", "file": "museder-restoreone-2.7.224.zip", "prefix": "backup_lite" },
+    { "version": "2.7.233", "file": "museder-restoreone-2.7.233.zip", "prefix": "museder_restoreone" },
+    { "version": "2.7.234", "file": "museder-restoreone-2.7.234.zip", "prefix": "museder_restoreone" },
+    { "version": "2.7.235", "file": "museder-restoreone-2.7.235.zip", "prefix": "museder_restoreone" },
+    { "version": "2.7.236", "file": "museder-restoreone-2.7.236.zip", "prefix": "museder_restoreone" },
+    { "version": "2.7.237", "file": "museder-restoreone-2.7.237.zip", "prefix": "museder_restoreone" },
+    { "version": "2.7.238", "file": "museder-restoreone-2.7.238.zip", "prefix": "museder_restoreone" },
+    { "version": "2.7.239", "file": "museder-restoreone-2.7.239.zip", "prefix": "museder_restoreone" },
+    { "version": "2.7.240", "file": "museder-restoreone-2.7.240.zip", "prefix": "museder_restoreone" },
+    { "version": "2.7.241", "file": "museder-restoreone-2.7.241.zip", "prefix": "backup_lite", "note": "Last backup_lite-prefixed source snapshot in workspace before 2.7.242 rename" },
+    { "version": "2.7.242", "file": "museder-restoreone-2.7.242.zip", "prefix": "museder_restoreone", "note": "Naming refactor; PRO still bundled" },
+    { "version": "2.7.243", "file": "museder-restoreone-2.7.243.zip", "prefix": "museder_restoreone" },
+    { "version": "2.7.250", "file": "museder-restoreone-2.7.250.zip", "prefix": "museder_restoreone" },
+    { "version": "2.7.254", "file": "museder-restoreone-2.7.254.zip", "prefix": "museder_restoreone" },
+    { "version": "2.7.261", "file": "museder-restoreone-2.7.261_*.zip", "prefix": "museder_restoreone" },
+    { "version": "2.7.262", "file": "museder-restoreone-2.7.262.zip", "prefix": "museder_restoreone", "note": "Current Lite mainline; PRO split to museder-restoreone-pro add-on" }
+  ]
+}

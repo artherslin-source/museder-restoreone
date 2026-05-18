@@ -3,10 +3,10 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-class Backup_Lite_Restore_Lock {
+class Museder_Restoreone_Restore_Lock {
 
-    const OPTION_KEY   = 'backup_lite_restore_lock';
-    const TRANSIENT_KEY = 'backup_lite_restore_lock';
+    const OPTION_KEY   = 'museder_restoreone_restore_lock';
+    const TRANSIENT_KEY = 'museder_restoreone_restore_lock';
     const LOCK_TIMEOUT = 30 * MINUTE_IN_SECONDS;
 
     public static function acquire( $job_id ) {

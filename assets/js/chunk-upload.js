@@ -12,7 +12,7 @@
     }
 
     const fileInput = document.getElementById('backup-lite-restore-file');
-    const confirmCheckbox = form.querySelector('input[name="backup_lite_confirm"]');
+    const confirmCheckbox = form.querySelector('input[name="museder_restoreone_confirm"]');
     const progressWrap = form.querySelector('.backup-lite-progress');
     const progressBar = progressWrap ? progressWrap.querySelector('.backup-lite-progress-bar span') : null;
     const statusEl = progressWrap ? progressWrap.querySelector('.backup-lite-progress-status') : null;
@@ -165,7 +165,7 @@
 
     async function prepareUpload(file, totalChunks) {
         const formData = new FormData();
-        formData.append('action', chunkSettings.prepareAction || 'backup_lite_prepare_upload');
+        formData.append('action', chunkSettings.prepareAction || 'museder_restoreone_prepare_upload');
         formData.append('nonce', settings.nonce);
         formData.append('file_name', file.name);
         formData.append('file_size', file.size);
@@ -290,8 +290,8 @@
             return '';
         }
 
-        const searchValue = searchFields.querySelector('input[name="backup_lite_search"]').value;
-        const replaceValue = searchFields.querySelector('input[name="backup_lite_replace"]').value;
+        const searchValue = searchFields.querySelector('input[name="museder_restoreone_search"]').value;
+        const replaceValue = searchFields.querySelector('input[name="museder_restoreone_replace"]').value;
 
         if (!searchValue) {
             return '';

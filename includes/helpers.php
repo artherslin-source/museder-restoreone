@@ -4,38 +4,36 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 
 if ( ! function_exists( 'museder_is_pro_active' ) ) {
     /**
-     * Unified PRO activation check wrapper.
+     * Unified add-on availability check wrapper.
      *
-     * IMPORTANT: New modules (e.g., AI scaffolding) should only depend on this
-     * function instead of calling Backup_Lite_Pro::is_pro_active() directly.
+     * The WordPress.org build must not ship bundled PRO activation or license logic.
+     * Instead, Free only detects whether a separate add-on plugin is present.
      *
      * @return bool
      */
     function museder_is_pro_active(): bool {
-        if ( class_exists( 'Backup_Lite_Pro' ) && method_exists( 'Backup_Lite_Pro', 'is_pro_active' ) ) {
-            return (bool) Backup_Lite_Pro::is_pro_active();
-        }
+        $has_addon = class_exists( 'Museder_Restoreone_Pro_Addon' );
 
-        return false;
+        /**
+         * Filters whether a separate RestoreOne add-on is available.
+         *
+         * This keeps the Free build extensible without bundling premium logic.
+         *
+         * @param bool $has_addon Whether a separate add-on plugin is active.
+         */
+        return (bool) apply_filters( 'museder_restoreone_has_addon', $has_addon );
     }
 }
 
-if ( ! function_exists( 'backup_lite_local_time' ) ) {
-    /**
-     * Return a timestamp formatted using the site's timezone settings.
-     *
-     * @param string   $format    Date format string.
-     * @param int|null $timestamp Optional Unix timestamp.
-     * @return string
-     */
+if ( ! function_exists( 'museder_restoreone_local_time' ) ) {
     /**
      * Return a timestamp formatted using the site's local timezone.
-     * 
+     *
      * @param string   $format    Date format string.
-     * @param int|null $timestamp Optional Unix timestamp (assumed to be UTC).
-     * @return string Formatted date/time in site's local timezone.
+     * @param int|null $timestamp Optional Unix timestamp (UTC). Defaults to current time.
+     * @return string Formatted date/time in site timezone.
      */
-    function backup_lite_local_time( $format = 'Y-m-d H:i:s', $timestamp = null ) {
+    function museder_restoreone_local_time( $format = 'Y-m-d H:i:s', $timestamp = null ) {
         // Use wp_date() for WordPress 5.3+ (handles timezone conversion automatically)
         if ( function_exists( 'wp_date' ) ) {
             // wp_date() expects UTC timestamp and converts to local timezone
@@ -66,17 +64,17 @@ if ( ! function_exists( 'backup_lite_local_time' ) ) {
 // All calls to size_format() will use WordPress core function.
 
 /**
- * Return the base directory used by Backup Lite within uploads.
+ * Return the base directory used by Museder RestoreOne within uploads.
  *
  * @return array{path:string,url:string}
  */
-function backup_lite_get_storage_root() {
+function museder_restoreone_get_storage_root() {
     $upload_dir = wp_upload_dir();
     $base       = trailingslashit( $upload_dir['basedir'] ) . 'museder-restoreone';
     $url        = trailingslashit( $upload_dir['baseurl'] ) . 'museder-restoreone';
 
-    backup_lite_ensure_directory( $base );
-    backup_lite_maybe_protect_directory( $base );
+    museder_restoreone_ensure_directory( $base );
+    museder_restoreone_maybe_protect_directory( $base );
 
     return [
         'path' => $base,
@@ -84,10 +82,10 @@ function backup_lite_get_storage_root() {
     ];
 }
 
-function backup_lite_get_backup_dir() {
-    $root = backup_lite_get_storage_root();
+function museder_restoreone_get_backup_dir() {
+    $root = museder_restoreone_get_storage_root();
     $dir  = trailingslashit( $root['path'] ) . 'backups';
-    backup_lite_ensure_directory( $dir );
+    museder_restoreone_ensure_directory( $dir );
 
     return $dir;
 }
@@ -97,15 +95,15 @@ function backup_lite_get_backup_dir() {
  *
  * @return array<int,string> Absolute directory paths.
  */
-function backup_lite_get_all_backup_dirs() {
+function museder_restoreone_get_all_backup_dirs() {
     $dirs = [];
 
-    $current = backup_lite_get_backup_dir();
+    $current = museder_restoreone_get_backup_dir();
     if ( $current ) {
         $dirs[] = wp_normalize_path( $current );
     }
 
-    foreach ( backup_lite_get_legacy_storage_roots() as $legacy_root ) {
+    foreach ( museder_restoreone_get_legacy_storage_roots() as $legacy_root ) {
         $legacy_backups = trailingslashit( wp_normalize_path( $legacy_root ) ) . 'backups';
         if ( is_dir( $legacy_backups ) ) {
             $dirs[] = wp_normalize_path( $legacy_backups );
@@ -122,7 +120,7 @@ function backup_lite_get_all_backup_dirs() {
  * @param string $path Path to check.
  * @return bool True if absolute path, false otherwise.
  */
-function backup_lite_is_absolute_path( $path ) {
+function museder_restoreone_is_absolute_path( $path ) {
     return (bool) preg_match( '#^([a-zA-Z]:[\\\\/]|\\\\\\\\|/)#', $path );
 }
 
@@ -136,27 +134,33 @@ function backup_lite_is_absolute_path( $path ) {
  * @param string $file Backup file name, relative path, or absolute path.
  * @return string|false Absolute path if file exists and is readable, false otherwise.
  */
-function backup_lite_get_backup_path( $file ) {
+function museder_restoreone_get_backup_path( $file ) {
     if ( empty( $file ) ) {
-        backup_lite_log( 'warning', 'backup_lite_get_backup_path called with empty file parameter.' );
+        museder_restoreone_log( 'warning', 'museder_restoreone_get_backup_path called with empty file parameter.' );
         return false;
     }
 
-    $backup_dirs = backup_lite_get_all_backup_dirs();
+    $backup_dirs = museder_restoreone_get_all_backup_dirs();
     if ( empty( $backup_dirs ) ) {
-        backup_lite_log( 'error', 'Backup directories not available.', [ 'file' => $file ] );
+        museder_restoreone_log( 'error', 'Backup directories not available.', [ 'file' => $file ] );
         return false;
     }
 
     // If already an absolute path, validate it stays within a known backups directory.
-    if ( backup_lite_is_absolute_path( $file ) && file_exists( $file ) && is_readable( $file ) ) {
+    if ( museder_restoreone_is_absolute_path( $file ) && file_exists( $file ) && is_readable( $file ) ) {
         $real_candidate = realpath( $file );
         if ( ! $real_candidate ) {
             return false;
         }
         foreach ( $backup_dirs as $dir ) {
             $real_dir = realpath( $dir );
-            if ( $real_dir && 0 === strpos( $real_candidate, $real_dir ) ) {
+            if ( ! $real_dir ) {
+                continue;
+            }
+            // Require directory-boundary prefix match (avoid backups vs backups2 ambiguity).
+            $prefix = trailingslashit( wp_normalize_path( $real_dir ) );
+            $norm_candidate = wp_normalize_path( $real_candidate );
+            if ( 0 === strpos( $norm_candidate, $prefix ) ) {
                 return $real_candidate;
             }
         }
@@ -178,7 +182,9 @@ function backup_lite_get_backup_path( $file ) {
             continue;
         }
 
-        if ( 0 !== strpos( $real_candidate, $real_backups_dir ) ) {
+        $dir_prefix = trailingslashit( wp_normalize_path( $real_backups_dir ) );
+        $norm_candidate = wp_normalize_path( $real_candidate );
+        if ( 0 !== strpos( $norm_candidate, $dir_prefix ) ) {
             continue;
         }
 
@@ -190,7 +196,7 @@ function backup_lite_get_backup_path( $file ) {
     }
 
     // Not found in any known directory.
-    backup_lite_log( 'warning', 'Backup file not found in known directories.', [
+    museder_restoreone_log( 'warning', 'Backup file not found in known directories.', [
         'file' => $file,
         'sanitized_file' => $sanitized_file,
         'dirs' => $backup_dirs,
@@ -211,7 +217,7 @@ function backup_lite_get_backup_path( $file ) {
  * @param int|null $seconds Duration in seconds.
  * @return string Formatted duration string, or empty string if invalid.
  */
-function backup_lite_format_duration( $seconds ) {
+function museder_restoreone_format_duration( $seconds ) {
     if ( ! is_numeric( $seconds ) || $seconds < 0 ) {
         return '';
     }
@@ -233,7 +239,7 @@ function backup_lite_format_duration( $seconds ) {
     return sprintf( '%02dm %02ds', $minutes, $secs );
 }
 
-function backup_lite_format_local_time( $time, $format = '' ) {
+function museder_restoreone_format_local_time( $time, $format = '' ) {
     if ( empty( $format ) ) {
         $format = get_option( 'date_format' ) . ' ' . get_option( 'time_format' );
     }
@@ -269,7 +275,7 @@ function backup_lite_format_local_time( $time, $format = '' ) {
  * @param string|int $timestamp_legacy Legacy timestamp (string or numeric).
  * @return int UTC Unix timestamp, or 0 if parsing fails.
  */
-function backup_lite_parse_legacy_timestamp( $timestamp_legacy ) {
+function museder_restoreone_parse_legacy_timestamp( $timestamp_legacy ) {
     if ( empty( $timestamp_legacy ) ) {
         return 0;
     }
@@ -305,12 +311,12 @@ function backup_lite_parse_legacy_timestamp( $timestamp_legacy ) {
     return 0;
 }
 
-function backup_lite_get_log_dir() {
-    $root = backup_lite_get_storage_root();
+function museder_restoreone_get_log_dir() {
+    $root = museder_restoreone_get_storage_root();
     $dir  = trailingslashit( $root['path'] ) . 'logs';
 
-    backup_lite_ensure_directory( $dir );
-    backup_lite_maybe_protect_directory( $dir );
+    museder_restoreone_ensure_directory( $dir );
+    museder_restoreone_maybe_protect_directory( $dir );
 
     return $dir;
 }
@@ -320,7 +326,7 @@ function backup_lite_get_log_dir() {
  *
  * @return array<int,string> Array of absolute legacy roots (e.g. .../uploads/backup-lite)
  */
-function backup_lite_get_legacy_storage_roots() {
+function museder_restoreone_get_legacy_storage_roots() {
     $candidates = [];
 
     $upload_dir = wp_upload_dir();
@@ -343,7 +349,7 @@ function backup_lite_get_legacy_storage_roots() {
  *
  * @return array<int,string> Array of absolute legacy log directories (e.g. .../uploads/backup-lite-logs)
  */
-function backup_lite_get_legacy_log_dirs() {
+function museder_restoreone_get_legacy_log_dirs() {
     $candidates = [];
 
     $upload_dir = wp_upload_dir();
@@ -368,8 +374,8 @@ function backup_lite_get_legacy_log_dirs() {
  *
  * @return array<string,mixed> Migration report.
  */
-function backup_lite_migrate_legacy_storage() {
-    $flag = (int) get_option( 'backup_lite_legacy_storage_migrated', 0 );
+function museder_restoreone_migrate_legacy_storage() {
+    $flag = (int) get_option( 'museder_restoreone_legacy_storage_migrated', 0 );
     if ( 1 === $flag ) {
         return [ 'skipped' => true ];
     }
@@ -380,7 +386,7 @@ function backup_lite_migrate_legacy_storage() {
         'errors'   => [],
     ];
 
-    $root = backup_lite_get_storage_root();
+    $root = museder_restoreone_get_storage_root();
     $new_root = isset( $root['path'] ) ? wp_normalize_path( $root['path'] ) : '';
     if ( '' === $new_root ) {
         $report['errors'][] = 'new_root_missing';
@@ -388,11 +394,11 @@ function backup_lite_migrate_legacy_storage() {
     }
 
     // Ensure root exists (but do not pre-create subdirectories so we can rename legacy folders atomically when possible).
-    backup_lite_ensure_directory( $new_root );
+    museder_restoreone_ensure_directory( $new_root );
 
     $moves = [];
 
-    foreach ( backup_lite_get_legacy_storage_roots() as $legacy_root ) {
+    foreach ( museder_restoreone_get_legacy_storage_roots() as $legacy_root ) {
         $legacy_root = wp_normalize_path( $legacy_root );
         $moves[] = [ trailingslashit( $legacy_root ) . 'backups', trailingslashit( $new_root ) . 'backups' ];
         $moves[] = [ trailingslashit( $legacy_root ) . 'temp', trailingslashit( $new_root ) . 'temp' ];
@@ -402,7 +408,7 @@ function backup_lite_migrate_legacy_storage() {
         $moves[] = [ trailingslashit( $legacy_root ) . 'pro/reports', trailingslashit( $new_root ) . 'pro/reports' ];
     }
 
-    foreach ( backup_lite_get_legacy_log_dirs() as $legacy_logs ) {
+    foreach ( museder_restoreone_get_legacy_log_dirs() as $legacy_logs ) {
         $legacy_logs = wp_normalize_path( $legacy_logs );
         $moves[] = [ $legacy_logs, trailingslashit( $new_root ) . 'logs' ];
     }
@@ -418,7 +424,7 @@ function backup_lite_migrate_legacy_storage() {
         }
 
         if ( $to && ! file_exists( $to ) ) {
-            backup_lite_ensure_directory( dirname( $to ) );
+            museder_restoreone_ensure_directory( dirname( $to ) );
 
             // Prefer atomic rename when possible (same filesystem).
             // @phpcs:disable WordPress.WP.AlternativeFunctions.rename_rename
@@ -435,38 +441,38 @@ function backup_lite_migrate_legacy_storage() {
         $report['errors'][] = [ 'from' => $from, 'to' => $to, 'code' => 'rename_failed' ];
     }
 
-    update_option( 'backup_lite_legacy_storage_migrated', 1, false );
+    update_option( 'museder_restoreone_legacy_storage_migrated', 1, false );
 
-    if ( function_exists( 'backup_lite_log' ) ) {
-        backup_lite_log( 'info', 'Legacy storage migration completed.', $report );
+    if ( function_exists( 'museder_restoreone_log' ) ) {
+        museder_restoreone_log( 'info', 'Legacy storage migration completed.', $report );
     }
 
     return $report;
 }
 
-function backup_lite_get_temp_dir() {
-    $root = backup_lite_get_storage_root();
+function museder_restoreone_get_temp_dir() {
+    $root = museder_restoreone_get_storage_root();
     $dir  = trailingslashit( $root['path'] ) . 'temp';
-    backup_lite_ensure_directory( $dir );
-    backup_lite_maybe_protect_directory( $dir );
+    museder_restoreone_ensure_directory( $dir );
+    museder_restoreone_maybe_protect_directory( $dir );
 
     return $dir;
 }
 
-function backup_lite_get_jobs_dir() {
-    $root = backup_lite_get_storage_root();
+function museder_restoreone_get_jobs_dir() {
+    $root = museder_restoreone_get_storage_root();
     $dir  = trailingslashit( $root['path'] ) . 'jobs';
-    backup_lite_ensure_directory( $dir );
-    backup_lite_maybe_protect_directory( $dir );
+    museder_restoreone_ensure_directory( $dir );
+    museder_restoreone_maybe_protect_directory( $dir );
 
     return $dir;
 }
 
-function backup_lite_get_reports_dir() {
-    $root = backup_lite_get_storage_root();
+function museder_restoreone_get_reports_dir() {
+    $root = museder_restoreone_get_storage_root();
     $dir  = trailingslashit( $root['path'] ) . 'reports';
-    backup_lite_ensure_directory( $dir );
-    backup_lite_maybe_protect_directory( $dir );
+    museder_restoreone_ensure_directory( $dir );
+    museder_restoreone_maybe_protect_directory( $dir );
 
     return $dir;
 }
@@ -476,11 +482,11 @@ function backup_lite_get_reports_dir() {
  *
  * @return string
  */
-function backup_lite_get_pro_jobs_dir() {
-    $root = backup_lite_get_storage_root();
+function museder_restoreone_get_pro_jobs_dir() {
+    $root = museder_restoreone_get_storage_root();
     $dir  = trailingslashit( $root['path'] ) . 'pro/jobs';
-    backup_lite_ensure_directory( $dir );
-    backup_lite_maybe_protect_directory( $dir );
+    museder_restoreone_ensure_directory( $dir );
+    museder_restoreone_maybe_protect_directory( $dir );
 
     return $dir;
 }
@@ -490,17 +496,17 @@ function backup_lite_get_pro_jobs_dir() {
  *
  * @return string
  */
-function backup_lite_get_pro_reports_dir() {
-    $root = backup_lite_get_storage_root();
+function museder_restoreone_get_pro_reports_dir() {
+    $root = museder_restoreone_get_storage_root();
     $dir  = trailingslashit( $root['path'] ) . 'pro/reports';
-    backup_lite_ensure_directory( $dir );
-    backup_lite_maybe_protect_directory( $dir );
+    museder_restoreone_ensure_directory( $dir );
+    museder_restoreone_maybe_protect_directory( $dir );
 
     return $dir;
 }
 
-function backup_lite_get_restore_history_path() {
-    $root = backup_lite_get_storage_root();
+function museder_restoreone_get_restore_history_path() {
+    $root = museder_restoreone_get_storage_root();
     $path = trailingslashit( $root['path'] ) . 'restore-history.json';
 
     if ( ! file_exists( $path ) ) {
@@ -514,8 +520,8 @@ function backup_lite_get_restore_history_path() {
     return $path;
 }
 
-function backup_lite_get_restore_history( $limit = 0 ) {
-    $path = backup_lite_get_restore_history_path();
+function museder_restoreone_get_restore_history( $limit = 0 ) {
+    $path = museder_restoreone_get_restore_history_path();
 
     if ( ! file_exists( $path ) ) {
         return [];
@@ -537,7 +543,7 @@ function backup_lite_get_restore_history( $limit = 0 ) {
         if ( ! is_array( $row ) ) {
             continue;
         }
-        $sanitized[] = backup_lite_sanitize_restore_history_entry( $row );
+        $sanitized[] = museder_restoreone_sanitize_restore_history_entry( $row );
     }
     $data = $sanitized;
 
@@ -554,7 +560,7 @@ function backup_lite_get_restore_history( $limit = 0 ) {
  * @param array $entry
  * @return array
  */
-function backup_lite_sanitize_restore_history_entry( array $entry ) {
+function museder_restoreone_sanitize_restore_history_entry( array $entry ) {
     $allowed_results = [ 'running', 'success', 'failed', 'cancelled', 'pending' ];
 
     $job_id  = isset( $entry['job_id'] ) ? sanitize_text_field( (string) $entry['job_id'] ) : '';
@@ -598,18 +604,18 @@ function backup_lite_sanitize_restore_history_entry( array $entry ) {
     );
 }
 
-function backup_lite_append_restore_history( $entry ) {
+function museder_restoreone_append_restore_history( $entry ) {
     if ( empty( $entry ) || ! is_array( $entry ) ) {
         return false;
     }
 
-    $entry = backup_lite_sanitize_restore_history_entry( $entry );
-    $history = backup_lite_get_restore_history();
+    $entry = museder_restoreone_sanitize_restore_history_entry( $entry );
+    $history = museder_restoreone_get_restore_history();
     array_unshift( $history, $entry );
 
     $history = array_slice( $history, 0, 50 );
 
-    $path = backup_lite_get_restore_history_path();
+    $path = museder_restoreone_get_restore_history_path();
 
     $json = wp_json_encode( $history, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES );
 
@@ -626,18 +632,18 @@ function backup_lite_append_restore_history( $entry ) {
  * @param array $entry
  * @return bool
  */
-function backup_lite_upsert_restore_history( $entry ) {
+function museder_restoreone_upsert_restore_history( $entry ) {
     if ( empty( $entry ) || ! is_array( $entry ) ) {
         return false;
     }
 
-    $entry = backup_lite_sanitize_restore_history_entry( $entry );
+    $entry = museder_restoreone_sanitize_restore_history_entry( $entry );
     $job_id = isset( $entry['job_id'] ) ? sanitize_text_field( (string) $entry['job_id'] ) : '';
     if ( '' === $job_id ) {
-        return backup_lite_append_restore_history( $entry );
+        return museder_restoreone_append_restore_history( $entry );
     }
 
-    $history = backup_lite_get_restore_history();
+    $history = museder_restoreone_get_restore_history();
     $updated = false;
 
     foreach ( $history as $idx => $row ) {
@@ -656,7 +662,7 @@ function backup_lite_upsert_restore_history( $entry ) {
 
     $history = array_slice( $history, 0, 50 );
 
-    $path = backup_lite_get_restore_history_path();
+    $path = museder_restoreone_get_restore_history_path();
     $json = wp_json_encode( $history, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES );
 
     // Using native file APIs on plugin-controlled storage path.
@@ -664,8 +670,8 @@ function backup_lite_upsert_restore_history( $entry ) {
     return false !== file_put_contents( $path, $json, LOCK_EX );
 }
 
-function backup_lite_create_temp_dir( $prefix = 'tmp' ) {
-    $temp_base = backup_lite_get_temp_dir();
+function museder_restoreone_create_temp_dir( $prefix = 'tmp' ) {
+    $temp_base = museder_restoreone_get_temp_dir();
 
     if ( function_exists( 'wp_generate_password' ) ) {
         $token = wp_generate_password( 6, false, false );
@@ -677,31 +683,32 @@ function backup_lite_create_temp_dir( $prefix = 'tmp' ) {
         }
     }
 
-    $unique = $prefix . '-' . backup_lite_local_time( 'Ymd-His' ) . '-' . $token;
+    $unique = $prefix . '-' . museder_restoreone_local_time( 'Ymd-His' ) . '-' . $token;
     $path   = trailingslashit( $temp_base ) . $unique;
 
-    backup_lite_ensure_directory( $path );
+    museder_restoreone_ensure_directory( $path );
 
     return $path;
 }
 
-function backup_lite_get_chunk_path( $upload_id, $file = '' ) {
+function museder_restoreone_get_chunk_path( $upload_id, $file = '' ) {
     $slug = preg_replace( '/[^a-zA-Z0-9\-_.]/', '', (string) $upload_id );
     if ( empty( $slug ) ) {
         return '';
     }
 
-    $base = trailingslashit( backup_lite_get_temp_dir() ) . $slug;
-    backup_lite_ensure_directory( $base );
+    $base = trailingslashit( museder_restoreone_get_temp_dir() ) . $slug;
+    museder_restoreone_ensure_directory( $base );
 
     if ( $file ) {
-        return trailingslashit( $base ) . ltrim( $file, '/' );
+        $safe = museder_restoreone_safe_path_join( $base, $file );
+        return $safe ? $safe : '';
     }
 
     return $base;
 }
 
-function backup_lite_delete_directory( $directory ) {
+function museder_restoreone_delete_directory( $directory ) {
     if ( empty( $directory ) || ! file_exists( $directory ) ) {
         return;
     }
@@ -736,8 +743,8 @@ function backup_lite_delete_directory( $directory ) {
     @rmdir( $directory ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_rmdir -- required for directory deletion, path from plugin-controlled directory
 }
 
-function backup_lite_cleanup_temp( $max_age = DAY_IN_SECONDS ) {
-    $temp_dir = backup_lite_get_temp_dir();
+function museder_restoreone_cleanup_temp( $max_age = DAY_IN_SECONDS ) {
+    $temp_dir = museder_restoreone_get_temp_dir();
     if ( ! is_dir( $temp_dir ) ) {
         return;
     }
@@ -760,7 +767,7 @@ function backup_lite_cleanup_temp( $max_age = DAY_IN_SECONDS ) {
 
         if ( $entry->isDir() ) {
             if ( $age > $max_age ) {
-                backup_lite_delete_directory( $path );
+                museder_restoreone_delete_directory( $path );
             }
         } elseif ( $age > $max_age ) {
             // @plugin-check: allowed - required for backup/restore file operations
@@ -779,7 +786,7 @@ function backup_lite_cleanup_temp( $max_age = DAY_IN_SECONDS ) {
     }
 }
 
-function backup_lite_sanitize_filename( $filename ) {
+function museder_restoreone_sanitize_filename( $filename ) {
     if ( function_exists( 'sanitize_file_name' ) ) {
         return sanitize_file_name( $filename );
     }
@@ -788,13 +795,14 @@ function backup_lite_sanitize_filename( $filename ) {
     return trim( preg_replace( '/-+/', '-', $filename ), '-' );
 }
 
-function backup_lite_is_allowed_backup_extension( $filename ) {
+function museder_restoreone_is_allowed_backup_extension( $filename ) {
     $extension = strtolower( pathinfo( $filename, PATHINFO_EXTENSION ) );
     return in_array( $extension, [ 'zip' ], true );
 }
 
-function backup_lite_safe_path_join( $base, $path ) {
-    $base     = wp_normalize_path( $base );
+function museder_restoreone_safe_path_join( $base, $path ) {
+    $base     = wp_normalize_path( (string) $base );
+    $base_ts  = trailingslashit( $base );
     $relative = str_replace( '\\', '/', (string) $path );
 
     // Reject absolute paths and traversal attempts.
@@ -808,20 +816,21 @@ function backup_lite_safe_path_join( $base, $path ) {
 
     $relative = ltrim( $relative, '/' );
 
-    $joined = wp_normalize_path( trailingslashit( $base ) . $relative );
+    $joined = wp_normalize_path( $base_ts . $relative );
 
-    if ( strpos( $joined, $base ) !== 0 ) {
+    // Directory-boundary prefix (avoid base "/foo/bar" matching "/foo/barnacle/…").
+    if ( 0 !== strpos( $joined, $base_ts ) && $joined !== untrailingslashit( $base_ts ) ) {
         return false;
     }
 
     return $joined;
 }
 
-function backup_lite_ensure_directory( $dir ) {
+function museder_restoreone_ensure_directory( $dir ) {
     if ( ! file_exists( $dir ) ) {
         $result = wp_mkdir_p( $dir );
         if ( ! $result ) {
-            backup_lite_log( 'error', 'ensure_directory_failed', [
+            museder_restoreone_log( 'error', 'ensure_directory_failed', [
                 'dir' => $dir,
                 'parent_exists' => file_exists( dirname( $dir ) ),
                 'parent_writable' => wp_is_writable( dirname( $dir ) ),
@@ -832,8 +841,8 @@ function backup_lite_ensure_directory( $dir ) {
     return true;
 }
 
-function backup_lite_maybe_protect_directory( $dir ) {
-    backup_lite_ensure_directory( $dir );
+function museder_restoreone_maybe_protect_directory( $dir ) {
+    museder_restoreone_ensure_directory( $dir );
 
     $htaccess = trailingslashit( $dir ) . '.htaccess';
     if ( ! file_exists( $htaccess ) ) {
@@ -868,28 +877,28 @@ function backup_lite_maybe_protect_directory( $dir ) {
     }
 }
 
-function backup_lite_ensure_access_controls() {
-    backup_lite_maybe_protect_directory( backup_lite_get_backup_dir() );
-    backup_lite_maybe_protect_directory( backup_lite_get_log_dir() );
-    backup_lite_maybe_protect_directory( backup_lite_get_temp_dir() );
-    backup_lite_maybe_protect_directory( backup_lite_get_jobs_dir() );
-    backup_lite_maybe_protect_directory( backup_lite_get_reports_dir() );
+function museder_restoreone_ensure_access_controls() {
+    museder_restoreone_maybe_protect_directory( museder_restoreone_get_backup_dir() );
+    museder_restoreone_maybe_protect_directory( museder_restoreone_get_log_dir() );
+    museder_restoreone_maybe_protect_directory( museder_restoreone_get_temp_dir() );
+    museder_restoreone_maybe_protect_directory( museder_restoreone_get_jobs_dir() );
+    museder_restoreone_maybe_protect_directory( museder_restoreone_get_reports_dir() );
     
     // PRO directories
     if ( museder_is_pro_active() ) {
-        backup_lite_maybe_protect_directory( backup_lite_get_pro_jobs_dir() );
-        backup_lite_maybe_protect_directory( backup_lite_get_pro_reports_dir() );
+        museder_restoreone_maybe_protect_directory( museder_restoreone_get_pro_jobs_dir() );
+        museder_restoreone_maybe_protect_directory( museder_restoreone_get_pro_reports_dir() );
     }
 }
 
 /**
  * Best-effort: derive wp-content directory path without hard-coding constants.
  *
- * Uses wp_upload_dir()['basedir'] (typically .../wp-content/uploads) and falls back to WP_CONTENT_DIR.
+ * Uses `wp_upload_dir()['basedir']` (typically `.../wp-content/uploads`) and derives `wp-content` from its parent, or from this plugin’s install path.
  *
  * @return string Normalized wp-content absolute path or empty string.
  */
-function backup_lite_get_wp_content_dir() {
+function museder_restoreone_get_wp_content_dir() {
     $uploads = wp_upload_dir();
     $basedir = isset( $uploads['basedir'] ) ? wp_normalize_path( (string) $uploads['basedir'] ) : '';
     if ( '' !== $basedir ) {
@@ -900,8 +909,8 @@ function backup_lite_get_wp_content_dir() {
     }
 
     // Derive wp-content from the plugin directory (wp-content/plugins/{this-plugin}).
-    if ( defined( 'BACKUP_LITE_PATH' ) ) {
-        $plugin_dir  = wp_normalize_path( (string) BACKUP_LITE_PATH );
+    if ( defined( 'MUSEDER_RESTOREONE_PATH' ) ) {
+        $plugin_dir  = wp_normalize_path( (string) MUSEDER_RESTOREONE_PATH );
         $plugins_dir = wp_normalize_path( rtrim( dirname( $plugin_dir ), "/\\\n\r\t " ) );
         $content_dir = wp_normalize_path( rtrim( dirname( $plugins_dir ), "/\\\n\r\t " ) );
         if ( '' !== $content_dir && is_dir( $content_dir ) ) {
@@ -915,12 +924,12 @@ function backup_lite_get_wp_content_dir() {
 /**
  * Best-effort: derive the WordPress install root directory.
  *
- * We prefer get_home_path() (from wp-admin/includes/file.php) when available because it
- * handles cases like WordPress installed in a subdirectory. Falls back to ABSPATH.
+ * We prefer WordPress core’s home-path helper when available because it
+ * handles cases like WordPress installed in a subdirectory. Returns empty if derivation fails.
  *
  * @return string Normalized absolute path to WP install root or empty string.
  */
-function backup_lite_get_wp_root_dir() {
+function museder_restoreone_get_wp_root_dir() {
     if ( function_exists( 'get_home_path' ) ) {
         $path = (string) get_home_path();
         $path = wp_normalize_path( rtrim( $path, "/\\\n\r\t " ) );
@@ -930,7 +939,7 @@ function backup_lite_get_wp_root_dir() {
     }
 
     // Derive from wp-content: root is typically parent of wp-content.
-    $content = backup_lite_get_wp_content_dir();
+    $content = museder_restoreone_get_wp_content_dir();
     if ( '' !== $content ) {
         $root = wp_normalize_path( rtrim( dirname( $content ), "/\\\n\r\t " ) );
         if ( '' !== $root && is_dir( $root ) ) {
@@ -942,12 +951,73 @@ function backup_lite_get_wp_root_dir() {
 }
 
 /**
+ * Resolve a readable WordPress core admin API include without concatenating internal path constants.
+ *
+ * @param string $filename Allowed basename only: `file.php`, `upgrade.php`, or `class-pclzip.php`.
+ * @return string Normalized absolute path or empty string.
+ */
+function museder_restoreone_get_core_admin_include_path( $filename ) {
+    static $allowed = [
+        'file.php'         => 'file.php',
+        'upgrade.php'      => 'upgrade.php',
+        'class-pclzip.php' => 'class-pclzip.php',
+    ];
+
+    $key = sanitize_file_name( (string) $filename );
+    if ( ! isset( $allowed[ $key ] ) ) {
+        return '';
+    }
+
+    $default = '';
+    $root    = function_exists( 'museder_restoreone_get_wp_root_dir' ) ? museder_restoreone_get_wp_root_dir() : '';
+    if ( '' !== $root ) {
+        $admin_dir    = 'wp-admin';
+        $includes_dir = 'includes';
+        if ( function_exists( 'path_join' ) ) {
+            $default = path_join(
+                path_join(
+                    path_join( $root, $admin_dir ),
+                    $includes_dir
+                ),
+                $allowed[ $key ]
+            );
+        } else {
+            $default = trailingslashit( trailingslashit( trailingslashit( $root ) . $admin_dir ) . $includes_dir ) . $allowed[ $key ];
+        }
+        $default = wp_normalize_path( $default );
+        if ( ! is_readable( $default ) ) {
+            $default = '';
+        }
+    }
+
+    /**
+     * Filter a core admin API include path for non-standard WordPress directory layouts.
+     *
+     * Return a readable absolute path to override the default. Empty or unreadable values
+     * fall back to the default resolution.
+     *
+     * @param string $path     Default readable path, or empty.
+     * @param string $filename Requested basename.
+     */
+    $filtered = apply_filters( 'museder_restoreone_core_admin_include_path', $default, $allowed[ $key ] );
+    $filtered = wp_normalize_path( (string) $filtered );
+    if ( '' !== $filtered && is_readable( $filtered ) ) {
+        $is_absolute = ( 0 === strpos( $filtered, '/' ) || (bool) preg_match( '/^[A-Za-z]:\//', $filtered ) );
+        if ( $is_absolute ) {
+            return $filtered;
+        }
+    }
+
+    return $default;
+}
+
+/**
  * Best-effort: derive wp-content/plugins directory path.
  *
  * @return string Normalized plugins dir absolute path or empty string.
  */
-function backup_lite_get_plugins_dir() {
-    $content = backup_lite_get_wp_content_dir();
+function museder_restoreone_get_plugins_dir() {
+    $content = museder_restoreone_get_wp_content_dir();
     if ( '' !== $content ) {
         $plugins = wp_normalize_path( trailingslashit( $content ) . 'plugins' );
         if ( is_dir( $plugins ) ) {
@@ -963,23 +1033,45 @@ function backup_lite_get_plugins_dir() {
  *
  * @return string Normalized mu-plugins dir absolute path or empty string.
  */
-function backup_lite_get_mu_plugins_dir() {
-    $content = backup_lite_get_wp_content_dir();
+function museder_restoreone_get_mu_plugins_dir() {
+    $content = museder_restoreone_get_wp_content_dir();
+    $out     = '';
     if ( '' !== $content ) {
         $mu = wp_normalize_path( trailingslashit( $content ) . 'mu-plugins' );
         if ( is_dir( $mu ) ) {
-            return $mu;
+            $out = $mu;
         }
     }
 
-    if ( defined( 'WPMU_PLUGIN_DIR' ) ) {
-        $fallback = wp_normalize_path( (string) WPMU_PLUGIN_DIR );
-        if ( '' !== $fallback && is_dir( $fallback ) ) {
-            return $fallback;
+    /**
+     * Filter the resolved mu-plugins directory (absolute path or empty).
+     *
+     * @param string $dir Normalized path with no trailing slash, or empty.
+     */
+    return (string) apply_filters( 'museder_restoreone_mu_plugins_dir', $out );
+}
+
+/**
+ * Best-effort: derive the site languages directory under wp-content (typically `wp-content/languages`).
+ *
+ * @return string Normalized absolute path or empty string.
+ */
+function museder_restoreone_get_languages_dir() {
+    $content = museder_restoreone_get_wp_content_dir();
+    $out     = '';
+    if ( '' !== $content ) {
+        $languages = wp_normalize_path( trailingslashit( $content ) . 'languages' );
+        if ( is_dir( $languages ) ) {
+            $out = $languages;
         }
     }
 
-    return '';
+    /**
+     * Filter the resolved languages directory (absolute path or empty).
+     *
+     * @param string $dir Normalized path with no trailing slash, or empty.
+     */
+    return (string) apply_filters( 'museder_restoreone_languages_dir', $out );
 }
 
 /**
@@ -990,12 +1082,12 @@ function backup_lite_get_mu_plugins_dir() {
  *
  * @return void
  */
-function backup_lite_maybe_invalidate_opcache_for_plugin() {
+function museder_restoreone_maybe_invalidate_opcache_for_plugin() {
     if ( ! function_exists( 'opcache_invalidate' ) ) {
         return;
     }
 
-    $base = defined( 'BACKUP_LITE_PATH' ) ? BACKUP_LITE_PATH : '';
+    $base = defined( 'MUSEDER_RESTOREONE_PATH' ) ? MUSEDER_RESTOREONE_PATH : '';
     if ( empty( $base ) || ! is_dir( $base ) ) {
         return;
     }
@@ -1059,8 +1151,8 @@ function backup_lite_maybe_invalidate_opcache_for_plugin() {
         }
     }
 
-    if ( function_exists( 'backup_lite_log' ) ) {
-        backup_lite_log( 'info', 'Attempted OPcache invalidate for plugin files.', [
+    if ( function_exists( 'museder_restoreone_log' ) ) {
+        museder_restoreone_log( 'info', 'Attempted OPcache invalidate for plugin files.', [
             'invalidated' => $invalidated,
             'failed'      => $failed,
             'files'       => count( $targets ),
@@ -1068,43 +1160,43 @@ function backup_lite_maybe_invalidate_opcache_for_plugin() {
     }
 }
 
-function backup_lite_is_shell_available() {
+function museder_restoreone_is_shell_available() {
     // WP.org submission hardening:
     // Do not rely on shell execution functions in the directory build.
     return false;
 }
 
-function backup_lite_command_exists( $command ) {
+function museder_restoreone_command_exists( $command ) {
     // WP.org submission hardening: no shell probing.
     return false;
 }
 
-function backup_lite_can_use_mysqldump() {
+function museder_restoreone_can_use_mysqldump() {
     // WP.org submission hardening: do not use mysqldump in directory build.
     return false;
 }
 
-function backup_lite_can_use_mysql_cli() {
+function museder_restoreone_can_use_mysql_cli() {
     // WP.org submission hardening: do not use mysql CLI in directory build.
     return false;
 }
 
-function backup_lite_can_use_ziparchive() {
-    if ( defined( 'BACKUP_LITE_FORCE_NO_ZIPARCHIVE' ) && BACKUP_LITE_FORCE_NO_ZIPARCHIVE ) {
+function museder_restoreone_can_use_ziparchive() {
+    if ( defined( 'MUSEDER_RESTOREONE_FORCE_NO_ZIPARCHIVE' ) && MUSEDER_RESTOREONE_FORCE_NO_ZIPARCHIVE ) {
         return false;
     }
 
     return class_exists( 'ZipArchive' );
 }
 
-function backup_lite_generate_filename( $type, $extension ) {
-    $timestamp = backup_lite_local_time( 'Ymd-His' );
+function museder_restoreone_generate_filename( $type, $extension ) {
+    $timestamp = museder_restoreone_local_time( 'Ymd-His' );
     return sprintf( '%s-%s.%s', $type, $timestamp, ltrim( $extension, '.' ) );
 }
 
-function backup_lite_get_download_url( $path ) {
+function museder_restoreone_get_download_url( $path ) {
     $path         = wp_normalize_path( $path );
-    $allowed_dirs = array_map( 'wp_normalize_path', backup_lite_get_all_backup_dirs() );
+    $allowed_dirs = array_map( 'wp_normalize_path', museder_restoreone_get_all_backup_dirs() );
 
     $allowed = false;
     foreach ( $allowed_dirs as $dir ) {
@@ -1122,9 +1214,9 @@ function backup_lite_get_download_url( $path ) {
     // Standard admin-post download URL protected by a WordPress nonce.
     // Note: We intentionally avoid generating plugin-specific “secret header” tokens to keep flows aligned with WP auth/nonce.
     return wp_nonce_url(
-        admin_url( 'admin-post.php?action=backup_lite_download_backup&file=' . rawurlencode( $filename ) ),
-        'backup_lite_download_backup',
-        '_backup_lite_download_nonce'
+        admin_url( 'admin-post.php?action=museder_restoreone_download_backup&file=' . rawurlencode( $filename ) ),
+        'museder_restoreone_download_backup',
+        '_museder_restoreone_download_nonce'
     );
 }
 
@@ -1139,7 +1231,7 @@ function backup_lite_get_download_url( $path ) {
  * @param string $token   Provided token.
  * @return bool True if token is valid and not expired.
  */
-function backup_lite_verify_download_token( $file, $expires, $token ) {
+function museder_restoreone_verify_download_token( $file, $expires, $token ) {
     $file    = (string) $file;
     $expires = (int) $expires;
     $token   = (string) $token;
@@ -1154,7 +1246,7 @@ function backup_lite_verify_download_token( $file, $expires, $token ) {
 
     // Backward-compat: verify legacy time-limited tokens (file/expires/token).
     // Use WordPress salts instead of any plugin-generated secret files.
-    $key = function_exists( 'wp_salt' ) ? (string) wp_salt( 'backup_lite_download' ) : '';
+    $key = function_exists( 'wp_salt' ) ? (string) wp_salt( 'museder_restoreone_download' ) : '';
     if ( '' === $key ) {
         return false;
     }
@@ -1173,19 +1265,21 @@ function backup_lite_verify_download_token( $file, $expires, $token ) {
  * This function schedules nothing by itself; callers should schedule events first,
  * then call this to *encourage* wp-cron to run soon.
  *
+ * This is a local loopback to the same site (not a third-party external service); readme FAQ documents it for directory review.
+ *
  * @return void
  */
-function backup_lite_nudge_wp_cron() {
+function museder_restoreone_nudge_wp_cron() {
     if ( ! function_exists( 'wp_remote_post' ) || ! function_exists( 'site_url' ) || ! function_exists( 'set_transient' ) || ! function_exists( 'get_transient' ) ) {
         return;
     }
 
     // Rate-limit nudges to avoid spamming loopback requests.
-    $last = (int) get_transient( 'backup_lite_wp_cron_nudge_ts' );
+    $last = (int) get_transient( 'museder_restoreone_wp_cron_nudge_ts' );
     if ( $last > 0 && ( time() - $last ) < 10 ) {
         return;
     }
-    set_transient( 'backup_lite_wp_cron_nudge_ts', time(), 30 );
+    set_transient( 'museder_restoreone_wp_cron_nudge_ts', time(), 30 );
 
     $doing = sprintf( '%.22F', microtime( true ) );
     $url   = add_query_arg( 'doing_wp_cron', rawurlencode( $doing ), site_url( 'wp-cron.php' ) );
@@ -1196,16 +1290,14 @@ function backup_lite_nudge_wp_cron() {
         [
             'timeout'    => 0.01,
             'blocking'   => false,
-            // Intentionally disable SSL verification for local loopback (some dev/test environments use self-signed certs).
-            'sslverify'  => false,
             'user-agent' => 'Museder RestoreOne',
         ]
     );
 }
 
-function backup_lite_log( $level, $message, $context = [] ) {
-    $log_dir = backup_lite_get_log_dir();
-    $file    = trailingslashit( $log_dir ) . 'backup-lite-' . backup_lite_local_time( 'Y-m-d' ) . '.log';
+function museder_restoreone_log( $level, $message, $context = [] ) {
+    $log_dir = museder_restoreone_get_log_dir();
+    $file    = trailingslashit( $log_dir ) . 'backup-lite-' . museder_restoreone_local_time( 'Y-m-d' ) . '.log';
 
     // Ensure message is always a string (avoid "Array to string conversion" notices).
     if ( ! is_string( $message ) ) {
@@ -1218,7 +1310,7 @@ function backup_lite_log( $level, $message, $context = [] ) {
 
     $entry = sprintf(
         "[%s] [%s] %s",
-        backup_lite_local_time( 'c' ),
+        museder_restoreone_local_time( 'c' ),
         strtoupper( $level ),
         $message
     );
@@ -1235,30 +1327,27 @@ function backup_lite_log( $level, $message, $context = [] ) {
 }
 
 /**
- * Load bundled PclZip fallback library if needed.
+ * Ensure the PclZip class is available (ZipArchive fallback).
  *
- * WP.org compliance: we avoid including WordPress core files directly via ABSPATH.
+ * Uses WordPress core’s copy to avoid shipping a duplicate third-party file that
+ * fails stricter Plugin Check / PHPCS rulesets on bundled libraries.
  *
  * @return void
  */
-function backup_lite_require_pclzip() {
+function museder_restoreone_require_pclzip() {
     if ( class_exists( 'PclZip' ) ) {
         return;
     }
 
-    $path = defined( 'BACKUP_LITE_PATH' ) ? (string) BACKUP_LITE_PATH : '';
-    if ( '' === $path ) {
-        return;
-    }
-
-    $file = trailingslashit( $path ) . 'includes/vendor/pclzip/class-pclzip.php';
-    if ( file_exists( $file ) ) {
-        require_once $file; // phpcs:ignore WordPressVIPMinimum.Files.IncludingFile.UsingVariable -- fixed plugin path
+    $path = function_exists( 'museder_restoreone_get_core_admin_include_path' ) ? museder_restoreone_get_core_admin_include_path( 'class-pclzip.php' ) : '';
+    if ( '' !== $path ) {
+        // phpcs:ignore WordPressVIPMinimum.Files.IncludingFile.UsingVariable -- vetted core path from museder_restoreone_get_core_admin_include_path().
+        require_once $path;
     }
 }
 
-function backup_lite_get_recent_logs( $limit = 5 ) {
-    $log_dir = backup_lite_get_log_dir();
+function museder_restoreone_get_recent_logs( $limit = 5 ) {
+    $log_dir = museder_restoreone_get_log_dir();
     $files   = glob( trailingslashit( $log_dir ) . 'backup-lite-*.log' );
 
     if ( empty( $files ) ) {
@@ -1270,7 +1359,7 @@ function backup_lite_get_recent_logs( $limit = 5 ) {
     return array_slice( $files, 0, $limit );
 }
 
-function backup_lite_normalize_bool( $value ) {
+function museder_restoreone_normalize_bool( $value ) {
     return filter_var( $value, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE );
 }
 
@@ -1282,8 +1371,8 @@ function backup_lite_normalize_bool( $value ) {
  *
  * @return array<string> Array of normalized directory paths (with trailing slashes) to exclude.
  */
-if ( ! function_exists( 'backup_lite_get_excluded_paths' ) ) {
-    function backup_lite_get_excluded_paths() {
+if ( ! function_exists( 'museder_restoreone_get_excluded_paths' ) ) {
+    function museder_restoreone_get_excluded_paths() {
         $paths = [];
         
         $normalize = static function( $path, $must_exist = false ) {
@@ -1303,7 +1392,7 @@ if ( ! function_exists( 'backup_lite_get_excluded_paths' ) ) {
             return trailingslashit( $normalized );
         };
         
-        $storage = backup_lite_get_storage_root();
+        $storage = museder_restoreone_get_storage_root();
         
         if ( ! empty( $storage['path'] ) ) {
             $root = trailingslashit( $storage['path'] );
@@ -1319,12 +1408,12 @@ if ( ! function_exists( 'backup_lite_get_excluded_paths' ) ) {
         }
         
         // Always exclude the active backup directory (even if customized) and its parent root.
-        $active_backup_dir = backup_lite_get_backup_dir();
+        $active_backup_dir = museder_restoreone_get_backup_dir();
         $paths[] = $normalize( $active_backup_dir );
         $paths[] = $normalize( trailingslashit( dirname( $active_backup_dir ) ) );
-        $paths[] = $normalize( backup_lite_get_temp_dir() );
-        $paths[] = $normalize( backup_lite_get_jobs_dir() );
-        $paths[] = $normalize( backup_lite_get_reports_dir() );
+        $paths[] = $normalize( museder_restoreone_get_temp_dir() );
+        $paths[] = $normalize( museder_restoreone_get_jobs_dir() );
+        $paths[] = $normalize( museder_restoreone_get_reports_dir() );
         
         // Legacy directories (only exclude when they exist to avoid false positives).
         $upload_dir = wp_upload_dir();

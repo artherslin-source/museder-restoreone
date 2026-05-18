@@ -22,30 +22,30 @@ $museder_restoreone_history_rows = isset( $museder_restoreone_history ) && is_ar
 $museder_restoreone_backups      = isset( $museder_restoreone_backups ) && is_array( $museder_restoreone_backups ) ? $museder_restoreone_backups : [];
 
 // Check if safe mode is active
-$safe_mode_active = get_option( 'backup_lite_safe_mode', '' ) === '1';
+$safe_mode_active = get_option( 'museder_restoreone_safe_mode', '' ) === '1';
 $prev_plugins_count = 0;
 if ( $safe_mode_active ) {
-    $prev_plugins = get_option( 'backup_lite_prev_active_plugins', [] );
+    $prev_plugins = get_option( 'museder_restoreone_prev_active_plugins', [] );
     $prev_plugins_count = is_array( $prev_plugins ) ? count( $prev_plugins ) : 0;
 }
 
 // Manual DB import notice (CLI-only DB restore fallback).
 $manual_db_notice = null;
-if ( class_exists( 'Backup_Lite_Restore_Service' ) && method_exists( 'Backup_Lite_Restore_Service', 'get_active_job_id' ) ) {
-    $active_job_id = (string) Backup_Lite_Restore_Service::get_active_job_id();
+if ( class_exists( 'Museder_Restoreone_Restore_Service' ) && method_exists( 'Museder_Restoreone_Restore_Service', 'get_active_job_id' ) ) {
+    $active_job_id = (string) Museder_Restoreone_Restore_Service::get_active_job_id();
     if ( '' !== $active_job_id ) {
         try {
-            $active_meta = Backup_Lite_Restore_Service::get_job_meta( $active_job_id );
+            $active_meta = Museder_Restoreone_Restore_Service::get_job_meta( $active_job_id );
             if ( is_array( $active_meta ) && ! empty( $active_meta['manual_db']['required'] ) ) {
                 $download_url = wp_nonce_url(
                     add_query_arg(
                         [
-                            'action' => 'backup_lite_download_restore_sql',
+                            'action' => 'museder_restoreone_download_restore_sql',
                             'job_id' => rawurlencode( $active_job_id ),
                         ],
                         admin_url( 'admin-post.php' )
                     ),
-                    'backup_lite_download_restore_sql_' . $active_job_id
+                    'museder_restoreone_download_restore_sql_' . $active_job_id
                 );
                 $manual_db_notice = [
                     'job_id' => $active_job_id,
@@ -85,19 +85,19 @@ if ( class_exists( 'Backup_Lite_Restore_Service' ) && method_exists( 'Backup_Lit
                         <span style="font-size: 20px; margin-right: 8px;">🛡️</span>
                         <?php esc_html_e( 'Safe Mode Active', 'museder-restoreone' ); ?>
                     </p>
-                    <p style="margin: 0; color: #646970;">
+                    <p style="margin: 0; color: var(--text-muted, #646970);">
                         <?php
                         printf(
-                            /* translators: %d: Number of plugins that were deactivated. */
-                            esc_html__( 'RestoreOne has enabled safe mode after restore, temporarily disabling %d plugin(s) to prevent conflicts. Please verify your site is working correctly, then click the button below to restore all plugins.', 'museder-restoreone' ),
+                            /* translators: %d: Number of plugins recorded in the safe mode snapshot. */
+                            esc_html__( 'RestoreOne saved a snapshot of %d active plugin(s) when safe mode was enabled after restore. Verify your site, then exit safe mode to clear this notice. Other plugins are not changed automatically.', 'museder-restoreone' ),
                             absint( $prev_plugins_count )
                         );
                         ?>
                     </p>
                 </div>
                 <div>
-                    <button type="button" id="backup-lite-exit-safe-mode-btn" class="button button-primary" style="white-space: nowrap;">
-                        <?php esc_html_e( 'Exit Safe Mode & Restore Plugins', 'museder-restoreone' ); ?>
+                    <button type="button" id="museder-restoreone-exit-safe-mode-btn" class="button button-primary" style="white-space: nowrap;">
+                        <?php esc_html_e( 'Exit Safe Mode', 'museder-restoreone' ); ?>
                     </button>
                 </div>
             </div>
@@ -134,7 +134,7 @@ if ( class_exists( 'Backup_Lite_Restore_Service' ) && method_exists( 'Backup_Lit
                     <span class="step-pill">Step 1</span>
                     <h2><?php esc_html_e( 'Backup Archive Source', 'museder-restoreone' ); ?></h2>
                 </div>
-                <p class="step-description"><?php esc_html_e( 'Upload a backup file, select an existing archive, or provide a remote URL to begin analysis.', 'museder-restoreone' ); ?></p>
+                <p class="step-description"><?php esc_html_e( 'Upload a backup file or select an existing archive to begin analysis.', 'museder-restoreone' ); ?></p>
                 <div class="step-status" id="step-upload-status" data-status="idle">
                     <span class="status-icon"></span>
                     <span class="status-text"><?php esc_html_e( 'Choose a backup and run Step 1.', 'museder-restoreone' ); ?></span>
@@ -143,19 +143,18 @@ if ( class_exists( 'Backup_Lite_Restore_Service' ) && method_exists( 'Backup_Lit
         <div class="method-tabs">
                 <button class="button-primary active" data-method="upload"><?php esc_html_e( 'Upload Local File', 'museder-restoreone' ); ?></button>
                 <button class="button-secondary" data-method="existing"><?php esc_html_e( 'Select from Backups', 'museder-restoreone' ); ?></button>
-                <button class="button-secondary" data-method="remote"><?php esc_html_e( 'Remote URL Restore', 'museder-restoreone' ); ?></button>
         </div>
         <div id="restore-upload" class="method-panel active">
             <form id="backup-lite-restore-form-v2">
                 <input type="file" id="backup-lite-restore-file-v2" accept=".zip">
 
                 <label style="display: block; margin-top: 10px;">
-                    <input type="checkbox" name="backup_lite_confirm" value="1">
+                    <input type="checkbox" name="museder_restoreone_confirm" value="1">
                     <?php esc_html_e( 'I understand this will upload the selected archive for analysis.', 'museder-restoreone' ); ?>
                 </label>
 
                 <div class="backup-lite-progress" aria-live="polite">
-                    <div class="progress-bar" style="height: 10px; width: 100%; background: rgba(0,0,0,0.08); border-radius: 4px; overflow: hidden;">
+                    <div class="progress-bar restore-upload-progress-track" style="height: 10px; width: 100%; border-radius: 4px; overflow: hidden;">
                         <div class="progress-bar-fill" style="height: 100%; width: 0%;"></div>
                     </div>
                     <div class="backup-lite-progress-status" style="margin-top: 8px;"></div>
@@ -179,10 +178,6 @@ if ( class_exists( 'Backup_Lite_Restore_Service' ) && method_exists( 'Backup_Lit
                 <?php endforeach; ?>
             </select>
                 <button id="selectRestore" class="button-primary step-action"><?php esc_html_e( 'Step 1 – Load Info', 'museder-restoreone' ); ?></button>
-        </div>
-        <div id="restore-remote" class="method-panel">
-            <input type="text" id="remoteUrl" placeholder="https://example.com/backup.zip">
-                <button id="downloadRestore" class="button-primary step-action"><?php esc_html_e( 'Step 1 – Download & Prepare', 'museder-restoreone' ); ?></button>
         </div>
     </section>
 
@@ -241,7 +236,7 @@ if ( class_exists( 'Backup_Lite_Restore_Service' ) && method_exists( 'Backup_Lit
                     <?php esc_html_e( 'Enter Safe Mode after restore (recommended)', 'museder-restoreone' ); ?>
                 </label>
                 <p class="description" style="margin: 6px 0 0 0;">
-                    <?php esc_html_e( 'Safe mode temporarily disables non-essential plugins to prevent conflicts. You can restore plugins with one click after verifying the site works.', 'museder-restoreone' ); ?>
+                    <?php esc_html_e( 'Safe mode saves which plugins were active and shows an admin reminder after restore. It does not change plugin activation for you; use Plugins screen as needed, then exit safe mode to clear the notice.', 'museder-restoreone' ); ?>
                 </p>
             </div>
             <!-- .wpress / encrypted backups are not supported in this build. -->
@@ -288,7 +283,7 @@ if ( class_exists( 'Backup_Lite_Restore_Service' ) && method_exists( 'Backup_Lit
             <p class="description" style="margin-top: 8px;">
                 <?php esc_html_e( 'If Step 3 is blocked with “Another restore is already in progress” but you are sure nothing is running, click Force Unlock to clear the stuck lock.', 'museder-restoreone' ); ?>
             </p>
-            <div id="restore-progress-container" style="display: none; padding: 24px; background: linear-gradient(135deg, rgba(58, 123, 255, 0.1) 0%, rgba(36, 93, 255, 0.05) 100%); border-radius: 12px; margin: 16px 0; border: 2px solid rgba(58, 123, 255, 0.2);">
+            <div id="restore-progress-container" class="restore-progress-panel" style="display: none;">
             <div style="text-align: center; margin-bottom: 16px;">
                 <div id="restore-status-icon" style="font-size: 48px; margin-bottom: 12px;">⚡</div>
                 <div id="restore-status-title" style="font-size: 20px; font-weight: 600; color: var(--bl-primary); margin-bottom: 8px; display: flex; align-items: center; justify-content: center; gap: 30px;">
@@ -299,9 +294,9 @@ if ( class_exists( 'Backup_Lite_Restore_Service' ) && method_exists( 'Backup_Lit
                     <?php esc_html_e( 'Please wait while we restore your site...', 'museder-restoreone' ); ?>
                 </div>
             </div>
-            <div class="progress-bar" style="height: 24px; background: rgba(0, 0, 0, 0.05); border-radius: 12px; overflow: hidden; margin-bottom: 12px; position: relative;">
+            <div class="progress-bar restore-execute-progress-track" style="height: 24px; border-radius: 12px; overflow: hidden; margin-bottom: 12px; position: relative;">
                 <div id="restore-progress-fill" class="progress-bar-fill" style="width:0%; height: 100%; background: linear-gradient(90deg, var(--bl-primary) 0%, var(--bl-primary-alt) 100%); transition: width 0.3s ease;"></div>
-                <span id="restore-progress-text" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #fff; font-weight: 600; font-size: 12px; pointer-events: none; text-align: center; width: 100%;">0%</span>
+                <span id="restore-progress-text" class="restore-progress-percent" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-weight: 600; font-size: 12px; pointer-events: none; text-align: center; width: 100%;">0%</span>
             </div>
             <p id="restore-progress-status" class="progress-status" style="text-align: center; font-size: 13px; color: var(--bl-text-muted); margin: 0;">
                 <?php echo esc_html( isset( $museder_restoreone_progress['message'] ) ? $museder_restoreone_progress['message'] : __( 'Waiting for action...', 'museder-restoreone' ) ); ?>
@@ -375,7 +370,7 @@ if ( class_exists( 'Backup_Lite_Restore_Service' ) && method_exists( 'Backup_Lit
                             <td>
                                 <?php
                                 $duration = isset( $entry['duration'] ) ? (int) $entry['duration'] : -1;
-                                $duration_human = backup_lite_format_duration( $duration );
+                                $duration_human = museder_restoreone_format_duration( $duration );
                                 echo esc_html( '' !== $duration_human ? $duration_human : '—' );
                                 ?>
                             </td>

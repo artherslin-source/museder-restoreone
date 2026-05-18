@@ -110,8 +110,8 @@ class Museder_AI_Sanitizer {
             'ziparchive' => false,
         ];
 
-        if ( class_exists( 'Backup_Lite_UI' ) && method_exists( 'Backup_Lite_UI', 'get_environment_status' ) ) {
-            $status = Backup_Lite_UI::get_environment_status();
+        if ( class_exists( 'Museder_Restoreone_UI' ) && method_exists( 'Museder_Restoreone_UI', 'get_environment_status' ) ) {
+            $status = Museder_Restoreone_UI::get_environment_status();
             if ( is_array( $status ) ) {
                 foreach ( $signals as $k => $_ ) {
                     $signals[ $k ] = ! empty( $status[ $k ] );
@@ -133,11 +133,7 @@ class Museder_AI_Sanitizer {
             $active = [];
         }
 
-        // Ensure get_plugins() is available for names.
-        if ( ! function_exists( 'get_plugins' ) && file_exists( ABSPATH . 'wp-admin/includes/plugin.php' ) ) {
-            require_once ABSPATH . 'wp-admin/includes/plugin.php';
-        }
-
+        // Use get_plugins() only when already loaded (e.g. admin context); do not load core plugin.php (WP.org compliance).
         $all = function_exists( 'get_plugins' ) ? get_plugins() : [];
         if ( ! is_array( $all ) ) {
             $all = [];
@@ -163,6 +159,9 @@ class Museder_AI_Sanitizer {
                 $name = (string) $all[ $plugin_file ]['Name'];
             }
             $name = sanitize_text_field( wp_strip_all_tags( $name ) );
+            if ( '' === $name ) {
+                $name = $slug;
+            }
 
             $items[] = [
                 'slug' => $slug,
@@ -187,22 +186,22 @@ class Museder_AI_Sanitizer {
         $last_run_ts  = 0;
         $activity     = [ 'success' => 0, 'failed' => 0, 'pending' => 0 ];
 
-        if ( class_exists( 'Backup_Lite_Schedule_Handler' ) && method_exists( 'Backup_Lite_Schedule_Handler', 'list_schedules' ) ) {
-            $schedules = Backup_Lite_Schedule_Handler::list_schedules();
+        if ( class_exists( 'Museder_Restoreone_Schedule_Handler' ) && method_exists( 'Museder_Restoreone_Schedule_Handler', 'list_schedules' ) ) {
+            $schedules = Museder_Restoreone_Schedule_Handler::list_schedules();
             $has_schedule = is_array( $schedules ) && ! empty( $schedules );
         }
 
-        if ( class_exists( 'Backup_Lite_Dashboard' ) ) {
-            if ( method_exists( 'Backup_Lite_Dashboard', 'get_schedule_overview' ) ) {
-                $overview = Backup_Lite_Dashboard::get_schedule_overview();
+        if ( class_exists( 'Museder_Restoreone_Dashboard' ) ) {
+            if ( method_exists( 'Museder_Restoreone_Dashboard', 'get_schedule_overview' ) ) {
+                $overview = Museder_Restoreone_Dashboard::get_schedule_overview();
                 if ( is_array( $overview ) ) {
                     $next_run_ts = isset( $overview['next_run'] ) && is_numeric( $overview['next_run'] ) ? (int) $overview['next_run'] : 0;
                     $last_run_ts = isset( $overview['last_run_timestamp'] ) && is_numeric( $overview['last_run_timestamp'] ) ? (int) $overview['last_run_timestamp'] : 0;
                 }
             }
 
-            if ( method_exists( 'Backup_Lite_Dashboard', 'get_activity_stats' ) ) {
-                $stats = Backup_Lite_Dashboard::get_activity_stats( 7 );
+            if ( method_exists( 'Museder_Restoreone_Dashboard', 'get_activity_stats' ) ) {
+                $stats = Museder_Restoreone_Dashboard::get_activity_stats( 7 );
                 if ( is_array( $stats ) ) {
                     $activity['success'] = isset( $stats['success'] ) ? (int) $stats['success'] : 0;
                     $activity['failed']  = isset( $stats['failed'] ) ? (int) $stats['failed'] : 0;
@@ -267,8 +266,8 @@ class Museder_AI_Sanitizer {
      */
     private static function get_log_signals(): array {
         $count = 0;
-        if ( class_exists( 'Backup_Lite_Log_Handler' ) && method_exists( 'Backup_Lite_Log_Handler', 'get_logs' ) ) {
-            $logs = Backup_Lite_Log_Handler::get_logs( 0 );
+        if ( class_exists( 'Museder_Restoreone_Log_Handler' ) && method_exists( 'Museder_Restoreone_Log_Handler', 'get_logs' ) ) {
+            $logs = Museder_Restoreone_Log_Handler::get_logs( 0 );
             if ( is_array( $logs ) ) {
                 $count = count( $logs );
             }
