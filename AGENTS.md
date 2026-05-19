@@ -4,7 +4,7 @@
 
 This repository ships [Superpowers](https://github.com/obra/superpowers) for Cursor / Cloud Agents:
 
-- **Skills:** `.cursor/skills/` (14 skills; symlinked from `.cursor/superpowers/skills/`)
+- **Skills:** `.cursor/skills/` (superpowers + `karpathy-guidelines`; superpowers symlinked from `.cursor/superpowers/skills/`)
 - **Session bootstrap:** `.cursor/hooks.json` → `sessionStart` injects `using-superpowers` context
 - **Version lock:** `.cursor/superpowers-lock.json`
 
@@ -33,6 +33,26 @@ Or in Cursor chat: `/add-plugin superpowers`
 | Between tasks | `requesting-code-review` |
 
 Follow skills via the Skill tool (or read `SKILL.md` in Cloud Agent). Do not skip `using-superpowers` workflow rules.
+
+## Karpathy Guidelines
+
+Behavioral skill from [forrestchang/andrej-karpathy-skills](https://github.com/forrestchang/andrej-karpathy-skills) (Andrej Karpathy–style coding discipline):
+
+- **Project skill:** `.cursor/skills/karpathy-guidelines/SKILL.md` (committed; Cloud Agents load automatically)
+- **Version lock:** `.cursor/karpathy-guidelines-lock.json`
+
+Apply **karpathy-guidelines** for all write, review, and refactor work:
+
+1. Think before coding — state assumptions; ask when unclear
+2. Simplicity first — minimum code for the request; no speculative abstractions
+3. Surgical changes — touch only what the task requires
+4. Goal-driven execution — verifiable success criteria (tests, repro steps)
+
+Global install on a developer machine:
+
+```bash
+./tools/cursor/setup-global-karpathy-guidelines.sh
+```
 
 ## Cursor Cloud specific instructions
 
