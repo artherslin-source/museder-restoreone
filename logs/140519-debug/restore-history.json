@@ -1,0 +1,68 @@
+[
+    {
+        "job_id": "rjb_20260518_111447_vynblk",
+        "timestamp_utc": 1779103392,
+        "date": "2026-05-18 11:23:12",
+        "file": "jializhuiye.com-20260514110729-wLIxey.zip",
+        "result": "success",
+        "duration_seconds": 371,
+        "restore_started_at": 1779103021,
+        "restore_completed_at": 1779103392,
+        "restore_duration_seconds": 371
+    },
+    {
+        "job_id": "rjb_20260518_130514_i0xvhz",
+        "timestamp_utc": 1779081340,
+        "date": "2026-05-18 05:15:40",
+        "file": "jializhuiye.com-20260514110729-wLIxey.zip",
+        "result": "success",
+        "duration_seconds": 620,
+        "restore_started_at": 1779080720,
+        "restore_completed_at": 1779081340,
+        "restore_duration_seconds": 620
+    },
+    {
+        "job_id": "rjb_20260517_174607_7iz8iv",
+        "timestamp_utc": 1779039972,
+        "date": "2026-05-17 17:46:12",
+        "file": "jializhuiye.com-20260514110729-wLIxey.zip",
+        "result": "running",
+        "duration_seconds": 0,
+        "restore_started_at": 1779039972,
+        "restore_completed_at": 0,
+        "restore_duration_seconds": 0
+    },
+    {
+        "job_id": "rjb_20260517_173916_nmpoda",
+        "timestamp_utc": 1779039690,
+        "date": "2026-05-17 17:41:30",
+        "file": "jializhuiye.com-20260514110729-wLIxey.zip",
+        "result": "running",
+        "duration_seconds": 0,
+        "restore_started_at": 1779039690,
+        "restore_completed_at": 0,
+        "restore_duration_seconds": 0
+    },
+    {
+        "job_id": "rjb_20260308_170549_02r3qv",
+        "timestamp_utc": 1772989821,
+        "date": "2026-03-08 17:10:21",
+        "file": "jializhuiye.com-20260308161936-JwsNfU-1.zip",
+        "result": "success",
+        "duration_seconds": 266,
+        "restore_started_at": 1772989555,
+        "restore_completed_at": 1772989821,
+        "restore_duration_seconds": 266
+    },
+    {
+        "job_id": "rjb_20260210_063754_nh8oce",
+        "timestamp_utc": 1770705766,
+        "date": "2026-02-10 06:42:46",
+        "file": "jializhuiye-CLEAN-20260210-restoreone.zip",
+        "result": "success",
+        "duration_seconds": 287,
+        "restore_started_at": 1770705479,
+        "restore_completed_at": 1770705766,
+        "restore_duration_seconds": 287
+    }
+]

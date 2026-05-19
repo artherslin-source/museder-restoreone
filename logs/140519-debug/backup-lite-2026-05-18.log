@@ -1,0 +1,43 @@
+[2026-05-18T00:35:52+00:00] [INFO] Museder RestoreOne build active. {"version":"2.7.262","build_id":"2.7.262-1","opcache":true}
+[2026-05-18T01:36:52+00:00] [INFO] Museder RestoreOne build active. {"version":"2.7.262","build_id":"2.7.262-1","opcache":true}
+[2026-05-18T02:36:58+00:00] [INFO] Museder RestoreOne build active. {"version":"2.7.262","build_id":"2.7.262-1","opcache":true}
+[2026-05-18T03:37:03+00:00] [INFO] Museder RestoreOne build active. {"version":"2.7.262","build_id":"2.7.262-1","opcache":true}
+[2026-05-18T04:37:08+00:00] [INFO] Museder RestoreOne build active. {"version":"2.7.262","build_id":"2.7.262-1","opcache":true}
+[2026-05-18T13:05:00+08:00] [INFO] Large file detected, skipping SHA1 calculation to avoid timeout. {"file":"jializhuiye.com-20260514110729-wLIxey.zip","size":"1.32 GB"}
+[2026-05-18T13:05:00+08:00] [INFO] Restore prepare: detected DB prefixes. {"file":"jializhuiye.com-20260514110729-wLIxey.zip","source_prefix":"","target_prefix":"zzak_"}
+[2026-05-18T13:05:14+08:00] [INFO] Restore job prepared. {"job_id":"rjb_20260518_130514_i0xvhz","file":"jializhuiye.com-20260514110729-wLIxey.zip"}
+[2026-05-18T13:05:20+08:00] [INFO] Restore job validated. {"job_id":"rjb_20260518_130514_i0xvhz"}
+[2026-05-18T05:05:46+00:00] [INFO] Museder RestoreOne build active. {"version":"2.7.262","build_id":"2.7.262-1","opcache":true}
+[2026-05-18T05:06:26+00:00] [INFO] Restore files: self-protect skipped plugin files. {"skipped":39,"total":39,"prefix":"wp-content\/plugins\/museder-restoreone\/"}
+[2026-05-18T05:08:24+00:00] [WARNING] Force unlock invoked for restore. {"lock_job_id":"","active_job_id":"","hard_force":false,"cleared_lock":true,"cleared_active":true,"cleared_state":false}
+[2026-05-18T05:10:20+00:00] [INFO] Restore files: self-protect skipped plugin files. {"skipped":30,"total":69,"prefix":"wp-content\/plugins\/museder-restoreone\/"}
+[2026-05-18T05:15:40+00:00] [INFO] Restore completed. Plugin activation status was not modified automatically. {"active_plugins_count":23}
+[2026-05-18T05:15:40+00:00] [INFO] Safe mode marker enabled after restore (no automatic plugin activation changes). {"previous_plugins_count":23}
+[2026-05-18T06:06:37+00:00] [INFO] Museder RestoreOne build active. {"version":"2.7.262","build_id":"2.7.262-1","opcache":true}
+[2026-05-18T07:07:08+00:00] [INFO] Museder RestoreOne build active. {"version":"2.7.262","build_id":"2.7.262-1","opcache":true}
+[2026-05-18T08:07:38+00:00] [INFO] Museder RestoreOne build active. {"version":"2.7.262","build_id":"2.7.262-1","opcache":true}
+[2026-05-18T09:08:07+00:00] [INFO] Museder RestoreOne build active. {"version":"2.7.262","build_id":"2.7.262-1","opcache":true}
+[2026-05-18T10:17:03+00:00] [INFO] Museder RestoreOne build active. {"version":"2.7.262","build_id":"2.7.262-1","opcache":true}
+[2026-05-18T11:14:35+00:00] [INFO] Large file detected, skipping SHA1 calculation to avoid timeout. {"file":"jializhuiye.com-20260514110729-wLIxey.zip","size":"1.32 GB"}
+[2026-05-18T11:14:35+00:00] [INFO] Restore prepare: detected DB prefixes. {"file":"jializhuiye.com-20260514110729-wLIxey.zip","source_prefix":"","target_prefix":"zzak_"}
+[2026-05-18T11:14:47+00:00] [INFO] Restore job prepared. {"job_id":"rjb_20260518_111447_vynblk","file":"jializhuiye.com-20260514110729-wLIxey.zip"}
+[2026-05-18T11:17:01+00:00] [INFO] Restore job validated. {"job_id":"rjb_20260518_111447_vynblk"}
+[2026-05-18T11:17:07+00:00] [INFO] Museder RestoreOne build active. {"version":"2.7.262","build_id":"2.7.262-1","opcache":true}
+[2026-05-18T11:17:31+00:00] [INFO] Museder RestoreOne build active. {"version":"2.7.262","build_id":"2.7.262-1","opcache":true}
+[2026-05-18T11:17:31+00:00] [INFO] Museder RestoreOne build active. {"version":"2.7.262","build_id":"2.7.262-1","opcache":true}
+[2026-05-18T11:18:13+00:00] [INFO] Restore files: self-protect skipped plugin files. {"skipped":39,"total":39,"prefix":"wp-content\/plugins\/museder-restoreone\/"}
+[2026-05-18T11:21:14+00:00] [INFO] Restore files: self-protect skipped plugin files. {"skipped":30,"total":69,"prefix":"wp-content\/plugins\/museder-restoreone\/"}
+[2026-05-18T11:23:12+00:00] [INFO] Restore completed. Plugin activation status was not modified automatically. {"active_plugins_count":23}
+[2026-05-18T11:23:12+00:00] [INFO] Safe mode marker enabled after restore (no automatic plugin activation changes). {"previous_plugins_count":23}
+[2026-05-18T12:18:12+00:00] [INFO] Museder RestoreOne build active. {"version":"2.7.262","build_id":"2.7.262-1","opcache":true}
+[2026-05-18T13:18:24+00:00] [INFO] Museder RestoreOne build active. {"version":"2.7.262","build_id":"2.7.262-1","opcache":true}
+[2026-05-18T14:19:12+00:00] [INFO] Museder RestoreOne build active. {"version":"2.7.262","build_id":"2.7.262-1","opcache":true}
+[2026-05-18T15:19:36+00:00] [INFO] Museder RestoreOne build active. {"version":"2.7.262","build_id":"2.7.262-1","opcache":true}
+[2026-05-18T16:29:28+00:00] [INFO] Museder RestoreOne build active. {"version":"2.7.262","build_id":"2.7.262-1","opcache":true}
+[2026-05-18T17:30:28+00:00] [INFO] Museder RestoreOne build active. {"version":"2.7.262","build_id":"2.7.262-1","opcache":true}
+[2026-05-18T18:34:11+00:00] [INFO] Museder RestoreOne build active. {"version":"2.7.262","build_id":"2.7.262-1","opcache":true}
+[2026-05-18T19:36:57+00:00] [INFO] Museder RestoreOne build active. {"version":"2.7.262","build_id":"2.7.262-1","opcache":true}
+[2026-05-18T20:37:08+00:00] [INFO] Museder RestoreOne build active. {"version":"2.7.262","build_id":"2.7.262-1","opcache":true}
+[2026-05-18T21:37:20+00:00] [INFO] Museder RestoreOne build active. {"version":"2.7.262","build_id":"2.7.262-1","opcache":true}
+[2026-05-18T22:39:32+00:00] [INFO] Museder RestoreOne build active. {"version":"2.7.262","build_id":"2.7.262-1","opcache":true}
+[2026-05-18T23:39:33+00:00] [INFO] Museder RestoreOne build active. {"version":"2.7.262","build_id":"2.7.262-1","opcache":true}
