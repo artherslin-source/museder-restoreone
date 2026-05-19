@@ -4,7 +4,7 @@ Tags: backup, migration, restore, site-backup, database-backup
 Requires at least: 5.8
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 2.7.262
+Stable tag: 2.7.263
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -182,6 +182,11 @@ Most sites do not need any changes. For unusual server layouts where core admin 
 6. Settings page with general options and system diagnostics.
 
 == Changelog ==
+
+= 2.7.263 =
+* Restore (P0): preserve admin **session tokens** and re-inject **cron**, **restore lock**, and **active job** state after database import so restores no longer stall when the admin session is invalidated mid-job.
+* Restore: add file-based **restore token** (survives DB rebuild) with REST **fallback** when WordPress nonces expire during long restores.
+* Restore UI: polling tolerates transient **401/403** responses during DB import instead of stopping immediately.
 
 = 2.7.262 =
 * Backup reliability: when **PclZip** compatibility repack is active, the async job runner **no longer keeps a long-lived `ZipArchive` handle** on the same `.zip` file (PclZip and ZipArchive were both mutating the archive, making `close()` extremely slow on large sites and risking central-directory corruption).
@@ -457,6 +462,9 @@ Most sites do not need any changes. For unusual server layouts where core admin 
 (Older changelog entries are maintained in the project repository.)
 
 == Upgrade Notice ==
+
+= 2.7.263 =
+Fixes restores that **stopped mid-job** after database import when the admin session was invalidated (session preserved, restore token fallback, resilient progress polling). Recommended for **large-site restores**.
 
 = 2.7.262 =
 Fixes large-site backup jobs that could appear **stuck near 95%** after a failed post-close verification (PclZip repack conflicting with an open ZipArchive handle). Recommended if you run **large full-site backups** on production.
