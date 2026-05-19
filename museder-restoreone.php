@@ -31,6 +31,7 @@ require_once MUSEDER_RESTOREONE_PATH . 'includes/class-ui.php';
 require_once MUSEDER_RESTOREONE_PATH . 'includes/class-restore-handler.php';
 require_once MUSEDER_RESTOREONE_PATH . 'includes/class-restore-service.php';
 require_once MUSEDER_RESTOREONE_PATH . 'includes/class-restore-lock.php';
+require_once MUSEDER_RESTOREONE_PATH . 'includes/class-restore-token.php';
 require_once MUSEDER_RESTOREONE_PATH . 'includes/class-restore-report.php';
 require_once MUSEDER_RESTOREONE_PATH . 'includes/class-restore-controller.php';
 require_once MUSEDER_RESTOREONE_PATH . 'includes/class-schedule-handler.php';
@@ -443,6 +444,7 @@ function museder_restoreone_render_restore_page() {
             'summary' => $museder_restoreone_summary,
             'progress'=> $museder_restoreone_progress,
             'history' => $museder_restoreone_history,
+            'restoreToken' => '',
             'job'     => $museder_restoreone_active_job ? array_merge( [ 'id' => $museder_restoreone_active_job_id ], $museder_restoreone_active_job ) : null,
             'labels'  => [
                 'noBackups'    => __( 'No backups available.', 'museder-restoreone' ),

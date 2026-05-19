@@ -1113,7 +1113,21 @@ class Museder_Restoreone_Backup {
                 continue;
             }
 
+            // Skip plugin runtime options that should not be carried in backups.
+            // Same pattern as AI1WM: exclude operational state from exports.
+            $is_options_table = ( isset( $wpdb->options ) && $safe_table === preg_replace( '/[^A-Za-z0-9_]/', '', (string) $wpdb->options ) );
+            $exclude_option_names = [
+                'museder_restoreone_restore_lock',
+                'museder_restoreone_restore_service_active_job_id',
+                'museder_restoreone_restore_token',
+                '_site_transient_museder_restoreone_restore_lock',
+                '_site_transient_timeout_museder_restoreone_restore_lock',
+            ];
+
             foreach ( $rows as $row ) {
+                if ( $is_options_table && isset( $row['option_name'] ) && in_array( (string) $row['option_name'], $exclude_option_names, true ) ) {
+                    continue;
+                }
                 $line = [
                     'type'  => 'row',
                     'table' => $safe_table,

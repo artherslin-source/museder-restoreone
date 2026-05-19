@@ -4,6 +4,7 @@
     var config = window.MusederRestoreOneRestore || {};
     var restURL = config.restURL || '';
     var nonce = config.nonce || '';
+    var restoreToken = config.restoreToken || '';
     var toast = window.Toastify || null;
 
     if (!restURL) {
@@ -205,6 +206,9 @@
             if (nonce) {
                 opts.headers['X-WP-Nonce'] = nonce;
             }
+            if (restoreToken) {
+                opts.headers['X-Restore-Token'] = restoreToken;
+            }
             opts.credentials = 'same-origin';
             return fetch(restURL.replace(/\/?$/, '/') + path.replace(/^\//, ''), opts).then(function (res) {
                 if (!res.ok) {
@@ -363,6 +367,9 @@
                 if (!data || data.ok === false) {
                     throw new Error(data && data.message ? data.message : 'Restore failed.');
                 }
+                if (data.restore_token) {
+                    restoreToken = data.restore_token;
+                }
                 _this3.toast(data.message || 'Restore completed successfully.', 'success');
                 _this3.log(data.message || 'Restore completed successfully.', 'success', 'restore');
                 _this3.state.status = Object.assign({}, _this3.state.status || {}, { rollback_available: !!data.rollback_available, completed: true, stage: 'done', message: data.message || 'Restore completed successfully.' });
@@ -434,9 +441,27 @@
             if (this.state.polling) {
                 return;
             }
+            var authFailCount = 0;
             this.state.polling = window.setInterval(function () {
-                _this5.buildRequest('restore/status/' + _this5.state.jobId, { method: 'GET' }).then(function (data) {
-                    if (!data || data.ok === false) {
+                var url = restURL.replace(/\/?$/, '/') + 'restore/status/' + _this5.state.jobId;
+                var headers = { 'Content-Type': 'application/json' };
+                if (nonce) { headers['X-WP-Nonce'] = nonce; }
+                if (restoreToken) { headers['X-Restore-Token'] = restoreToken; }
+                fetch(url, { method: 'GET', headers: headers, credentials: 'same-origin' }).then(function (res) {
+                    if (!res.ok && (res.status === 401 || res.status === 403)) {
+                        authFailCount++;
+                        if (authFailCount <= 30) {
+                            return null;
+                        }
+                        _this5.stopPolling();
+                        _this5.log('Session expired. Please re-login and return to this page.', 'error');
+                        return null;
+                    }
+                    authFailCount = 0;
+                    return res.json();
+                }).then(function (data) {
+                    if (!data) { return; }
+                    if (data.ok === false) {
                         _this5.stopPolling();
                         if (data && data.message) {
                             _this5.log('Status error: ' + data.message, 'error');
@@ -461,7 +486,10 @@
                         _this5.stopPolling();
                     }
                 }).catch(function () {
-                    _this5.stopPolling();
+                    authFailCount++;
+                    if (authFailCount > 30) {
+                        _this5.stopPolling();
+                    }
                 });
             }, 2000);
         },
