@@ -5660,7 +5660,7 @@ function initRestoreCenter() {
         });
     }
     var scheduleBody = document.getElementById('backup-lite-schedule-body');
-    var newScheduleButtons = Array.prototype.slice.call(document.querySelectorAll('#bl-new-schedule, [data-bl-action="new-schedule"]'));
+    var newScheduleButtons = Array.prototype.slice.call(document.querySelectorAll('.bl-schedule-add-trigger'));
     var scheduleModal = document.getElementById('bl-schedule-modal');
     var scheduleModalTitle = document.getElementById('bl-modal-title');
     var localizedSettings = window.MusederRestoreOneAdmin || {};
@@ -5706,6 +5706,24 @@ function initRestoreCenter() {
     }
 
     var schedules = [];
+    var activeInlineEditId = null;
+
+    function loadSchedulesBootstrap() {
+        var node = document.getElementById('museder-restoreone-schedules-data');
+        if (!node || !node.textContent) {
+            return;
+        }
+        try {
+            var parsed = JSON.parse(node.textContent);
+            if (Array.isArray(parsed) && parsed.length) {
+                schedules = parsed;
+            }
+        } catch (bootstrapError) {
+            schedules = [];
+        }
+    }
+
+    loadSchedulesBootstrap();
 
     function ajaxRequest(action, payload) {
         if (!localizedSettings.ajaxUrl) {
@@ -5754,10 +5772,33 @@ function initRestoreCenter() {
 
         if (!schedules.length) {
             var emptyRow = document.createElement('tr');
-            emptyRow.className = 'bl-empty-row';
+            emptyRow.className = 'bl-schedules-empty-row';
             var emptyCell = document.createElement('td');
             emptyCell.colSpan = 8;
-            emptyCell.textContent = strings.noSchedules || 'No schedules configured yet.';
+            var emptyPanel = document.createElement('div');
+            emptyPanel.className = 'bl-schedules-empty';
+            emptyPanel.id = 'bl-schedules-empty-state';
+
+            var emptyTitle = document.createElement('p');
+            emptyTitle.className = 'bl-schedules-empty__title';
+            emptyTitle.textContent = strings.scheduleEmptyTitle || 'No schedules yet';
+            emptyPanel.appendChild(emptyTitle);
+
+            var emptyText = document.createElement('p');
+            emptyText.className = 'bl-schedules-empty__text';
+            emptyText.textContent = strings.scheduleEmptyText || 'Create your first automated backup job. You can set frequency, retention, and optional email alerts.';
+            emptyPanel.appendChild(emptyText);
+
+            var emptyButton = document.createElement('button');
+            emptyButton.type = 'button';
+            emptyButton.className = 'button button-primary bl-schedule-add-trigger';
+            emptyButton.innerHTML = '<span aria-hidden="true">＋</span> ' + (strings.addFirstSchedule || 'Add your first schedule');
+            emptyButton.addEventListener('click', function () {
+                openScheduleModal(null);
+            });
+            emptyPanel.appendChild(emptyButton);
+
+            emptyCell.appendChild(emptyPanel);
             emptyRow.appendChild(emptyCell);
             scheduleBody.appendChild(emptyRow);
             return;
@@ -5765,6 +5806,8 @@ function initRestoreCenter() {
 
         schedules.forEach(function (schedule) {
             var row = document.createElement('tr');
+            row.className = 'bl-schedule-row';
+            row.setAttribute('data-schedule-id', String(schedule.id));
 
             var nameCell = document.createElement('td');
             nameCell.textContent = schedule.title || '(untitled)';
@@ -5801,6 +5844,8 @@ function initRestoreCenter() {
             row.appendChild(lastRunCell);
 
             var actionCell = document.createElement('td');
+            actionCell.className = 'bl-schedule-actions-cell';
+
             var menu = document.createElement('details');
             menu.className = 'bl-actions-menu';
 
@@ -5813,7 +5858,7 @@ function initRestoreCenter() {
             var list = document.createElement('div');
             list.className = 'bl-actions-list';
             var startLabel = getString('scheduleActionStart', 'Start Now');
-            var editLabel = getString('scheduleActionEdit', 'Edit');
+            var editLabel = getString('scheduleActionEditInline', 'Edit inline');
             var deleteLabel = getString('scheduleActionDelete', 'Delete');
             
             // Create action buttons with proper classes for event delegation
@@ -5825,7 +5870,7 @@ function initRestoreCenter() {
             list.appendChild(startBtn);
             
             var editBtn = createActionButton('✏️ ' + editLabel, function () {
-                openScheduleModal(schedule);
+                handleEditScheduleClick(schedule.id);
             });
             editBtn.className = 'button backup-lite-schedule-action-edit bl-actions-list__item';
             editBtn.setAttribute('data-schedule-id', schedule.id);
@@ -5910,7 +5955,7 @@ function initRestoreCenter() {
             $form.find('#bl-schedule-id').val('');
         } else {
             // Fallback: try to find form by common selectors
-            var $form = jQuery('#bl-inline-schedule-form, #bl-schedule-form');
+            var $form = jQuery('#bl-schedule-form');
             if ($form.length) {
                 $form.find('input[name="schedule_id"]').val('');
                 $form.find('[data-field="id"]').val('');
@@ -5948,7 +5993,7 @@ function initRestoreCenter() {
         if (context.form) {
             $submitBtn = jQuery(context.form).find('button[type="submit"]');
         } else {
-            $submitBtn = jQuery('#bl-inline-schedule-form, #bl-schedule-form').find('button[type="submit"]');
+            $submitBtn = jQuery('#bl-schedule-form').find('button[type="submit"]');
         }
         
         if ($submitBtn.length) {
@@ -5972,33 +6017,7 @@ function initRestoreCenter() {
 
         if (schedule) {
             scheduleModalTitle.textContent = strings.editScheduleTitle || 'Edit Schedule';
-            if (modalFormContext.id) {
-                modalFormContext.id.value = schedule.id || '';
-            }
-            if (modalFormContext.title) {
-                modalFormContext.title.value = schedule.title || '';
-            }
-            if (modalFormContext.type) {
-                modalFormContext.type.value = schedule.type || 'backup';
-            }
-            if (modalFormContext.period) {
-                modalFormContext.period.value = schedule.period || 'daily';
-            }
-            if (modalFormContext.time) {
-                modalFormContext.time.value = schedule.time || '00:00';
-            }
-            if (modalFormContext.retain) {
-                modalFormContext.retain.value = schedule.retain || 5;
-            }
-            if (modalFormContext.maxAge) {
-                modalFormContext.maxAge.value = schedule.max_age || 30;
-            }
-            if (modalFormContext.notify) {
-                modalFormContext.notify.value = schedule.notify || '';
-            }
-            if (modalFormContext.status) {
-                modalFormContext.status.checked = schedule.status !== 'disabled';
-            }
+            populateScheduleFormContext(modalFormContext, schedule);
         } else {
             scheduleModalTitle.textContent = strings.newScheduleTitle || 'New Schedule';
         }
@@ -6014,6 +6033,315 @@ function initRestoreCenter() {
         scheduleModal.classList.remove('is-visible');
         document.body.classList.remove('bl-modal-open');
     }
+
+    function populateScheduleFormContext(context, schedule) {
+        if (!context || !schedule) {
+            return;
+        }
+        if (context.id) {
+            context.id.value = schedule.id || '';
+        }
+        if (context.title) {
+            context.title.value = schedule.title || '';
+        }
+        if (context.type) {
+            context.type.value = schedule.type || 'backup';
+        }
+        if (context.period) {
+            context.period.value = schedule.period || 'daily';
+        }
+        if (context.time) {
+            context.time.value = schedule.time || '00:00';
+        }
+        if (context.retain) {
+            context.retain.value = schedule.retain || 5;
+        }
+        if (context.maxAge) {
+            context.maxAge.value = schedule.max_age || 30;
+        }
+        if (context.notify) {
+            context.notify.value = schedule.notify || '';
+        }
+        if (context.status) {
+            context.status.checked = schedule.status !== 'disabled';
+        }
+    }
+
+    function createInlineLabel(text, control) {
+        var label = document.createElement('label');
+        label.className = 'bl-form-control';
+        var span = document.createElement('span');
+        span.textContent = text;
+        label.appendChild(span);
+        label.appendChild(control);
+        return label;
+    }
+
+    function createInlineInput(type, field, value, extra) {
+        var input = document.createElement('input');
+        input.type = type;
+        input.setAttribute('data-field', field);
+        if (typeof value !== 'undefined' && value !== null) {
+            input.value = value;
+        }
+        if (extra) {
+            Object.keys(extra).forEach(function (key) {
+                input.setAttribute(key, extra[key]);
+            });
+        }
+        return input;
+    }
+
+    function createInlineSelect(field, options, selected) {
+        var select = document.createElement('select');
+        select.setAttribute('data-field', field);
+        options.forEach(function (option) {
+            var opt = document.createElement('option');
+            opt.value = option.value;
+            opt.textContent = option.label;
+            if (selected === option.value) {
+                opt.selected = true;
+            }
+            select.appendChild(opt);
+        });
+        return select;
+    }
+
+    function buildInlineScheduleEditRow(schedule) {
+        var tr = document.createElement('tr');
+        tr.className = 'bl-schedule-inline-edit-row';
+        tr.setAttribute('data-edit-for', String(schedule.id));
+
+        var td = document.createElement('td');
+        td.colSpan = 8;
+
+        var panel = document.createElement('div');
+        panel.className = 'bl-schedule-inline-editor';
+
+        var heading = document.createElement('p');
+        heading.className = 'bl-schedule-inline-editor__title';
+        heading.textContent = getString('scheduleInlineEditTitle', 'Edit schedule') + ': ' + (schedule.title || '');
+        panel.appendChild(heading);
+
+        var form = document.createElement('form');
+        form.className = 'bl-schedule-inline-form';
+        form.setAttribute('data-schedule-id', String(schedule.id));
+
+        var hiddenId = createInlineInput('hidden', 'id', schedule.id);
+        form.appendChild(hiddenId);
+
+        var grid = document.createElement('div');
+        grid.className = 'bl-schedule-inline-grid';
+
+        grid.appendChild(createInlineLabel(
+            getString('scheduleFieldTitle', 'Title'),
+            createInlineInput('text', 'title', schedule.title || '', { required: 'required' })
+        ));
+        grid.appendChild(createInlineLabel(
+            getString('scheduleFieldType', 'Event type'),
+            createInlineSelect('type', [
+                { value: 'backup', label: getString('scheduleTypeBackup', 'Backup') },
+                { value: 'restore', label: getString('scheduleTypeRestore', 'Restore') }
+            ], schedule.type || 'backup')
+        ));
+        grid.appendChild(createInlineLabel(
+            getString('scheduleFieldPeriod', 'Schedule interval'),
+            createInlineSelect('period', [
+                { value: 'daily', label: getString('schedulePeriodDaily', 'Daily') },
+                { value: 'weekly', label: getString('schedulePeriodWeekly', 'Weekly') },
+                { value: 'monthly', label: getString('schedulePeriodMonthly', 'Monthly') }
+            ], schedule.period || 'weekly')
+        ));
+        grid.appendChild(createInlineLabel(
+            getString('scheduleFieldTime', 'Start time'),
+            createInlineInput('time', 'time', schedule.time || '02:00', { required: 'required' })
+        ));
+        grid.appendChild(createInlineLabel(
+            getString('scheduleFieldRetain', 'Keep the most recent (N) backups'),
+            createInlineInput('number', 'retain', schedule.retain || 5, { min: '1', step: '1' })
+        ));
+        grid.appendChild(createInlineLabel(
+            getString('scheduleFieldMaxAge', 'Remove backups older than (days)'),
+            createInlineInput('number', 'max_age', schedule.max_age || 30, { min: '0', step: '1' })
+        ));
+        grid.appendChild(createInlineLabel(
+            getString('scheduleFieldNotify', 'Notification email (optional)'),
+            createInlineInput('email', 'notify', schedule.notify || '', { placeholder: 'admin@example.com' })
+        ));
+
+        var statusLabel = document.createElement('label');
+        statusLabel.className = 'bl-form-control bl-toggle';
+        var statusSpan = document.createElement('span');
+        statusSpan.textContent = getString('scheduleFieldStatus', 'Status');
+        var statusInput = createInlineInput('checkbox', 'status', '');
+        statusInput.checked = schedule.status !== 'disabled';
+        statusLabel.appendChild(statusSpan);
+        statusLabel.appendChild(statusInput);
+        grid.appendChild(statusLabel);
+
+        form.appendChild(grid);
+
+        var actions = document.createElement('div');
+        actions.className = 'bl-schedule-inline-actions';
+        var saveBtn = document.createElement('button');
+        saveBtn.type = 'submit';
+        saveBtn.className = 'button button-primary';
+        saveBtn.textContent = getString('scheduleInlineSave', 'Save changes');
+        var cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'button button-secondary bl-schedule-inline-cancel';
+        cancelBtn.textContent = getString('scheduleInlineCancel', 'Cancel');
+        actions.appendChild(saveBtn);
+        actions.appendChild(cancelBtn);
+        form.appendChild(actions);
+
+        panel.appendChild(form);
+        td.appendChild(panel);
+        tr.appendChild(td);
+
+        form.addEventListener('submit', function (event) {
+            event.preventDefault();
+            var context = buildScheduleFormContext(form);
+            var payload = gatherScheduleForm(context);
+            if (!payload || !payload.title) {
+                showToast('⚠️ ' + getString('provideScheduleTitle', 'Please provide a schedule title.'), 'warning');
+                return;
+            }
+            ajaxRequest('museder_restoreone_update_schedule', {
+                id: schedule.id,
+                schedule: JSON.stringify(payload)
+            }).then(function (data) {
+                if (data.schedule) {
+                    upsertSchedule(data.schedule);
+                } else {
+                    fetchSchedules();
+                }
+                closeScheduleInlineEdit();
+                showToast('💾 ' + (strings.scheduleSaved || 'Schedule saved successfully.'), 'success');
+            }).catch(function (error) {
+                var message = (error && error.message) ? error.message : 'Unable to save schedule.';
+                showToast('⚠️ ' + message, 'warning');
+            });
+        });
+
+        cancelBtn.addEventListener('click', function () {
+            closeScheduleInlineEdit();
+        });
+
+        return tr;
+    }
+
+    function closeScheduleInlineEdit() {
+        var editRow = document.querySelector('.bl-schedule-inline-edit-row');
+        if (editRow) {
+            editRow.remove();
+        }
+        if (scheduleBody) {
+            var editingRows = scheduleBody.querySelectorAll('.bl-schedule-row--editing');
+            editingRows.forEach(function (row) {
+                row.classList.remove('bl-schedule-row--editing');
+            });
+        }
+        activeInlineEditId = null;
+    }
+
+    function findScheduleRowById(scheduleId) {
+        if (!scheduleBody) {
+            return null;
+        }
+        var normalizedId = String(scheduleId);
+        var rows = scheduleBody.querySelectorAll('.bl-schedule-row[data-schedule-id]');
+        for (var i = 0; i < rows.length; i++) {
+            if (rows[i].getAttribute('data-schedule-id') === normalizedId) {
+                return rows[i];
+            }
+        }
+        return null;
+    }
+
+    function openScheduleInlineEdit(schedule) {
+        if (!schedule || !schedule.id || !scheduleBody) {
+            return;
+        }
+        closeScheduleModal();
+        closeScheduleInlineEdit();
+
+        var dataRow = findScheduleRowById(schedule.id);
+        if (!dataRow) {
+            showToast('⚠️ ' + getString('scheduleNotFound', 'Schedule not found.'), 'warning');
+            return;
+        }
+
+        var editRow = buildInlineScheduleEditRow(schedule);
+        if (dataRow.nextSibling) {
+            scheduleBody.insertBefore(editRow, dataRow.nextSibling);
+        } else {
+            scheduleBody.appendChild(editRow);
+        }
+
+        dataRow.classList.add('bl-schedule-row--editing');
+        activeInlineEditId = String(schedule.id);
+
+        if (typeof editRow.scrollIntoView === 'function') {
+            editRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+    }
+
+    function resolveScheduleForEdit(scheduleId, callback) {
+        var normalizedId = String(scheduleId);
+        var found = findScheduleById(normalizedId);
+        if (!found) {
+            schedules.some(function (item) {
+                if (String(item.id) === normalizedId) {
+                    found = item;
+                    return true;
+                }
+                return false;
+            });
+        }
+        if (found) {
+            callback(found);
+            return;
+        }
+        ajaxRequest('museder_restoreone_fetch_schedules').then(function (data) {
+            schedules = data.schedules || [];
+            var match = findScheduleById(normalizedId);
+            if (!match) {
+                schedules.some(function (item) {
+                    if (String(item.id) === normalizedId) {
+                        match = item;
+                        return true;
+                    }
+                    return false;
+                });
+            }
+            callback(match || null);
+        }).catch(function () {
+            callback(null);
+        });
+    }
+
+    function handleEditScheduleClick(scheduleId) {
+        if (!scheduleId) {
+            return;
+        }
+        resolveScheduleForEdit(scheduleId, function (schedule) {
+            if (schedule) {
+                openScheduleInlineEdit(schedule);
+            } else if (typeof showToast === 'function') {
+                showToast('⚠️ ' + getString('scheduleNotFound', 'Schedule not found.'), 'warning');
+            }
+        });
+    }
+
+    window.musederRestoreoneScheduleUi = {
+        open: openScheduleModal,
+        openInline: openScheduleInlineEdit,
+        closeInline: closeScheduleInlineEdit,
+        edit: handleEditScheduleClick,
+        find: findScheduleById,
+        refresh: fetchSchedules
+    };
 
     function gatherScheduleForm(context) {
         if (!context) {
@@ -6047,9 +6375,10 @@ function initRestoreCenter() {
     }
 
     function findScheduleById(id) {
+        var normalizedId = String(id);
         var match = null;
         schedules.forEach(function (schedule) {
-            if (schedule.id === id) {
+            if (String(schedule.id) === normalizedId) {
                 match = schedule;
             }
         });
@@ -6341,6 +6670,12 @@ function initRestoreCenter() {
                 $menu[0].removeAttribute('open');
             }
 
+            var scheduleUi = window.musederRestoreoneScheduleUi;
+            if (scheduleUi && typeof scheduleUi.edit === 'function') {
+                scheduleUi.edit(scheduleId);
+                return;
+            }
+
             console.log('[Backup Lite] Calling backupLitePopulateScheduleForm, function available:', typeof backupLitePopulateScheduleForm === 'function');
             if (typeof backupLitePopulateScheduleForm === 'function') {
                 backupLitePopulateScheduleForm(scheduleId, $(this));
@@ -6502,79 +6837,13 @@ function initRestoreCenter() {
 
                     if (schedule) {
                         console.log('[Backup Lite] Found schedule:', schedule);
-                        // 1. Populate form fields
-                        var $form = jQuery('#bl-inline-schedule-form, #bl-schedule-form');
-                        if ($form.length === 0) {
-                            console.error('[Backup Lite] Schedule form not found');
+                        var scheduleUi = window.musederRestoreoneScheduleUi;
+                        if (scheduleUi && typeof scheduleUi.openInline === 'function') {
+                            scheduleUi.openInline(schedule);
                             return;
                         }
-
-                        // Set schedule ID
-                        $form.find('[data-field="id"]').val(scheduleId);
-                        $form.find('#bl-schedule-id').val(scheduleId);
-                        $form.find('input[name="schedule_id"]').val(scheduleId);
-
-                        // Set all form fields
-                        var $title = $form.find('[data-field="title"]');
-                        if ($title.length) {
-                            $title.val(schedule.title || '');
-                        }
-
-                        var $type = $form.find('[data-field="type"]');
-                        if ($type.length) {
-                            $type.val(schedule.type || schedule.event_type || 'backup');
-                        }
-
-                        var $period = $form.find('[data-field="period"]');
-                        if ($period.length) {
-                            $period.val(schedule.period || 'daily');
-                        }
-
-                        var $time = $form.find('[data-field="time"]');
-                        if ($time.length) {
-                            $time.val(schedule.time || '00:00');
-                        }
-
-                        var $retain = $form.find('[data-field="retain"]');
-                        if ($retain.length) {
-                            $retain.val(schedule.retain || schedule.keep_count || 5);
-                        }
-
-                        var $maxAge = $form.find('[data-field="max_age"]');
-                        if ($maxAge.length) {
-                            $maxAge.val(schedule.max_age || 30);
-                        }
-
-                        var $notify = $form.find('[data-field="notify"]');
-                        if ($notify.length) {
-                            $notify.val(schedule.notify || schedule.notification_email || '');
-                        }
-
-                        var $status = $form.find('[data-field="status"]');
-                        if ($status.length) {
-                            $status.prop('checked', schedule.status !== 'disabled');
-                        }
-
-                        // 2. Update submit button text
-                        var $submitBtn = $form.find('button[type="submit"]');
-                        if ($submitBtn.length) {
-                            var updateLabel = (window.musederRestoreoneSchedulesL10n && musederRestoreoneSchedulesL10n.updateSchedule) || 'Update Schedule';
-                            $submitBtn.data('original-label', $submitBtn.text());
-                            $submitBtn.text(updateLabel);
-                        }
-
-                        // 3. Scroll to form or open modal
-                        var $modal = jQuery('#bl-schedule-modal');
-                        if ($modal.length) {
-                            $modal.attr('aria-hidden', 'false').addClass('is-open');
-                            jQuery('body').addClass('bl-modal-open');
-                        } else {
-                            var $inlineForm = jQuery('#bl-inline-schedule-form');
-                            if ($inlineForm.length) {
-                                jQuery('html, body').animate({
-                                    scrollTop: $inlineForm.offset().top - 40
-                                }, 300);
-                            }
+                        if (typeof handleEditScheduleClick === 'function') {
+                            handleEditScheduleClick(scheduleId);
                         }
                     } else {
                         console.error('[Backup Lite] Schedule not found:', scheduleId);
@@ -6690,7 +6959,7 @@ function initRestoreCenter() {
                         schedules = data.schedules || [];
                         var found = findScheduleById(scheduleId);
                         if (found) {
-                            openScheduleModal(found);
+                            openScheduleInlineEdit(found);
                         } else {
                             showToast('⚠️ ' + getString('scheduleNotFound', 'Schedule not found.'), 'warning');
                         }
@@ -6699,7 +6968,7 @@ function initRestoreCenter() {
                         showToast('⚠️ ' + message, 'warning');
                     });
                 } else if (scheduleData) {
-                    openScheduleModal(scheduleData);
+                    openScheduleInlineEdit(scheduleData);
                 }
                 return;
             }
@@ -6826,12 +7095,58 @@ function initRestoreCenter() {
         return !!(el && el.checked);
     }
 
+    function getStorageSubdirValue() {
+        var select = document.getElementById('bl-setting-storage-subdir');
+        var newInput = document.getElementById('bl-setting-storage-new');
+        if (!select) {
+            return 'backups';
+        }
+        if (select.value === '__new__') {
+            return newInput ? newInput.value.trim() : '';
+        }
+        return select.value || 'backups';
+    }
+
+    function updateStoragePathPreview() {
+        var form = document.getElementById('bl-settings-form');
+        var pathEl = document.getElementById('bl-setting-storage-path');
+        if (!form || !pathEl) {
+            return;
+        }
+        var root = form.getAttribute('data-storage-root') || '';
+        var subdir = getStorageSubdirValue().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+        if (!subdir) {
+            subdir = 'backups';
+        }
+        pathEl.textContent = root.replace(/\/$/, '') + '/' + subdir;
+    }
+
+    function toggleStorageNewFolderField() {
+        var select = document.getElementById('bl-setting-storage-subdir');
+        var wrap = document.getElementById('bl-setting-storage-new-wrap');
+        if (!select || !wrap) {
+            return;
+        }
+        var showNew = select.value === '__new__';
+        wrap.hidden = !showNew;
+        updateStoragePathPreview();
+    }
+
     function gatherSettings() {
+        var smartThresholdEl = document.getElementById('bl-setting-smart-threshold');
+        var smartThreshold = smartThresholdEl ? parseInt(smartThresholdEl.value, 10) : 50000;
+        if (isNaN(smartThreshold)) {
+            smartThreshold = 50000;
+        }
+
         var settings = {
-            backup_directory: document.getElementById('bl-setting-backup-dir') ? document.getElementById('bl-setting-backup-dir').value.trim() : '',
+            backup_storage_subdir: getStorageSubdirValue(),
             notification_email: document.getElementById('bl-setting-notify-email') ? document.getElementById('bl-setting-notify-email').value.trim() : '',
             min_role: document.getElementById('bl-setting-role') ? document.getElementById('bl-setting-role').value : 'administrator',
-            ui_theme: document.getElementById('bl-setting-theme-mode') ? document.getElementById('bl-setting-theme-mode').value : 'auto',
+            backup_mode_default: document.getElementById('bl-setting-backup-mode-default') ? document.getElementById('bl-setting-backup-mode-default').value : 'auto',
+            backup_smart_exclude_default: document.getElementById('bl-setting-smart-exclude-default') ? document.getElementById('bl-setting-smart-exclude-default').value : 'auto',
+            backup_smart_exclude_threshold: smartThreshold,
+            backup_custom_excludes: document.getElementById('bl-setting-custom-excludes') ? document.getElementById('bl-setting-custom-excludes').value : '',
             feature_restore_center_v2: getCheckboxValue('bl-feature-restore-center'),
             feature_ui_animation: getCheckboxValue('bl-feature-ui-animation'),
             feature_extended_log: getCheckboxValue('bl-feature-extended-log'),
@@ -6847,6 +7162,9 @@ function initRestoreCenter() {
             ajaxRequest('museder_restoreone_save_settings', { settings: JSON.stringify(payload) }).then(function () {
                 showSettingsMessage(strings.settingsSaved || 'Settings saved successfully.', 'success');
                 showToast('⚙️ ' + (strings.settingsSaved || 'Settings saved successfully.'), 'success');
+                window.setTimeout(function () {
+                    window.location.reload();
+                }, 600);
             }).catch(function (error) {
                 var message = (error && error.message) ? error.message : 'Unable to save settings.';
                 showSettingsMessage(message, 'error');
@@ -6858,14 +7176,38 @@ function initRestoreCenter() {
                 return;
             }
             var s = data.settings;
-            var backupDir = document.getElementById('bl-setting-backup-dir');
+            var storageSelect = document.getElementById('bl-setting-storage-subdir');
+            var storageNew = document.getElementById('bl-setting-storage-new');
             var email = document.getElementById('bl-setting-notify-email');
             var role = document.getElementById('bl-setting-role');
-            var theme = document.getElementById('bl-setting-theme-mode');
-            if (backupDir) backupDir.value = s.backup_directory || backupDir.value;
+            var backupMode = document.getElementById('bl-setting-backup-mode-default');
+            var smartExclude = document.getElementById('bl-setting-smart-exclude-default');
+            var smartThreshold = document.getElementById('bl-setting-smart-threshold');
+            var customExcludes = document.getElementById('bl-setting-custom-excludes');
+
+            if (storageSelect && s.backup_storage_subdir) {
+                var subdir = s.backup_storage_subdir;
+                var hasOption = Array.prototype.some.call(storageSelect.options, function (opt) {
+                    return opt.value === subdir;
+                });
+                if (!hasOption && subdir !== '__new__') {
+                    var customOption = document.createElement('option');
+                    customOption.value = subdir;
+                    customOption.textContent = subdir;
+                    storageSelect.insertBefore(customOption, storageSelect.querySelector('option[value="__new__"]'));
+                }
+                storageSelect.value = subdir;
+            }
+            if (storageNew) {
+                storageNew.value = '';
+            }
+            toggleStorageNewFolderField();
             if (email) email.value = s.notification_email || email.value;
             if (role) role.value = s.min_role || role.value;
-            if (theme && s.ui_theme) theme.value = s.ui_theme;
+            if (backupMode && s.backup_mode_default) backupMode.value = s.backup_mode_default;
+            if (smartExclude && s.backup_smart_exclude_default) smartExclude.value = s.backup_smart_exclude_default;
+            if (smartThreshold && s.backup_smart_exclude_threshold) smartThreshold.value = s.backup_smart_exclude_threshold;
+            if (customExcludes && typeof s.backup_custom_excludes === 'string') customExcludes.value = s.backup_custom_excludes;
 
             var restoreToggle = document.getElementById('bl-feature-restore-center');
             if (restoreToggle) restoreToggle.checked = !!s.feature_restore_center_v2;
@@ -6876,6 +7218,16 @@ function initRestoreCenter() {
         }).catch(function () {
             // ignore fetch errors
         });
+
+        var storageSelect = document.getElementById('bl-setting-storage-subdir');
+        var storageNewInput = document.getElementById('bl-setting-storage-new');
+        if (storageSelect) {
+            storageSelect.addEventListener('change', toggleStorageNewFolderField);
+        }
+        if (storageNewInput) {
+            storageNewInput.addEventListener('input', updateStoragePathPreview);
+        }
+        toggleStorageNewFolderField();
     }
 
     // Feature Toggles UI removed per request; live preview wiring disabled.
@@ -7095,15 +7447,15 @@ function initRestoreCenter() {
                             throw new Error('backupLiteStartSchedule function not available');
                         }
                     } else if (actionType === 'edit') {
-                        if (typeof window.backupLitePopulateScheduleForm === 'function') {
-                            console.log('[Backup Lite] Calling backupLitePopulateScheduleForm with ID:', btnId);
-                            // For edit, create a dummy jQuery object for the trigger parameter
+                        if (window.musederRestoreoneScheduleUi && typeof window.musederRestoreoneScheduleUi.edit === 'function') {
+                            window.musederRestoreoneScheduleUi.edit(btnId);
+                        } else if (typeof window.backupLitePopulateScheduleForm === 'function') {
                             var $dummyTrigger = jQuery('<div>');
                             $dummyTrigger.data('processing', false);
                             window.backupLitePopulateScheduleForm(btnId, $dummyTrigger);
                         } else {
-                            console.error('[Backup Lite] backupLitePopulateScheduleForm not available or not a function');
-                            throw new Error('backupLitePopulateScheduleForm function not available');
+                            console.error('[Backup Lite] Schedule edit handler not available');
+                            throw new Error('Schedule edit handler not available');
                         }
                     } else if (actionType === 'delete') {
                         if (typeof window.backupLiteDeleteSchedule === 'function') {

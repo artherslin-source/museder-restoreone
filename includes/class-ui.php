@@ -267,11 +267,17 @@ class Museder_Restoreone_UI {
             MUSEDER_RESTOREONE_VERSION
         );
 
+        $theme_css_file = MUSEDER_RESTOREONE_PATH . 'assets/css/backup-lite-theme.css';
+        $theme_css_ver  = MUSEDER_RESTOREONE_VERSION;
+        if ( is_readable( $theme_css_file ) ) {
+            $theme_css_ver .= '.' . (string) filemtime( $theme_css_file );
+        }
+
         wp_enqueue_style(
             'museder-restoreone-theme',
             MUSEDER_RESTOREONE_URL . 'assets/css/backup-lite-theme.css',
             [ 'museder-restoreone-ui' ],
-            MUSEDER_RESTOREONE_VERSION
+            $theme_css_ver
         );
 
         wp_enqueue_style(
@@ -289,11 +295,17 @@ class Museder_Restoreone_UI {
             true
         );
 
+        $admin_js_file = MUSEDER_RESTOREONE_PATH . 'assets/js/admin.js';
+        $admin_js_ver  = MUSEDER_RESTOREONE_VERSION;
+        if ( is_readable( $admin_js_file ) ) {
+            $admin_js_ver .= '.' . (string) filemtime( $admin_js_file );
+        }
+
         wp_enqueue_script(
             'museder-restoreone-admin',
             MUSEDER_RESTOREONE_URL . 'assets/js/admin.js',
             [ 'jquery', 'toastify' ],
-            MUSEDER_RESTOREONE_VERSION,
+            $admin_js_ver,
             true
         );
 
@@ -475,6 +487,9 @@ class Museder_Restoreone_UI {
                 'testEmailSuccess'=> __( 'Test email sent successfully.', 'museder-restoreone' ),
                 'copySuccess'     => __( 'Copied to clipboard', 'museder-restoreone' ),
                 'noSchedules'     => __( 'No schedules configured yet.', 'museder-restoreone' ),
+                'scheduleEmptyTitle' => __( 'No schedules yet', 'museder-restoreone' ),
+                'scheduleEmptyText'  => __( 'Create your first automated backup job. You can set frequency, retention, and optional email alerts.', 'museder-restoreone' ),
+                'addFirstSchedule'   => __( 'Add your first schedule', 'museder-restoreone' ),
                 'scheduleResultSuccess' => __( 'Success', 'museder-restoreone' ),
                 'scheduleResultFailed'  => __( 'Failed', 'museder-restoreone' ),
                 'scheduleResultPending' => __( 'Pending', 'museder-restoreone' ),
@@ -1632,7 +1647,20 @@ class Museder_Restoreone_UI {
 
         // Add inline styles for schedules page.
         if ( in_array( $current_page, [ 'museder-restoreone-schedules' ], true ) ) {
+            $schedules_inline_css = '
+.backup-lite-admin .bl-schedule-inline-form .bl-schedule-inline-actions {
+    display: flex !important;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 16px !important;
+    margin-top: 16px;
+}
+.backup-lite-admin .bl-schedule-inline-form .bl-schedule-inline-actions .bl-schedule-inline-cancel {
+    margin-inline-start: 16px !important;
+}';
             wp_add_inline_style( 'museder-restoreone-theme', $pro_page_css );
+            wp_add_inline_style( 'museder-restoreone-theme', $schedules_inline_css );
             wp_add_inline_script( 'museder-restoreone-admin', $notice_removal_js, 'after' );
         }
     }

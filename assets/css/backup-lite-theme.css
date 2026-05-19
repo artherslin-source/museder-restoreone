@@ -385,6 +385,117 @@ body.wp-admin #wpcontent {
     font-weight: 700;
 }
 
+.schedule-hero--compact {
+    padding: 24px;
+}
+
+.schedule-hero--compact .schedule-hero-header {
+    justify-content: flex-start;
+}
+
+.schedule-hero--compact .schedule-hero-header .badge {
+    display: inline-block;
+    margin-bottom: 8px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.16);
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.bl-schedules-panel-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+}
+
+.bl-schedules-panel-header h2 {
+    margin: 0 0 6px;
+}
+
+.bl-schedules-empty {
+    text-align: center;
+    padding: 36px 20px;
+}
+
+.bl-schedules-empty__title {
+    margin: 0 0 8px;
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-dark);
+}
+
+.bl-schedules-empty__text {
+    margin: 0 auto 18px;
+    max-width: 520px;
+    color: var(--text-muted);
+}
+
+.bl-schedules-empty-row td {
+    border: 0;
+    background: transparent !important;
+}
+
+.bl-schedule-row--editing {
+    background: rgba(59, 130, 246, 0.08) !important;
+}
+
+.bl-schedule-actions-cell {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.bl-schedule-inline-edit-row td {
+    padding: 0 !important;
+    border-top: 0;
+    background: rgba(248, 250, 252, 0.95);
+}
+
+.bl-schedule-inline-editor {
+    padding: 16px 18px 18px;
+    border-top: 2px solid rgba(59, 130, 246, 0.35);
+}
+
+.bl-schedule-inline-editor__title {
+    margin: 0 0 12px;
+    font-weight: 600;
+    color: var(--text-dark);
+}
+
+.bl-schedule-inline-grid {
+    display: grid;
+    gap: 14px;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+
+.backup-lite-admin .bl-schedule-inline-form .bl-schedule-inline-actions {
+    display: flex !important;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 16px !important;
+    margin-top: 16px;
+}
+
+.backup-lite-admin .bl-schedule-inline-form .bl-schedule-inline-actions .button {
+    margin: 0 !important;
+    float: none !important;
+}
+
+.backup-lite-admin .bl-schedule-inline-form .bl-schedule-inline-actions .bl-schedule-inline-cancel {
+    margin-inline-start: 16px !important;
+}
+
+[data-bl-theme="dark"] .bl-schedule-inline-edit-row td {
+    background: rgba(15, 23, 42, 0.55);
+}
+
 .backup-lite-table,
 .museder-restoreone-table,
 .backup-lite-admin .bl-table {
@@ -545,6 +656,52 @@ body.bl-restore-v2-off .restore-stepper {
     justify-content: flex-end;
     gap: 10px;
     margin-top: 20px;
+}
+
+.settings-actions--inline {
+    margin-top: 0;
+    padding-top: 4px;
+}
+
+.settings-actions--footer {
+    margin-top: 8px;
+}
+
+.bl-settings-storage-panel {
+    display: grid;
+    gap: 16px;
+    margin-top: 18px;
+}
+
+.bl-settings-storage-meta {
+    display: grid;
+    gap: 12px;
+    padding: 14px 16px;
+    border-radius: 12px;
+    background: rgba(248, 250, 252, 0.9);
+    border: 1px solid rgba(148, 163, 184, 0.25);
+}
+
+.bl-settings-storage-path code {
+    display: block;
+    margin-top: 6px;
+    word-break: break-all;
+    font-size: 12px;
+}
+
+.bl-settings-storage-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.bl-form-control--full {
+    grid-column: 1 / -1;
+}
+
+[data-bl-theme="dark"] .bl-settings-storage-meta {
+    background: rgba(15, 23, 42, 0.45);
+    border-color: rgba(148, 163, 184, 0.2);
 }
 
 
