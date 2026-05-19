@@ -294,6 +294,11 @@ class Museder_Restoreone_Restore {
             return $result;
         }
 
+        // Preserve current admin session state before DB tables are replaced.
+        // After import, wp_usermeta is rebuilt from backup data, destroying the
+        // active admin's session tokens and causing forced logout.
+        $preserved_session = self::preserve_session_before_import();
+
         // Ensure dbDelta exists for schema creation (core upgrade API), via centralized path resolution.
         if ( ! function_exists( 'dbDelta' ) ) {
             $upgrade = function_exists( 'museder_restoreone_get_core_admin_include_path' ) ? museder_restoreone_get_core_admin_include_path( 'upgrade.php' ) : '';
@@ -464,6 +469,9 @@ class Museder_Restoreone_Restore {
         // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fgets, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
 
         self::restore_database_constraints();
+
+        // Re-inject the preserved session so the admin stays logged in.
+        self::restore_session_after_import( $preserved_session );
 
         if ( $decoded_lines <= 0 || $schemas_imported <= 0 ) {
             $result['code']    = 'db_format_invalid';
@@ -1787,6 +1795,114 @@ class Museder_Restoreone_Restore {
     }
     
     // NOTE: Automatic SQL dump import (database.sql) has been removed for WP.org submission compliance.
+
+    /**
+     * Snapshot critical runtime state before DB import replaces all tables.
+     *
+     * Captures the current admin's WP session tokens and plugin-specific
+     * options (restore lock, active job, cron schedule) so they can be
+     * re-injected after import.  This follows the same pattern used by
+     * All-in-One WP Migration (secret_key save/restore around import).
+     *
+     * @return array Opaque state blob for restore_session_after_import().
+     */
+    private static function preserve_session_before_import() {
+        $state = [
+            'user_id'        => function_exists( 'get_current_user_id' ) ? get_current_user_id() : 0,
+            'session_tokens' => [],
+            'cron'           => get_option( 'cron' ),
+            'restore_lock'   => get_option( 'museder_restoreone_restore_lock' ),
+            'active_job'     => get_option( 'museder_restoreone_restore_service_active_job_id' ),
+        ];
+
+        if ( $state['user_id'] > 0 && class_exists( 'WP_Session_Tokens' ) ) {
+            $manager = WP_Session_Tokens::get_instance( $state['user_id'] );
+            $state['session_tokens'] = $manager->get_all();
+        }
+
+        return $state;
+    }
+
+    /**
+     * Re-inject preserved runtime state after DB import.
+     *
+     * Because import_database_from_ndjson() DROP+rebuilds every table
+     * (including wp_usermeta and wp_options), the current admin's session
+     * tokens and the plugin's cron/lock state are destroyed.
+     * This method writes them back so:
+     *  - The admin is not forced to re-login.
+     *  - WP-Cron can still fire the next restore slice.
+     *  - The restore lock remains valid.
+     *
+     * @param array $state Return value from preserve_session_before_import().
+     */
+    private static function restore_session_after_import( array $state ) {
+        global $wpdb;
+
+        // 1. Flush object cache so subsequent reads hit the new DB.
+        if ( function_exists( 'wp_cache_flush' ) ) {
+            wp_cache_flush();
+        }
+
+        // 2. Re-inject session tokens for the admin who triggered the restore.
+        $user_id = isset( $state['user_id'] ) ? (int) $state['user_id'] : 0;
+        if ( $user_id > 0 && ! empty( $state['session_tokens'] ) ) {
+            $serialized = maybe_serialize( $state['session_tokens'] );
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+            $updated = $wpdb->update(
+                $wpdb->usermeta,
+                [ 'meta_value' => $serialized ],
+                [
+                    'user_id'  => $user_id,
+                    'meta_key' => 'session_tokens', // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_key
+                ]
+            );
+            if ( 0 === (int) $wpdb->rows_affected ) {
+                // Row may not exist yet (backup had different user IDs).
+                // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+                $wpdb->insert(
+                    $wpdb->usermeta,
+                    [
+                        'user_id'    => $user_id,
+                        'meta_key'   => 'session_tokens', // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_key
+                        'meta_value' => $serialized, // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_value
+                    ]
+                );
+            }
+
+            if ( function_exists( 'museder_restoreone_log' ) ) {
+                museder_restoreone_log( 'info', 'Session tokens re-injected after DB import.', [ 'user_id' => $user_id ] );
+            }
+        }
+
+        // 3. Restore cron schedule.
+        if ( ! empty( $state['cron'] ) ) {
+            update_option( 'cron', $state['cron'] );
+        }
+
+        // 4. Restore the plugin's restore lock.
+        if ( ! empty( $state['restore_lock'] ) ) {
+            update_option( 'museder_restoreone_restore_lock', $state['restore_lock'], false );
+            if ( function_exists( 'set_site_transient' ) ) {
+                set_site_transient( 'museder_restoreone_restore_lock', $state['restore_lock'], 30 * MINUTE_IN_SECONDS );
+            }
+        }
+
+        // 5. Restore active job pointer.
+        if ( ! empty( $state['active_job'] ) ) {
+            update_option( 'museder_restoreone_restore_service_active_job_id', $state['active_job'], false );
+        }
+
+        // 6. Restore the file-based restore token (Fix 2 integration point).
+        $token_file = WP_CONTENT_DIR . '/uploads/museder-restoreone/temp/.restore-auth-token';
+        if ( file_exists( $token_file ) ) {
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_get_contents
+            $token_data = json_decode( file_get_contents( $token_file ), true );
+            if ( is_array( $token_data ) ) {
+                update_option( 'museder_restoreone_restore_token', $token_data, false );
+            }
+        }
+    }
 
     private static function run_database_primers() {
         global $wpdb;

@@ -383,6 +383,13 @@ class Museder_Restoreone_Restore_Service {
             // Track as active restore job (for UI bootstrap / polling recovery).
             update_option( self::ACTIVE_JOB_OPTION, $job_id, false );
 
+            // Generate a file-based restore token that survives DB import.
+            $restore_token = '';
+            if ( class_exists( 'Museder_Restoreone_Restore_Token' ) ) {
+                $restore_token = Museder_Restoreone_Restore_Token::generate( $job_id );
+            }
+            $meta['restore_token'] = $restore_token;
+
             // Schedule background processing (time-sliced).
             // De-duplicate any existing scheduled ticks for this job id.
             if ( function_exists( 'wp_clear_scheduled_hook' ) ) {
@@ -395,6 +402,7 @@ class Museder_Restoreone_Restore_Service {
                 'ok'                 => true,
                 'message'            => __( 'Restore started. You can monitor progress on this page.', 'museder-restoreone' ),
                 'rollback_available' => ! empty( $pre_backup ) && ! empty( $pre_backup['file'] ),
+                'restore_token'      => $restore_token,
             ];
         } catch ( Exception $e ) {
             museder_restoreone_log( 'error', 'Restore execution start failed.', [ 'job_id' => $job_id, 'error' => $e->getMessage() ] );
@@ -455,6 +463,9 @@ class Museder_Restoreone_Restore_Service {
                 $meta['completed']  = true;
                 $meta['updated_at'] = current_time( 'mysql' );
                 self::write_job_meta( $job_id, $meta );
+                if ( class_exists( 'Museder_Restoreone_Restore_Token' ) ) {
+                    Museder_Restoreone_Restore_Token::revoke();
+                }
                 Museder_Restoreone_Restore_Lock::release();
 
                 // Restore History: mark cancelled.
@@ -670,6 +681,10 @@ class Museder_Restoreone_Restore_Service {
             // Ignore.
         }
 
+        if ( class_exists( 'Museder_Restoreone_Restore_Token' ) ) {
+            Museder_Restoreone_Restore_Token::revoke();
+        }
+
         Museder_Restoreone_Restore_Lock::release();
 
         return [ 'ok' => true, 'message' => __( 'Restore cancelled.', 'museder-restoreone' ) ];
@@ -688,6 +703,54 @@ class Museder_Restoreone_Restore_Service {
         // Do not include WordPress core files directly. Best-effort: nudge wp-cron via loopback request.
         if ( function_exists( 'museder_restoreone_nudge_wp_cron' ) ) {
             museder_restoreone_nudge_wp_cron();
+        }
+    }
+
+    /**
+     * Recover runtime state after DB import replaced wp_options.
+     *
+     * The NDJSON import DROP+rebuilds wp_options, which destroys:
+     * - WP-Cron schedule for this job
+     * - Restore lock (option + transient)
+     * - Active job pointer
+     *
+     * This method re-writes them so the next cron tick can proceed.
+     *
+     * @param string $job_id Current restore job ID.
+     */
+    private static function post_db_import_recovery( $job_id ) {
+        // Flush object cache so update_option writes to the real DB.
+        if ( function_exists( 'wp_cache_flush' ) ) {
+            wp_cache_flush();
+        }
+
+        // Re-establish the restore lock.
+        $lock_payload = [
+            'job_id'      => $job_id,
+            'acquired_at' => time(),
+        ];
+        update_option( Museder_Restoreone_Restore_Lock::OPTION_KEY, $lock_payload, false );
+        if ( function_exists( 'set_site_transient' ) ) {
+            set_site_transient(
+                Museder_Restoreone_Restore_Lock::TRANSIENT_KEY,
+                $lock_payload,
+                30 * MINUTE_IN_SECONDS
+            );
+        }
+
+        // Re-establish active job pointer.
+        update_option( self::ACTIVE_JOB_OPTION, $job_id, false );
+
+        // Ensure cron is scheduled for the next tick.
+        if ( ! wp_next_scheduled( self::CRON_HOOK_PROCESS, [ $job_id ] ) ) {
+            wp_schedule_single_event( time() + 2, self::CRON_HOOK_PROCESS, [ $job_id ] );
+        }
+
+        // Nudge cron.
+        self::spawn_cron();
+
+        if ( function_exists( 'museder_restoreone_log' ) ) {
+            museder_restoreone_log( 'info', 'Post-DB-import recovery: lock, active job, and cron re-established.', [ 'job_id' => $job_id ] );
         }
     }
 
@@ -804,6 +867,10 @@ class Museder_Restoreone_Restore_Service {
         // New database format (database.ndjson) is imported directly by Museder_Restoreone_Restore.
         // Legacy SQL backups are manual-only (Museder_Restoreone_Restore::import_database returns manual_db_required).
         $result = Museder_Restoreone_Restore::import_database( $db_file );
+
+        // DB import replaces wp_options (cron schedule, lock, active job pointer).
+        // Force-recover these runtime values so the restore pipeline continues.
+        self::post_db_import_recovery( $job_id );
 
         // Manual DB fallback: allow file restore to proceed when backup format is SQL.
         if ( empty( $result['success'] ) && isset( $result['code'] ) && 'manual_db_required' === (string) $result['code'] ) {
@@ -1888,6 +1955,10 @@ class Museder_Restoreone_Restore_Service {
                                 'restore_duration_seconds'=> $duration,
                             ]
                         );
+                    }
+
+                    if ( class_exists( 'Museder_Restoreone_Restore_Token' ) ) {
+                        Museder_Restoreone_Restore_Token::revoke();
                     }
 
             Museder_Restoreone_Restore_Lock::release();
