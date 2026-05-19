@@ -9,7 +9,7 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-class Backup_Lite_Dashboard {
+class Museder_Restoreone_Dashboard {
 
     /**
      * Placeholder bootstrap (reserved for future hooks).
@@ -25,7 +25,7 @@ class Backup_Lite_Dashboard {
      * @return array<int,array>
      */
     public static function get_recent_backups( $limit = 3 ) {
-        $events = Backup_Lite_Log_Handler::get_recent_events( 'backup_result', $limit );
+        $events = Museder_Restoreone_Log_Handler::get_recent_events( 'backup_result', $limit );
         $items  = [];
 
         foreach ( $events as $event ) {
@@ -51,7 +51,7 @@ class Backup_Lite_Dashboard {
      * @return array<string,mixed>
      */
     public static function get_schedule_overview() {
-        $schedules = Backup_Lite_Schedule_Handler::list_schedules();
+        $schedules = Museder_Restoreone_Schedule_Handler::list_schedules();
 
         if ( empty( $schedules ) ) {
             return [
@@ -126,12 +126,12 @@ class Backup_Lite_Dashboard {
             'next_run'    => $next_timestamp,
             // Use same format as Schedules list: Y-m-d H:i
             'next_run_human' => $next_timestamp > 0
-                ? backup_lite_format_local_time( $next_timestamp, 'Y-m-d H:i' )
+                ? museder_restoreone_format_local_time( $next_timestamp, 'Y-m-d H:i' )
                 : __( 'Not scheduled', 'museder-restoreone' ),
             'countdown'   => $countdown,
             'last_result' => $next['last_result'] ?? '',
             'last_run'    => $last_run_timestamp > 0
-                ? backup_lite_format_local_time( $last_run_timestamp, 'Y-m-d H:i' )
+                ? museder_restoreone_format_local_time( $last_run_timestamp, 'Y-m-d H:i' )
                 : __( 'Never', 'museder-restoreone' ),
             'last_run_timestamp' => $last_run_timestamp,
         ];
@@ -144,7 +144,7 @@ class Backup_Lite_Dashboard {
      * @return array{success:int,failed:int,pending:int}
      */
     public static function get_activity_stats( $days = 7 ) {
-        return Backup_Lite_Log_Handler::get_activity_totals( $days );
+        return Museder_Restoreone_Log_Handler::get_activity_totals( $days );
     }
 
     /**
@@ -171,7 +171,7 @@ class Backup_Lite_Dashboard {
         }
 
         // @plugin-check: wp_date with local timezone - converts UTC timestamp to site's local timezone
-        return backup_lite_format_local_time( $time );
+        return museder_restoreone_format_local_time( $time );
     }
 
     /**

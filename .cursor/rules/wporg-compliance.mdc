@@ -1,0 +1,18 @@
+---
+description: Always apply Museder RestoreOne WordPress.org compliance and review-history rules.
+alwaysApply: true
+---
+
+# Museder RestoreOne WordPress.org Compliance
+
+Before modifying or reviewing this project, apply `.cursor/skills/museder-wporg-compliance/SKILL.md` and `docs/WORDPRESS_ORG_DEVELOPMENT_GUIDE.md`.
+
+Hard requirements:
+
+- Lite WordPress.org package must not contain locked local PRO functionality, license gates, trialware, quota/time restrictions, or `museder-restoreone-pro/`.
+- New identifiers must use `museder_restoreone_`, `MUSEDER_RESTOREONE_`, `Museder_Restoreone_`, `museder-restoreone/v*`, or `MusederRestoreOne*`; Add-on code must include `pro` / `addon` distinction.
+- Every sensitive AJAX/REST/form action must verify capability, verify nonce correctly, sanitize/validate input, and escape output.
+- Use WordPress APIs for paths, HTTP, enqueue, and uploads; writable data belongs under `wp_upload_dir()/museder-restoreone`.
+- Release packages must exclude docs, tools, logs, zip files, AI outputs, Git metadata, GitHub workflow files, review emails, and other development-only artifacts.
+- Before release-facing changes, run or request Plugin Check and clean-install `WP_DEBUG` smoke tests.
+

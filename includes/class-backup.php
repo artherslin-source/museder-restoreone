@@ -2,7 +2,7 @@
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-class Backup_Lite_Backup {
+class Museder_Restoreone_Backup {
 
     const CHUNK_SIZE = 500;
     // AI1WM-like: time-slice long preparing operations (DB export / manifest scan) to avoid timeouts.
@@ -62,12 +62,12 @@ class Backup_Lite_Backup {
      * @return array{success:bool,message:string,file?:string,url?:string}
      */
     public static function backup_site( $options = [] ) {
-        $backup_dir = trailingslashit( backup_lite_get_backup_dir() );
+        $backup_dir = trailingslashit( museder_restoreone_get_backup_dir() );
 
         self::optimize_runtime_environment();
 
         if ( ! self::ensure_writable_directory( $backup_dir ) ) {
-            $log = backup_lite_log( 'error', 'Backup directory is not writable.', [ 'dir' => $backup_dir ] );
+            $log = museder_restoreone_log( 'error', 'Backup directory is not writable.', [ 'dir' => $backup_dir ] );
             self::record_backup_event( 'failed', [
                 'message' => __( 'Backup directory is not writable.', 'museder-restoreone' ),
             ] );
@@ -86,33 +86,32 @@ class Backup_Lite_Backup {
         // Sanitize domain name for filename
         $site_url = sanitize_file_name( $site_url );
         
-        $date_time = backup_lite_local_time( 'YmdHis' );
+        $date_time = museder_restoreone_local_time( 'YmdHis' );
         $random_code = wp_generate_password( 6, false, false );
         
         $label_suffix = '';
-        // PRO: Backup label
-        if ( ! empty( $options['label'] ) && Backup_Lite_Pro::is_pro_active() ) {
+        if ( ! empty( $options['label'] ) ) {
             $label_suffix = '-' . sanitize_file_name( $options['label'] );
         }
         
         $archive_name = sprintf( '%s-%s-%s%s.zip', $site_url, $date_time, $random_code, $label_suffix );
         $archive_path = $backup_dir . $archive_name;
 
-        $temp_dir = backup_lite_create_temp_dir( 'build' );
+        $temp_dir = museder_restoreone_create_temp_dir( 'build' );
         $sql_path = trailingslashit( $temp_dir ) . 'database.ndjson';
         $meta_path = trailingslashit( $temp_dir ) . 'meta.json';
 
         // Record backup start time (UTC timestamp)
         $backup_started_at = time();
 
-        $log = backup_lite_log( 'info', 'Site backup started.', [
+        $log = museder_restoreone_log( 'info', 'Site backup started.', [
             'archive' => $archive_path,
-            'method'  => backup_lite_can_use_ziparchive() ? 'ZipArchive' : 'PclZip',
+            'method'  => museder_restoreone_can_use_ziparchive() ? 'ZipArchive' : 'PclZip',
         ] );
 
         if ( ! self::generate_database_dump( $sql_path, $options ) ) {
-            backup_lite_log( 'error', 'Failed to generate database dump.', [ 'path' => $sql_path ] );
-            backup_lite_delete_directory( $temp_dir );
+            museder_restoreone_log( 'error', 'Failed to generate database dump.', [ 'path' => $sql_path ] );
+            museder_restoreone_delete_directory( $temp_dir );
 
             self::record_backup_event( 'failed', [
                 'message' => __( 'Database export failed. Check logs for details.', 'museder-restoreone' ),
@@ -126,8 +125,8 @@ class Backup_Lite_Backup {
         }
 
         if ( ! self::write_meta_file( $meta_path, $options ) ) {
-            backup_lite_log( 'error', 'Failed to write meta.json file.', [ 'path' => $meta_path ] );
-            backup_lite_delete_directory( $temp_dir );
+            museder_restoreone_log( 'error', 'Failed to write meta.json file.', [ 'path' => $meta_path ] );
+            museder_restoreone_delete_directory( $temp_dir );
 
             self::record_backup_event( 'failed', [
                 'message' => __( 'Unable to write meta information for backup.', 'museder-restoreone' ),
@@ -156,16 +155,16 @@ class Backup_Lite_Backup {
         $success = self::with_runtime_exclusions(
             $options,
             function () use ( $archive_path, $sql_path, $meta_path, $directories ) {
-                return backup_lite_can_use_ziparchive()
+                return museder_restoreone_can_use_ziparchive()
             ? self::create_zip_bundle( $archive_path, $sql_path, $meta_path, $directories )
             : self::create_pclzip_bundle( $archive_path, $sql_path, $meta_path, $directories );
             }
         );
 
-        backup_lite_delete_directory( $temp_dir );
+        museder_restoreone_delete_directory( $temp_dir );
 
         if ( ! $success || ! file_exists( $archive_path ) ) {
-            backup_lite_log( 'error', 'Site backup failed.', [ 'archive' => $archive_path ] );
+            museder_restoreone_log( 'error', 'Site backup failed.', [ 'archive' => $archive_path ] );
 
             self::record_backup_event( 'failed', [
                 'message' => __( 'Backup failed. See logs for more information.', 'museder-restoreone' ),
@@ -185,7 +184,7 @@ class Backup_Lite_Backup {
         $backup_completed_at = time();
         $backup_duration_seconds = isset( $backup_started_at ) ? ( $backup_completed_at - $backup_started_at ) : 0;
 
-        backup_lite_log( 'info', 'Site backup completed.', [
+        museder_restoreone_log( 'info', 'Site backup completed.', [
             'archive' => $archive_path,
             'size'    => $size,
             'duration_seconds' => $backup_duration_seconds,
@@ -197,8 +196,10 @@ class Backup_Lite_Backup {
             'started_at' => isset( $backup_started_at ) ? $backup_started_at : null,
             'completed_at' => $backup_completed_at,
         ];
-        if ( Backup_Lite_Pro::is_pro_active() && ! empty( $options['label'] ) ) {
+        if ( ! empty( $options['label'] ) ) {
             $backup_metadata['label'] = sanitize_text_field( $options['label'] );
+        }
+        if ( museder_is_pro_active() ) {
             $backup_metadata['encrypted'] = ! empty( $options['encrypt'] );
             $backup_metadata['cloud_destinations'] = $options['cloud_destinations'] ?? [];
         }
@@ -208,7 +209,7 @@ class Backup_Lite_Backup {
             'success' => true,
             'message' => __( 'Backup completed successfully.', 'museder-restoreone' ),
             'file'    => $archive_path,
-            'url'     => backup_lite_get_download_url( $archive_path ),
+            'url'     => museder_restoreone_get_download_url( $archive_path ),
             'size'    => $size,
         ];
 
@@ -222,11 +223,11 @@ class Backup_Lite_Backup {
             'duration_seconds' => $backup_duration_seconds,
         ] );
 
-        // PRO: Upload to cloud storage if specified
-        if ( Backup_Lite_Pro::is_pro_active() && ! empty( $options['cloud_destinations'] ) && is_array( $options['cloud_destinations'] ) ) {
+        // Add-on: upload to external storage when a separate provider is present.
+        if ( museder_is_pro_active() && class_exists( 'Museder_Restoreone_Cloud_Storage' ) && ! empty( $options['cloud_destinations'] ) && is_array( $options['cloud_destinations'] ) ) {
             foreach ( $options['cloud_destinations'] as $destination ) {
                 if ( 'local' !== $destination ) {
-                    Backup_Lite_Cloud_Storage::upload_backup( $archive_path, $destination );
+                    Museder_Restoreone_Cloud_Storage::upload_backup( $archive_path, $destination );
                 }
             }
         }
@@ -276,11 +277,11 @@ class Backup_Lite_Backup {
         }
 
         $method = 'php';
-        backup_lite_log( 'info', 'Database export initiated.', [ 'method' => $method, 'path' => $filepath ] );
+        museder_restoreone_log( 'info', 'Database export initiated.', [ 'method' => $method, 'path' => $filepath ] );
         $success = self::export_database_with_php( $filepath, $options );
 
         if ( $success && file_exists( $filepath ) ) {
-            backup_lite_log( 'info', 'Database export finished.', [ 'path' => $filepath, 'size' => filesize( $filepath ) ] );
+            museder_restoreone_log( 'info', 'Database export finished.', [ 'path' => $filepath, 'size' => filesize( $filepath ) ] );
             return true;
         }
 
@@ -289,20 +290,19 @@ class Backup_Lite_Backup {
 
     private static function write_meta_file( $path, $options = [] ) {
         $meta = [
-            'plugin_version'    => defined( 'BACKUP_LITE_VERSION' ) ? BACKUP_LITE_VERSION : 'unknown',
+            'plugin_version'    => defined( 'MUSEDER_RESTOREONE_VERSION' ) ? MUSEDER_RESTOREONE_VERSION : 'unknown',
             'wordpress_version' => function_exists( 'get_bloginfo' ) ? get_bloginfo( 'version' ) : 'unknown',
-            'generated_at'      => backup_lite_local_time( 'c' ),
+            'generated_at'      => museder_restoreone_local_time( 'c' ),
             // @plugin-check: allowed - GMT time for internal logs and metadata
             'generated_at_gmt'  => gmdate( 'c' ), // phpcs:ignore WordPress.DateTime.RestrictedFunctions.date_date -- GMT time for internal metadata, not user-facing
             'site_url'          => function_exists( 'home_url' ) ? home_url() : '',
             'php_version'       => PHP_VERSION,
         ];
 
-        // PRO: Add label and encryption info
-        if ( Backup_Lite_Pro::is_pro_active() ) {
-            if ( ! empty( $options['label'] ) ) {
-                $meta['label'] = sanitize_text_field( $options['label'] );
-            }
+        if ( ! empty( $options['label'] ) ) {
+            $meta['label'] = sanitize_text_field( $options['label'] );
+        }
+        if ( museder_is_pro_active() ) {
             if ( ! empty( $options['encrypt'] ) ) {
                 $meta['encrypted'] = true;
             }
@@ -320,7 +320,7 @@ class Backup_Lite_Backup {
 
     private static function ensure_writable_directory( $dir ) {
         if ( ! file_exists( $dir ) ) {
-            backup_lite_ensure_directory( $dir );
+            museder_restoreone_ensure_directory( $dir );
         }
 
         return is_dir( $dir ) && wp_is_writable( $dir );
@@ -331,11 +331,11 @@ class Backup_Lite_Backup {
 
         $zip = new ZipArchive();
         if ( true !== $zip->open( $archive_path, ZipArchive::CREATE | ZipArchive::OVERWRITE ) ) {
-            backup_lite_log( 'error', 'Unable to create zip archive with ZipArchive.', [ 'path' => $archive_path ] );
+            museder_restoreone_log( 'error', 'Unable to create zip archive with ZipArchive.', [ 'path' => $archive_path ] );
             return false;
         }
 
-        backup_lite_log( 'info', 'ZipArchive bundle phase started.', [
+        museder_restoreone_log( 'info', 'ZipArchive bundle phase started.', [
             'archive' => $archive_path,
             'roots'   => count( $directories ),
         ] );
@@ -347,7 +347,7 @@ class Backup_Lite_Backup {
         $zip->setCompressionName( 'meta.json', ZipArchive::CM_DEFLATE );
 
         foreach ( $directories as $target => $source ) {
-            backup_lite_log( 'info', 'Adding directory to archive.', [
+            museder_restoreone_log( 'info', 'Adding directory to archive.', [
                 'source' => $source,
                 'target' => $target,
             ] );
@@ -360,12 +360,12 @@ class Backup_Lite_Backup {
     private static function create_pclzip_bundle( $archive_path, $sql_path, $meta_path, $directories ) {
         self::optimize_runtime_environment();
 
-        if ( function_exists( 'backup_lite_require_pclzip' ) ) {
-            backup_lite_require_pclzip();
+        if ( function_exists( 'museder_restoreone_require_pclzip' ) ) {
+            museder_restoreone_require_pclzip();
         }
 
         $manifest = self::build_pclzip_manifest( $sql_path, $meta_path, $directories );
-        backup_lite_log( 'info', 'PclZip bundle phase started.', [
+        museder_restoreone_log( 'info', 'PclZip bundle phase started.', [
             'archive' => $archive_path,
             'items'   => count( $manifest ),
         ] );
@@ -374,7 +374,7 @@ class Backup_Lite_Backup {
         $result  = $archive->create( $manifest );
 
         if ( 0 === $result ) {
-            backup_lite_log( 'error', 'PclZip failed while creating archive.', [ 'error' => $archive->errorInfo( true ) ] );
+            museder_restoreone_log( 'error', 'PclZip failed while creating archive.', [ 'error' => $archive->errorInfo( true ) ] );
             return false;
         }
 
@@ -445,7 +445,7 @@ class Backup_Lite_Backup {
                 $size = $file->getSize();
                 $max_file_size = 2147483648; // 2GB
                 if ( $size !== false && $size > $max_file_size ) {
-                    backup_lite_log( 'warning', 'Skipping extremely large file in PclZip manifest.', [
+                    museder_restoreone_log( 'warning', 'Skipping extremely large file in PclZip manifest.', [
                         'path' => $file_path,
                         'size' => $size,
                         'size_mb' => round( $size / 1048576, 2 ),
@@ -559,7 +559,7 @@ class Backup_Lite_Backup {
                 $size = $file->getSize();
                 $max_file_size = 2147483648; // 2GB
                 if ( $size !== false && $size > $max_file_size ) {
-                    backup_lite_log( 'warning', 'Skipping extremely large file in ZipArchive.', [
+                    museder_restoreone_log( 'warning', 'Skipping extremely large file in ZipArchive.', [
                         'path' => $file_path,
                         'size' => $size,
                         'size_mb' => round( $size / 1048576, 2 ),
@@ -606,7 +606,7 @@ class Backup_Lite_Backup {
 
         // Multisite subsite-only export: pack wp-content only (faster + smaller), rely on include prefixes.
         if ( function_exists( 'is_multisite' ) && is_multisite() && ! empty( $options['multisite_blog_id'] ) ) {
-            $wp_content = function_exists( 'backup_lite_get_wp_content_dir' ) ? backup_lite_get_wp_content_dir() : '';
+            $wp_content = function_exists( 'museder_restoreone_get_wp_content_dir' ) ? museder_restoreone_get_wp_content_dir() : '';
             $wp_content = wp_normalize_path( rtrim( (string) $wp_content, '/\\' ) );
             if ( '' !== $wp_content && is_dir( $wp_content ) ) {
                 $map['wp-content'] = $wp_content;
@@ -615,7 +615,7 @@ class Backup_Lite_Backup {
         }
 
         // Prefer helper to handle non-standard installs; fall back internally.
-        $root = function_exists( 'backup_lite_get_wp_root_dir' ) ? (string) backup_lite_get_wp_root_dir() : '';
+        $root = function_exists( 'museder_restoreone_get_wp_root_dir' ) ? (string) museder_restoreone_get_wp_root_dir() : '';
         $root = wp_normalize_path( rtrim( (string) $root, '/\\' ) );
         if ( '' !== $root && is_dir( $root ) ) {
             // Empty target means "ZIP root".
@@ -623,7 +623,7 @@ class Backup_Lite_Backup {
         }
 
         // If wp-content is outside the install root, include it explicitly.
-        $wp_content = function_exists( 'backup_lite_get_wp_content_dir' ) ? backup_lite_get_wp_content_dir() : '';
+        $wp_content = function_exists( 'museder_restoreone_get_wp_content_dir' ) ? museder_restoreone_get_wp_content_dir() : '';
         $wp_content = wp_normalize_path( rtrim( (string) $wp_content, '/\\' ) );
         if ( '' !== $wp_content && is_dir( $wp_content ) ) {
             $root_prefix = '' !== $root ? trailingslashit( $root ) : '';
@@ -645,7 +645,7 @@ class Backup_Lite_Backup {
     public static function create_async_job_stub_context( $job_id, $options = [] ) {
         self::optimize_runtime_environment();
 
-        $backup_dir = trailingslashit( backup_lite_get_backup_dir() );
+        $backup_dir = trailingslashit( museder_restoreone_get_backup_dir() );
         if ( ! self::ensure_writable_directory( $backup_dir ) ) {
             throw new RuntimeException( esc_html__( 'Backup directory is not writable.', 'museder-restoreone' ) );
         }
@@ -656,23 +656,23 @@ class Backup_Lite_Backup {
         }
         $site_url = sanitize_file_name( $site_url );
 
-        $date_time    = backup_lite_local_time( 'YmdHis' );
+        $date_time    = museder_restoreone_local_time( 'YmdHis' );
         $random_code  = wp_generate_password( 6, false, false );
         $label_suffix = '';
 
-        if ( class_exists( 'Backup_Lite_Pro' ) && Backup_Lite_Pro::is_pro_active() && ! empty( $options['label'] ) ) {
+        if ( ! empty( $options['label'] ) ) {
             $label_suffix = '-' . sanitize_file_name( $options['label'] );
         }
 
         $archive_name = sprintf( '%s-%s-%s%s.zip', $site_url, $date_time, $random_code, $label_suffix );
         $archive_path = $backup_dir . $archive_name;
 
-        $temp_dir  = backup_lite_create_temp_dir( 'build' );
+        $temp_dir  = museder_restoreone_create_temp_dir( 'build' );
         $sql_path  = trailingslashit( $temp_dir ) . 'database.ndjson';
         $meta_path = trailingslashit( $temp_dir ) . 'meta.json';
 
-        $manifest_file = trailingslashit( backup_lite_get_jobs_dir() ) . sanitize_file_name( $job_id ) . '-manifest.json';
-        $manifest_ndjson_file = trailingslashit( backup_lite_get_jobs_dir() ) . sanitize_file_name( $job_id ) . '-manifest.ndjson';
+        $manifest_file = trailingslashit( museder_restoreone_get_jobs_dir() ) . sanitize_file_name( $job_id ) . '-manifest.json';
+        $manifest_ndjson_file = trailingslashit( museder_restoreone_get_jobs_dir() ) . sanitize_file_name( $job_id ) . '-manifest.ndjson';
 
         return [
             'archive_path'  => $archive_path,
@@ -696,7 +696,7 @@ class Backup_Lite_Backup {
     public static function prepare_async_job( $job_id, $options = [] ) {
         self::optimize_runtime_environment();
 
-        $backup_dir = trailingslashit( backup_lite_get_backup_dir() );
+        $backup_dir = trailingslashit( museder_restoreone_get_backup_dir() );
 
         if ( ! self::ensure_writable_directory( $backup_dir ) ) {
             throw new RuntimeException( esc_html__( 'Backup directory is not writable.', 'museder-restoreone' ) );
@@ -710,27 +710,27 @@ class Backup_Lite_Backup {
         // Sanitize domain name for filename
         $site_url = sanitize_file_name( $site_url );
         
-        $date_time = backup_lite_local_time( 'YmdHis' );
+        $date_time = museder_restoreone_local_time( 'YmdHis' );
         $random_code = wp_generate_password( 6, false, false );
         
         $label_suffix = '';
-        if ( Backup_Lite_Pro::is_pro_active() && ! empty( $options['label'] ) ) {
+        if ( ! empty( $options['label'] ) ) {
             $label_suffix = '-' . sanitize_file_name( $options['label'] );
         }
 
         $archive_name = sprintf( '%s-%s-%s%s.zip', $site_url, $date_time, $random_code, $label_suffix );
         $archive_path = $backup_dir . $archive_name;
-        $temp_dir     = backup_lite_create_temp_dir( 'build' );
+        $temp_dir     = museder_restoreone_create_temp_dir( 'build' );
         $sql_path     = trailingslashit( $temp_dir ) . 'database.ndjson';
         $meta_path    = trailingslashit( $temp_dir ) . 'meta.json';
 
         if ( ! self::generate_database_dump( $sql_path, $options ) ) {
-            backup_lite_delete_directory( $temp_dir );
+            museder_restoreone_delete_directory( $temp_dir );
             throw new RuntimeException( esc_html__( 'Database export failed. Check logs for details.', 'museder-restoreone' ) );
         }
 
         if ( ! self::write_meta_file( $meta_path, $options ) ) {
-            backup_lite_delete_directory( $temp_dir );
+            museder_restoreone_delete_directory( $temp_dir );
             throw new RuntimeException( esc_html__( 'Unable to write meta information for backup.', 'museder-restoreone' ) );
         }
 
@@ -760,8 +760,8 @@ class Backup_Lite_Backup {
                 }
             );
         } catch ( Exception $e ) {
-            backup_lite_delete_directory( $temp_dir );
-            backup_lite_log( 'error', 'Failed to build file manifest during job preparation.', [
+            museder_restoreone_delete_directory( $temp_dir );
+            museder_restoreone_log( 'error', 'Failed to build file manifest during job preparation.', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
             ] );
@@ -769,7 +769,7 @@ class Backup_Lite_Backup {
         }
 
         if ( empty( $manifest_data ) || ! isset( $manifest_data['files'] ) ) {
-            backup_lite_delete_directory( $temp_dir );
+            museder_restoreone_delete_directory( $temp_dir );
             throw new RuntimeException( esc_html__( 'File manifest is empty or invalid.', 'museder-restoreone' ) );
         }
 
@@ -777,20 +777,20 @@ class Backup_Lite_Backup {
         // This prevents "fake success" archives that contain only a tiny subset of files.
         $selfcheck = self::selfcheck_backup_roots( $archive_path, $directories );
         if ( ! empty( $selfcheck['failed'] ) ) {
-            backup_lite_log( 'error', 'Backup root self-check failed.', $selfcheck );
-            backup_lite_delete_directory( $temp_dir );
+            museder_restoreone_log( 'error', 'Backup root self-check failed.', $selfcheck );
+            museder_restoreone_delete_directory( $temp_dir );
             throw new RuntimeException(
                 esc_html__( 'Backup cannot access required WordPress directories on this host. Please check logs for details.', 'museder-restoreone' )
             );
         }
 
-        $manifest_file  = trailingslashit( backup_lite_get_jobs_dir() ) . $job_id . '-manifest.json';
+        $manifest_file  = trailingslashit( museder_restoreone_get_jobs_dir() ) . $job_id . '-manifest.json';
         $manifest_bytes = wp_json_encode( $manifest_data['files'], JSON_UNESCAPED_SLASHES );
 
         if ( false === $manifest_bytes ) {
-            backup_lite_delete_directory( $temp_dir );
+            museder_restoreone_delete_directory( $temp_dir );
             $json_error = function_exists( 'json_last_error_msg' ) ? json_last_error_msg() : 'Unknown JSON error';
-            backup_lite_log( 'error', 'Failed to encode backup manifest to JSON.', [
+            museder_restoreone_log( 'error', 'Failed to encode backup manifest to JSON.', [
                 'json_error' => $json_error,
                 'file_count' => isset( $manifest_data['count'] ) ? $manifest_data['count'] : 0,
             ] );
@@ -800,11 +800,11 @@ class Backup_Lite_Backup {
         // Using native file APIs on local backup directory; paths are sanitized and constrained.
         // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_read_file_put_contents
         if ( false === file_put_contents( $manifest_file, $manifest_bytes, LOCK_EX ) ) {
-            backup_lite_delete_directory( $temp_dir );
+            museder_restoreone_delete_directory( $temp_dir );
             throw new RuntimeException( esc_html__( 'Unable to write backup manifest.', 'museder-restoreone' ) );
         }
 
-        backup_lite_log( 'info', 'Backup job prepared.', [
+        museder_restoreone_log( 'info', 'Backup job prepared.', [
             'job'   => $job_id,
             'files' => $manifest_data['count'],
             'bytes' => $manifest_data['bytes'],
@@ -849,7 +849,7 @@ class Backup_Lite_Backup {
         if ( 'db' === $step ) {
             $job['message'] = __( 'Preparing database export…', 'museder-restoreone' );
             // WP.org submission build: database export uses plugin-owned NDJSON via PHP/WordPress APIs.
-            if ( backup_lite_can_use_mysqldump() ) {
+            if ( museder_restoreone_can_use_mysqldump() ) {
                 if ( ! self::generate_database_dump( $sql_path, $options ) ) {
                 throw new RuntimeException( esc_html__( 'Database export failed. Check logs for details.', 'museder-restoreone' ) );
             }
@@ -922,7 +922,7 @@ class Backup_Lite_Backup {
 
             $ndjson_file = isset( $job['manifest_ndjson_file'] ) ? (string) $job['manifest_ndjson_file'] : '';
             if ( '' === $ndjson_file ) {
-                $ndjson_file = trailingslashit( backup_lite_get_jobs_dir() ) . sanitize_file_name( (string) ( $job['id'] ?? '' ) ) . '-manifest.ndjson';
+                $ndjson_file = trailingslashit( museder_restoreone_get_jobs_dir() ) . sanitize_file_name( (string) ( $job['id'] ?? '' ) ) . '-manifest.ndjson';
                 $job['manifest_ndjson_file'] = $ndjson_file;
             }
 
@@ -933,7 +933,7 @@ class Backup_Lite_Backup {
                 }
             );
             if ( $done ) {
-                backup_lite_log( 'info', 'Backup job prepared (sliced manifest).', [
+                museder_restoreone_log( 'info', 'Backup job prepared (sliced manifest).', [
                 'job'   => $job['id'] ?? '',
                     'files' => isset( $job['total_files'] ) ? (int) $job['total_files'] : 0,
                     'bytes' => isset( $job['total_bytes'] ) ? (int) $job['total_bytes'] : 0,
@@ -960,7 +960,7 @@ class Backup_Lite_Backup {
                 $job['status']  = 'failed';
                 $job['stage']   = 'failed';
                 $job['message'] = __( 'Backup failed: required directories are not readable on this host. Please check logs for details.', 'museder-restoreone' );
-                backup_lite_log( 'error', 'Backup root self-check failed.', $selfcheck );
+                museder_restoreone_log( 'error', 'Backup root self-check failed.', $selfcheck );
                 return $job;
             }
 
@@ -1026,7 +1026,7 @@ class Backup_Lite_Backup {
         if ( empty( $state['started'] ) ) {
             $meta = [
                 'type'            => 'meta',
-                'format'          => 'backup_lite_db_ndjson',
+                'format'          => 'museder_restoreone_db_ndjson',
                 'format_version'  => 1,
                 'generated_at_gmt'=> gmdate( 'c' ), // phpcs:ignore WordPress.DateTime.RestrictedFunctions.date_date -- GMT metadata
                 'site_url'        => function_exists( 'home_url' ) ? home_url() : '',
@@ -1366,7 +1366,7 @@ class Backup_Lite_Backup {
 
         $job_id = sanitize_file_name( (string) ( $job['id'] ?? '' ) );
         if ( '' === $ndjson ) {
-            $ndjson = trailingslashit( backup_lite_get_jobs_dir() ) . $job_id . '-manifest.ndjson';
+            $ndjson = trailingslashit( museder_restoreone_get_jobs_dir() ) . $job_id . '-manifest.ndjson';
             $job['manifest_ndjson_file'] = $ndjson;
         }
 
@@ -1409,8 +1409,8 @@ class Backup_Lite_Backup {
         $friendly = esc_html__( "This backup's manifest.json is invalid or corrupted. Please create a new backup and try again.", 'museder-restoreone' );
 
         $fail = static function ( $reason ) use ( $json_file, $friendly ) {
-            if ( function_exists( 'backup_lite_log' ) ) {
-                backup_lite_log( 'error', 'legacy_manifest_invalid', [
+            if ( function_exists( 'museder_restoreone_log' ) ) {
+                museder_restoreone_log( 'error', 'legacy_manifest_invalid', [
                     'file'   => basename( (string) $json_file ),
                     'reason' => (string) $reason,
                 ] );
@@ -1727,9 +1727,9 @@ class Backup_Lite_Backup {
         $upload_dir = wp_upload_dir();
         $uploads_basedir = isset( $upload_dir['basedir'] ) ? (string) $upload_dir['basedir'] : '';
         $uploads_basedir = $uploads_basedir ? wp_normalize_path( $uploads_basedir ) : '';
-        $plugins_dir = function_exists( 'backup_lite_get_plugins_dir' ) ? backup_lite_get_plugins_dir() : '';
+        $plugins_dir = function_exists( 'museder_restoreone_get_plugins_dir' ) ? museder_restoreone_get_plugins_dir() : '';
         $themes_dir  = function_exists( 'get_theme_root' ) ? wp_normalize_path( (string) get_theme_root() ) : '';
-        $content_dir = function_exists( 'backup_lite_get_wp_content_dir' ) ? backup_lite_get_wp_content_dir() : '';
+        $content_dir = function_exists( 'museder_restoreone_get_wp_content_dir' ) ? museder_restoreone_get_wp_content_dir() : '';
 
         $roots = [
             'uploads'   => $directories['uploads'] ?? $uploads_basedir,
@@ -1741,7 +1741,7 @@ class Backup_Lite_Backup {
         $results = [
             'failed'  => false,
             'roots'   => [],
-            'version' => defined( 'BACKUP_LITE_VERSION' ) ? BACKUP_LITE_VERSION : '',
+            'version' => defined( 'MUSEDER_RESTOREONE_VERSION' ) ? MUSEDER_RESTOREONE_VERSION : '',
         ];
 
         foreach ( $roots as $key => $root ) {
@@ -1790,7 +1790,7 @@ class Backup_Lite_Backup {
                     $root_result['errors'][] = $read_error;
                 }
 
-                if ( backup_lite_can_use_ziparchive() && file_exists( $archive_path ) ) {
+                if ( museder_restoreone_can_use_ziparchive() && file_exists( $archive_path ) ) {
                     $zip = new ZipArchive();
                     if ( true === $zip->open( $archive_path, ZipArchive::CREATE ) ) {
                         $test_name = '__bl_selfcheck/' . $key . '/' . basename( $sample_path );
@@ -1931,8 +1931,8 @@ class Backup_Lite_Backup {
         $requested_mode_raw  = $requested_mode;
         $requested_smart_raw = $requested_smart;
 
-        if ( class_exists( 'Backup_Lite_Settings' ) ) {
-            $settings = Backup_Lite_Settings::get_settings();
+        if ( class_exists( 'Museder_Restoreone_Settings' ) ) {
+            $settings = Museder_Restoreone_Settings::get_settings();
             if ( '' === $requested_mode && isset( $settings['backup_mode_default'] ) ) {
                 $requested_mode = (string) $settings['backup_mode_default'];
             }
@@ -1959,8 +1959,8 @@ class Backup_Lite_Backup {
         }
 
         $threshold = 50000;
-        if ( class_exists( 'Backup_Lite_Settings' ) ) {
-            $settings = Backup_Lite_Settings::get_settings();
+        if ( class_exists( 'Museder_Restoreone_Settings' ) ) {
+            $settings = Museder_Restoreone_Settings::get_settings();
             if ( isset( $settings['backup_smart_exclude_threshold'] ) ) {
                 $threshold = (int) $settings['backup_smart_exclude_threshold'];
             }
@@ -1971,7 +1971,7 @@ class Backup_Lite_Backup {
          *
          * @param int $threshold File count threshold.
          */
-        $threshold = (int) apply_filters( 'backup_lite_backup_auto_threshold_files', $threshold );
+        $threshold = (int) apply_filters( 'museder_restoreone_backup_auto_threshold_files', $threshold );
         $threshold = max( 1000, min( 500000, $threshold ) );
 
         // Decide large site based on a lightweight count-only scan (stops once threshold is reached).
@@ -2007,7 +2007,7 @@ class Backup_Lite_Backup {
         $options['backup_mode'] = $effective_mode;
         $options['backup_smart_exclude'] = $effective_smart;
 
-        backup_lite_log( 'info', 'Backup Auto mode decision.', [
+        museder_restoreone_log( 'info', 'Backup Auto mode decision.', [
             'threshold_files' => $threshold,
             'reached_threshold' => $is_large,
             'scanned_files' => isset( $stats['count'] ) ? (int) $stats['count'] : 0,
@@ -2210,6 +2210,40 @@ class Backup_Lite_Backup {
     }
 
     /**
+     * Whether an opened ZipArchive contains an entry for the given relative path.
+     *
+     * Normalizes slashes and tries common libzip/Windows quirks so post-close verification
+     * does not false-trigger a full repack.
+     *
+     * @param ZipArchive $zip  Open archive.
+     * @param string     $name Expected entry path (forward slashes, no leading slash).
+     * @return bool
+     */
+    private static function zip_archive_has_entry( ZipArchive $zip, $name ) {
+        $name = ltrim( str_replace( '\\', '/', (string) $name ), '/' );
+        if ( '' === $name ) {
+            return false;
+        }
+        if ( false !== $zip->locateName( $name ) ) {
+            return true;
+        }
+        // Some tooling stores names with a leading "./".
+        if ( false !== $zip->locateName( './' . $name ) ) {
+            return true;
+        }
+        if ( defined( 'ZipArchive::FL_NOCASE' ) ) {
+            if ( false !== $zip->locateName( $name, ZipArchive::FL_NOCASE ) ) {
+                return true;
+            }
+            if ( false !== $zip->locateName( './' . $name, ZipArchive::FL_NOCASE ) ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * Verify the closed archive contains expected WordPress site root data.
      *
      * We require the archive to contain at least one file from each core directory:
@@ -2298,7 +2332,7 @@ class Backup_Lite_Backup {
 
             foreach ( $required as $file ) {
                 $checked++;
-                if ( false === $zip->locateName( $file ) ) {
+                if ( ! self::zip_archive_has_entry( $zip, $file ) ) {
                     $missing++;
                     if ( count( $missing_samples ) < 12 ) {
                         $missing_samples[] = $file;
@@ -2359,7 +2393,7 @@ class Backup_Lite_Backup {
                             foreach ( $needles as $prefix ) {
                                 if ( ! $found[ $prefix ] && 0 === strpos( $target, $prefix ) ) {
                                     // Require at least one actual file under the prefix (not just the directory entry).
-                                    if ( false === $zip->locateName( $target ) ) {
+                                    if ( ! self::zip_archive_has_entry( $zip, $target ) ) {
                                         $missing++;
                                         if ( count( $missing_samples ) < 12 ) {
                                             $missing_samples[] = 'missing_sample:' . $target;
@@ -2510,8 +2544,7 @@ class Backup_Lite_Backup {
             $checked++;
             $roots[ $root ]['checked']++;
 
-            $idx = $zip->locateName( $target );
-            if ( false === $idx ) {
+            if ( ! self::zip_archive_has_entry( $zip, $target ) ) {
                 $missing++;
                 if ( count( $missing_samples ) < 12 ) {
                     $missing_samples[] = $target;
@@ -2535,8 +2568,7 @@ class Backup_Lite_Backup {
                 continue;
             }
             $checked++;
-            $idx = $zip->locateName( $file );
-            if ( false === $idx ) {
+            if ( ! self::zip_archive_has_entry( $zip, $file ) ) {
                 $missing++;
                 $files_ok[ $file ] = false;
                 if ( count( $missing_samples ) < 12 ) {
@@ -2564,7 +2596,7 @@ class Backup_Lite_Backup {
         // Also ensure database/meta exist.
         $zip2 = new ZipArchive();
         if ( true === $zip2->open( $archive_path ) ) {
-            if ( false === $zip2->locateName( 'database.ndjson' ) || false === $zip2->locateName( 'meta.json' ) ) {
+            if ( ! self::zip_archive_has_entry( $zip2, 'database.ndjson' ) || ! self::zip_archive_has_entry( $zip2, 'meta.json' ) ) {
                 $ok = false;
             }
             $zip2->close();
@@ -2600,8 +2632,8 @@ class Backup_Lite_Backup {
         $data = [
             'plugin' => [
                 'name'    => 'museder-restoreone',
-                'version' => defined( 'BACKUP_LITE_VERSION' ) ? BACKUP_LITE_VERSION : '',
-                'build'   => defined( 'BACKUP_LITE_BUILD_ID' ) ? BACKUP_LITE_BUILD_ID : '',
+                'version' => defined( 'MUSEDER_RESTOREONE_VERSION' ) ? MUSEDER_RESTOREONE_VERSION : '',
+                'build'   => defined( 'MUSEDER_RESTOREONE_BUILD_ID' ) ? MUSEDER_RESTOREONE_BUILD_ID : '',
             ],
             'generated_at_gmt' => gmdate( 'c' ), // phpcs:ignore WordPress.DateTime.RestrictedFunctions.date_date -- internal backup metadata
             'format' => [
@@ -2770,7 +2802,7 @@ class Backup_Lite_Backup {
 
             // If we skipped anything, log a single summary once (helps diagnose 1-file edge cases without failing).
             if ( $skipped_files > 0 && empty( $job['skip_summary_logged'] ) ) {
-                backup_lite_log( 'warning', 'Backup packing reached end pointer with skipped files.', [
+                museder_restoreone_log( 'warning', 'Backup packing reached end pointer with skipped files.', [
                     'job_id'        => $job['id'] ?? '',
                     'total_files'   => $total,
                     'added_files'   => $added_files,
@@ -2786,7 +2818,7 @@ class Backup_Lite_Backup {
             }
 
             if ( $total >= 1000 && $added_files < (int) round( $total * $min_ratio ) ) {
-                backup_lite_log( 'error', 'Backup packing reached end pointer but too many files were skipped/blocked. Marking job failed to avoid incomplete archive.', [
+                museder_restoreone_log( 'error', 'Backup packing reached end pointer but too many files were skipped/blocked. Marking job failed to avoid incomplete archive.', [
                     'job_id'        => $job['id'] ?? '',
                     'total_files'   => $total,
                     'added_files'   => $added_files,
@@ -2806,7 +2838,7 @@ class Backup_Lite_Backup {
             }
 
             if ( $total_bytes >= 500 * 1024 * 1024 && $added_bytes < (int) round( $total_bytes * $min_bytes_ratio ) ) {
-                backup_lite_log( 'error', 'Backup packing reached end pointer but too few bytes were added. Marking job failed to avoid incomplete archive.', [
+                museder_restoreone_log( 'error', 'Backup packing reached end pointer but too few bytes were added. Marking job failed to avoid incomplete archive.', [
                     'job_id'       => $job['id'] ?? '',
                     'total_files'  => $total,
                     'added_files'  => $added_files,
@@ -2976,7 +3008,7 @@ class Backup_Lite_Backup {
             $job_options = isset( $job['options'] ) && is_array( $job['options'] ) ? $job['options'] : [];
             $pack_method = isset( $job['pack_method'] ) ? (string) $job['pack_method'] : '';
             if ( '' === $pack_method ) {
-                $pack_method = backup_lite_can_use_ziparchive() ? 'ziparchive' : 'pclzip';
+                $pack_method = museder_restoreone_can_use_ziparchive() ? 'ziparchive' : 'pclzip';
             }
 
             $append_results = self::with_runtime_exclusions(
@@ -3035,7 +3067,7 @@ class Backup_Lite_Backup {
         if ( isset( $append_results['fallback'] ) && is_array( $append_results['fallback'] ) ) {
             $job['pack_method'] = 'pclzip';
             $job['skip_reasons']['fallback_to_pclzip'] = isset( $job['skip_reasons']['fallback_to_pclzip'] ) ? ( (int) $job['skip_reasons']['fallback_to_pclzip'] + 1 ) : 1;
-            backup_lite_log( 'warning', 'Fallback to PclZip executed for failed ZipArchive entries.', [
+            museder_restoreone_log( 'warning', 'Fallback to PclZip executed for failed ZipArchive entries.', [
                 'job_id' => $job['id'] ?? '',
                 'failed' => $append_results['failed'] ?? 0,
                 'fallback' => $append_results['fallback'],
@@ -3057,7 +3089,7 @@ class Backup_Lite_Backup {
         $job['message'] = __( 'Backup running…', 'museder-restoreone' );
 
         if ( $job['pointer'] >= $total ) {
-            backup_lite_log( 'info', 'Packing reached end pointer; running integrity guards.', [
+            museder_restoreone_log( 'info', 'Packing reached end pointer; running integrity guards.', [
                 'job_id' => $job['id'] ?? '',
                 'total_files' => (int) $total,
                 'pointer' => (int) $job['pointer'],
@@ -3079,7 +3111,7 @@ class Backup_Lite_Backup {
             $min_bytes_ratio = 0.70;
 
             if ( $total >= 1000 && $added_files < (int) round( $total * $min_ratio ) ) {
-                backup_lite_log( 'error', 'Backup packing finished with too many skipped/blocked files. Marking job failed to avoid incomplete archive.', [
+                museder_restoreone_log( 'error', 'Backup packing finished with too many skipped/blocked files. Marking job failed to avoid incomplete archive.', [
                     'job_id'        => $job['id'] ?? '',
                     'total_files'   => $total,
                     'added_files'   => $added_files,
@@ -3099,7 +3131,7 @@ class Backup_Lite_Backup {
             }
 
             if ( $total_bytes >= 500 * 1024 * 1024 && $added_bytes < (int) round( $total_bytes * $min_bytes_ratio ) ) {
-                backup_lite_log( 'error', 'Backup packing finished but too few bytes were added. Marking job failed to avoid incomplete archive.', [
+                museder_restoreone_log( 'error', 'Backup packing finished but too few bytes were added. Marking job failed to avoid incomplete archive.', [
                     'job_id'       => $job['id'] ?? '',
                     'total_files'  => $total,
                     'added_files'  => $added_files,
@@ -3174,7 +3206,7 @@ class Backup_Lite_Backup {
             $offset = isset( $job['manifest_offset'] ) ? (int) $job['manifest_offset'] : 0;
             $size   = @filesize( $ndjson ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_filesize -- manifest size check, file path is plugin-controlled
             if ( is_numeric( $size ) && (int) $size > 0 && $offset > 0 && $offset < (int) $size ) {
-                backup_lite_log( 'error', 'Finalize called before manifest.ndjson was fully consumed.', [
+                museder_restoreone_log( 'error', 'Finalize called before manifest.ndjson was fully consumed.', [
                     'job_id' => $job['id'] ?? '',
                     'offset' => $offset,
                     'size'   => (int) $size,
@@ -3197,7 +3229,7 @@ class Backup_Lite_Backup {
             $before = $total_files;
             $total_files = $manifest_count;
             $job['total_files'] = $total_files;
-            backup_lite_log( 'warning', 'Repairing total_files from manifest_count during finalize.', [
+            museder_restoreone_log( 'warning', 'Repairing total_files from manifest_count during finalize.', [
                 'job_id' => $job['id'] ?? '',
                 'total_files_before' => (int) $before,
                 'manifest_count' => $manifest_count,
@@ -3209,7 +3241,7 @@ class Backup_Lite_Backup {
             $total_bytes = (int) self::sum_manifest_bytes( $manifest );
             $total_bytes = max( 1, $total_bytes );
             $job['total_bytes'] = $total_bytes;
-            backup_lite_log( 'warning', 'Repairing total_bytes from manifest entries during finalize.', [
+            museder_restoreone_log( 'warning', 'Repairing total_bytes from manifest entries during finalize.', [
                 'job_id' => $job['id'] ?? '',
                 'total_bytes_before' => (int) $before,
                 'total_bytes' => (int) $total_bytes,
@@ -3218,7 +3250,7 @@ class Backup_Lite_Backup {
         }
 
         // Always log a high-level finalize snapshot for diagnostics (helps confirm which guards ran).
-        backup_lite_log( 'info', 'Finalize snapshot (after close).', [
+        museder_restoreone_log( 'info', 'Finalize snapshot (after close).', [
             'job_id' => $job['id'] ?? '',
             'total_files' => (int) $total_files,
             'added_files' => (int) $added_files,
@@ -3242,7 +3274,7 @@ class Backup_Lite_Backup {
             try {
                 self::embed_metadata_into_archive_after_close( $job );
             } catch ( Exception $e ) {
-                backup_lite_log( 'error', 'Failed to embed backup metadata into archive.', [
+                museder_restoreone_log( 'error', 'Failed to embed backup metadata into archive.', [
                     'job_id' => $job['id'] ?? '',
                     'error'  => $e->getMessage(),
                 ] );
@@ -3266,7 +3298,7 @@ class Backup_Lite_Backup {
         // Run in a separate tick to avoid timeouts.
         if ( 'verify' === $finalize_step ) {
         $verify = self::verify_archive_contains_wp_content( $job );
-        backup_lite_log( 'info', 'Archive verify snapshot (after close).', [
+        museder_restoreone_log( 'info', 'Archive verify snapshot (after close).', [
             'job_id'   => $job['id'] ?? '',
             'ok'       => $verify['ok'],
             'checked'  => $verify['checked'],
@@ -3278,7 +3310,7 @@ class Backup_Lite_Backup {
         if ( empty( $verify['ok'] ) ) {
             // If verification fails, automatically repack once using PclZip for compatibility.
             if ( empty( $job['repack_attempted'] ) ) {
-                backup_lite_log( 'warning', 'Archive verification failed; scheduling repack with PclZip.', [
+                museder_restoreone_log( 'warning', 'Archive verification failed; scheduling repack with PclZip.', [
                     'job_id' => $job['id'] ?? '',
                 ] );
 
@@ -3336,7 +3368,7 @@ class Backup_Lite_Backup {
                 return $job;
             }
 
-            backup_lite_log( 'error', 'Archive verification failed after repack attempt; refusing to mark completed.', [
+            museder_restoreone_log( 'error', 'Archive verification failed after repack attempt; refusing to mark completed.', [
                 'job_id' => $job['id'] ?? '',
                 'verify' => $verify,
             ] );
@@ -3358,7 +3390,7 @@ class Backup_Lite_Backup {
         }
 
         if ( $total_files >= 1000 && $manifest_count > 0 && $manifest_count < (int) round( $total_files * 0.90 ) ) {
-            backup_lite_log( 'error', 'Backup manifest mismatch at finalize; refusing to mark job completed.', [
+            museder_restoreone_log( 'error', 'Backup manifest mismatch at finalize; refusing to mark job completed.', [
                 'job_id'          => $job['id'] ?? '',
                 'total_files'     => $total_files,
                 'manifest_count'  => $manifest_count,
@@ -3381,7 +3413,7 @@ class Backup_Lite_Backup {
 
         // Re-run completion guards here too (after the archive is closed) to prevent false success.
         if ( $total_files >= 1000 && $added_files < (int) round( $total_files * 0.95 ) ) {
-            backup_lite_log( 'error', 'Finalize guard: too many files were not added; refusing to mark completed.', [
+            museder_restoreone_log( 'error', 'Finalize guard: too many files were not added; refusing to mark completed.', [
                 'job_id'        => $job['id'] ?? '',
                 'total_files'   => $total_files,
                 'added_files'   => $added_files,
@@ -3402,7 +3434,7 @@ class Backup_Lite_Backup {
         }
 
         if ( $total_bytes >= 500 * 1024 * 1024 && $added_bytes < (int) round( $total_bytes * 0.70 ) ) {
-            backup_lite_log( 'error', 'Finalize guard: too few bytes were added; refusing to mark completed.', [
+            museder_restoreone_log( 'error', 'Finalize guard: too few bytes were added; refusing to mark completed.', [
                 'job_id'        => $job['id'] ?? '',
                 'total_files'   => $total_files,
                 'added_files'   => $added_files,
@@ -3464,7 +3496,7 @@ class Backup_Lite_Backup {
         try {
             $manifest = self::build_manifest_from_directories( $directories );
         } catch ( Exception $e ) {
-            backup_lite_log( 'error', 'Failed to build file manifest.', [
+            museder_restoreone_log( 'error', 'Failed to build file manifest.', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
             ] );
@@ -3476,7 +3508,7 @@ class Backup_Lite_Backup {
         // Only use cache for larger sites (> 1000 files) where cache benefits outweigh overhead
         if ( $file_count < 1000 ) {
             // Small site: skip caching to reduce overhead
-            backup_lite_log( 'info', 'Built file manifest (cache skipped for small site).', [
+            museder_restoreone_log( 'info', 'Built file manifest (cache skipped for small site).', [
                 'files' => $file_count,
                 'bytes' => $manifest['bytes'] ?? 0,
             ] );
@@ -3490,7 +3522,7 @@ class Backup_Lite_Backup {
             return $manifest;
         }
         
-        $cache_key = 'backup_lite_manifest_' . md5( $directories_json );
+        $cache_key = 'museder_restoreone_manifest_' . md5( $directories_json );
         
         // Try to get cached manifest
         $cached = get_transient( $cache_key );
@@ -3499,7 +3531,7 @@ class Backup_Lite_Backup {
             $age = time() - $cached['timestamp'];
             // Use cache if it's less than 5 minutes old
             if ( $age < 300 && is_array( $cached['manifest'] ) ) {
-                backup_lite_log( 'info', 'Using cached file manifest.', [
+                museder_restoreone_log( 'info', 'Using cached file manifest.', [
                     'age_seconds' => $age,
                     'files' => $cached['manifest']['count'] ?? 0,
                 ] );
@@ -3522,7 +3554,7 @@ class Backup_Lite_Backup {
             // Don't log cache failures to reduce I/O overhead
         }
         
-        backup_lite_log( 'info', 'Built file manifest.', [
+        museder_restoreone_log( 'info', 'Built file manifest.', [
             'files' => $file_count,
             'bytes' => $manifest['bytes'] ?? 0,
         ] );
@@ -3582,7 +3614,7 @@ class Backup_Lite_Backup {
                 foreach ( $iterator as $file ) {
                     // Safety check: prevent memory exhaustion
                     if ( $file_count >= $max_files ) {
-                        backup_lite_log( 'warning', 'File manifest limit reached, stopping scan.', [
+                        museder_restoreone_log( 'warning', 'File manifest limit reached, stopping scan.', [
                             'max_files' => $max_files,
                             'scanned' => $file_count,
                         ] );
@@ -3653,7 +3685,7 @@ class Backup_Lite_Backup {
                     $file_count++;
                 }
             } catch ( Exception $e ) {
-                backup_lite_log( 'error', 'Error scanning directory for manifest.', [
+                museder_restoreone_log( 'error', 'Error scanning directory for manifest.', [
                     'source' => $source,
                     'target' => $target,
                     'error' => $e->getMessage(),
@@ -3692,7 +3724,7 @@ class Backup_Lite_Backup {
         // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
         $contents = file_get_contents( $path );
         if ( false === $contents ) {
-            backup_lite_log( 'error', 'Failed to read backup manifest file.', [
+            museder_restoreone_log( 'error', 'Failed to read backup manifest file.', [
                 'manifest_file' => $path,
             ] );
             return [];
@@ -3704,7 +3736,7 @@ class Backup_Lite_Backup {
             $json_error = function_exists( 'json_last_error_msg' ) ? json_last_error_msg() : 'Unknown JSON error';
             // phpcs:ignore WordPress.WP.AlternativeFunctions.filesystem_operations_filesize
             $manifest_size = @filesize( $path );
-            backup_lite_log( 'error', 'Backup manifest JSON decode failed (truncated or invalid).', [
+            museder_restoreone_log( 'error', 'Backup manifest JSON decode failed (truncated or invalid).', [
                 'manifest_file' => $path,
                 'json_error'    => $json_error,
                 'file_size'     => $manifest_size,
@@ -3845,8 +3877,8 @@ class Backup_Lite_Backup {
     private static function append_files_to_pclzip( $archive_path, array $files ) {
         self::optimize_runtime_environment();
 
-        if ( function_exists( 'backup_lite_require_pclzip' ) ) {
-            backup_lite_require_pclzip();
+        if ( function_exists( 'museder_restoreone_require_pclzip' ) ) {
+            museder_restoreone_require_pclzip();
         }
 
         $results = [
@@ -3928,7 +3960,7 @@ class Backup_Lite_Backup {
         $effective_done = max( $processed_files, $pointer, $added_files + $skipped_files );
 
         if ( $total_files > 0 && $effective_done < $total_files ) {
-            backup_lite_log( 'warning', 'Finalize requested before job finished packing. Continuing backup instead of completing.', [
+            museder_restoreone_log( 'warning', 'Finalize requested before job finished packing. Continuing backup instead of completing.', [
                 'total_files'     => $total_files,
                 'processed_files' => $processed_files,
                 'added_files'     => $added_files,
@@ -3962,7 +3994,7 @@ class Backup_Lite_Backup {
 
         // Update download_url with the final archive path
         if ( ! empty( $job['archive_path'] ) && file_exists( $job['archive_path'] ) ) {
-            $job['download_url'] = backup_lite_get_download_url( $job['archive_path'] );
+            $job['download_url'] = museder_restoreone_get_download_url( $job['archive_path'] );
         }
 
         // Calculate duration if started_at exists
@@ -3974,7 +4006,7 @@ class Backup_Lite_Backup {
         $job['completed_at'] = $backup_completed_at;
         $job['duration_seconds'] = $backup_duration_seconds;
 
-        backup_lite_log( 'info', 'Backup job completed.', [
+        museder_restoreone_log( 'info', 'Backup job completed.', [
             'archive' => $job['archive_path'],
             'size'    => $size,
             'duration_seconds' => $backup_duration_seconds,
@@ -3998,15 +4030,17 @@ class Backup_Lite_Backup {
             'started_at' => isset( $job['started_at'] ) ? (int) $job['started_at'] : null,
             'completed_at' => $backup_completed_at,
         ];
-        if ( Backup_Lite_Pro::is_pro_active() && ! empty( $job['options']['label'] ) ) {
+        if ( ! empty( $job['options']['label'] ) ) {
             $backup_metadata['label'] = sanitize_text_field( $job['options']['label'] );
+        }
+        if ( museder_is_pro_active() ) {
             $backup_metadata['encrypted'] = ! empty( $job['options']['encrypt'] );
             $backup_metadata['cloud_destinations'] = $job['options']['cloud_destinations'] ?? [];
         }
         self::store_backup_metadata( basename( $job['archive_path'] ), $backup_metadata );
 
-        if ( class_exists( 'Backup_Lite_Backup_Jobs' ) ) {
-            Backup_Lite_Backup_Jobs::cleanup_job( $job );
+        if ( class_exists( 'Museder_Restoreone_Backup_Jobs' ) ) {
+            Museder_Restoreone_Backup_Jobs::cleanup_job( $job );
         }
 
         return $job;
@@ -4018,7 +4052,7 @@ class Backup_Lite_Backup {
         // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- required for writing DB export file, path validated and sanitized
         $handle = fopen( $filepath, 'wb' ); // Use binary mode for better performance
         if ( ! $handle ) {
-            backup_lite_log( 'error', 'Unable to open database export file for writing.', [ 'path' => $filepath ] );
+            museder_restoreone_log( 'error', 'Unable to open database export file for writing.', [ 'path' => $filepath ] );
             return false;
         }
 
@@ -4041,7 +4075,7 @@ class Backup_Lite_Backup {
 
         $meta = [
             'type'            => 'meta',
-            'format'          => 'backup_lite_db_ndjson',
+            'format'          => 'museder_restoreone_db_ndjson',
             'format_version'  => 1,
             'generated_at_gmt'=> gmdate( 'c' ), // phpcs:ignore WordPress.DateTime.RestrictedFunctions.date_date -- GMT metadata
             'site_url'        => function_exists( 'home_url' ) ? home_url() : '',
@@ -4054,7 +4088,7 @@ class Backup_Lite_Backup {
         if ( empty( $tables ) ) {
             // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- required for cleanup after fopen
             fclose( $handle );
-            backup_lite_log( 'warning', 'No database tables found for export.' );
+            museder_restoreone_log( 'warning', 'No database tables found for export.' );
             return true;
         }
 
@@ -4210,7 +4244,7 @@ class Backup_Lite_Backup {
          * @param array<string> $tables
          * @param array         $options
          */
-        $tables = apply_filters( 'backup_lite_export_db_tables', $tables, $options );
+        $tables = apply_filters( 'museder_restoreone_export_db_tables', $tables, $options );
         if ( ! is_array( $tables ) ) {
             $tables = [];
         }
@@ -4324,8 +4358,8 @@ class Backup_Lite_Backup {
         }
 
         // Also skip the current backup jobs dir if it is inside site root.
-        if ( function_exists( 'backup_lite_get_jobs_dir' ) ) {
-            $jobs_dir = backup_lite_get_jobs_dir();
+        if ( function_exists( 'museder_restoreone_get_jobs_dir' ) ) {
+            $jobs_dir = museder_restoreone_get_jobs_dir();
             if ( ! empty( $jobs_dir ) ) {
                 $jobs_dir = wp_normalize_path( trailingslashit( (string) $jobs_dir ) );
                 if ( '' !== $jobs_dir && 0 === strpos( $normalized, $jobs_dir ) ) {
@@ -4389,7 +4423,7 @@ class Backup_Lite_Backup {
         }
 
         // Use shared helper function for consistency
-        $paths = backup_lite_get_excluded_paths();
+        $paths = museder_restoreone_get_excluded_paths();
         
         // Add additional exclusions specific to backup process
         $normalize = static function( $path, $must_exist = false ) {
@@ -4430,7 +4464,7 @@ class Backup_Lite_Backup {
                 }
             } catch ( Exception $e ) {
                 // Silently continue if directory iteration fails
-                backup_lite_log( 'warning', 'Failed to scan uploads directory for exclusions.', [ 'error' => $e->getMessage() ] );
+                museder_restoreone_log( 'warning', 'Failed to scan uploads directory for exclusions.', [ 'error' => $e->getMessage() ] );
             }
         }
 
@@ -4502,7 +4536,7 @@ class Backup_Lite_Backup {
                 }
 
                 if ( empty( $options['no_plugins'] ) ) {
-                    $plugins_dir = function_exists( 'backup_lite_get_plugins_dir' ) ? backup_lite_get_plugins_dir() : '';
+                    $plugins_dir = function_exists( 'museder_restoreone_get_plugins_dir' ) ? museder_restoreone_get_plugins_dir() : '';
                     if ( '' !== $plugins_dir ) {
                         $prefixes[] = wp_normalize_path( trailingslashit( $plugins_dir ) );
                     }
@@ -4511,12 +4545,14 @@ class Backup_Lite_Backup {
                     $prefixes[] = wp_normalize_path( trailingslashit( (string) get_theme_root() ) );
                 }
                 if ( empty( $options['no_muplugins'] ) ) {
-                    if ( defined( 'WPMU_PLUGIN_DIR' ) ) {
-                        $prefixes[] = wp_normalize_path( trailingslashit( WPMU_PLUGIN_DIR ) );
+                    $mu_dir = function_exists( 'museder_restoreone_get_mu_plugins_dir' ) ? museder_restoreone_get_mu_plugins_dir() : '';
+                    if ( '' !== $mu_dir ) {
+                        $prefixes[] = wp_normalize_path( trailingslashit( $mu_dir ) );
                     }
                 }
-                if ( defined( 'WP_LANG_DIR' ) ) {
-                    $prefixes[] = wp_normalize_path( trailingslashit( WP_LANG_DIR ) );
+                $lang_dir = function_exists( 'museder_restoreone_get_languages_dir' ) ? museder_restoreone_get_languages_dir() : '';
+                if ( '' !== $lang_dir ) {
+                    $prefixes[] = wp_normalize_path( trailingslashit( $lang_dir ) );
                 }
             }
         }
@@ -4527,7 +4563,7 @@ class Backup_Lite_Backup {
          * @param array<string> $prefixes
          * @param array         $options
          */
-        $prefixes = apply_filters( 'backup_lite_backup_scope_include_prefixes', $prefixes, $options );
+        $prefixes = apply_filters( 'museder_restoreone_backup_scope_include_prefixes', $prefixes, $options );
         if ( ! is_array( $prefixes ) ) {
             $prefixes = [];
         }
@@ -4544,8 +4580,8 @@ class Backup_Lite_Backup {
      */
     private static function resolve_runtime_backup_mode( array $options ) {
         $mode = isset( $options['backup_mode'] ) ? (string) $options['backup_mode'] : '';
-        if ( '' === $mode && class_exists( 'Backup_Lite_Settings' ) ) {
-            $settings = Backup_Lite_Settings::get_settings();
+        if ( '' === $mode && class_exists( 'Museder_Restoreone_Settings' ) ) {
+            $settings = Museder_Restoreone_Settings::get_settings();
             $mode = isset( $settings['backup_mode_default'] ) ? (string) $settings['backup_mode_default'] : '';
         }
 
@@ -4576,8 +4612,8 @@ class Backup_Lite_Backup {
         $basenames = [];
 
         $smart = isset( $options['backup_smart_exclude'] ) ? (string) $options['backup_smart_exclude'] : '';
-        if ( '' === $smart && class_exists( 'Backup_Lite_Settings' ) ) {
-            $settings = Backup_Lite_Settings::get_settings();
+        if ( '' === $smart && class_exists( 'Museder_Restoreone_Settings' ) ) {
+            $settings = Museder_Restoreone_Settings::get_settings();
             $smart = isset( $settings['backup_smart_exclude_default'] ) ? (string) $settings['backup_smart_exclude_default'] : '';
         }
         if ( ! in_array( $smart, [ 'auto', 'on', 'off' ], true ) ) {
@@ -4591,8 +4627,8 @@ class Backup_Lite_Backup {
         }
 
         $custom = isset( $options['backup_custom_excludes'] ) ? (string) $options['backup_custom_excludes'] : '';
-        if ( '' === $custom && class_exists( 'Backup_Lite_Settings' ) ) {
-            $settings = Backup_Lite_Settings::get_settings();
+        if ( '' === $custom && class_exists( 'Museder_Restoreone_Settings' ) ) {
+            $settings = Museder_Restoreone_Settings::get_settings();
             $custom = isset( $settings['backup_custom_excludes'] ) ? (string) $settings['backup_custom_excludes'] : '';
         }
         if ( '' !== trim( $custom ) ) {
@@ -4612,7 +4648,7 @@ class Backup_Lite_Backup {
             }
         }
         if ( ! empty( $options['no_plugins'] ) ) {
-            $plugins_dir = function_exists( 'backup_lite_get_plugins_dir' ) ? backup_lite_get_plugins_dir() : '';
+            $plugins_dir = function_exists( 'museder_restoreone_get_plugins_dir' ) ? museder_restoreone_get_plugins_dir() : '';
             if ( '' !== $plugins_dir ) {
                 $prefixes[] = wp_normalize_path( trailingslashit( $plugins_dir ) );
             }
@@ -4621,8 +4657,9 @@ class Backup_Lite_Backup {
             $prefixes[] = wp_normalize_path( trailingslashit( (string) get_theme_root() ) );
         }
         if ( ! empty( $options['no_muplugins'] ) ) {
-            if ( defined( 'WPMU_PLUGIN_DIR' ) ) {
-                $prefixes[] = wp_normalize_path( trailingslashit( WPMU_PLUGIN_DIR ) );
+            $mu_dir = function_exists( 'museder_restoreone_get_mu_plugins_dir' ) ? museder_restoreone_get_mu_plugins_dir() : '';
+            if ( '' !== $mu_dir ) {
+                $prefixes[] = wp_normalize_path( trailingslashit( $mu_dir ) );
             }
         }
         if ( ! empty( $options['no_cache'] ) ) {
@@ -4635,7 +4672,7 @@ class Backup_Lite_Backup {
          * @param array<string> $prefixes
          * @param array         $options
          */
-        $prefixes = apply_filters( 'backup_lite_backup_scope_exclude_prefixes', $prefixes, $options );
+        $prefixes = apply_filters( 'museder_restoreone_backup_scope_exclude_prefixes', $prefixes, $options );
 
         $prefixes  = array_values( array_unique( array_filter( $prefixes ) ) );
         $patterns  = array_values( array_unique( array_filter( $patterns ) ) );
@@ -4657,7 +4694,7 @@ class Backup_Lite_Backup {
         $upload_dir = wp_upload_dir();
         $uploads_basedir = isset( $upload_dir['basedir'] ) ? (string) $upload_dir['basedir'] : '';
         $uploads_basedir = $uploads_basedir ? wp_normalize_path( $uploads_basedir ) : '';
-        $content_dir = function_exists( 'backup_lite_get_wp_content_dir' ) ? backup_lite_get_wp_content_dir() : '';
+        $content_dir = function_exists( 'museder_restoreone_get_wp_content_dir' ) ? museder_restoreone_get_wp_content_dir() : '';
 
         $prefixes = [
             '' !== $content_dir ? trailingslashit( $content_dir . '/cache' ) : '',
@@ -4681,7 +4718,7 @@ class Backup_Lite_Backup {
          *
          * @param array<string> $prefixes Normalized directory prefixes with trailing slashes.
          */
-        $prefixes = apply_filters( 'backup_lite_smart_exclude_prefixes', $prefixes );
+        $prefixes = apply_filters( 'museder_restoreone_smart_exclude_prefixes', $prefixes );
 
         if ( ! is_array( $prefixes ) ) {
             $prefixes = [];
@@ -4744,7 +4781,7 @@ class Backup_Lite_Backup {
 
             // Normalize relative roots.
             if ( 0 === strpos( $line, 'wp-content/' ) ) {
-                $content_dir = function_exists( 'backup_lite_get_wp_content_dir' ) ? backup_lite_get_wp_content_dir() : '';
+                $content_dir = function_exists( 'museder_restoreone_get_wp_content_dir' ) ? museder_restoreone_get_wp_content_dir() : '';
                 if ( '' === $content_dir ) {
                     continue;
                 }
@@ -4759,14 +4796,14 @@ class Backup_Lite_Backup {
                 $line = wp_normalize_path( trailingslashit( $uploads_basedir ) . substr( $line, strlen( 'uploads/' ) ) );
             } elseif ( 0 === strpos( $line, './' ) ) {
                 $line = ltrim( $line, './' );
-                $root = function_exists( 'backup_lite_get_wp_root_dir' ) ? (string) backup_lite_get_wp_root_dir() : '';
+                $root = function_exists( 'museder_restoreone_get_wp_root_dir' ) ? (string) museder_restoreone_get_wp_root_dir() : '';
                 if ( '' === $root ) {
                     continue;
                 }
                 $line = wp_normalize_path( trailingslashit( $root ) . $line );
             } elseif ( 0 !== strpos( $line, '/' ) && false === preg_match( '#^([a-zA-Z]:/|\\\\\\\\)#', $line ) ) {
                 // Treat as relative to the WordPress install root.
-                $root = function_exists( 'backup_lite_get_wp_root_dir' ) ? (string) backup_lite_get_wp_root_dir() : '';
+                $root = function_exists( 'museder_restoreone_get_wp_root_dir' ) ? (string) museder_restoreone_get_wp_root_dir() : '';
                 if ( '' === $root ) {
                     continue;
                 }
@@ -4918,7 +4955,7 @@ class Backup_Lite_Backup {
     private static function record_backup_event( $status, array $context = [] ) {
         $context['status'] = $status;
         $context['time']   = current_time( 'mysql' );
-        Backup_Lite_Log_Handler::record_event( 'backup_result', $context, 'success' === $status ? 'info' : 'error' );
+        Museder_Restoreone_Log_Handler::record_event( 'backup_result', $context, 'success' === $status ? 'info' : 'error' );
     }
 
     /**
@@ -4931,7 +4968,7 @@ class Backup_Lite_Backup {
     private static function store_backup_metadata( $filename, $metadata ) {
         // Always store metadata (duration, timestamps) even without PRO
         // PRO features (label, encrypted, cloud_destinations) are only stored if PRO is active
-        $meta_file = backup_lite_get_backup_dir() . '/.backup-meta.json';
+        $meta_file = museder_restoreone_get_backup_dir() . '/.backup-meta.json';
         $all_meta = [];
 
         if ( file_exists( $meta_file ) ) {
@@ -4959,7 +4996,7 @@ class Backup_Lite_Backup {
      */
     public static function get_backup_metadata( $filename ) {
         // Always return metadata (duration, timestamps) even without PRO
-        $meta_file = backup_lite_get_backup_dir() . '/.backup-meta.json';
+        $meta_file = museder_restoreone_get_backup_dir() . '/.backup-meta.json';
         if ( ! file_exists( $meta_file ) ) {
             return [];
         }

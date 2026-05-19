@@ -1,17 +1,18 @@
 <?php
 /**
- * Log handler utilities for Backup Lite.
+ * Log handler utilities for Museder RestoreOne.
  *
- * @package BackupLite
+ * @package Museder_Restoreone
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-class Backup_Lite_Log_Handler {
+class Museder_Restoreone_Log_Handler {
 
-    const LOG_DIR = 'backup-lite-logs';
+    /** Legacy log subdir name (for migration only). Current logs use museder_restoreone_get_log_dir(). */
+    const LEGACY_LOG_DIR = 'backup-lite-logs';
 
     /**
      * Initialise hooks.
@@ -19,11 +20,11 @@ class Backup_Lite_Log_Handler {
     public static function init() {
         add_action( 'admin_init', [ __CLASS__, 'maybe_create_log_dir' ] );
 
-        add_action( 'wp_ajax_backup_lite_fetch_logs', [ __CLASS__, 'ajax_fetch_logs' ] );
-        add_action( 'wp_ajax_backup_lite_delete_log', [ __CLASS__, 'ajax_delete_log' ] );
-        add_action( 'wp_ajax_backup_lite_download_log', [ __CLASS__, 'ajax_download_log' ] );
-        add_action( 'wp_ajax_backup_lite_get_log_download_url', [ __CLASS__, 'ajax_get_log_download_url' ] );
-        add_action( 'wp_ajax_backup_lite_view_log', [ __CLASS__, 'ajax_view_log' ] );
+        add_action( 'wp_ajax_museder_restoreone_fetch_logs', [ __CLASS__, 'ajax_fetch_logs' ] );
+        add_action( 'wp_ajax_museder_restoreone_delete_log', [ __CLASS__, 'ajax_delete_log' ] );
+        add_action( 'wp_ajax_museder_restoreone_download_log', [ __CLASS__, 'ajax_download_log' ] );
+        add_action( 'wp_ajax_museder_restoreone_get_log_download_url', [ __CLASS__, 'ajax_get_log_download_url' ] );
+        add_action( 'wp_ajax_museder_restoreone_view_log', [ __CLASS__, 'ajax_view_log' ] );
     }
 
     /**
@@ -35,7 +36,7 @@ class Backup_Lite_Log_Handler {
      */
     public static function record_event( $event, array $context = [], $level = 'info' ) {
         $context['event'] = $event;
-        backup_lite_log( $level, 'event=' . $event, $context );
+        museder_restoreone_log( $level, 'event=' . $event, $context );
     }
 
     /**
@@ -110,7 +111,7 @@ class Backup_Lite_Log_Handler {
      */
     public static function get_log_dir() {
         // Use the unified log directory resolver (wp_upload_dir-based museder-restoreone root).
-        return backup_lite_get_log_dir();
+        return museder_restoreone_get_log_dir();
     }
 
     /**
@@ -126,8 +127,8 @@ class Backup_Lite_Log_Handler {
             $dirs[] = wp_normalize_path( $current );
         }
 
-        if ( function_exists( 'backup_lite_get_legacy_log_dirs' ) ) {
-            $legacy = backup_lite_get_legacy_log_dirs();
+        if ( function_exists( 'museder_restoreone_get_legacy_log_dirs' ) ) {
+            $legacy = museder_restoreone_get_legacy_log_dirs();
             if ( is_array( $legacy ) ) {
                 foreach ( $legacy as $dir ) {
                     if ( is_string( $dir ) && '' !== $dir ) {
@@ -154,7 +155,8 @@ class Backup_Lite_Log_Handler {
      * AJAX: Fetch logs list.
      */
     public static function ajax_fetch_logs() {
-        Backup_Lite_UI::verify_ajax_request();
+        Museder_Restoreone_UI::verify_ajax_request();
+        check_ajax_referer( Museder_Restoreone_UI::NONCE, 'nonce' );
 
         wp_send_json_success( [ 'logs' => self::get_logs() ] );
     }
@@ -163,9 +165,9 @@ class Backup_Lite_Log_Handler {
      * AJAX: Delete log file.
      */
     public static function ajax_delete_log() {
-        Backup_Lite_UI::verify_ajax_request();
+        Museder_Restoreone_UI::verify_ajax_request();
         // Additional nonce verification for plugin-check
-        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
+        check_ajax_referer( Museder_Restoreone_UI::NONCE, 'nonce' );
 
         // Nonce verified above
         // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
@@ -209,9 +211,9 @@ class Backup_Lite_Log_Handler {
      * preventing nonce expiration issues.
      */
     public static function ajax_get_log_download_url() {
-        Backup_Lite_UI::verify_ajax_request();
+        Museder_Restoreone_UI::verify_ajax_request();
         // Additional nonce verification for plugin-check
-        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
+        check_ajax_referer( Museder_Restoreone_UI::NONCE, 'nonce' );
 
         // Nonce verified above
         // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
@@ -267,11 +269,11 @@ class Backup_Lite_Log_Handler {
         }
 
         // Verify nonce - use the basename of the log file for the nonce action
-        $nonce_action = 'backup_lite_download_log_' . basename( $path );
+        $nonce_action = 'museder_restoreone_download_log_' . basename( $path );
         if ( ! check_admin_referer( $nonce_action, '_wpnonce' ) ) {
             // If nonce verification fails, provide a helpful error message
             wp_die( 
-                esc_html__( 'The link you are trying to access has expired.', 'museder-restoreone' ) . ' <a href="' . esc_url( admin_url( 'admin.php?page=backup-lite-logs' ) ) . '">' . esc_html__( 'Please try again', 'museder-restoreone' ) . '</a>.',
+                esc_html__( 'The link you are trying to access has expired.', 'museder-restoreone' ) . ' <a href="' . esc_url( admin_url( 'admin.php?page=museder-restoreone-logs' ) ) . '">' . esc_html__( 'Please try again', 'museder-restoreone' ) . '</a>.',
                 esc_html__( 'Link expired', 'museder-restoreone' ),
                 [ 'response' => 403, 'back_link' => true ]
             );
@@ -294,9 +296,9 @@ class Backup_Lite_Log_Handler {
      * AJAX: View log content (tail).
      */
     public static function ajax_view_log() {
-        Backup_Lite_UI::verify_ajax_request();
+        Museder_Restoreone_UI::verify_ajax_request();
         // Additional nonce verification for plugin-check
-        check_ajax_referer( Backup_Lite_UI::NONCE, 'nonce' );
+        check_ajax_referer( Museder_Restoreone_UI::NONCE, 'nonce' );
 
         // Nonce verified above
         // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
@@ -324,8 +326,8 @@ class Backup_Lite_Log_Handler {
             'log' => [
                 'name'      => basename( $path ),
                 'size'      => size_format( $size ),
-                // @plugin-check: wp_date with local timezone - filemtime() returns Unix timestamp (UTC), backup_lite_format_local_time() handles timezone conversion
-                'modified'  => backup_lite_format_local_time( filemtime( $path ), 'Y-m-d H:i' ),
+                // @plugin-check: wp_date with local timezone - filemtime() returns Unix timestamp (UTC), museder_restoreone_format_local_time() handles timezone conversion
+                'modified'  => museder_restoreone_format_local_time( filemtime( $path ), 'Y-m-d H:i' ),
                 'content'   => $content,
                 'truncated' => $truncated,
             ],
@@ -350,8 +352,8 @@ class Backup_Lite_Log_Handler {
             $items[] = [
                 'name'         => basename( $path ),
                 'size'         => size_format( filesize( $path ) ),
-                // @plugin-check: wp_date with local timezone - filemtime() returns Unix timestamp (UTC), backup_lite_format_local_time() handles timezone conversion
-                'modified'     => backup_lite_format_local_time( filemtime( $path ), 'Y-m-d H:i' ),
+                // @plugin-check: wp_date with local timezone - filemtime() returns Unix timestamp (UTC), museder_restoreone_format_local_time() handles timezone conversion
+                'modified'     => museder_restoreone_format_local_time( filemtime( $path ), 'Y-m-d H:i' ),
                 'download_url' => self::build_download_url( $path ),
             ];
         }
@@ -367,13 +369,13 @@ class Backup_Lite_Log_Handler {
      */
     private static function iterate_recent_logs( $days = 7 ) {
         $days = max( 1, (int) $days );
-        // Use UTC timestamp, backup_lite_format_local_time() will convert to local timezone for display
+        // Use UTC timestamp, museder_restoreone_format_local_time() will convert to local timezone for display
         $base_timestamp = time();
 
         for ( $offset = 0; $offset < $days; $offset++ ) {
             $timestamp = $base_timestamp - ( DAY_IN_SECONDS * $offset );
-            // @plugin-check: wp_date with local timezone - $timestamp is UTC, backup_lite_format_local_time() handles timezone conversion
-            $filename  = sprintf( 'backup-lite-%s.log', backup_lite_format_local_time( $timestamp, 'Y-m-d' ) );
+            // @plugin-check: wp_date with local timezone - $timestamp is UTC, museder_restoreone_format_local_time() handles timezone conversion
+            $filename  = sprintf( 'backup-lite-%s.log', museder_restoreone_format_local_time( $timestamp, 'Y-m-d' ) );
             $path     = '';
 
             foreach ( self::get_log_dirs() as $dir ) {
@@ -463,16 +465,22 @@ class Backup_Lite_Log_Handler {
         }
 
         foreach ( self::get_log_dirs() as $dir ) {
-            $root = wp_normalize_path( $dir );
-            $path = wp_normalize_path( trailingslashit( $root ) . $base );
-
-            if ( strpos( $path, $root ) !== 0 ) {
+            $root_real = realpath( $dir );
+            if ( ! $root_real ) {
+                continue;
+            }
+            $root_prefix = trailingslashit( wp_normalize_path( $root_real ) );
+            $path        = wp_normalize_path( $root_prefix . $base );
+            $path_real   = file_exists( $path ) ? realpath( $path ) : false;
+            if ( ! $path_real ) {
+                continue;
+            }
+            $norm = wp_normalize_path( $path_real );
+            if ( 0 !== strpos( $norm, $root_prefix ) ) {
                 continue;
             }
 
-            if ( file_exists( $path ) ) {
-                return $path;
-            }
+            return $path_real;
         }
 
         return null;
@@ -488,8 +496,8 @@ class Backup_Lite_Log_Handler {
     private static function build_download_url( $path ) {
         $basename = basename( $path );
         return wp_nonce_url(
-            admin_url( 'admin-post.php?action=backup_lite_download_log&log=' . rawurlencode( $basename ) ),
-            'backup_lite_download_log_' . $basename
+            admin_url( 'admin-post.php?action=museder_restoreone_download_log&log=' . rawurlencode( $basename ) ),
+            'museder_restoreone_download_log_' . $basename
         );
     }
 

@@ -38,6 +38,10 @@
     --bl-shadow-lg: 0 24px 50px rgba(17, 24, 39, 0.55);
 }
 
+[data-bl-theme="dark"] .bl-diagnostic-item .label {
+    color: rgba(226, 232, 240, 0.88);
+}
+
 body.backup-lite-admin {
     background: var(--bl-bg);
     color: var(--bl-text);
@@ -593,7 +597,7 @@ body.backup-lite-admin #wpcontent {
     gap: 16px;
 }
 
-[data-bl-theme=\"dark\"] .bl-list-item {
+[data-bl-theme="dark"] .bl-list-item {
     background: rgba(255, 255, 255, 0.1);
 }
 
@@ -634,7 +638,7 @@ body.backup-lite-admin #wpcontent {
     z-index: 5;
 }
 
-[data-bl-theme=\"dark\"] .bl-table-wrapper thead {
+[data-bl-theme="dark"] .bl-table-wrapper thead {
     background: rgba(255, 255, 255, 0.12);
 }
 

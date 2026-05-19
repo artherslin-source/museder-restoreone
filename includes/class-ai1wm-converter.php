@@ -9,7 +9,7 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-class Backup_Lite_AI1WM_Converter {
+class Museder_Restoreone_AI1WM_Converter {
 
     /**
      * Detect if a backup file is from All-in-One WP Migration
@@ -168,13 +168,13 @@ class Backup_Lite_AI1WM_Converter {
         $large_file_threshold = 500 * 1024 * 1024; // 500MB
         
         if ( $file_size > $large_file_threshold ) {
-            backup_lite_log( 'info', 'Large file conversion started, this may take some time.', [
+            museder_restoreone_log( 'info', 'Large file conversion started, this may take some time.', [
                 'file' => basename( $source_file ),
                 'size' => size_format( $file_size, 2 ),
             ] );
         }
         
-        $temp_dir = backup_lite_create_temp_dir( 'ai1wm_convert' );
+        $temp_dir = museder_restoreone_create_temp_dir( 'ai1wm_convert' );
         if ( ! $temp_dir || ! is_dir( $temp_dir ) ) {
             return [
                 'success' => false,
@@ -185,14 +185,14 @@ class Backup_Lite_AI1WM_Converter {
 
         try {
             // Step 1: Extract source ZIP
-            backup_lite_log( 'info', 'Extracting All-in-One backup for conversion.', [ 'file' => basename( $source_file ) ] );
+            museder_restoreone_log( 'info', 'Extracting All-in-One backup for conversion.', [ 'file' => basename( $source_file ) ] );
             
             $extract_dir = trailingslashit( $temp_dir ) . 'source';
-            backup_lite_ensure_directory( $extract_dir );
+            museder_restoreone_ensure_directory( $extract_dir );
             
             $extract_result = self::extract_archive( $source_file, $extract_dir );
             if ( ! $extract_result['success'] ) {
-                backup_lite_delete_directory( $temp_dir );
+                museder_restoreone_delete_directory( $temp_dir );
                 return [
                     'success' => false,
                     'message' => __( 'Failed to extract All-in-One backup archive.', 'museder-restoreone' ),
@@ -202,11 +202,11 @@ class Backup_Lite_AI1WM_Converter {
 
             // Step 2: Analyze structure and reorganize
             $reorganized_dir = trailingslashit( $temp_dir ) . 'reorganized';
-            backup_lite_ensure_directory( $reorganized_dir );
+            museder_restoreone_ensure_directory( $reorganized_dir );
             
             $reorganize_result = self::reorganize_structure( $extract_dir, $reorganized_dir );
             if ( ! $reorganize_result['success'] ) {
-                backup_lite_delete_directory( $temp_dir );
+                museder_restoreone_delete_directory( $temp_dir );
                 return [
                     'success' => false,
                     'message' => $reorganize_result['message'],
@@ -217,7 +217,7 @@ class Backup_Lite_AI1WM_Converter {
             // Step 3: Create metadata file
             $meta_result = self::create_metadata( $reorganized_dir, $source_file );
             if ( ! $meta_result['success'] ) {
-                backup_lite_delete_directory( $temp_dir );
+                museder_restoreone_delete_directory( $temp_dir );
                 return [
                     'success' => false,
                     'message' => __( 'Failed to create metadata file.', 'museder-restoreone' ),
@@ -227,7 +227,7 @@ class Backup_Lite_AI1WM_Converter {
 
             // Step 4: Create output ZIP
             if ( empty( $output_file ) ) {
-                $backup_dir = backup_lite_get_backup_dir();
+                $backup_dir = museder_restoreone_get_backup_dir();
                 $base_name = pathinfo( $source_file, PATHINFO_FILENAME );
                 $output_file = trailingslashit( $backup_dir ) . sanitize_file_name( $base_name . '-converted.zip' );
                 $output_file = wp_unique_filename( $backup_dir, basename( $output_file ) );
@@ -236,7 +236,7 @@ class Backup_Lite_AI1WM_Converter {
             $zip_result = self::create_output_zip( $reorganized_dir, $output_file );
             
             // Cleanup
-            backup_lite_delete_directory( $temp_dir );
+            museder_restoreone_delete_directory( $temp_dir );
 
             if ( ! $zip_result['success'] ) {
                 return [
@@ -246,7 +246,7 @@ class Backup_Lite_AI1WM_Converter {
                 ];
             }
 
-            backup_lite_log( 'info', 'Successfully converted All-in-One backup to Museder RestoreOne format.', [
+            museder_restoreone_log( 'info', 'Successfully converted All-in-One backup to Museder RestoreOne format.', [
                 'source' => basename( $source_file ),
                 'output' => basename( $output_file ),
             ] );
@@ -258,8 +258,8 @@ class Backup_Lite_AI1WM_Converter {
             ];
 
         } catch ( Exception $e ) {
-            backup_lite_delete_directory( $temp_dir );
-            backup_lite_log( 'error', 'Exception during All-in-One conversion.', [ 'error' => $e->getMessage() ] );
+            museder_restoreone_delete_directory( $temp_dir );
+            museder_restoreone_log( 'error', 'Exception during All-in-One conversion.', [ 'error' => $e->getMessage() ] );
             
             return [
                 'success' => false,
@@ -300,7 +300,7 @@ class Backup_Lite_AI1WM_Converter {
 
         // Reorganize wp-content structure
         $wp_content_target = trailingslashit( $target_dir ) . 'wp-content';
-        backup_lite_ensure_directory( $wp_content_target );
+        museder_restoreone_ensure_directory( $wp_content_target );
 
         // All-in-One structure variations:
         // 1. Direct plugins/, themes/, uploads/ at root
@@ -438,15 +438,15 @@ class Backup_Lite_AI1WM_Converter {
         
         // Try to extract metadata from original backup
         $meta = [
-            'plugin_version'    => defined( 'BACKUP_LITE_VERSION' ) ? BACKUP_LITE_VERSION : 'unknown',
+            'plugin_version'    => defined( 'MUSEDER_RESTOREONE_VERSION' ) ? MUSEDER_RESTOREONE_VERSION : 'unknown',
             'wordpress_version' => 'unknown', // Will be determined from database if possible
-            'generated_at'      => backup_lite_local_time( 'c' ),
+            'generated_at'      => museder_restoreone_local_time( 'c' ),
             'generated_at_gmt'  => gmdate( 'c' ),
             'site_url'          => function_exists( 'home_url' ) ? home_url() : '',
             'php_version'       => PHP_VERSION,
             'source_format'     => 'ai1wm',
             'original_file'     => basename( $source_file ),
-            'converted_at'      => backup_lite_local_time( 'c' ),
+            'converted_at'      => museder_restoreone_local_time( 'c' ),
             'converted_at_gmt'  => gmdate( 'c' ),
         ];
 
@@ -516,8 +516,8 @@ class Backup_Lite_AI1WM_Converter {
         }
 
         // Fallback to PclZip
-        if ( function_exists( 'backup_lite_require_pclzip' ) ) {
-            backup_lite_require_pclzip();
+        if ( function_exists( 'museder_restoreone_require_pclzip' ) ) {
+            museder_restoreone_require_pclzip();
         }
 
         $pcl = new PclZip( $output_file );
@@ -594,8 +594,8 @@ class Backup_Lite_AI1WM_Converter {
             }
         }
 
-        if ( function_exists( 'backup_lite_require_pclzip' ) ) {
-            backup_lite_require_pclzip();
+        if ( function_exists( 'museder_restoreone_require_pclzip' ) ) {
+            museder_restoreone_require_pclzip();
         }
 
         $pcl = new PclZip( $archive_path );

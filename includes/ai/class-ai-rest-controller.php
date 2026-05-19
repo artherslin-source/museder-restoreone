@@ -9,7 +9,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 class Museder_AI_REST_Controller {
-    public const REST_NAMESPACE = 'museder/v1';
+    public const REST_NAMESPACE = 'museder-restoreone/v1';
 
     /**
      * Init hooks.
@@ -76,11 +76,20 @@ class Museder_AI_REST_Controller {
             $nonce = (string) $request->get_param( '_wpnonce' );
         }
 
-        if ( '' === $nonce || ! wp_verify_nonce( $nonce, 'wp_rest' ) ) {
+        // WordPress.org review: verify in separate steps (avoid combining checks with ||).
+        if ( '' === $nonce ) {
             return new WP_Error(
-                'museder_ai_invalid_nonce',
+                'museder_restoreone_invalid_nonce',
                 __( 'Invalid security token.', 'museder-restoreone' ),
-                [ 'status' => 403 ]
+                [ 'status' => 401 ]
+            );
+        }
+
+        if ( ! wp_verify_nonce( $nonce, 'wp_rest' ) ) {
+            return new WP_Error(
+                'museder_restoreone_invalid_nonce',
+                __( 'Invalid security token.', 'museder-restoreone' ),
+                [ 'status' => 401 ]
             );
         }
 
@@ -97,10 +106,7 @@ class Museder_AI_REST_Controller {
         $user_id = get_current_user_id();
 
         $rate = new Museder_AI_Rate_Limiter();
-        $ok   = $rate->assert_allowed_and_increment( (int) $user_id );
-        if ( is_wp_error( $ok ) ) {
-            return $ok;
-        }
+        $rate->assert_allowed_and_increment( (int) $user_id );
 
         $payload_raw = $request->get_json_params();
         $payload     = Museder_AI_Sanitizer::sanitize_payload( $payload_raw );
@@ -118,9 +124,8 @@ class Museder_AI_REST_Controller {
 
         return rest_ensure_response(
             [
-                'ok'        => true,
-                'remaining' => $rate->get_remaining( (int) $user_id ),
-                'report'    => $stored,
+                'ok'     => true,
+                'report' => $stored,
             ]
         );
     }

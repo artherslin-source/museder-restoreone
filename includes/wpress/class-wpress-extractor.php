@@ -17,7 +17,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
+class Museder_Restoreone_Wpress_Extractor extends Museder_Restoreone_Wpress_Archiver {
 	/** @var int|null */
 	protected $total_files_count = null;
 
@@ -38,14 +38,14 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 	/**
 	 * List file headers (does not read file contents).
 	 *
-	 * @throws Backup_Lite_Wpress_Not_Seekable_Exception
+	 * @throws Museder_Restoreone_Wpress_Not_Seekable_Exception
 	 */
 	public function list_files(): array {
 		$files = array();
 
 		// phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fseek, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_ftell
 		if ( @fseek( $this->file_handle, 0, SEEK_SET ) === -1 ) {
-			throw new Backup_Lite_Wpress_Not_Seekable_Exception(
+			throw new Museder_Restoreone_Wpress_Not_Seekable_Exception(
 				sprintf(
 					/* translators: %s: archive file path */
 					esc_html__( 'Could not seek to beginning of file. File: %s', 'museder-restoreone' ),
@@ -64,7 +64,7 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 				$data['offset'] = (int) @ftell( $this->file_handle );
 
 				if ( @fseek( $this->file_handle, $data['size'], SEEK_CUR ) === -1 ) {
-					throw new Backup_Lite_Wpress_Not_Seekable_Exception(
+					throw new Museder_Restoreone_Wpress_Not_Seekable_Exception(
 						sprintf(
 							/* translators: 1: archive file path, 2: offset */
 							esc_html__( 'Could not seek to offset of file. File: %1$s Offset: %2$d', 'museder-restoreone' ),
@@ -83,7 +83,7 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 	}
 
 	/**
-	 * @throws Backup_Lite_Wpress_Not_Seekable_Exception
+	 * @throws Museder_Restoreone_Wpress_Not_Seekable_Exception
 	 */
 	public function get_total_files_count(): int {
 		if ( $this->total_files_count === null ) {
@@ -94,7 +94,7 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 	}
 
 	/**
-	 * @throws Backup_Lite_Wpress_Not_Seekable_Exception
+	 * @throws Museder_Restoreone_Wpress_Not_Seekable_Exception
 	 */
 	public function get_total_files_size(): int {
 		if ( $this->total_files_size === null ) {
@@ -111,11 +111,11 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 	 * - $include_files / $exclude_files are treated as prefix paths (AI1WM style).
 	 * - $file_offset is a per-file offset (bytes already written for current file), used for resume.
 	 *
-	 * @throws Backup_Lite_Wpress_Not_Directory_Exception
-	 * @throws Backup_Lite_Wpress_Not_Seekable_Exception
-	 * @throws Backup_Lite_Wpress_Not_Readable_Exception
-	 * @throws Backup_Lite_Wpress_Quota_Exceeded_Exception
-	 * @throws Backup_Lite_Wpress_Path_Traversal_Exception
+	 * @throws Museder_Restoreone_Wpress_Not_Directory_Exception
+	 * @throws Museder_Restoreone_Wpress_Not_Seekable_Exception
+	 * @throws Museder_Restoreone_Wpress_Not_Readable_Exception
+	 * @throws Museder_Restoreone_Wpress_Quota_Exceeded_Exception
+	 * @throws Museder_Restoreone_Wpress_Path_Traversal_Exception
 	 */
 	public function extract_by_files_array(
 		string $location,
@@ -127,7 +127,7 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 		int $timeout_seconds = 10
 	): bool {
 		if ( ! is_dir( $location ) ) {
-			throw new Backup_Lite_Wpress_Not_Directory_Exception(
+			throw new Museder_Restoreone_Wpress_Not_Directory_Exception(
 				sprintf(
 					/* translators: %s: directory path */
 					esc_html__( 'Location is not a directory: %s', 'museder-restoreone' ),
@@ -144,7 +144,7 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 		// phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fseek, WordPress.WP.AlternativeFunctions.file_system_operations_fread
 		if ( $file_offset > 0 ) {
 			if ( @fseek( $this->file_handle, - $file_offset - self::HEADER_BYTES, SEEK_CUR ) === -1 ) {
-				throw new Backup_Lite_Wpress_Not_Seekable_Exception(
+				throw new Museder_Restoreone_Wpress_Not_Seekable_Exception(
 					sprintf(
 						/* translators: 1: archive file path, 2: offset */
 						esc_html__( 'Could not seek to offset of file. File: %1$s Offset: %2$d', 'museder-restoreone' ),
@@ -197,7 +197,7 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 				}
 			} else {
 				if ( @fseek( $this->file_handle, $file_size, SEEK_CUR ) === -1 ) {
-					throw new Backup_Lite_Wpress_Not_Seekable_Exception(
+					throw new Museder_Restoreone_Wpress_Not_Seekable_Exception(
 						sprintf(
 							/* translators: 1: archive file path, 2: offset */
 							esc_html__( 'Could not seek to offset of file. File: %1$s Offset: %2$d', 'museder-restoreone' ),
@@ -230,11 +230,11 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 	 * On slice break:
 	 * - returns false AND preserves offsets to resume from same header with updated $file_offset
 	 *
-	 * @throws Backup_Lite_Wpress_Not_Directory_Exception
-	 * @throws Backup_Lite_Wpress_Not_Seekable_Exception
-	 * @throws Backup_Lite_Wpress_Not_Readable_Exception
-	 * @throws Backup_Lite_Wpress_Quota_Exceeded_Exception
-	 * @throws Backup_Lite_Wpress_Path_Traversal_Exception
+	 * @throws Museder_Restoreone_Wpress_Not_Directory_Exception
+	 * @throws Museder_Restoreone_Wpress_Not_Seekable_Exception
+	 * @throws Museder_Restoreone_Wpress_Not_Readable_Exception
+	 * @throws Museder_Restoreone_Wpress_Quota_Exceeded_Exception
+	 * @throws Museder_Restoreone_Wpress_Path_Traversal_Exception
 	 */
 	public function extract_filtered_sliced(
 		string $location,
@@ -247,7 +247,7 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 		int $timeout_seconds = 10
 	): bool {
 		if ( ! is_dir( $location ) ) {
-			throw new Backup_Lite_Wpress_Not_Directory_Exception(
+			throw new Museder_Restoreone_Wpress_Not_Directory_Exception(
 				sprintf(
 					/* translators: %s: directory path */
 					esc_html__( 'Location is not a directory: %s', 'museder-restoreone' ),
@@ -263,7 +263,7 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 
 		// phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fseek, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_ftell
 		if ( @fseek( $this->file_handle, $archive_offset, SEEK_SET ) === -1 ) {
-			throw new Backup_Lite_Wpress_Not_Seekable_Exception(
+			throw new Museder_Restoreone_Wpress_Not_Seekable_Exception(
 				sprintf(
 					/* translators: 1: archive file path, 2: offset */
 					esc_html__( 'Could not seek to offset of file. File: %1$s Offset: %2$d', 'museder-restoreone' ),
@@ -338,7 +338,7 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 					$skip = 0;
 				}
 				if ( @fseek( $this->file_handle, $skip, SEEK_CUR ) === -1 ) {
-					throw new Backup_Lite_Wpress_Not_Seekable_Exception(
+					throw new Museder_Restoreone_Wpress_Not_Seekable_Exception(
 						sprintf(
 							/* translators: 1: archive file path, 2: offset */
 							esc_html__( 'Could not seek to offset of file. File: %1$s Offset: %2$d', 'museder-restoreone' ),
@@ -382,7 +382,7 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 		// Large archive streaming requires direct file operations for performance and compatibility.
 		// phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fseek, WordPress.WP.AlternativeFunctions.file_system_operations_fread
 		if ( @fseek( $this->file_handle, 0, SEEK_SET ) === -1 ) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fseek -- Streaming archive handle.
-			throw new Backup_Lite_Wpress_Not_Seekable_Exception(
+			throw new Museder_Restoreone_Wpress_Not_Seekable_Exception(
 				sprintf(
 					/* translators: %s: archive file path */
 					esc_html__( 'Could not seek to beginning of file. File: %s', 'museder-restoreone' ),
@@ -402,7 +402,7 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 				$this->total_files_size  += (int) $data['size'];
 
 				if ( @fseek( $this->file_handle, (int) $data['size'], SEEK_CUR ) === -1 ) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fseek -- Streaming archive handle.
-					throw new Backup_Lite_Wpress_Not_Seekable_Exception(
+					throw new Museder_Restoreone_Wpress_Not_Seekable_Exception(
 						sprintf(
 							/* translators: 1: archive file path, 2: file offset in bytes */
 							esc_html__( 'Could not seek to offset of file. File: %1$s Offset: %2$d', 'museder-restoreone' ),
@@ -419,10 +419,10 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 	/**
 	 * Extract bytes for a single file.
 	 *
-	 * @throws Backup_Lite_Wpress_Not_Seekable_Exception
-	 * @throws Backup_Lite_Wpress_Not_Readable_Exception
-	 * @throws Backup_Lite_Wpress_Quota_Exceeded_Exception
-	 * @throws Backup_Lite_Wpress_Not_Decryptable_Exception
+	 * @throws Museder_Restoreone_Wpress_Not_Seekable_Exception
+	 * @throws Museder_Restoreone_Wpress_Not_Readable_Exception
+	 * @throws Museder_Restoreone_Wpress_Quota_Exceeded_Exception
+	 * @throws Museder_Restoreone_Wpress_Not_Decryptable_Exception
 	 */
 	private function extract_to(
 		string $dest_file,
@@ -440,7 +440,7 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 		// phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fseek, WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.file_system_operations_fclose, WordPress.WP.AlternativeFunctions.file_system_operations_touch, WordPress.WP.AlternativeFunctions.file_system_operations_chmod
 		if ( $file_offset > 0 ) {
 			if ( @fseek( $this->file_handle, $file_offset, SEEK_CUR ) === -1 ) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fseek -- Streaming archive handle.
-				throw new Backup_Lite_Wpress_Not_Seekable_Exception(
+				throw new Museder_Restoreone_Wpress_Not_Seekable_Exception(
 					sprintf(
 						/* translators: 1: archive file path, 2: file offset in bytes */
 						esc_html__( 'Could not seek to offset of file. File: %1$s Offset: %2$d', 'museder-restoreone' ),
@@ -461,7 +461,7 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 				// AI1WM encryption: each 512000 plaintext chunk becomes iv_length + 512000 + 16 padding.
 				if ( ! empty( $this->decryption_password ) && basename( $dest_file ) !== 'package.json' ) {
 					if ( $file_size > 512000 ) {
-						$iv_len     = Backup_Lite_Wpress_Crypto::iv_length();
+						$iv_len     = Museder_Restoreone_Wpress_Crypto::iv_length();
 						$chunk_size = $chunk_size + ( $iv_len * 2 );
 						$chunk_size = $chunk_size > $file_size ? $file_size : $chunk_size;
 					}
@@ -469,7 +469,7 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 
 				$file_content = @fread( $this->file_handle, $chunk_size ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- Streaming archive handle.
 				if ( $file_content === false ) {
-					throw new Backup_Lite_Wpress_Not_Readable_Exception(
+					throw new Museder_Restoreone_Wpress_Not_Readable_Exception(
 						sprintf(
 							/* translators: %s: archive file path */
 							esc_html__( 'Could not read content from file. File: %s', 'museder-restoreone' ),
@@ -481,12 +481,12 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 				$file_size -= $chunk_size;
 
 				if ( ! empty( $this->decryption_password ) && basename( $dest_file ) !== 'package.json' ) {
-					$file_content = Backup_Lite_Wpress_Crypto::decrypt_bytes( $file_content, (string) $this->decryption_password );
+					$file_content = Museder_Restoreone_Wpress_Crypto::decrypt_bytes( $file_content, (string) $this->decryption_password );
 				}
 
 				$written = @fwrite( $file_handle, $file_content ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- Streaming large archive extraction.
 				if ( $written === false || strlen( $file_content ) !== $written ) {
-					throw new Backup_Lite_Wpress_Quota_Exceeded_Exception(
+					throw new Museder_Restoreone_Wpress_Quota_Exceeded_Exception(
 						sprintf(
 							/* translators: %s: destination file path */
 							esc_html__( 'Out of disk space. Could not write content to file. File: %s', 'museder-restoreone' ),
@@ -514,7 +514,7 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 		} else {
 			// No file permissions, skip remaining bytes.
 			if ( @fseek( $this->file_handle, $file_size, SEEK_CUR ) === -1 ) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fseek -- Streaming archive handle.
-				throw new Backup_Lite_Wpress_Not_Seekable_Exception(
+				throw new Museder_Restoreone_Wpress_Not_Seekable_Exception(
 					sprintf(
 						/* translators: 1: archive file path, 2: file offset in bytes */
 						esc_html__( 'Could not seek to offset of file. File: %1$s Offset: %2$d', 'museder-restoreone' ),
@@ -597,7 +597,7 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 	/**
 	 * Prevent path traversal; ensures the joined path stays under base directory.
 	 *
-	 * @throws Backup_Lite_Wpress_Path_Traversal_Exception
+	 * @throws Museder_Restoreone_Wpress_Path_Traversal_Exception
 	 */
 	private function safe_join( string $base_dir, string $relative ): string {
 		$base_dir = rtrim( $base_dir, "/\\ \t\n\r\0\x0B" );
@@ -612,19 +612,21 @@ class Backup_Lite_Wpress_Extractor extends Backup_Lite_Wpress_Archiver {
 		}
 
 		if ( path_is_absolute( $norm_rel ) ) {
-			throw new Backup_Lite_Wpress_Path_Traversal_Exception( esc_html__( 'Unsafe absolute path in archive.', 'museder-restoreone' ) );
+			throw new Museder_Restoreone_Wpress_Path_Traversal_Exception( esc_html__( 'Unsafe absolute path in archive.', 'museder-restoreone' ) );
 		}
 
 		foreach ( explode( '/', $norm_rel ) as $seg ) {
 			if ( $seg === '..' ) {
-				throw new Backup_Lite_Wpress_Path_Traversal_Exception( esc_html__( 'Unsafe path traversal in archive.', 'museder-restoreone' ) );
+				throw new Museder_Restoreone_Wpress_Path_Traversal_Exception( esc_html__( 'Unsafe path traversal in archive.', 'museder-restoreone' ) );
 			}
 		}
 
 		$joined = wp_normalize_path( $norm_base . '/' . $norm_rel );
 
-		if ( strpos( $joined . '/', rtrim( $norm_base, '/' ) . '/' ) !== 0 ) {
-			throw new Backup_Lite_Wpress_Path_Traversal_Exception( esc_html__( 'Unsafe extract path (outside base directory).', 'museder-restoreone' ) );
+		$base_prefix = trailingslashit( wp_normalize_path( $norm_base ) );
+		$joined_norm = wp_normalize_path( $joined );
+		if ( $joined_norm !== untrailingslashit( $base_prefix ) && 0 !== strpos( $joined_norm, $base_prefix ) ) {
+			throw new Museder_Restoreone_Wpress_Path_Traversal_Exception( esc_html__( 'Unsafe extract path (outside base directory).', 'museder-restoreone' ) );
 		}
 
 		return str_replace( '/', DIRECTORY_SEPARATOR, $joined );

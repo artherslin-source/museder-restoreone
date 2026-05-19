@@ -55,11 +55,28 @@ docker compose exec -T wordpress bash -lc '
     --exclude=./release \
     --exclude=./.git \
     --exclude=./.cursor \
+    --exclude=./museder-restoreone-pro \
+    --exclude=./archive \
     -cf - . | tar -C "$dst" -xf -
+'
+
+echo "[wp] syncing add-on plugin (optional)..."
+docker compose exec -T wordpress bash -lc '
+  set -e
+  src=/tmp/museder-restoreone-src/museder-restoreone-pro
+  dst=/var/www/html/wp-content/plugins/museder-restoreone-pro
+  if [ -d "$src" ]; then
+    rm -rf "$dst"
+    mkdir -p "$dst"
+    tar -C "$src" -cf - . | tar -C "$dst" -xf -
+  fi
 '
 
 echo "[wp] activating plugin..."
 docker compose run --rm wpcli plugin activate museder-restoreone
+if docker compose run --rm wpcli plugin is-installed museder-restoreone-pro >/dev/null 2>&1; then
+  docker compose run --rm wpcli plugin activate museder-restoreone-pro || true
+fi
 
 echo "[wp] installing theme + required plugins..."
 docker compose run --rm wpcli theme install /tmp/test-one/museder-blank-theme.zip --activate

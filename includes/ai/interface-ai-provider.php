@@ -26,7 +26,7 @@ interface Museder_AI_Provider_Interface {
     public function get_capabilities(): array;
 
     /**
-     * Return provider limits (e.g., quota).
+     * Return optional provider metadata (hosted build: no quota fields).
      *
      * @return array<string,mixed>
      */

@@ -19,58 +19,58 @@ if ( ! defined( 'ABSPATH' ) ) {
 // Template context: These variables are scoped to this template file and provided by the rendering function.
 // They use short names for template readability but are not global namespace pollution.
 // phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
-$status                   = isset( $status ) ? $status : Backup_Lite_UI::get_environment_status();
-$dashboard_recent_backups = isset( $dashboard_recent_backups ) ? $dashboard_recent_backups : Backup_Lite_Dashboard::get_recent_backups( 3 );
-$schedule_overview        = isset( $schedule_overview ) ? $schedule_overview : Backup_Lite_Dashboard::get_schedule_overview();
-$activity_stats           = isset( $activity_stats ) ? $activity_stats : Backup_Lite_Dashboard::get_activity_stats();
-$recent_logs              = isset( $recent_logs ) ? $recent_logs : Backup_Lite_Log_Handler::get_logs( 3 );
+$status                   = isset( $status ) ? $status : Museder_Restoreone_UI::get_environment_status();
+$dashboard_recent_backups = isset( $dashboard_recent_backups ) ? $dashboard_recent_backups : Museder_Restoreone_Dashboard::get_recent_backups( 3 );
+$schedule_overview        = isset( $schedule_overview ) ? $schedule_overview : Museder_Restoreone_Dashboard::get_schedule_overview();
+$activity_stats           = isset( $activity_stats ) ? $activity_stats : Museder_Restoreone_Dashboard::get_activity_stats();
+$recent_logs              = isset( $recent_logs ) ? $recent_logs : Museder_Restoreone_Log_Handler::get_logs( 3 );
 
 $chart_success = isset( $activity_stats['success'] ) ? (int) $activity_stats['success'] : 0;
 $chart_failed  = isset( $activity_stats['failed'] ) ? (int) $activity_stats['failed'] : 0;
 
 // Check if safe mode is active
-$safe_mode_active = get_option( 'backup_lite_safe_mode', '' ) === '1';
+$safe_mode_active = get_option( 'museder_restoreone_safe_mode', '' ) === '1';
 $prev_plugins_count = 0;
 if ( $safe_mode_active ) {
-    $prev_plugins = get_option( 'backup_lite_prev_active_plugins', [] );
+    $prev_plugins = get_option( 'museder_restoreone_prev_active_plugins', [] );
     $prev_plugins_count = is_array( $prev_plugins ) ? count( $prev_plugins ) : 0;
 }
 ?>
 
-<div class="wrap backup-lite-admin backup-lite-dashboard">
-    <h1 class="backup-lite-page-title">💾 <?php esc_html_e( 'Museder RestoreOne Dashboard', 'museder-restoreone' ); ?></h1>
-    <p class="backup-lite-page-description"><?php esc_html_e( 'Quick overview of your environment, schedules, and the latest backup health signals.', 'museder-restoreone' ); ?></p>
+<div class="wrap backup-lite-admin backup-lite-dashboard museder-restoreone-admin museder-restoreone-dashboard">
+    <h1 class="backup-lite-page-title museder-restoreone-page-title">💾 <?php esc_html_e( 'Museder RestoreOne Dashboard', 'museder-restoreone' ); ?></h1>
+    <p class="backup-lite-page-description museder-restoreone-page-description"><?php esc_html_e( 'Quick overview of your environment, schedules, and the latest backup health signals.', 'museder-restoreone' ); ?></p>
 
     <?php if ( $safe_mode_active ) : ?>
-    <div class="notice notice-warning is-dismissible" id="backup-lite-safe-mode-notice" style="border-left-color: #ffb900; padding: 12px 20px; margin: 20px 0;">
+    <div class="notice notice-warning is-dismissible" id="museder-restoreone-safe-mode-notice" style="border-left-color: #ffb900; padding: 12px 20px; margin: 20px 0;">
         <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px;">
             <div style="flex: 1; min-width: 300px;">
                 <p style="margin: 0 0 8px 0; font-weight: 600;">
                     <span style="font-size: 20px; margin-right: 8px;">🛡️</span>
                     <?php esc_html_e( 'Safe Mode Active', 'museder-restoreone' ); ?>
                 </p>
-                <p style="margin: 0; color: #646970;">
+                <p style="margin: 0; color: var(--text-muted, #646970);">
                     <?php
                     printf(
-                        /* translators: %d: Number of plugins that were deactivated. */
-                        esc_html__( 'RestoreOne has enabled safe mode after restore, temporarily disabling %d plugin(s) to prevent conflicts. Please verify your site is working correctly, then click the button below to restore all plugins.', 'museder-restoreone' ),
+                        /* translators: %d: Number of plugins recorded in the safe mode snapshot. */
+                        esc_html__( 'RestoreOne saved a snapshot of %d active plugin(s) when safe mode was enabled after restore. Verify your site, then exit safe mode to clear this notice. Other plugins are not changed automatically.', 'museder-restoreone' ),
                         absint( $prev_plugins_count )
                     );
                     ?>
                 </p>
             </div>
             <div>
-                <button type="button" id="backup-lite-exit-safe-mode-btn" class="button button-primary" style="white-space: nowrap;">
-                    <?php esc_html_e( 'Exit Safe Mode & Restore Plugins', 'museder-restoreone' ); ?>
+                <button type="button" id="museder-restoreone-exit-safe-mode-btn" class="button button-primary" style="white-space: nowrap;">
+                    <?php esc_html_e( 'Exit Safe Mode', 'museder-restoreone' ); ?>
                 </button>
             </div>
         </div>
     </div>
     <?php endif; ?>
 
-    <div class="backup-lite-dashboard-actions">
-        <a class="button button-primary" href="<?php echo esc_url( admin_url( 'admin.php?page=backup-lite-settings' ) ); ?>">⚙️ <?php esc_html_e( 'Settings', 'museder-restoreone' ); ?></a>
-        <a class="button button-primary" href="<?php echo esc_url( admin_url( 'admin.php?page=backup-lite-schedules' ) ); ?>">🗓️ <?php esc_html_e( 'View Schedules', 'museder-restoreone' ); ?></a>
+    <div class="backup-lite-dashboard-actions museder-restoreone-dashboard-actions">
+        <a class="button button-primary" href="<?php echo esc_url( admin_url( 'admin.php?page=museder-restoreone-settings' ) ); ?>">⚙️ <?php esc_html_e( 'Settings', 'museder-restoreone' ); ?></a>
+        <a class="button button-primary" href="<?php echo esc_url( admin_url( 'admin.php?page=museder-restoreone-schedules' ) ); ?>">🗓️ <?php esc_html_e( 'View Schedules', 'museder-restoreone' ); ?></a>
     </div>
 
     <div class="backup-lite-grid">
@@ -110,7 +110,7 @@ if ( $safe_mode_active ) {
                                 <?php
                                 $duration_seconds = isset( $museder_restoreone_item['duration_seconds'] ) && is_numeric( $museder_restoreone_item['duration_seconds'] ) ? (int) $museder_restoreone_item['duration_seconds'] : null;
                                 if ( $duration_seconds !== null && $duration_seconds > 0 ) {
-                                    echo ' (' . esc_html( backup_lite_format_duration( $duration_seconds ) ) . ')';
+                                    echo ' (' . esc_html( museder_restoreone_format_duration( $duration_seconds ) ) . ')';
                                 }
                                 ?>
                                 · <?php echo esc_html( $museder_restoreone_item['size_human'] ); ?>
@@ -213,19 +213,16 @@ if ( $safe_mode_active ) {
         ?>
         <div class="backup-lite-card" id="backup-lite-ai-card">
             <h2>
-                🤖 <?php esc_html_e( 'AI Site Scan (Preview)', 'museder-restoreone' ); ?>
-                <?php if ( ! $museder_restoreone_is_pro_ai ) : ?>
-                    <span class="pro-badge">PREVIEW</span>
-                <?php endif; ?>
+                🤖 <?php esc_html_e( 'Offline readiness scan', 'museder-restoreone' ); ?>
             </h2>
 
             <p class="description" style="margin-top: 8px;">
-                <?php esc_html_e( 'Runs locally in your admin. No external network calls are made.', 'museder-restoreone' ); ?>
+                <?php esc_html_e( 'Local heuristics only — suggestions for your install. No remote model or third-party API is called.', 'museder-restoreone' ); ?>
             </p>
 
             <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top: 10px;">
                 <button type="button" class="button button-primary" id="backup-lite-ai-run-scan">
-                    <?php esc_html_e( 'Run Scan', 'museder-restoreone' ); ?>
+                    <?php esc_html_e( 'Run offline readiness scan', 'museder-restoreone' ); ?>
                 </button>
                 <span id="backup-lite-ai-status" class="description" aria-live="polite"></span>
             </div>
@@ -233,12 +230,12 @@ if ( $safe_mode_active ) {
             <p class="description" style="margin-top: 10px;">
                 <strong style="display:inline-block; margin-right:6px;"><?php esc_html_e( 'Last scan:', 'museder-restoreone' ); ?></strong>
                 <span id="backup-lite-ai-last-scan">
-                    <?php echo esc_html( $museder_restoreone_ai_last_created ? backup_lite_format_local_time( $museder_restoreone_ai_last_created ) : '—' ); ?>
+                    <?php echo esc_html( $museder_restoreone_ai_last_created ? museder_restoreone_format_local_time( $museder_restoreone_ai_last_created ) : '—' ); ?>
                 </span>
             </p>
 
             <div style="margin-top: 10px;" id="backup-lite-ai-latest-items-wrap" <?php echo empty( $museder_restoreone_ai_last_items ) ? 'hidden' : ''; // @plugin-check: escaped ?>>
-                <strong><?php esc_html_e( 'Top recommendations', 'museder-restoreone' ); ?></strong>
+                <strong><?php esc_html_e( 'Top local recommendations', 'museder-restoreone' ); ?></strong>
                 <ul class="backup-lite-list" id="backup-lite-ai-latest-items" style="margin-top: 10px;">
                     <?php foreach ( array_slice( $museder_restoreone_ai_last_items, 0, 5 ) as $museder_restoreone_ai_item ) : ?>
                         <?php
@@ -272,7 +269,7 @@ if ( $safe_mode_active ) {
                 <strong><?php esc_html_e( 'Recent reports', 'museder-restoreone' ); ?></strong>
                 <div id="backup-lite-ai-reports-container">
                 <?php if ( empty( $museder_restoreone_ai_reports ) ) : ?>
-                    <p class="description" id="backup-lite-ai-empty"><?php esc_html_e( 'No AI scan reports yet.', 'museder-restoreone' ); ?></p>
+                    <p class="description" id="backup-lite-ai-empty"><?php esc_html_e( 'No offline scan reports yet.', 'museder-restoreone' ); ?></p>
                 <?php else : ?>
                     <ul class="backup-lite-list" id="backup-lite-ai-reports">
                         <?php foreach ( $museder_restoreone_ai_reports as $museder_restoreone_ai_entry ) : ?>
@@ -282,7 +279,7 @@ if ( $safe_mode_active ) {
                             $museder_restoreone_ai_items   = isset( $museder_restoreone_ai_entry['report']['items'] ) && is_array( $museder_restoreone_ai_entry['report']['items'] ) ? $museder_restoreone_ai_entry['report']['items'] : [];
                             ?>
                             <li>
-                                    <strong><?php echo esc_html( $museder_restoreone_ai_created ? backup_lite_format_local_time( $museder_restoreone_ai_created ) : '' ); ?></strong>
+                                    <strong><?php echo esc_html( $museder_restoreone_ai_created ? museder_restoreone_format_local_time( $museder_restoreone_ai_created ) : '' ); ?></strong>
                                 <?php if ( $museder_restoreone_ai_summary ) : ?>
                                     <span><?php echo esc_html( $museder_restoreone_ai_summary ); ?></span>
                                 <?php endif; ?>
@@ -325,11 +322,6 @@ if ( $safe_mode_active ) {
                 </div>
             </div>
 
-            <?php if ( ! $museder_restoreone_is_pro_ai ) : ?>
-                <a href="<?php echo esc_url( admin_url( 'admin.php?page=backup-lite-pro' ) ); ?>" class="button button-primary" style="margin-top: 10px;">
-                    <?php esc_html_e( 'Upgrade to Pro', 'museder-restoreone' ); ?>
-                </a>
-            <?php endif; ?>
         </div>
 
         <div class="backup-lite-card">
@@ -348,28 +340,6 @@ if ( $safe_mode_active ) {
             <?php endif; ?>
         </div>
 
-        <?php
-        // Site Backup Health Score (Pro) — Lite shows promo only, no score
-        // Moved to last position as it's a PRO feature and appears grayed out
-        $is_pro = function_exists( 'museder_is_pro_active' ) ? museder_is_pro_active() : Backup_Lite_Pro::is_pro_active();
-        ?>
-        <?php // @plugin-check: escaped ?>
-        <div class="backup-lite-card <?php echo esc_attr( $is_pro ? '' : 'pro-locked' ); ?>" <?php echo $is_pro ? '' : 'data-upgrade="' . esc_attr( 'pro' ) . '"'; // @plugin-check: escaped ?>>
-            <h2>
-                🏥 <?php esc_html_e( 'Site Backup Health Score (Pro)', 'museder-restoreone' ); ?>
-                <?php if ( ! $is_pro ) : ?>
-                    <span class="pro-badge">PRO</span>
-                <?php endif; ?>
-            </h2>
-            <p class="description" style="margin-top: 8px;">
-                <?php esc_html_e( 'Premium sites can see an overall backup health score based on schedules, recent activity, and storage hygiene.', 'museder-restoreone' ); ?>
-            </p>
-            <?php if ( ! $is_pro ) : ?>
-                <a href="<?php echo esc_url( admin_url( 'admin.php?page=backup-lite-pro' ) ); ?>" class="button button-primary" style="margin-top: 8px;">
-                    <?php esc_html_e( 'Upgrade to Pro', 'museder-restoreone' ); ?>
-                </a>
-            <?php endif; ?>
-        </div>
     </div>
 </div>
 

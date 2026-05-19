@@ -2,43 +2,43 @@
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-class Backup_Lite_UI {
+class Museder_Restoreone_UI {
 
     /**
      * Partial slug used to detect our admin pages when enqueuing assets.
-     * All plugin pages registered via add_submenu_page() share the "backup-lite"
-     * substring in their hook suffix (e.g. toplevel_page_backup-lite-dashboard).
+     * Keep both the current and legacy prefixes working during the UI migration.
      */
-    const PAGE_SLUG = 'backup-lite';
-    const NONCE     = 'backup_lite_action';
-    const NONCE_V2  = 'backup_lite_v2';
+    const PAGE_SLUG = 'museder-restoreone';
+    const NONCE     = 'museder_restoreone_action';
+    const NONCE_V2  = 'museder_restoreone_v2';
 
     public static function init() {
         add_action( 'admin_enqueue_scripts', [ __CLASS__, 'enqueue_assets' ] );
         add_action( 'admin_notices', [ __CLASS__, 'render_restore_notice' ] );
+        add_action( 'admin_notices', [ __CLASS__, 'render_multisite_experimental_notice' ] );
         add_action( 'admin_init', [ __CLASS__, 'handle_restore_notice_dismiss' ] );
-        add_action( 'admin_post_backup_lite_download_restore_sql', [ __CLASS__, 'handle_download_restore_sql' ] );
+        add_action( 'admin_post_museder_restoreone_download_restore_sql', [ __CLASS__, 'handle_download_restore_sql' ] );
 
-        add_action( 'wp_ajax_backup_lite_run_backup', [ __CLASS__, 'handle_backup_request' ] );
-        add_action( 'wp_ajax_backup_lite_run_restore', [ __CLASS__, 'handle_restore_request' ] );
-        add_action( 'wp_ajax_backup_lite_restore_existing', [ __CLASS__, 'handle_restore_existing' ] );
-        add_action( 'wp_ajax_backup_lite_get_backups_list', [ __CLASS__, 'handle_get_backups_list' ] );
-        add_action( 'wp_ajax_backup_lite_delete_backup', [ __CLASS__, 'handle_delete_backup' ] );
-        add_action( 'wp_ajax_backup_lite_delete_backups', [ __CLASS__, 'handle_delete_backups' ] );
-        add_action( 'wp_ajax_backup_lite_delete_restore_history', [ __CLASS__, 'handle_delete_restore_history' ] );
-        add_action( 'wp_ajax_backup_lite_start_backup_job', [ __CLASS__, 'ajax_start_backup_job' ] );
-        add_action( 'wp_ajax_backup_lite_get_job_status', [ __CLASS__, 'ajax_get_backup_job_status' ] );
+        add_action( 'wp_ajax_museder_restoreone_run_backup', [ __CLASS__, 'handle_backup_request' ] );
+        add_action( 'wp_ajax_museder_restoreone_run_restore', [ __CLASS__, 'handle_restore_request' ] );
+        add_action( 'wp_ajax_museder_restoreone_restore_existing', [ __CLASS__, 'handle_restore_existing' ] );
+        add_action( 'wp_ajax_museder_restoreone_get_backups_list', [ __CLASS__, 'handle_get_backups_list' ] );
+        add_action( 'wp_ajax_museder_restoreone_delete_backup', [ __CLASS__, 'handle_delete_backup' ] );
+        add_action( 'wp_ajax_museder_restoreone_delete_backups', [ __CLASS__, 'handle_delete_backups' ] );
+        add_action( 'wp_ajax_museder_restoreone_delete_restore_history', [ __CLASS__, 'handle_delete_restore_history' ] );
+        add_action( 'wp_ajax_museder_restoreone_start_backup_job', [ __CLASS__, 'ajax_start_backup_job' ] );
+        add_action( 'wp_ajax_museder_restoreone_get_job_status', [ __CLASS__, 'ajax_get_backup_job_status' ] );
         // Alias for newer frontend builds (keep both for backward compatibility).
-        add_action( 'wp_ajax_backup_lite_get_backup_job_status', [ __CLASS__, 'ajax_get_backup_job_status' ] );
-        add_action( 'wp_ajax_backup_lite_continue_backup_job', [ __CLASS__, 'ajax_continue_backup_job' ] );
-        add_action( 'wp_ajax_backup_lite_cancel_backup_job', [ __CLASS__, 'ajax_cancel_backup_job' ] );
-        add_action( 'wp_ajax_backup_lite_get_active_backup_job', [ __CLASS__, 'ajax_get_active_backup_job' ] );
-        add_action( 'wp_ajax_backup_lite_refresh_nonce', [ __CLASS__, 'ajax_refresh_nonce' ] );
-        add_action( 'wp_ajax_backup_lite_keep_alive', [ __CLASS__, 'ajax_keep_alive' ] );
+        add_action( 'wp_ajax_museder_restoreone_get_backup_job_status', [ __CLASS__, 'ajax_get_backup_job_status' ] );
+        add_action( 'wp_ajax_museder_restoreone_continue_backup_job', [ __CLASS__, 'ajax_continue_backup_job' ] );
+        add_action( 'wp_ajax_museder_restoreone_cancel_backup_job', [ __CLASS__, 'ajax_cancel_backup_job' ] );
+        add_action( 'wp_ajax_museder_restoreone_get_active_backup_job', [ __CLASS__, 'ajax_get_active_backup_job' ] );
+        add_action( 'wp_ajax_museder_restoreone_refresh_nonce', [ __CLASS__, 'ajax_refresh_nonce' ] );
+        add_action( 'wp_ajax_museder_restoreone_keep_alive', [ __CLASS__, 'ajax_keep_alive' ] );
 
-        add_action( 'admin_post_backup_lite_download_log', [ __CLASS__, 'handle_log_download' ] );
-        add_action( 'admin_post_backup_lite_download_backup', [ __CLASS__, 'handle_backup_download' ] );
-        add_action( 'admin_post_backup_lite_download_report', [ __CLASS__, 'handle_report_download' ] );
+        add_action( 'admin_post_museder_restoreone_download_log', [ __CLASS__, 'handle_log_download' ] );
+        add_action( 'admin_post_museder_restoreone_download_backup', [ __CLASS__, 'handle_backup_download' ] );
+        add_action( 'admin_post_museder_restoreone_download_report', [ __CLASS__, 'handle_report_download' ] );
     }
 
     /**
@@ -60,25 +60,25 @@ class Backup_Lite_UI {
         if ( ! current_user_can( 'manage_options' ) ) {
             return;
         }
-        if ( ! class_exists( 'Backup_Lite_Restore_Service' ) ) {
+        if ( ! class_exists( 'Museder_Restoreone_Restore_Service' ) ) {
             return;
         }
         $uid = function_exists( 'get_current_user_id' ) ? (int) get_current_user_id() : 0;
         if ( $uid <= 0 ) {
             return;
         }
-        $dismissed = (int) get_user_meta( $uid, 'backup_lite_restore_notice_dismissed', true );
+        $dismissed = (int) get_user_meta( $uid, 'museder_restoreone_restore_notice_dismissed', true );
         if ( 1 === $dismissed ) {
             return;
         }
-        $job_id = (string) get_user_meta( $uid, 'backup_lite_restore_notice_job_id', true );
+        $job_id = (string) get_user_meta( $uid, 'museder_restoreone_restore_notice_job_id', true );
         if ( '' === $job_id ) {
             return;
         }
 
         $status = null;
         try {
-            $status = Backup_Lite_Restore_Service::status( $job_id );
+            $status = Museder_Restoreone_Restore_Service::status( $job_id );
         } catch ( Exception $e ) {
             $status = null;
         }
@@ -107,10 +107,10 @@ class Backup_Lite_UI {
         }
 
         $dismiss_url = wp_nonce_url(
-            add_query_arg( [ 'backup_lite_dismiss_restore_notice' => 1, 'job_id' => rawurlencode( $job_id ) ], admin_url() ),
-            'backup_lite_dismiss_restore_notice'
+            add_query_arg( [ 'museder_restoreone_dismiss_restore_notice' => 1, 'job_id' => rawurlencode( $job_id ) ], admin_url() ),
+            'museder_restoreone_dismiss_restore_notice'
         );
-        $restore_url = admin_url( 'admin.php?page=backup-lite-restore' );
+        $restore_url = admin_url( 'admin.php?page=museder-restoreone-restore' );
 
         printf(
             '<div class="notice notice-%1$s"><p><strong>%2$s</strong> — %3$s</p><p>%4$s</p></div>',
@@ -131,22 +131,51 @@ class Backup_Lite_UI {
     }
 
     /**
-     * Handle dismiss action for the restore notice.
+     * Warn network admins that Multisite is experimental for this plugin (readme stance).
      */
-    public static function handle_restore_notice_dismiss() {
-        if ( ! isset( $_GET['backup_lite_dismiss_restore_notice'] ) ) {
+    public static function render_multisite_experimental_notice() {
+        if ( ! function_exists( 'is_multisite' ) || ! is_multisite() ) {
             return;
         }
         if ( ! current_user_can( 'manage_options' ) ) {
             return;
         }
-        check_admin_referer( 'backup_lite_dismiss_restore_notice' );
+        if ( ! function_exists( 'get_current_screen' ) ) {
+            return;
+        }
+        $screen = get_current_screen();
+        if ( ! $screen || empty( $screen->id ) ) {
+            return;
+        }
+        $screen_id = (string) $screen->id;
+        if ( false === strpos( $screen_id, 'museder-restoreone' ) ) {
+            return;
+        }
+
+        printf(
+            '<div class="notice notice-warning"><p><strong>%1$s</strong> %2$s</p></div>',
+            esc_html__( 'WordPress Multisite', 'museder-restoreone' ),
+            esc_html__( 'Museder RestoreOne is not formally tested on Multisite. Verify backups and restores on a staging copy of your network before relying on it in production.', 'museder-restoreone' )
+        );
+    }
+
+    /**
+     * Handle dismiss action for the restore notice.
+     */
+    public static function handle_restore_notice_dismiss() {
+        if ( ! isset( $_GET['museder_restoreone_dismiss_restore_notice'] ) ) {
+            return;
+        }
+        if ( ! current_user_can( 'manage_options' ) ) {
+            return;
+        }
+        check_admin_referer( 'museder_restoreone_dismiss_restore_notice' );
         $uid = function_exists( 'get_current_user_id' ) ? (int) get_current_user_id() : 0;
         if ( $uid > 0 ) {
-            update_user_meta( $uid, 'backup_lite_restore_notice_dismissed', 1 );
+            update_user_meta( $uid, 'museder_restoreone_restore_notice_dismissed', 1 );
         }
         // Redirect to remove query args.
-        wp_safe_redirect( remove_query_arg( [ 'backup_lite_dismiss_restore_notice', '_wpnonce', 'job_id' ] ) );
+        wp_safe_redirect( remove_query_arg( [ 'museder_restoreone_dismiss_restore_notice', '_wpnonce', 'job_id' ] ) );
         exit;
     }
 
@@ -164,18 +193,28 @@ class Backup_Lite_UI {
             wp_die( esc_html__( 'Missing job id.', 'museder-restoreone' ), 400 );
         }
 
-        check_admin_referer( 'backup_lite_download_restore_sql_' . $job_id );
+        check_admin_referer( 'museder_restoreone_download_restore_sql_' . $job_id );
 
-        $jobs_dir = wp_normalize_path( trailingslashit( backup_lite_get_jobs_dir() ) );
-        $file     = wp_normalize_path( trailingslashit( $jobs_dir ) . $job_id . '/database.sql' );
+        if ( ! preg_match( '/^[A-Za-z0-9_\-]+$/', $job_id ) ) {
+            wp_die( esc_html__( 'Invalid job id.', 'museder-restoreone' ), 400 );
+        }
 
-        // Ensure the resolved file stays within the jobs directory.
-        if ( '' === $jobs_dir || 0 !== strpos( $file, $jobs_dir ) ) {
+        $jobs_root = museder_restoreone_get_jobs_dir();
+        $jobs_real = realpath( $jobs_root );
+        if ( ! $jobs_real ) {
             wp_die( esc_html__( 'Invalid file path.', 'museder-restoreone' ), 400 );
         }
-        if ( ! file_exists( $file ) || ! is_readable( $file ) ) {
+
+        $jobs_prefix = trailingslashit( wp_normalize_path( $jobs_real ) );
+        $candidate    = wp_normalize_path( $jobs_prefix . $job_id . '/database.sql' );
+        $file_real    = file_exists( $candidate ) ? realpath( $candidate ) : false;
+        if ( ! $file_real || 0 !== strpos( wp_normalize_path( $file_real ), $jobs_prefix ) ) {
+            wp_die( esc_html__( 'Invalid file path.', 'museder-restoreone' ), 400 );
+        }
+        if ( ! is_readable( $file_real ) ) {
             wp_die( esc_html__( 'SQL file not found.', 'museder-restoreone' ), 404 );
         }
+        $file = $file_real;
 
         // WP.org compliance: do not stream arbitrary-sized files via direct PHP file operations here.
         // Instead, provide a clear manual import instruction page and the on-server path to the SQL file.
@@ -195,95 +234,106 @@ class Backup_Lite_UI {
     }
 
     public static function enqueue_assets( $hook ) {
-        // Allow toplevel main menu + all backup-lite sub pages
+        // Allow the current admin pages plus any legacy-prefixed pages during migration.
         // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- page parameter is for UI display only, not for security-sensitive operations
         $page = isset( $_GET['page'] ) ? sanitize_key( wp_unslash( $_GET['page'] ) ) : '';
-        
-        if (
-            'toplevel_page_museder-restoreone' !== $hook
-            && false === strpos( $hook, 'backup-lite' )
-            && 0 !== strpos( $page, 'backup-lite' )
-        ) {
+
+        $is_plugin_hook = (
+            0 === strpos( (string) $hook, 'toplevel_page_museder-restoreone-' )
+            || 0 === strpos( (string) $hook, 'museder-restoreone_page_museder-restoreone-' )
+            || false !== strpos( (string) $hook, 'backup-lite' )
+        );
+
+        $is_plugin_page = (
+            0 === strpos( $page, 'museder-restoreone-' )
+            || 0 === strpos( $page, 'backup-lite' )
+        );
+
+        if ( ! $is_plugin_hook && ! $is_plugin_page ) {
             return;
         }
 
         wp_enqueue_style(
-            'backup-lite-admin',
-            BACKUP_LITE_URL . 'assets/css/admin.css',
+            'museder-restoreone-admin',
+            MUSEDER_RESTOREONE_URL . 'assets/css/admin.css',
             [],
-            BACKUP_LITE_VERSION
+            MUSEDER_RESTOREONE_VERSION
         );
 
         wp_enqueue_style(
-            'backup-lite-ui',
-            BACKUP_LITE_URL . 'assets/css/admin-style.css',
-            [ 'backup-lite-admin' ],
-            BACKUP_LITE_VERSION
+            'museder-restoreone-ui',
+            MUSEDER_RESTOREONE_URL . 'assets/css/admin-style.css',
+            [ 'museder-restoreone-admin' ],
+            MUSEDER_RESTOREONE_VERSION
         );
 
         wp_enqueue_style(
-            'backup-lite-theme',
-            BACKUP_LITE_URL . 'assets/css/backup-lite-theme.css',
-            [ 'backup-lite-ui' ],
-            BACKUP_LITE_VERSION
+            'museder-restoreone-theme',
+            MUSEDER_RESTOREONE_URL . 'assets/css/backup-lite-theme.css',
+            [ 'museder-restoreone-ui' ],
+            MUSEDER_RESTOREONE_VERSION
         );
 
         wp_enqueue_style(
             'toastify-css',
-            BACKUP_LITE_URL . 'assets/vendor/toastify.min.css',
+            MUSEDER_RESTOREONE_URL . 'assets/vendor/toastify.min.css',
             [],
             '1.12.0'
         );
 
         wp_enqueue_script(
             'toastify',
-            BACKUP_LITE_URL . 'assets/vendor/toastify.min.js',
+            MUSEDER_RESTOREONE_URL . 'assets/vendor/toastify.min.js',
             [],
             '1.12.0',
             true
         );
 
         wp_enqueue_script(
-            'backup-lite-admin',
-            BACKUP_LITE_URL . 'assets/js/admin.js',
+            'museder-restoreone-admin',
+            MUSEDER_RESTOREONE_URL . 'assets/js/admin.js',
             [ 'jquery', 'toastify' ],
-            BACKUP_LITE_VERSION,
+            MUSEDER_RESTOREONE_VERSION,
             true
         );
 
         wp_enqueue_script(
-            'backup-lite-admin-ui',
-            BACKUP_LITE_URL . 'assets/js/admin-ui.js',
+            'museder-restoreone-admin-ui',
+            MUSEDER_RESTOREONE_URL . 'assets/js/admin-ui.js',
             [],
-            BACKUP_LITE_VERSION,
+            MUSEDER_RESTOREONE_VERSION,
             false
         );
 
-        // Localize PRO status for frontend
-        $is_pro = class_exists( 'Backup_Lite_Pro' ) && Backup_Lite_Pro::is_pro_active();
-        $settings = Backup_Lite_Settings::get_settings();
+        // Localize optional add-on availability for frontend messaging.
+        $is_pro = function_exists( 'museder_is_pro_active' ) ? museder_is_pro_active() : false;
+        $settings = Museder_Restoreone_Settings::get_settings();
 
-        wp_localize_script(
-            'backup-lite-admin-ui',
-            'MusederRestoreOnePro',
-            [
-                'isPro'      => $is_pro,
-                'upgradeUrl' => class_exists( 'Backup_Lite_Pro' ) ? Backup_Lite_Pro::get_upgrade_url() : 'https://your-site.com/pro',
-                'strings'    => [
-                    'modalTitle'    => __( 'Museder RestoreOne PRO Required', 'museder-restoreone' ),
-                    'modalSubtitle' => __( 'This feature requires Museder RestoreOne PRO to activate.', 'museder-restoreone' ),
-                    'close'         => __( 'Close', 'museder-restoreone' ),
-                    'upgrade'       => __( 'Upgrade to PRO', 'museder-restoreone' ),
-                    /* translators: %s: Name of the locked feature. */
-                    'featureLocked' => __( 'Feature "%s" is available in Museder RestoreOne PRO.', 'museder-restoreone' ),
-                ],
-            ]
+        $addon_payload = [
+            'isPro'      => $is_pro,
+            'upgradeUrl' => '',
+            'strings'    => [
+                'modalTitle'    => __( 'Optional add-on setting unavailable', 'museder-restoreone' ),
+                'modalSubtitle' => __( 'This control is reserved for an optional add-on. It is not used by the base plugin.', 'museder-restoreone' ),
+                'close'         => __( 'Close', 'museder-restoreone' ),
+                'upgrade'       => __( 'OK', 'museder-restoreone' ),
+                /* translators: %s: Name of the reserved control or feature key. */
+                'featureLocked' => __( 'Setting "%s" is reserved for an optional add-on and is not available here.', 'museder-restoreone' ),
+            ],
+        ];
+        $addon_json = wp_json_encode(
+            $addon_payload,
+            JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE
+        );
+        wp_add_inline_script(
+            'museder-restoreone-admin-ui',
+            'window.MusederRestoreOneAddon=' . $addon_json . ';window.MusederRestoreOnePro=window.MusederRestoreOneAddon;',
+            'before'
         );
 
-        // Inject basic admin preferences and feature toggles
-        $settings = Backup_Lite_Settings::get_settings();
+        // Inject basic admin preferences and feature toggles (single localize; avoid overwriting `features`).
         wp_localize_script(
-            'backup-lite-admin-ui',
+            'museder-restoreone-admin-ui',
             'MusederRestoreOneAdminUI',
             [
                 'theme'    => isset( $settings['ui_theme'] ) ? $settings['ui_theme'] : 'auto',
@@ -295,31 +345,23 @@ class Backup_Lite_UI {
             ]
         );
 
-        wp_localize_script(
-            'backup-lite-admin-ui',
-            'MusederRestoreOneAdminUI',
-            [
-                'theme' => isset( $settings['ui_theme'] ) ? $settings['ui_theme'] : 'auto',
-            ]
-        );
-
         wp_enqueue_script(
-            'backup-lite-chunk-upload',
-            BACKUP_LITE_URL . 'assets/js/chunk-upload.js',
-            [ 'backup-lite-admin' ],
-            BACKUP_LITE_VERSION,
+            'museder-restoreone-chunk-upload',
+            MUSEDER_RESTOREONE_URL . 'assets/js/chunk-upload.js',
+            [ 'museder-restoreone-admin' ],
+            MUSEDER_RESTOREONE_VERSION,
             true
         );
 
         wp_enqueue_script(
-            'backup-lite-chunk-upload-v2',
-            BACKUP_LITE_URL . 'assets/js/chunk-upload-v2.js',
-            [ 'backup-lite-admin' ],
-            BACKUP_LITE_VERSION,
+            'museder-restoreone-chunk-upload-v2',
+            MUSEDER_RESTOREONE_URL . 'assets/js/chunk-upload-v2.js',
+            [ 'museder-restoreone-admin' ],
+            MUSEDER_RESTOREONE_VERSION,
             true
         );
 
-        $rest_url_v2 = rest_url( 'backup-lite/v2/' );
+        $rest_url_v2 = rest_url( 'museder-restoreone/v2/' );
         $nonce_v2    = wp_create_nonce( self::NONCE_V2 );
 
         // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- page parameter is for UI display only, not for security-sensitive operations
@@ -328,43 +370,43 @@ class Backup_Lite_UI {
         // Add inline styles and scripts for specific pages
         self::add_page_specific_inline_assets( $current_page );
 
-        $active_job = Backup_Lite_Backup_Jobs::get_active_job_summary();
+        $active_job = Museder_Restoreone_Backup_Jobs::get_active_job_summary();
 
         // Localize script for schedule actions (use unique globals to avoid conflicts).
         wp_localize_script(
-            'backup-lite-admin',
+            'museder-restoreone-admin',
             'musederRestoreoneAdmin',
             [
                 'ajax_url' => admin_url( 'admin-ajax.php' ),
-                'nonce'    => wp_create_nonce( 'backup_lite_admin_actions' ),
+                'nonce'    => wp_create_nonce( 'museder_restoreone_admin_actions' ),
             ]
         );
 
         // Also localize as MusederRestoreOne for compatibility
         wp_localize_script(
-            'backup-lite-admin',
+            'museder-restoreone-admin',
             'MusederRestoreOne',
             [
                 'ajax_url' => admin_url( 'admin-ajax.php' ),
-                'nonce'    => wp_create_nonce( 'backup_lite_admin_actions' ),
+                'nonce'    => wp_create_nonce( 'museder_restoreone_admin_actions' ),
                 'i18n_confirm_delete_schedule' => __( 'Delete this schedule?', 'museder-restoreone' ),
             ]
         );
 
         // Localize schedule-specific strings
         wp_localize_script(
-            'backup-lite-admin',
+            'museder-restoreone-admin',
             'musederRestoreoneSchedulesL10n',
             [
                 'ajaxUrl'        => admin_url( 'admin-ajax.php' ),
-                'nonce'          => wp_create_nonce( 'backup_lite_admin_actions' ),
+                'nonce'          => wp_create_nonce( 'museder_restoreone_admin_actions' ),
                 'updateSchedule' => __( 'Update Schedule', 'museder-restoreone' ),
                 'saveSchedule'   => __( 'Save Schedule', 'museder-restoreone' ),
                 'confirmDelete'  => __( 'Are you sure you want to delete this schedule?', 'museder-restoreone' ),
             ]
         );
 
-        wp_localize_script( 'backup-lite-admin', 'MusederRestoreOneAdmin', [
+        wp_localize_script( 'museder-restoreone-admin', 'MusederRestoreOneAdmin', [
             'ajaxUrl'        => admin_url( 'admin-ajax.php' ),
             'nonce'          => wp_create_nonce( self::NONCE ),
             'nonceV2'        => $nonce_v2,
@@ -517,20 +559,22 @@ class Backup_Lite_UI {
                 /* translators: 1: Current chunk number, 2: Total chunks, 3: Progress percentage. */
                 'chunkUploading'        => __( 'Uploading %1$s of %2$s (%3$s%)…', 'museder-restoreone' ),
                 'chunkMerging'          => __( 'Merging uploaded chunks…', 'museder-restoreone' ),
+                'safeModeOverlayHint'   => __( 'Safe mode is active: a plugin snapshot was saved for your review. Verify your site, then exit safe mode to clear the notice.', 'museder-restoreone' ),
+                'exitSafeMode'          => __( 'Exit Safe Mode', 'museder-restoreone' ),
             ],
             'chunk'         => [
-                'prepareAction'  => 'backup_lite_prepare_upload',
+                'prepareAction'  => 'museder_restoreone_prepare_upload',
                 'chunkSize'     => 2 * 1024 * 1024,
                 'maxFileSize'   => 4294967296,
-                'uploadAction'  => 'backup_lite_upload_chunk',
-                'finalizeAction'=> 'backup_lite_finalize_upload',
-                'abortAction'   => 'backup_lite_abort_upload',
+                'uploadAction'  => 'museder_restoreone_upload_chunk',
+                'finalizeAction'=> 'museder_restoreone_finalize_upload',
+                'abortAction'   => 'museder_restoreone_abort_upload',
                 'allowedExt'    => [ 'zip' ],
             ],
         ] );
 
         wp_localize_script(
-            'backup-lite-chunk-upload-v2',
+            'museder-restoreone-chunk-upload-v2',
             'MusederRestoreOneV2',
             [
                 'restUrl'        => esc_url_raw( $rest_url_v2 ),
@@ -541,10 +585,11 @@ class Backup_Lite_UI {
 
     public static function handle_backup_request() {
         self::verify_ajax_request();
+        check_ajax_referer( self::NONCE, 'nonce' );
 
         $options = self::get_backup_options_from_request();
 
-        $response = Backup_Lite_Backup::backup_site( $options );
+        $response = Museder_Restoreone_Backup::backup_site( $options );
 
         if ( ! empty( $response['success'] ) ) {
             if ( ! empty( $response['file'] ) ) {
@@ -558,18 +603,19 @@ class Backup_Lite_UI {
 
     public static function ajax_start_backup_job() {
         self::verify_ajax_request();
+        check_ajax_referer( self::NONCE, 'nonce' );
 
         try {
             $options = self::get_backup_options_from_request();
-            $job     = Backup_Lite_Backup_Jobs::create_job( $options );
+            $job     = Museder_Restoreone_Backup_Jobs::create_job( $options );
 
             wp_send_json_success( [
-                'job'     => Backup_Lite_Backup_Jobs::format_job_payload( $job ),
+                'job'     => Museder_Restoreone_Backup_Jobs::format_job_payload( $job ),
                 // @plugin-check: escaped
                 'message' => esc_html__( 'Backup job created. Processing has started in the background.', 'museder-restoreone' ),
             ] );
         } catch ( Exception $exception ) {
-            backup_lite_log( 'error', 'Failed to start backup job.', [
+            museder_restoreone_log( 'error', 'Failed to start backup job.', [
                 'error' => $exception->getMessage(),
             ] );
 
@@ -580,6 +626,7 @@ class Backup_Lite_UI {
 
     public static function ajax_get_backup_job_status() {
         self::verify_ajax_request();
+        check_ajax_referer( self::NONCE, 'nonce' );
 
         // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() above
         $job_id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
@@ -588,7 +635,7 @@ class Backup_Lite_UI {
             wp_send_json_error( [ 'message' => esc_html__( 'Job ID is required.', 'museder-restoreone' ) ], 400 );
         }
 
-        $payload = Backup_Lite_Backup_Jobs::get_job_payload( $job_id );
+        $payload = Museder_Restoreone_Backup_Jobs::get_job_payload( $job_id );
         if ( ! $payload ) {
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'Backup job not found or already completed.', 'museder-restoreone' ) ], 404 );
@@ -599,6 +646,7 @@ class Backup_Lite_UI {
 
     public static function ajax_continue_backup_job() {
         self::verify_ajax_request();
+        check_ajax_referer( self::NONCE, 'nonce' );
 
         // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() above
         $job_id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
@@ -607,14 +655,14 @@ class Backup_Lite_UI {
             wp_send_json_error( [ 'message' => esc_html__( 'Job ID is required.', 'museder-restoreone' ) ], 400 );
         }
 
-        $job = Backup_Lite_Backup_Jobs::process_job_immediately( $job_id, Backup_Lite_Backup_Jobs::AJAX_BATCH_FILES, Backup_Lite_Backup_Jobs::AJAX_BATCH_BYTES );
+        $job = Museder_Restoreone_Backup_Jobs::process_job_immediately( $job_id, Museder_Restoreone_Backup_Jobs::AJAX_BATCH_FILES, Museder_Restoreone_Backup_Jobs::AJAX_BATCH_BYTES );
         if ( ! $job ) {
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'Backup job not found.', 'museder-restoreone' ) ], 404 );
         }
 
         wp_send_json_success( [
-            'job'     => Backup_Lite_Backup_Jobs::format_job_payload( $job ),
+            'job'     => Museder_Restoreone_Backup_Jobs::format_job_payload( $job ),
             // @plugin-check: escaped
             'message' => esc_html__( 'Backup job updated.', 'museder-restoreone' ),
         ] );
@@ -622,6 +670,7 @@ class Backup_Lite_UI {
 
     public static function ajax_cancel_backup_job() {
         self::verify_ajax_request();
+        check_ajax_referer( self::NONCE, 'nonce' );
 
         // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() above
         $job_id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
@@ -630,7 +679,7 @@ class Backup_Lite_UI {
             wp_send_json_error( [ 'message' => esc_html__( 'Job ID is required.', 'museder-restoreone' ) ], 400 );
         }
 
-        if ( ! Backup_Lite_Backup_Jobs::cancel_job( $job_id ) ) {
+        if ( ! Museder_Restoreone_Backup_Jobs::cancel_job( $job_id ) ) {
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'Unable to cancel backup job.', 'museder-restoreone' ) ], 404 );
         }
@@ -644,8 +693,9 @@ class Backup_Lite_UI {
      */
     public static function ajax_get_active_backup_job() {
         self::verify_ajax_request();
+        check_ajax_referer( self::NONCE, 'nonce' );
 
-        $payload = Backup_Lite_Backup_Jobs::get_active_job_summary();
+        $payload = Museder_Restoreone_Backup_Jobs::get_active_job_summary();
         if ( ! $payload ) {
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'No active backup job found.', 'museder-restoreone' ) ], 404 );
@@ -656,6 +706,7 @@ class Backup_Lite_UI {
 
     public static function handle_restore_request() {
         self::verify_ajax_request();
+        check_ajax_referer( self::NONCE, 'nonce' );
 
         // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() above
         // @plugin-check: sanitized + nonce - verified via verify_ajax_request() above
@@ -684,9 +735,16 @@ class Backup_Lite_UI {
 
         $file = $uploaded_file;
 
-        if ( ! function_exists( 'wp_handle_upload' ) && defined( 'ABSPATH' ) ) {
-            // Guard core include to reduce WP.org review risk (this handler runs only for admins after nonce/cap checks).
-            require_once ABSPATH . 'wp-admin/includes/file.php';
+        if ( ! function_exists( 'wp_handle_upload' ) ) {
+            $file_php = function_exists( 'museder_restoreone_get_core_admin_include_path' ) ? museder_restoreone_get_core_admin_include_path( 'file.php' ) : '';
+            if ( '' !== $file_php ) {
+                // phpcs:ignore WordPressVIPMinimum.Files.IncludingFile.UsingVariable -- vetted core path from helper.
+                require_once $file_php;
+            }
+        }
+        if ( ! function_exists( 'wp_handle_upload' ) ) {
+            // @plugin-check: escaped
+            wp_send_json_error( [ 'message' => esc_html__( 'WordPress upload API is unavailable on this request.', 'museder-restoreone' ) ] );
         }
 
         $overrides = [ 'test_form' => false ];
@@ -694,7 +752,7 @@ class Backup_Lite_UI {
         $uploaded = wp_handle_upload( $file, $overrides );
 
         if ( isset( $uploaded['error'] ) ) {
-            backup_lite_log( 'error', 'Restore upload failed.', [ 'error' => $uploaded['error'] ] );
+            museder_restoreone_log( 'error', 'Restore upload failed.', [ 'error' => $uploaded['error'] ] );
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'Failed to upload restore file.', 'museder-restoreone' ) ] );
         }
@@ -703,7 +761,7 @@ class Backup_Lite_UI {
         $ext       = strtolower( pathinfo( $file_path, PATHINFO_EXTENSION ) );
 
         // Move uploaded file into backup directory for logging & future reuse.
-        $backup_dir = backup_lite_get_backup_dir();
+        $backup_dir = museder_restoreone_get_backup_dir();
         $unique     = wp_unique_filename( $backup_dir, basename( $file_path ) );
         $destination = trailingslashit( $backup_dir ) . $unique;
         // This plugin needs low-level rename() here for streaming backup/restore performance.
@@ -724,10 +782,10 @@ class Backup_Lite_UI {
         } else {
             // AI1WM-style: queue restore as a resumable Restore_Service job (cron + checkpoints).
             $file_name = basename( $file_path );
-            $prepared  = Backup_Lite_Restore_Service::prepare( 'upload', $file_name, '' );
+            $prepared  = Museder_Restoreone_Restore_Service::prepare( 'upload', $file_name, '' );
             $job_id    = isset( $prepared['job_id'] ) ? (string) $prepared['job_id'] : '';
-            Backup_Lite_Restore_Service::validate( $job_id );
-            $started = Backup_Lite_Restore_Service::execute( $job_id, [ 'autoBackup' => true ] );
+            Museder_Restoreone_Restore_Service::validate( $job_id );
+            $started = Museder_Restoreone_Restore_Service::execute( $job_id, [ 'autoBackup' => true ] );
 
             $response = [
                 'success' => true,
@@ -745,6 +803,7 @@ class Backup_Lite_UI {
 
     public static function handle_restore_existing() {
         self::verify_ajax_request();
+        check_ajax_referer( self::NONCE, 'nonce' );
 
         // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() above
         $filename = isset( $_POST['filename'] ) ? sanitize_text_field( wp_unslash( $_POST['filename'] ) ) : '';
@@ -754,16 +813,16 @@ class Backup_Lite_UI {
         }
 
         // Use helper function to get absolute path from file name
-        // backup_lite_get_backup_path() ensures the file is within the backup directory and is readable
-        $file_path = backup_lite_get_backup_path( $filename );
+        // museder_restoreone_get_backup_path() ensures the file is within the backup directory and is readable
+        $file_path = museder_restoreone_get_backup_path( $filename );
 
         if ( ! $file_path ) {
-            backup_lite_log( 'error', 'Restore archive not readable.', [ 'filename' => $filename ] );
+            museder_restoreone_log( 'error', 'Restore archive not readable.', [ 'filename' => $filename ] );
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'Backup file not found or unreadable.', 'museder-restoreone' ) ], 404 );
         }
 
-        // No need to check $backup_dir here - backup_lite_get_backup_path() already ensures
+        // No need to check $backup_dir here - museder_restoreone_get_backup_path() already ensures
         // the file is within the backup directory and is readable
 
         $options = [];
@@ -788,10 +847,10 @@ class Backup_Lite_UI {
         }
 
         // AI1WM-style: queue restore as a resumable Restore_Service job (cron + checkpoints).
-        $prepared = Backup_Lite_Restore_Service::prepare( 'existing', $filename, '' );
+        $prepared = Museder_Restoreone_Restore_Service::prepare( 'existing', $filename, '' );
         $job_id   = isset( $prepared['job_id'] ) ? (string) $prepared['job_id'] : '';
-        Backup_Lite_Restore_Service::validate( $job_id );
-        $started = Backup_Lite_Restore_Service::execute( $job_id, $options );
+        Museder_Restoreone_Restore_Service::validate( $job_id );
+        $started = Museder_Restoreone_Restore_Service::execute( $job_id, $options );
 
         wp_send_json_success(
             [
@@ -807,6 +866,7 @@ class Backup_Lite_UI {
      */
     public static function handle_get_backups_list() {
         self::verify_ajax_request();
+        check_ajax_referer( self::NONCE, 'nonce' );
 
         $backups = self::get_backups_list();
         $formatted = array_map(
@@ -819,7 +879,7 @@ class Backup_Lite_UI {
                     'size_human' => size_format( $size, 2 ),
                     'created'    => $item['created'],
                     'duration_seconds' => $duration_seconds,
-                    'duration'   => $duration_seconds !== null ? backup_lite_format_duration( $duration_seconds ) : '',
+                    'duration'   => $duration_seconds !== null ? museder_restoreone_format_duration( $duration_seconds ) : '',
                 ];
             },
             $backups
@@ -830,6 +890,7 @@ class Backup_Lite_UI {
 
     public static function handle_delete_backup() {
         self::verify_ajax_request();
+        check_ajax_referer( self::NONCE, 'nonce' );
 
         // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() above
         $filename = isset( $_POST['filename'] ) ? sanitize_text_field( wp_unslash( $_POST['filename'] ) ) : '';
@@ -838,7 +899,7 @@ class Backup_Lite_UI {
             wp_send_json_error( [ 'message' => esc_html__( 'Backup filename not provided.', 'museder-restoreone' ) ], 400 );
         }
 
-        $file_path = backup_lite_get_backup_path( $filename );
+        $file_path = museder_restoreone_get_backup_path( $filename );
         if ( ! $file_path || ! file_exists( $file_path ) ) {
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'Backup file not found.', 'museder-restoreone' ) ], 404 );
@@ -859,10 +920,10 @@ class Backup_Lite_UI {
         }
         // @phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
         if ( $deleted ) {
-            backup_lite_log( 'info', 'Backup file deleted.', [ 'file' => $file_path ] );
+            museder_restoreone_log( 'info', 'Backup file deleted.', [ 'file' => $file_path ] );
             wp_send_json_success( [ 'message' => esc_html__( 'Backup deleted successfully.', 'museder-restoreone' ) ] );
         } else {
-            backup_lite_log( 'error', 'Failed to delete backup file.', [ 'file' => $file_path ] );
+            museder_restoreone_log( 'error', 'Failed to delete backup file.', [ 'file' => $file_path ] );
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'Failed to delete backup file.', 'museder-restoreone' ) ], 500 );
         }
@@ -870,6 +931,7 @@ class Backup_Lite_UI {
 
     public static function handle_delete_backups() {
         self::verify_ajax_request();
+        check_ajax_referer( self::NONCE, 'nonce' );
 
         // phpcs:disable WordPress.Security.NonceVerification.Missing,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified in verify_ajax_request() above, will be sanitized in array_map below
         $raw = array();
@@ -901,7 +963,7 @@ class Backup_Lite_UI {
         $errors     = [];
 
         foreach ( $filenames as $filename ) {
-            $file_path = backup_lite_get_backup_path( $filename );
+            $file_path = museder_restoreone_get_backup_path( $filename );
             if ( ! $file_path || ! file_exists( $file_path ) ) {
                 $errors[] = [ 'file' => $filename, 'message' => esc_html__( 'Backup file not found.', 'museder-restoreone' ) ];
                 continue;
@@ -923,10 +985,10 @@ class Backup_Lite_UI {
             // @phpcs:enable WordPress.WP.AlternativeFunctions.unlink_unlink
             if ( $deleted_file ) {
                 $deleted[] = $filename;
-                backup_lite_log( 'info', 'Backup file deleted (bulk).', [ 'file' => $file_path ] );
+                museder_restoreone_log( 'info', 'Backup file deleted (bulk).', [ 'file' => $file_path ] );
             } else {
                 $errors[] = [ 'file' => $filename, 'message' => esc_html__( 'Failed to delete backup file.', 'museder-restoreone' ) ];
-                backup_lite_log( 'error', 'Failed to delete backup file (bulk).', [ 'file' => $file_path ] );
+                museder_restoreone_log( 'error', 'Failed to delete backup file (bulk).', [ 'file' => $file_path ] );
             }
         }
 
@@ -972,7 +1034,7 @@ class Backup_Lite_UI {
             wp_send_json_error( [ 'message' => esc_html__( 'No restore history entries selected.', 'museder-restoreone' ) ], 400 );
         }
 
-        $history = backup_lite_get_restore_history();
+        $history = museder_restoreone_get_restore_history();
         $deleted = [];
         $errors = [];
 
@@ -982,7 +1044,7 @@ class Backup_Lite_UI {
                 $entry_timestamp = isset( $entry['timestamp_utc'] ) ? (int) $entry['timestamp_utc'] : 0;
                 if ( ! $entry_timestamp && isset( $entry['timestamp'] ) ) {
                     // Fallback: try to parse timestamp string
-                    $entry_timestamp = backup_lite_parse_legacy_timestamp( $entry['timestamp'] );
+                    $entry_timestamp = museder_restoreone_parse_legacy_timestamp( $entry['timestamp'] );
                 }
                 
                 if ( $entry_timestamp === $timestamp ) {
@@ -1001,13 +1063,13 @@ class Backup_Lite_UI {
         // Save updated history
         if ( ! empty( $deleted ) ) {
             $history = array_values( $history ); // Re-index array
-            $path = backup_lite_get_restore_history_path();
+            $path = museder_restoreone_get_restore_history_path();
             $json = wp_json_encode( $history, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES );
             
             // Using native file APIs on local backup directory; paths are sanitized and constrained.
             // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
             if ( false !== file_put_contents( $path, $json, LOCK_EX ) ) {
-                backup_lite_log( 'info', 'Restore history entries deleted.', [ 'count' => count( $deleted ) ] );
+                museder_restoreone_log( 'info', 'Restore history entries deleted.', [ 'count' => count( $deleted ) ] );
             } else {
                 $errors[] = [ 'message' => esc_html__( 'Failed to save updated restore history.', 'museder-restoreone' ) ];
             }
@@ -1028,37 +1090,43 @@ class Backup_Lite_UI {
             wp_die( esc_html__( 'Unauthorized.', 'museder-restoreone' ) );
         }
 
-        // Sanitize log parameter before nonce check
-        // phpcs:disable WordPress.Security.NonceVerification.Recommended -- nonce verified via check_admin_referer() below
-        $log  = sanitize_text_field( wp_unslash( $_GET['log'] ?? '' ) );
-        // Compatibility: if a link contains literal "&amp;", PHP may receive the parameter key "amp;log".
+        // phpcs:disable WordPress.Security.NonceVerification.Recommended -- read GET only to build nonce action; full path resolved after referer check
+        $log = sanitize_text_field( wp_unslash( $_GET['log'] ?? '' ) );
         if ( empty( $log ) && isset( $_GET['amp;log'] ) ) {
             $log = sanitize_text_field( wp_unslash( $_GET['amp;log'] ) );
         }
         // phpcs:enable WordPress.Security.NonceVerification.Recommended
-        
+
         if ( empty( $log ) ) {
             wp_die( esc_html__( 'Log filename missing.', 'museder-restoreone' ), esc_html__( 'Download error', 'museder-restoreone' ), 400 );
         }
-        
-        $path = backup_lite_get_log_dir() . '/' . basename( $log );
-        $path = wp_normalize_path( $path );
 
-        if ( ! file_exists( $path ) ) {
-            wp_die( esc_html__( 'Log file not found.', 'museder-restoreone' ), esc_html__( 'Download error', 'museder-restoreone' ), 404 );
-        }
-
-        // Verify nonce - use the basename of the log file for the nonce action
-        // This matches the nonce action used in build_log_download_link()
-        $nonce_action = 'backup_lite_download_log_' . basename( $path );
+        $log_base = basename( $log );
+        // Matches build_log_download_link(): nonce is tied to basename only; verify before filesystem access.
+        $nonce_action = 'museder_restoreone_download_log_' . $log_base;
         if ( ! check_admin_referer( $nonce_action, '_wpnonce' ) ) {
-            // If nonce verification fails, provide a helpful error message
-            wp_die( 
-                esc_html__( 'The link you are trying to access has expired.', 'museder-restoreone' ) . ' <a href="' . esc_url( admin_url( 'admin.php?page=backup-lite-logs' ) ) . '">' . esc_html__( 'Please try again', 'museder-restoreone' ) . '</a>.',
+            wp_die(
+                esc_html__( 'The link you are trying to access has expired.', 'museder-restoreone' ) . ' <a href="' . esc_url( admin_url( 'admin.php?page=museder-restoreone-logs' ) ) . '">' . esc_html__( 'Please try again', 'museder-restoreone' ) . '</a>.',
                 esc_html__( 'Link expired', 'museder-restoreone' ),
                 [ 'response' => 403, 'back_link' => true ]
             );
         }
+
+        $log_root = museder_restoreone_get_log_dir();
+        $path     = wp_normalize_path( trailingslashit( $log_root ) . $log_base );
+
+        $real_root = realpath( $log_root );
+        $real_file = file_exists( $path ) ? realpath( $path ) : false;
+        if ( ! $real_root || ! $real_file ) {
+            wp_die( esc_html__( 'Log file not found.', 'museder-restoreone' ), esc_html__( 'Download error', 'museder-restoreone' ), 404 );
+        }
+
+        $root_prefix = trailingslashit( wp_normalize_path( $real_root ) );
+        if ( 0 !== strpos( wp_normalize_path( $real_file ), $root_prefix ) ) {
+            wp_die( esc_html__( 'Invalid file path.', 'museder-restoreone' ), esc_html__( 'Download error', 'museder-restoreone' ), 403 );
+        }
+
+        $path = $real_file;
 
         // @plugin-check: sanitized - safe whitelisted mime type
         header( 'Content-Type: text/plain' );
@@ -1076,29 +1144,33 @@ class Backup_Lite_UI {
             wp_die( esc_html__( 'Unauthorized.', 'museder-restoreone' ) );
         }
 
-        // Sanitize file parameter before nonce check
-        // phpcs:disable WordPress.Security.NonceVerification.Recommended -- nonce verified via check_admin_referer() below
-        $file = isset( $_GET['file'] ) ? sanitize_file_name( wp_unslash( $_GET['file'] ) ) : '';
-        // phpcs:enable WordPress.Security.NonceVerification.Recommended
-        
-        if ( empty( $file ) ) {
-            wp_die( esc_html__( 'Invalid backup file.', 'museder-restoreone' ), esc_html__( 'Download error', 'museder-restoreone' ), 400 );
-        }
-
         // Verify access:
-        // - Prefer WordPress nonce for standard admin-post links.
-        // - Also support legacy time-limited tokens (file/expires/token) for backward compatibility.
+        // - Legacy time-limited tokens (file/expires/token): validate token after reading GET (token covers filename).
+        // - Standard admin-post links: run check_admin_referer before reading $_GET['file'] (review tooling expects this order).
         // phpcs:disable WordPress.Security.NonceVerification.Recommended -- validated by either nonce or token verification below
         $expires = isset( $_GET['expires'] ) ? absint( wp_unslash( $_GET['expires'] ) ) : 0;
         $token   = isset( $_GET['token'] ) ? sanitize_text_field( wp_unslash( $_GET['token'] ) ) : '';
         // phpcs:enable WordPress.Security.NonceVerification.Recommended
 
         $verified = false;
-        if ( $expires > 0 && '' !== $token && function_exists( 'backup_lite_verify_download_token' ) ) {
-            $verified = backup_lite_verify_download_token( $file, $expires, $token );
+        $file     = '';
+
+        if ( $expires > 0 && '' !== $token && function_exists( 'museder_restoreone_verify_download_token' ) ) {
+            // phpcs:disable WordPress.Security.NonceVerification.Recommended -- token path; filename covered by HMAC
+            $file = isset( $_GET['file'] ) ? sanitize_file_name( wp_unslash( $_GET['file'] ) ) : '';
+            // phpcs:enable WordPress.Security.NonceVerification.Recommended
+            if ( empty( $file ) ) {
+                wp_die( esc_html__( 'Invalid backup file.', 'museder-restoreone' ), esc_html__( 'Download error', 'museder-restoreone' ), 400 );
+            }
+            $verified = museder_restoreone_verify_download_token( $file, $expires, $token );
         } else {
-            // Nonce check will die() on failure.
-            check_admin_referer( 'backup_lite_download_backup', '_backup_lite_download_nonce' );
+            check_admin_referer( 'museder_restoreone_download_backup', '_museder_restoreone_download_nonce' );
+            // phpcs:disable WordPress.Security.NonceVerification.Recommended -- nonce verified via check_admin_referer() above
+            $file = isset( $_GET['file'] ) ? sanitize_file_name( wp_unslash( $_GET['file'] ) ) : '';
+            // phpcs:enable WordPress.Security.NonceVerification.Recommended
+            if ( empty( $file ) ) {
+                wp_die( esc_html__( 'Invalid backup file.', 'museder-restoreone' ), esc_html__( 'Download error', 'museder-restoreone' ), 400 );
+            }
             $verified = true;
         }
 
@@ -1107,10 +1179,10 @@ class Backup_Lite_UI {
         }
 
         // Use helper function to get absolute path from file name
-        $path = backup_lite_get_backup_path( $file );
+        $path = museder_restoreone_get_backup_path( $file );
 
         if ( ! $path ) {
-            backup_lite_log( 'error', 'Download archive not readable.', [ 'filename' => $file ] );
+            museder_restoreone_log( 'error', 'Download archive not readable.', [ 'filename' => $file ] );
             wp_die( esc_html__( 'Backup file not found or unreadable.', 'museder-restoreone' ), esc_html__( 'Download error', 'museder-restoreone' ), 404 );
         }
 
@@ -1176,11 +1248,7 @@ class Backup_Lite_UI {
     private static function get_backup_options_from_request() {
         $options = [];
 
-        // Extra explicit nonce verification to satisfy static analysis and reviewer tooling.
-        // (Calling handlers already verify via verify_ajax_request().)
-        check_ajax_referer( self::NONCE, 'nonce' );
-
-        // phpcs:disable WordPress.Security.NonceVerification.Missing,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified in calling function (handle_backup_request or ajax_start_backup_job) via verify_ajax_request()
+        // phpcs:disable WordPress.Security.NonceVerification.Missing,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified in calling function (handle_backup_request or ajax_start_backup_job) via verify_ajax_request() and check_ajax_referer()
         // Backup mode (Free + Pro)
         $backup_mode = '';
         if ( isset( $_POST['backup_mode'] ) ) {
@@ -1268,40 +1336,6 @@ class Backup_Lite_UI {
             }
         }
 
-        if ( Backup_Lite_Pro::is_pro_active() ) {
-            $backup_label = '';
-            if ( isset( $_POST['backup_label'] ) ) {
-                $backup_label = sanitize_text_field( wp_unslash( $_POST['backup_label'] ) );
-            }
-            // @plugin-check: sanitized
-            if ( ! empty( $backup_label ) ) {
-                $options['label'] = $backup_label;
-            }
-
-            // @plugin-check: validated - checkbox value
-            if ( ! empty( $_POST['backup_encrypt'] ) ) {
-                $options['encrypt'] = true;
-            }
-
-            // @plugin-check: validated - checkbox value
-            if ( ! empty( $_POST['backup_dual'] ) ) {
-                $options['dual_version'] = true;
-            }
-            $backup_cloud_raw = '';
-            if ( isset( $_POST['backup_cloud'] ) ) {
-                $backup_cloud_raw = wp_unslash( $_POST['backup_cloud'] );
-            }
-            // @plugin-check: validated - will be sanitized in array_map or sanitize_text_field below
-            if ( ! empty( $backup_cloud_raw ) ) {
-                $cloud = $backup_cloud_raw;
-                if ( is_array( $cloud ) ) {
-                    $options['cloud_destinations'] = array_map( 'sanitize_text_field', $cloud );
-                } elseif ( is_string( $cloud ) ) {
-                    $decoded = json_decode( $cloud, true );
-                    $options['cloud_destinations'] = is_array( $decoded ) ? array_map( 'sanitize_text_field', $decoded ) : [];
-                }
-            }
-        }
         // phpcs:enable WordPress.Security.NonceVerification.Missing,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
 
         return $options;
@@ -1334,6 +1368,19 @@ class Backup_Lite_UI {
             wp_send_json_error( [ 'message' => esc_html__( 'Unauthorized.', 'museder-restoreone' ) ], 403 );
         }
 
+        // WordPress.org strict review: do not mint a new AJAX nonce without validating the current one first.
+        $ok = check_ajax_referer( self::NONCE, 'nonce', false );
+        if ( ! $ok ) {
+            wp_send_json_error(
+                [
+                    'code'    => 'invalid_nonce',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Your session has expired. Please reload the page.', 'museder-restoreone' ),
+                ],
+                403
+            );
+        }
+
         wp_send_json_success(
             [
                 'nonce' => wp_create_nonce( self::NONCE ),
@@ -1342,15 +1389,15 @@ class Backup_Lite_UI {
     }
 
     public static function get_backups_list( $limit = 0 ) {
-        $dirs = array_map( 'trailingslashit', backup_lite_get_all_backup_dirs() );
+        $dirs = array_map( 'trailingslashit', museder_restoreone_get_all_backup_dirs() );
         if ( empty( $dirs ) ) {
             return [];
         }
 
         // Hide the currently-running archive from the library list to avoid exposing partial files.
         $active_archive = '';
-        if ( class_exists( 'Backup_Lite_Backup_Jobs' ) ) {
-            $active_job = Backup_Lite_Backup_Jobs::get_active_job();
+        if ( class_exists( 'Museder_Restoreone_Backup_Jobs' ) ) {
+            $active_job = Museder_Restoreone_Backup_Jobs::get_active_job();
             if (
                 $active_job
                 && ! empty( $active_job['archive_path'] )
@@ -1409,7 +1456,7 @@ class Backup_Lite_UI {
             }
 
             $filename = basename( $file );
-            $metadata = Backup_Lite_Backup::get_backup_metadata( $filename );
+            $metadata = Museder_Restoreone_Backup::get_backup_metadata( $filename );
 
             // Get duration from metadata first, then fallback to logs
             $duration_seconds = null;
@@ -1417,7 +1464,7 @@ class Backup_Lite_UI {
                 $duration_seconds = (int) $metadata['duration_seconds'];
             } else {
                 // Fallback to logs
-                $events = Backup_Lite_Log_Handler::get_recent_events( 'backup_result', 10 );
+                $events = Museder_Restoreone_Log_Handler::get_recent_events( 'backup_result', 10 );
                 foreach ( $events as $event ) {
                     $context = $event['context'];
                     if ( isset( $context['file'] ) && basename( $context['file'] ) === $filename ) {
@@ -1434,8 +1481,8 @@ class Backup_Lite_UI {
                 'path'    => wp_normalize_path( $file ),
                 'size'    => filesize( $file ),
                 'type'    => 'site',
-                // @plugin-check: wp_date with local timezone - filemtime() returns Unix timestamp (UTC), backup_lite_format_local_time() handles timezone conversion
-                'created' => backup_lite_format_local_time( filemtime( $file ) ),
+                // @plugin-check: wp_date with local timezone - filemtime() returns Unix timestamp (UTC), museder_restoreone_format_local_time() handles timezone conversion
+                'created' => museder_restoreone_format_local_time( filemtime( $file ) ),
                 'download_url' => self::build_backup_download_link( $file ),
                 'label'   => $metadata['label'] ?? '',
                 'encrypted' => ! empty( $metadata['encrypted'] ),
@@ -1449,7 +1496,7 @@ class Backup_Lite_UI {
     }
 
     public static function get_logs_list( $limit = 0 ) {
-        $files = backup_lite_get_recent_logs();
+        $files = museder_restoreone_get_recent_logs();
         $items = [];
 
         foreach ( $files as $index => $file ) {
@@ -1469,7 +1516,7 @@ class Backup_Lite_UI {
 
     public static function get_environment_status() {
         return [
-            'ziparchive' => backup_lite_can_use_ziparchive(),
+            'ziparchive' => museder_restoreone_can_use_ziparchive(),
         ];
     }
 
@@ -1481,7 +1528,9 @@ class Backup_Lite_UI {
     private static function add_page_specific_inline_assets( $current_page ) {
         // Common PRO page styles
         $pro_page_css = '
+.museder-restoreone-pro-page.pro-locked-overlay::before,
 .backup-lite-pro-page.pro-locked-overlay::before,
+.museder-restoreone-reports.pro-locked-overlay::before,
 .backup-lite-reports.pro-locked-overlay::before {
     content: "";
     position: fixed;
@@ -1494,33 +1543,59 @@ class Backup_Lite_UI {
     z-index: 1;
     pointer-events: none;
 }
+.museder-restoreone-pro-page.pro-locked-overlay .bl-container,
 .backup-lite-pro-page.pro-locked-overlay .bl-container,
+.museder-restoreone-reports.pro-locked-overlay .bl-container,
 .backup-lite-reports.pro-locked-overlay .bl-container {
     position: relative;
     z-index: 2;
 }
-.backup-lite-pro-page .notice:not(.backup-lite-notice),
-.backup-lite-pro-page .update-nag:not(.backup-lite-notice),
-.backup-lite-pro-page .error:not(.backup-lite-notice),
-.backup-lite-pro-page .updated:not(.backup-lite-notice),
-.backup-lite-reports .notice:not(.backup-lite-notice),
-.backup-lite-reports .update-nag:not(.backup-lite-notice),
-.backup-lite-reports .error:not(.backup-lite-notice),
-.backup-lite-reports .updated:not(.backup-lite-notice),
-.backup-lite-schedules .notice:not(.backup-lite-notice),
-.backup-lite-schedules .update-nag:not(.backup-lite-notice),
-.backup-lite-schedules .error:not(.backup-lite-notice),
-.backup-lite-schedules .updated:not(.backup-lite-notice) {
+.museder-restoreone-pro-page .notice:not(.museder-restoreone-notice):not(.backup-lite-notice),
+.museder-restoreone-pro-page .update-nag:not(.museder-restoreone-notice):not(.backup-lite-notice),
+.museder-restoreone-pro-page .error:not(.museder-restoreone-notice):not(.backup-lite-notice),
+.museder-restoreone-pro-page .updated:not(.museder-restoreone-notice):not(.backup-lite-notice),
+.backup-lite-pro-page .notice:not(.museder-restoreone-notice):not(.backup-lite-notice),
+.backup-lite-pro-page .update-nag:not(.museder-restoreone-notice):not(.backup-lite-notice),
+.backup-lite-pro-page .error:not(.museder-restoreone-notice):not(.backup-lite-notice),
+.backup-lite-pro-page .updated:not(.museder-restoreone-notice):not(.backup-lite-notice),
+.museder-restoreone-reports .notice:not(.museder-restoreone-notice):not(.backup-lite-notice),
+.museder-restoreone-reports .update-nag:not(.museder-restoreone-notice):not(.backup-lite-notice),
+.museder-restoreone-reports .error:not(.museder-restoreone-notice):not(.backup-lite-notice),
+.museder-restoreone-reports .updated:not(.museder-restoreone-notice):not(.backup-lite-notice),
+.backup-lite-reports .notice:not(.museder-restoreone-notice):not(.backup-lite-notice),
+.backup-lite-reports .update-nag:not(.museder-restoreone-notice):not(.backup-lite-notice),
+.backup-lite-reports .error:not(.museder-restoreone-notice):not(.backup-lite-notice),
+.backup-lite-reports .updated:not(.museder-restoreone-notice):not(.backup-lite-notice),
+.museder-restoreone-schedules .notice:not(.museder-restoreone-notice):not(.backup-lite-notice),
+.museder-restoreone-schedules .update-nag:not(.museder-restoreone-notice):not(.backup-lite-notice),
+.museder-restoreone-schedules .error:not(.museder-restoreone-notice):not(.backup-lite-notice),
+.museder-restoreone-schedules .updated:not(.museder-restoreone-notice):not(.backup-lite-notice),
+.backup-lite-schedules .notice:not(.museder-restoreone-notice):not(.backup-lite-notice),
+.backup-lite-schedules .update-nag:not(.museder-restoreone-notice):not(.backup-lite-notice),
+.backup-lite-schedules .error:not(.museder-restoreone-notice):not(.backup-lite-notice),
+.backup-lite-schedules .updated:not(.museder-restoreone-notice):not(.backup-lite-notice) {
     display: none !important;
 }
+.museder-restoreone-pro-page > .notice,
+.museder-restoreone-pro-page > .update-nag,
+.museder-restoreone-pro-page > .error,
+.museder-restoreone-pro-page > .updated,
 .backup-lite-pro-page > .notice,
 .backup-lite-pro-page > .update-nag,
 .backup-lite-pro-page > .error,
 .backup-lite-pro-page > .updated,
+.museder-restoreone-reports > .notice,
+.museder-restoreone-reports > .update-nag,
+.museder-restoreone-reports > .error,
+.museder-restoreone-reports > .updated,
 .backup-lite-reports > .notice,
 .backup-lite-reports > .update-nag,
 .backup-lite-reports > .error,
 .backup-lite-reports > .updated,
+.museder-restoreone-schedules > .notice,
+.museder-restoreone-schedules > .update-nag,
+.museder-restoreone-schedules > .error,
+.museder-restoreone-schedules > .updated,
 .backup-lite-schedules > .notice,
 .backup-lite-schedules > .update-nag,
 .backup-lite-schedules > .error,
@@ -1536,13 +1611,13 @@ class Backup_Lite_UI {
         $notice_removal_js = '
 (function() {
     document.addEventListener("DOMContentLoaded", function() {
-        var pages = [".backup-lite-pro-page", ".backup-lite-reports", ".backup-lite-schedules"];
+        var pages = [".museder-restoreone-schedules", ".backup-lite-schedules"];
         pages.forEach(function(selector) {
             var page = document.querySelector(selector);
             if (page) {
                 var pageWrapper = page.closest(".wrap") || page.parentElement;
                 if (pageWrapper) {
-                    var notices = pageWrapper.querySelectorAll(".notice:not(.backup-lite-notice), .update-nag:not(.backup-lite-notice), .error:not(.backup-lite-notice), .updated:not(.backup-lite-notice)");
+                    var notices = pageWrapper.querySelectorAll(".notice:not(.museder-restoreone-notice):not(.backup-lite-notice), .update-nag:not(.museder-restoreone-notice):not(.backup-lite-notice), .error:not(.museder-restoreone-notice):not(.backup-lite-notice), .updated:not(.museder-restoreone-notice):not(.backup-lite-notice)");
                     notices.forEach(function(notice) {
                         var heroSection = page.querySelector(".bl-card, .schedule-hero");
                         if (heroSection && notice.compareDocumentPosition(heroSection) & Node.DOCUMENT_POSITION_FOLLOWING) {
@@ -1555,26 +1630,108 @@ class Backup_Lite_UI {
     });
 })();';
 
-        // Add inline styles for PRO pages, reports, and schedules
-        if ( in_array( $current_page, [ 'backup-lite-pro', 'backup-lite-pro-features', 'backup-lite-pro-cloud', 'backup-lite-pro-ai', 'backup-lite-pro-filters', 'backup-lite-pro-retention', 'backup-lite-pro-reports', 'backup-lite-reports', 'backup-lite-schedules' ], true ) ) {
-            wp_add_inline_style( 'backup-lite-theme', $pro_page_css );
-            wp_add_inline_script( 'backup-lite-admin', $notice_removal_js, 'after' );
+        // Add inline styles for schedules page.
+        if ( in_array( $current_page, [ 'museder-restoreone-schedules' ], true ) ) {
+            wp_add_inline_style( 'museder-restoreone-theme', $pro_page_css );
+            wp_add_inline_script( 'museder-restoreone-admin', $notice_removal_js, 'after' );
         }
     }
 
     private static function build_backup_download_link( $file ) {
-        return backup_lite_get_download_url( $file );
+        return museder_restoreone_get_download_url( $file );
     }
 
     private static function build_log_download_link( $file ) {
         $name = basename( $file );
         return wp_nonce_url(
-            admin_url( 'admin-post.php?action=backup_lite_download_log&log=' . rawurlencode( $name ) ),
-            'backup_lite_download_log_' . $name
+            admin_url( 'admin-post.php?action=museder_restoreone_download_log&log=' . rawurlencode( $name ) ),
+            'museder_restoreone_download_log_' . $name
         );
     }
 
     public static function handle_report_download() {
-        Backup_Lite_Reports_Controller::handle_report_download();
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_die( esc_html__( 'Unauthorized.', 'museder-restoreone' ) );
+        }
+
+        check_admin_referer( 'museder_restoreone_download_report', '_wpnonce' );
+
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified via check_admin_referer() above
+        $job_id = isset( $_GET['job_id'] ) ? sanitize_text_field( wp_unslash( $_GET['job_id'] ) ) : '';
+        $type   = isset( $_GET['type'] ) ? sanitize_key( wp_unslash( $_GET['type'] ) ) : '';
+        $format = isset( $_GET['format'] ) ? strtolower( sanitize_key( wp_unslash( $_GET['format'] ) ) ) : '';
+        // phpcs:enable WordPress.Security.NonceVerification.Missing
+
+        if ( '' === $job_id || '' === $type || ! in_array( $format, [ 'txt', 'json' ], true ) ) {
+            wp_die( esc_html__( 'Invalid report request.', 'museder-restoreone' ), esc_html__( 'Download error', 'museder-restoreone' ), 400 );
+        }
+
+        $path = Museder_Restoreone_Restore_Report::download( $job_id, $type, $format );
+        if ( is_wp_error( $path ) ) {
+            $err_data = $path->get_error_data();
+            $st       = ( is_array( $err_data ) && isset( $err_data['status'] ) ) ? (int) $err_data['status'] : 404;
+            // Literal HTTP codes + inline escaping per arg (PHPCS does not treat assigned $msg as escaped for wp_die()).
+            if ( 400 === $st ) {
+                wp_die(
+                    esc_html( $path->get_error_message() ),
+                    esc_html__( 'Download error', 'museder-restoreone' ),
+                    [ 'response' => 400 ]
+                );
+            } elseif ( 403 === $st ) {
+                wp_die(
+                    esc_html( $path->get_error_message() ),
+                    esc_html__( 'Download error', 'museder-restoreone' ),
+                    [ 'response' => 403 ]
+                );
+            } elseif ( 404 === $st ) {
+                wp_die(
+                    esc_html( $path->get_error_message() ),
+                    esc_html__( 'Download error', 'museder-restoreone' ),
+                    [ 'response' => 404 ]
+                );
+            } elseif ( 500 === $st ) {
+                wp_die(
+                    esc_html( $path->get_error_message() ),
+                    esc_html__( 'Download error', 'museder-restoreone' ),
+                    [ 'response' => 500 ]
+                );
+            } else {
+                wp_die(
+                    esc_html( $path->get_error_message() ),
+                    esc_html__( 'Download error', 'museder-restoreone' ),
+                    [ 'response' => 404 ]
+                );
+            }
+        }
+
+        $reports_dir = museder_restoreone_get_reports_dir();
+        $reports_real = realpath( $reports_dir );
+        $path_real    = is_string( $path ) && file_exists( $path ) ? realpath( $path ) : false;
+        if ( ! $reports_real || ! $path_real ) {
+            wp_die( esc_html__( 'Invalid file path.', 'museder-restoreone' ), esc_html__( 'Download error', 'museder-restoreone' ), 403 );
+        }
+        $reports_prefix = trailingslashit( wp_normalize_path( $reports_real ) );
+        if ( 0 !== strpos( wp_normalize_path( $path_real ), $reports_prefix ) ) {
+            wp_die( esc_html__( 'Invalid file path.', 'museder-restoreone' ), esc_html__( 'Download error', 'museder-restoreone' ), 403 );
+        }
+
+        $path = $path_real;
+
+        if ( ! is_readable( $path ) ) {
+            wp_die( esc_html__( 'Report not found.', 'museder-restoreone' ), esc_html__( 'Download error', 'museder-restoreone' ), 404 );
+        }
+
+        nocache_headers();
+        status_header( 200 );
+        $mime = ( 'json' === $format ) ? 'application/json' : 'text/plain';
+        header( 'Content-Type: ' . $mime . '; charset=utf-8' );
+        $download_filename = sanitize_file_name( basename( $path ) );
+        header( 'Content-Disposition: attachment; filename="' . $download_filename . '"' );
+        header( 'Content-Length: ' . (string) filesize( $path ) );
+        header( 'X-Content-Type-Options: nosniff' );
+
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_readfile -- streaming validated path under reports dir
+        readfile( $path );
+        exit;
     }
 }

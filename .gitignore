@@ -10,6 +10,10 @@ logs/
 !logs/
 !logs/**
 
+# Release artifacts live on GitHub Releases, not in git.
+dist/*.zip
+
+# Nested copy from mistaken plugin packaging
 museder-restoreone/
 
 # Local docs/artifacts (not part of plugin release)

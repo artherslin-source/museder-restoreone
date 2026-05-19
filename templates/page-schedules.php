@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 // Template context: These variables use the museder_restoreone_ prefix and are scoped to this template file.
 // They are provided by the rendering function and are not global namespace pollution.
-$museder_restoreone_schedules       = isset( $schedules ) ? $schedules : Backup_Lite_Schedule_Handler::list_schedules();
+$museder_restoreone_schedules       = isset( $schedules ) ? $schedules : Museder_Restoreone_Schedule_Handler::list_schedules();
 $museder_restoreone_total_schedules = is_array( $museder_restoreone_schedules ) ? count( $museder_restoreone_schedules ) : 0;
 $museder_restoreone_enabled_count   = 0;
 $museder_restoreone_next_run_label  = __( 'Not scheduled', 'museder-restoreone' );
@@ -41,8 +41,8 @@ if ( $museder_restoreone_total_schedules ) {
 
         if ( ! isset( $museder_restoreone_earliest_timestamp ) || $museder_restoreone_timestamp < $museder_restoreone_earliest_timestamp ) {
             $museder_restoreone_earliest_timestamp = $museder_restoreone_timestamp;
-            // @plugin-check: wp_date with local timezone - $museder_restoreone_timestamp is UTC timestamp, backup_lite_format_local_time() handles timezone conversion
-            $museder_restoreone_next_run_label     = backup_lite_format_local_time( $museder_restoreone_timestamp, 'Y-m-d H:i' );
+            // @plugin-check: wp_date with local timezone - $museder_restoreone_timestamp is UTC timestamp, museder_restoreone_format_local_time() handles timezone conversion
+            $museder_restoreone_next_run_label     = museder_restoreone_format_local_time( $museder_restoreone_timestamp, 'Y-m-d H:i' );
             $museder_restoreone_next_run_title     = ! empty( $museder_restoreone_schedule['title'] ) ? $museder_restoreone_schedule['title'] : __( '(Untitled)', 'museder-restoreone' );
             if ( $museder_restoreone_timestamp >= $museder_restoreone_now ) {
                 $museder_restoreone_next_run_diff = human_time_diff( $museder_restoreone_now, $museder_restoreone_timestamp );
@@ -52,7 +52,7 @@ if ( $museder_restoreone_total_schedules ) {
 }
 ?>
 
-<div class="wrap backup-lite-admin backup-lite-schedules">
+<div class="wrap backup-lite-admin backup-lite-schedules museder-restoreone-admin museder-restoreone-schedules">
     <div class="schedule-hero">
         <div class="schedule-hero-header">
             <div>
@@ -86,46 +86,6 @@ if ( $museder_restoreone_total_schedules ) {
         </div>
     </div>
 
-    <?php
-    // AI Smart Schedule Advisor (PRO Feature)
-    $is_pro = Backup_Lite_Pro::is_pro_active();
-    ?>
-    <?php if ( ! $is_pro ) : ?>
-        <div class="backup-lite-card" style="background: linear-gradient(135deg, #facc15 0%, #fbbf24 100%); border: none; margin-bottom: 24px;">
-            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px;">
-                <div>
-                    <h3 style="margin: 0 0 8px 0; color: #000; font-size: 18px; display: flex; align-items: center; gap: 8px;">
-                        🤖 <?php esc_html_e( 'AI Smart Schedule Advisor', 'museder-restoreone' ); ?>
-                        <span class="pro-badge" style="background: #000; color: #facc15;">PRO</span>
-                    </h3>
-                    <p style="margin: 0; color: rgba(0, 0, 0, 0.8); font-size: 14px;">
-                        <?php esc_html_e( 'Get AI-powered recommendations for optimal backup schedules based on your site activity.', 'museder-restoreone' ); ?>
-                    </p>
-                </div>
-                <a href="<?php echo esc_url( admin_url( 'admin.php?page=backup-lite-pro' ) ); ?>" class="button button-primary" style="background: #000; color: #facc15; border: none; font-weight: 600;">
-                    <?php esc_html_e( 'Upgrade to PRO', 'museder-restoreone' ); ?> →
-                </a>
-            </div>
-        </div>
-    <?php else : ?>
-        <div class="backup-lite-card" style="margin-bottom: 24px;">
-            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px;">
-                <div>
-                    <h3 style="margin: 0 0 8px 0; font-size: 18px; display: flex; align-items: center; gap: 8px;">
-                        🤖 <?php esc_html_e( 'AI Smart Schedule Advisor', 'museder-restoreone' ); ?>
-                    </h3>
-                    <p style="margin: 0; color: var(--bl-text-muted); font-size: 14px;">
-                        <?php esc_html_e( 'Get AI-powered recommendations for optimal backup schedules.', 'museder-restoreone' ); ?>
-                    </p>
-                </div>
-                <button type="button" id="bl-ai-schedule-advisor" class="bl-button bl-button-primary">
-                    <?php esc_html_e( 'Get AI Recommendations', 'museder-restoreone' ); ?>
-                </button>
-            </div>
-            <div id="bl-ai-advisor-results" style="margin-top: 16px; display: none;"></div>
-        </div>
-    <?php endif; ?>
-
     <div class="backup-lite-card">
         <div class="bl-inline-builder-header">
             <div>
@@ -138,12 +98,8 @@ if ( $museder_restoreone_total_schedules ) {
                 ? (int) $museder_restoreone_total_schedules
                 : ( is_array( $museder_restoreone_schedules ) ? count( $museder_restoreone_schedules ) : 0 );
             ?>
-            <?php // @plugin-check: escaped ?>
-            <button type="button" class="button button-primary <?php echo esc_attr( $is_pro || $museder_restoreone_total_schedules === 0 ? '' : 'pro-locked' ); ?>" id="bl-new-schedule" <?php echo $is_pro || $museder_restoreone_total_schedules === 0 ? '' : 'data-upgrade="' . esc_attr( 'pro' ) . '"'; // @plugin-check: escaped ?>>
+            <button type="button" class="button button-primary" id="bl-new-schedule">
                 ＋ <?php esc_html_e( 'New Schedule', 'museder-restoreone' ); ?>
-                <?php if ( ! $is_pro && $museder_restoreone_total_schedules >= 1 ) : ?>
-                    <span class="pro-badge">PRO</span>
-                <?php endif; ?>
             </button>
         </div>
         <div class="bl-table-scroll">
@@ -179,8 +135,8 @@ if ( $museder_restoreone_total_schedules ) {
                                     <?php
                                     $next_run_timestamp = isset( $museder_restoreone_schedule['next_run_timestamp_utc'] ) ? (int) $museder_restoreone_schedule['next_run_timestamp_utc'] : ( isset( $museder_restoreone_schedule['next_run'] ) ? (int) $museder_restoreone_schedule['next_run'] : 0 );
                                     if ( $next_run_timestamp > 0 ) {
-                                        // @plugin-check: wp_date with local timezone - next_run_timestamp_utc is UTC timestamp, backup_lite_format_local_time() handles timezone conversion
-                                        echo esc_html( backup_lite_format_local_time( $next_run_timestamp, 'Y-m-d H:i' ) );
+                                        // @plugin-check: wp_date with local timezone - next_run_timestamp_utc is UTC timestamp, museder_restoreone_format_local_time() handles timezone conversion
+                                        echo esc_html( museder_restoreone_format_local_time( $next_run_timestamp, 'Y-m-d H:i' ) );
                                     } else {
                                         esc_html_e( '—', 'museder-restoreone' );
                                     }
@@ -208,8 +164,8 @@ if ( $museder_restoreone_total_schedules ) {
                                         $last_run_timestamp = strtotime( $museder_restoreone_schedule['last_run'] . ' UTC' );
                                     }
                                     if ( $last_run_timestamp > 0 ) {
-                                        // @plugin-check: wp_date with local timezone - last_run_timestamp_utc is UTC timestamp, backup_lite_format_local_time() handles timezone conversion
-                                        echo esc_html( backup_lite_format_local_time( $last_run_timestamp, 'Y-m-d H:i' ) );
+                                        // @plugin-check: wp_date with local timezone - last_run_timestamp_utc is UTC timestamp, museder_restoreone_format_local_time() handles timezone conversion
+                                        echo esc_html( museder_restoreone_format_local_time( $last_run_timestamp, 'Y-m-d H:i' ) );
                                     } else {
                                         esc_html_e( '—', 'museder-restoreone' );
                                     }

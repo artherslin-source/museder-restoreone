@@ -12,15 +12,15 @@
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
-$logs = isset( $logs ) ? $logs : Backup_Lite_Log_Handler::get_logs();
+$logs = isset( $logs ) ? $logs : Museder_Restoreone_Log_Handler::get_logs();
 // phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 ?>
 
-<div class="wrap backup-lite-admin backup-lite-logs">
-    <h1 class="backup-lite-page-title">📜 <?php esc_html_e( 'Museder RestoreOne Logs', 'museder-restoreone' ); ?></h1>
-    <p class="backup-lite-page-description"><?php esc_html_e( 'Inspect backup, restore, and schedule activity. Logs are stored under wp-content/uploads/museder-restoreone/logs/ (legacy: wp-content/uploads/backup-lite-logs/).', 'museder-restoreone' ); ?></p>
+<div class="wrap backup-lite-admin museder-restoreone-admin museder-restoreone-logs">
+    <h1 class="backup-lite-page-title museder-restoreone-page-title">📜 <?php esc_html_e( 'Museder RestoreOne Logs', 'museder-restoreone' ); ?></h1>
+    <p class="backup-lite-page-description museder-restoreone-page-description"><?php esc_html_e( 'Inspect backup, restore, and schedule activity. Logs are stored under wp-content/uploads/museder-restoreone/logs/ (legacy: wp-content/uploads/backup-lite-logs/).', 'museder-restoreone' ); ?></p>
 
-    <div class="backup-lite-log-layout">
+    <div class="backup-lite-log-layout museder-restoreone-log-layout">
         <div class="log-table-wrapper">
             <div class="bl-inline-builder-header">
                 <div>
@@ -30,7 +30,7 @@ $logs = isset( $logs ) ? $logs : Backup_Lite_Log_Handler::get_logs();
                 <button type="button" class="button button-primary" id="bl-refresh-logs"><?php esc_html_e( 'Refresh', 'museder-restoreone' ); ?></button>
             </div>
             <div class="bl-table-scroll">
-                <table class="backup-lite-table">
+                <table class="backup-lite-table museder-restoreone-table">
                     <thead>
                         <tr>
                             <th><?php esc_html_e( 'File Name', 'museder-restoreone' ); ?></th>
@@ -68,7 +68,7 @@ $logs = isset( $logs ) ? $logs : Backup_Lite_Log_Handler::get_logs();
             </div>
         </div>
 
-        <div class="log-preview-panel backup-lite-card">
+        <div class="log-preview-panel backup-lite-card museder-restoreone-card">
             <h2 id="bl-log-preview-title">🪵 <?php esc_html_e( 'Preview', 'museder-restoreone' ); ?></h2>
             <pre id="bl-log-preview-content" class="log-preview" aria-live="polite"><?php esc_html_e( 'Select a log file to preview.', 'museder-restoreone' ); ?></pre>
             <p id="bl-log-preview-note" class="description"></p>

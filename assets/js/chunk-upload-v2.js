@@ -17,7 +17,7 @@
     }
 
     const fileInput = document.getElementById('backup-lite-restore-file-v2');
-    const confirmCheckbox = form.querySelector('input[name="backup_lite_confirm"]');
+    const confirmCheckbox = form.querySelector('input[name="museder_restoreone_confirm"]');
     const progressWrap = form.querySelector('.backup-lite-progress');
     const progressBar = progressWrap ? progressWrap.querySelector('.progress-bar-fill') : null;
     const statusEl = progressWrap ? progressWrap.querySelector('.backup-lite-progress-status') : null;
@@ -379,8 +379,8 @@
         if (!searchToggle || !searchToggle.checked || !searchFields) {
             return '';
         }
-        const searchValue = searchFields.querySelector('input[name="backup_lite_search"]').value;
-        const replaceValue = searchFields.querySelector('input[name="backup_lite_replace"]').value;
+        const searchValue = searchFields.querySelector('input[name="museder_restoreone_search"]').value;
+        const replaceValue = searchFields.querySelector('input[name="museder_restoreone_replace"]').value;
         if (!searchValue) {
             return '';
         }

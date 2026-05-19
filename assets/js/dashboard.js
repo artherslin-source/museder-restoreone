@@ -102,7 +102,7 @@
             }
         });
 
-        // AI Site Scan (Preview)
+        // Offline readiness scan (local rules; REST uses manage_options + REST nonce)
         var runBtn = document.getElementById('backup-lite-ai-run-scan');
         var statusEl = document.getElementById('backup-lite-ai-status');
         var reportsList = document.getElementById('backup-lite-ai-reports');
@@ -272,7 +272,7 @@
                 if (runBtn.disabled) return;
 
                 runBtn.disabled = true;
-                setStatus((aiConfig.strings && aiConfig.strings.running) ? aiConfig.strings.running : 'Running scan…');
+                setStatus((aiConfig.strings && aiConfig.strings.running) ? aiConfig.strings.running : 'Scanning (local rules)…');
 
                 fetch(aiConfig.restUrl, {
                     method: 'POST',
@@ -291,7 +291,7 @@
                     .then(function (result) {
                         if (!result.ok) {
                             var message = (result.json && (result.json.message || result.json.data)) ? (result.json.message || result.json.data) : null;
-                            setStatus((aiConfig.strings && aiConfig.strings.failed) ? aiConfig.strings.failed : 'Scan failed.');
+                            setStatus((aiConfig.strings && aiConfig.strings.failed) ? aiConfig.strings.failed : 'Local scan could not finish.');
                             if (message && statusEl) {
                                 // Append a short error detail.
                                 statusEl.textContent += ' ' + String(message);
@@ -299,7 +299,7 @@
                             return;
                         }
 
-                        setStatus((aiConfig.strings && aiConfig.strings.done) ? aiConfig.strings.done : 'Scan completed.');
+                        setStatus((aiConfig.strings && aiConfig.strings.done) ? aiConfig.strings.done : 'Local scan finished.');
                         if (result.json && result.json.report) {
                             appendReport(result.json.report);
                             updateLastScan(result.json.report.created_at_gmt);
@@ -311,7 +311,7 @@
                         }
                     })
                     .catch(function () {
-                        setStatus((aiConfig.strings && aiConfig.strings.failed) ? aiConfig.strings.failed : 'Scan failed.');
+                        setStatus((aiConfig.strings && aiConfig.strings.failed) ? aiConfig.strings.failed : 'Local scan could not finish.');
                     })
                     .finally(function () {
                         runBtn.disabled = false;
