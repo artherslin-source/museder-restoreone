@@ -1,0 +1,38 @@
+---
+description: Remind agents to update plugin header Author Jerry Lin → Adrian Lin on next main-file or PRO release touch
+alwaysApply: true
+---
+
+# Plugin Author display name (pending)
+
+## Current state (as of readme-only SVN, Stable tag 2.7.263)
+
+- **Deferred intentionally:** `Author: Jerry Lin` remains in plugin headers until the next change that ships `museder-restoreone.php` (not changed for readme-only WordPress.org SVN).
+- **Do not change Contributors** in `readme.txt`: keep `Contributors: artherslin` (WordPress.org userid slug).
+- **Author URI:** keep `https://profiles.wordpress.org/artherslin/` on Lite and PRO main files.
+- **Directory display name:** user may set **Display name: Adrian Lin** on the WordPress.org profile for `artherslin` without changing the slug.
+
+## Agent obligation — remind the user
+
+When you **edit, review, package, or release** any of the following, **check the `Author:` line** and **explicitly remind the user** if it still says `Jerry Lin`:
+
+- `museder-restoreone.php` (Lite)
+- `museder-restoreone-pro/museder-restoreone-pro.php` (PRO / Add-on)
+
+**Reminder text (use or paraphrase in 繁體中文 when the user prefers Chinese):**
+
+> 專案約定：請將主檔 `Author: Jerry Lin` 改為 `Author: Adrian Lin`（`Author URI` 維持 artherslin 個人頁）。readme 的 `Contributors:` 仍為 `artherslin`。若開發／發佈 PRO，請一併更新 PRO 主檔的 `Author:`。
+
+Apply the rename **in the same change set** when the user is already modifying that main plugin file or cutting a release — do not change Author silently on unrelated tasks unless the user asks.
+
+## Target headers
+
+```text
+Author: Adrian Lin
+Author URI: https://profiles.wordpress.org/artherslin/
+```
+
+## Related docs
+
+- `docs/readme-en-zh-full.md` — Contributors vs Author vs Display name
+- `AGENTS.md` — Author display name pending section

@@ -12,6 +12,7 @@
   - [ ] `MUSEDER_RESTOREONE_BUILD_ID`（若本次需要）
   - [ ] `readme.txt` `Stable tag`
   - [ ] `readme.txt` changelog
+- [ ] 若主檔有變更：確認是否仍為 `Author: Jerry Lin`；若是，改為 **`Author: Adrian Lin`**（`Author URI` 維持 `artherslin` 個人頁；readme `Contributors: artherslin` 不變）。PRO 主檔同理。見 `.cursor/rules/plugin-author-display-name.mdc`。
 - [ ] 若 Add-on 有變更，Add-on 版本號同步更新。
 - [ ] `readme.txt` 只有一個清楚的 changelog 區塊。
 - [ ] Plugin URI / Author URI 可公開連線。

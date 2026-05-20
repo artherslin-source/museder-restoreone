@@ -25,6 +25,7 @@
 
 - Branded: Museder RestoreOne, museder restoreone backup
 - Category: WordPress backup plugin, site migration, restore
+- **Positioning (readme):** **Museder RestoreOne** = main plugin on WordPress.org (no “Lite” in display name); large-site local backup/restore in this plugin; honest 2 GB per-file cap; **Premium Extensions** naming reserved for future paid plugins—**not** mentioned in public readme until launch
 - Comparison / alternative intent (future): vs Duplicator, UpdraftPlus, etc. — use `competitors` skill
 
 ## Conversion goals

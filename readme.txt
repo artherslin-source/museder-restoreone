@@ -1,6 +1,6 @@
-=== Museder RestoreOne ===
+=== Museder RestoreOne – WP Backup & Restore ===
 Contributors: artherslin
-Tags: backup, migration, restore, site-backup, database-backup
+Tags: backup, migration, restore, clone, site-backup
 Requires at least: 5.8
 Tested up to: 6.9
 Requires PHP: 7.4
@@ -8,37 +8,58 @@ Stable tag: 2.7.263
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-A lightweight WordPress backup & restore plugin focused on compatibility, single-file site snapshots, and clean restore workflows.
+Large-site WordPress backup & restore with Museder RestoreOne—asynchronous jobs, chunked uploads, and local migration.
 
 == Description ==
 
-Museder RestoreOne lets you create complete WordPress backups (database + `wp-content`) as a single archive, and restore them in a guided 3-step wizard.
+**Museder RestoreOne** is built for **larger WordPress sites** on everyday hosting—and includes **large-site backup and restore in this plugin** (the version you install from WordPress.org), not behind a separate paid core product. Package your database and `wp-content` into **one downloadable archive**, run **background backup jobs** (not a single fragile browser request), and restore through a **guided wizard** with progress, logs, and safety checks.
 
-It is designed for shared hosting environments and uses WordPress APIs for database backup/restore, with archive compression handled by `ZipArchive` or WordPress’ bundled PclZip.
+**Looking for large-site backup without a paid upgrade?**
 
-**Key features**
+Many WordPress backup plugins reserve **chunked or large archive imports**, **direct site-to-site migration**, **multisite**, or **“unlimited” migration size** for **paid or premium tiers**. **Museder RestoreOne** includes the following **in this plugin** for **local, on-server** workflows (download your archive, copy it to another host, restore with the wizard):
+
+* **Background backup jobs** (async via WordPress cron)  
+* **Backup size estimation** before you commit to a long job  
+* **Chunked REST uploads** for multi‑gigabyte ZIPs on low `upload_max_filesize` hosts  
+* **Validate & dry-run** before a full restore  
+* **Multiple backup schedules** on the same site (local schedules included in this plugin)  
+* **Full-site restore / migration** using archives **you** store—no third-party cloud required  
+
+**Large-site backup & restore (included in Museder RestoreOne)**
+
+* **Background backup jobs** — Full-site backups can run as **async jobs** processed via WordPress cron, with progress in the admin instead of relying on one long page load.  
+* **Backup size estimation** — Scan database and `wp-content` in **batches** (thousands of files per pass) so you can see estimated size before starting a large backup; sites over **1 GB** get guidance in the UI.  
+* **Chunked archive uploads** — Upload multi‑gigabyte backup ZIPs over the **authenticated REST API** in small chunks with retries and integrity checks—useful when `upload_max_filesize` / `post_max_size` are low.  
+* **Validate & dry-run before execute** — Review an archive and run checks before a full restore on production.  
+* **Long-restore resilience** — Restore progress can continue when admin sessions or nonces expire mid-job (restore token fallback and tolerant polling during database import).  
+* **Honest limits** — **Single files over 2 GB are skipped** for stability; **total site size can exceed 2 GB** when each file is under the cap. Very large restores may still need staging, higher PHP limits, or host cron—see FAQ.
+
+Database work uses WordPress APIs in PHP—**no `mysqldump` required**. Archives use `ZipArchive` or WordPress’ bundled **PclZip** when the ZIP extension is unavailable.
+
+**Who is it for?**
+
+* **Shared-hosting sites** that need **full-site backup and restore for larger installs** when their **current backup setup’s free plan** no longer covers big uploads, long-running jobs, or migration helpers that many tools reserve for **paid plans**—but you still want those capabilities on everyday hosting.  
+* **Growing or large WordPress sites** (media-heavy, many plugins, multi‑GB `wp-content`) without shell access or `mysqldump`.  
+* **Agencies and freelancers** who migrate clients with **chunked uploads**, size estimates, and validate/dry-run before go-live.  
+* **Anyone who wants a focused backup → restore workflow** on shared hosting without extra complexity.
+
+**More features**
 
 * One-click full-site backup  
-  Export the database, `meta.json`, and `wp-content/` into a single archive you can download or restore later.
+  Export the database, `meta.json`, and `wp-content/` into a single archive you can download, store locally, or restore later.
 
-* Restore Center wizard  
-  A clear 3-step flow: upload & analyze → review summary & options → start restore with real-time progress and logs.
-
-* Chunked uploads with validation  
-  Bypass `upload_max_filesize` / `post_max_size` limits by uploading your archive in small chunks, with retries and integrity checks.
-
-* Shared-hosting friendly  
-  Uses pure PHP + WordPress APIs for database backup/restore, and falls back from `ZipArchive` to PclZip compression when needed.
+* Restore Center wizard (migration & recovery)  
+  Upload & analyze → review summary & options → execute restore with real-time progress and logs.
 
 * Schedules and logs  
-  Create one or more automatic backup schedules (or run backups manually), then inspect, download, or clean up structured backup and restore logs.
+  Automatic backup schedules (or manual runs), structured logs, download, and cleanup from the admin.
 
-* Neo-glass admin UI  
-  Modern Dashboard, Backups, Restore, Schedules, Logs and Settings screens with clear calls-to-action, status messages, and responsive layout.
+* Modern admin UI  
+  Dashboard, Backups, Restore, Schedules, Logs, and Settings with clear status and responsive layout.
 
 **Multisite**
 
-This release is **not formally tested on WordPress Multisite**. For predictable results, use RestoreOne on **standard single-site** installs (one site per admin context). If you run a network, treat use as **experimental** until you have verified backups and restores on a staging clone.
+This release is **not formally tested on WordPress Multisite**. For predictable results, use Museder RestoreOne on **standard single-site** installs (one site per admin context). If you run a network, treat use as **experimental** until you have verified backups and restores on a staging clone.
 
 == External services ==
 
@@ -46,7 +67,7 @@ This plugin does not use external services.
 
 The **only programmatic outbound HTTP** the base plugin performs by default is an optional, short **non-blocking** request to **your own site’s** `wp-cron.php` (same host / local loopback) to encourage scheduled tasks to run. No third-party API is called for backups or restores.
 
-All **admin JavaScript and CSS** for RestoreOne are loaded from files shipped under this plugin’s `assets/` directory (including vendored libraries under `assets/vendor/`). Optional add-ons, if you install them separately, may introduce their own network behavior; see each add-on’s readme. See the FAQ for more on the local `wp-cron.php` nudge.
+All **admin JavaScript and CSS** for Museder RestoreOne are loaded from files shipped under this plugin’s `assets/` directory (including vendored libraries under `assets/vendor/`). See the FAQ for more on the local `wp-cron.php` nudge.
 
 == Privacy ==
 
@@ -65,9 +86,7 @@ Exact folder names may vary with your uploads path or custom content directory; 
 
 **Third parties**
 
-The free plugin does **not** upload your backup contents, database, or logs to third-party APIs or clouds. That statement matches **External services** above and the FAQ entries on external data and local `wp-cron` loopback.
-
-Optional **add-ons** (separate plugins or extensions, if you install and activate them) could send specific categories of data to remote storage or services only when you enable and configure those extensions; the base RestoreOne plugin does not do that on its own.
+Museder RestoreOne does **not** upload your backup contents, database, or logs to third-party APIs or clouds. That statement matches **External services** above and the FAQ entries on external data and local `wp-cron` loopback.
 
 **Retention and deletion**
 
@@ -75,16 +94,45 @@ You can delete backup archives from the **Backups** screen, remove or download l
 
 **Uninstall (`uninstall.php`)** removes plugin-owned **options**, **transients** (including timeout rows), **dynamic job-lock option rows**, and **scheduled cron hooks** whose names start with `museder_restoreone_`. It does **not** delete backup ZIP archives, log files, restore reports, or other files under your uploads/storage tree; delete those manually from the Backups / Logs UI or your host if you no longer need them.
 
-On **Multisite**, uninstall walks sites in **batches** (100 IDs per query) instead of loading the entire network at once. Very large networks should still use a **maintenance window** so uninstall is not interrupted by web-server timeouts.
+On **WordPress Multisite**, if you **delete** this plugin from the network, `uninstall.php` runs the same options/cron cleanup **on each subsite**, loading site IDs in **batches of 100** so a very large network does not pull every site into memory at once. This applies only at **plugin uninstall**—not to backup or restore. Very large networks should still use a **maintenance window** so uninstall is not interrupted by web-server timeouts.
 
 == Installation ==
 
-1. Upload the `museder-restoreone` folder (or ZIP) to the `/wp-content/plugins/` directory via FTP or through the “Upload Plugin” screen in your WordPress admin.
-2. Activate the plugin through the “Plugins” menu in WordPress.
-3. Go to the **Museder RestoreOne** menu in your admin sidebar.
-4. Open the **Backups** or **Restore** page and create your first backup.
+**From the WordPress.org Plugin Directory (recommended)**
+
+1. In your WordPress admin, go to **Plugins → Add New**.
+2. Search for **Museder RestoreOne** (or open [Museder RestoreOne on WordPress.org](https://wordpress.org/plugins/museder-restoreone/) and click **Download**, then upload if your host blocks the in-dashboard installer).
+3. Click **Install Now**, then **Activate**.
+4. Open the **Museder RestoreOne** menu in your admin sidebar.
+5. Go to **Backups** or **Restore** and create your first backup.
+
+**Manual install (alternative)**
+
+1. Download the plugin ZIP from WordPress.org or copy the `museder-restoreone` folder into `/wp-content/plugins/` (FTP/SFTP or **Plugins → Add New → Upload Plugin**).
+2. Activate **Museder RestoreOne** under **Plugins**.
+3. Open **Backups** or **Restore** and create your first backup.
 
 == Frequently Asked Questions ==
+
+= Do I need a paid plan for large-site backup and restore? =
+
+**No.** Museder RestoreOne includes background backup jobs, size estimation, chunked archive uploads, validate/dry-run, multiple **local** schedules, and full-site restore/migration using archives stored on **your** servers.
+
+Many other backup plugins move **chunked imports**, **premium migration** (push from site A to B), **multisite**, or **unlimited archive size** into **paid tiers**. Museder RestoreOne is aimed at users who want those **local large-site capabilities in this plugin**—compare the checklist in the Description to what your host and workflow actually need.
+
+= Is Museder RestoreOne suitable for large WordPress sites? =
+
+**Yes—with realistic expectations.** Museder RestoreOne targets **larger single-site installs** on shared and managed hosting:
+
+* **Backups:** Async **background jobs**, batched **size estimation**, and archive building with `ZipArchive` or **PclZip** fallback.  
+* **Uploads:** **Chunked REST uploads** for big backup ZIPs when PHP limits are tight.  
+* **Restores:** **Validate** and **dry-run** steps, progress UI, **restore token** fallback when a long database import outlasts the admin session, and detailed **Logs**.
+
+**Limits:** Each **individual file over 2 GB is skipped** (reported at backup time). Total site size can be much larger if files stay under that cap. Shared hosts may still impose PHP time limits, disk space, or web-server timeouts on the final restore **execute** step—use **staging**, chunked upload, and dry-run first; see the FAQ on very large archives.
+
+= Can I migrate my WordPress site to another host with Museder RestoreOne? =
+
+Yes. On the **source** site, create a **full-site backup** and download the archive (or copy it securely to the new server). On the **destination** site, use the **Restore Center** wizard to upload and restore. Museder RestoreOne does **not** send backup contents to third-party clouds; migration stays on servers you control. For large sites, use chunked upload, validate/dry-run steps, and test on **staging** before switching DNS.
 
 = What does the backup archive contain? =
 
@@ -98,19 +146,19 @@ Together, these files are enough to recreate your site on the same or another se
 
 = Does compatibility with third-party backup formats imply an official partnership? =
 
-**No.** RestoreOne may document or implement **technical compatibility** with certain third-party archive or migration formats so you can move data between tools on **your own server**. That compatibility is **not** an endorsement, partnership, or affiliation with those projects unless explicitly stated elsewhere by the authors.
+**No.** Museder RestoreOne may document or implement **technical compatibility** with certain third-party archive or migration formats so you can move data between tools on **your own server**. That compatibility is **not** an endorsement, partnership, or affiliation with those projects unless explicitly stated elsewhere by the authors.
 
 = Are there any file size limits? =
 
-Yes. For safety and compatibility, **single files larger than 2GB are skipped** during backup. This means they will not be included in the backup ZIP and will not be restored.
+Yes. For safety and compatibility on **large sites**, **single files larger than 2 GB are skipped** during backup. They are not included in the backup ZIP and will not be restored.
 
-Sites larger than 2GB in total size can still be backed up and restored successfully as long as each individual file is smaller than 2GB.
+**Total site size can exceed 2 GB** (many uploads, themes, and plugins) as long as **each file** is under 2 GB. The **Backups** screen can **estimate** database and file size before you start, and warns when totals suggest a long or heavy job.
 
-When files are skipped, the backup completion message shows the skip reasons and examples.
+When files are skipped, the backup completion message shows skip reasons and examples.
 
-= What happens if mysqldump is not available? =
+= Do I need mysqldump, SSH, or WP-CLI? =
 
-Museder RestoreOne does not require `mysqldump`. Database backup/restore is implemented in pure PHP using WordPress database APIs.
+No. Museder RestoreOne does not require `mysqldump`, SSH, or WP-CLI. Database backup and restore use **WordPress database APIs in PHP**. Shell or CLI tools on your host are optional extras, not requirements. If `mysqldump` is unavailable—as on many shared hosts—Museder RestoreOne still works.
 
 = What if ZipArchive is not enabled on my server? =
 
@@ -130,6 +178,17 @@ Scheduled backups depend on **WordPress cron** (or your host’s **system cron**
 
 Very large restores may hit **PHP time limits**, **web server timeouts**, or **disk space** constraints on shared hosting. The Restore wizard supports **validate** and **dry run** steps so you can verify an archive before a full **execute**. For huge sites, prefer a **staging clone** or **WP-CLI**-driven restore where your host allows long-running PHP.
 
+= What is *not* included in Museder RestoreOne (vs typical paid upsells)? =
+
+Museder RestoreOne is optimized for **local full-site archives** (backup → download or copy → chunked upload → restore). It does **not** replace every feature you may see in other vendors’ paid tiers, for example:
+
+* **Managed offsite cloud** as the primary backup destination.  
+* **One-click push migration** from dashboard to dashboard without moving an archive file yourself (migration in this plugin is archive-based).  
+* **Incremental-only** backup engines or **real-time** replication (Museder RestoreOne focuses on full-site snapshots).  
+* **Formally supported Multisite** (experimental only in this release—see Description and FAQ).
+
+If you need only **large local backup and restore** on shared hosting, those gaps may not matter; if you need cloud-first or network-wide Multisite, compare other tools to your workflow.
+
 = Where are the logs stored? =
 
 All logs are stored under:
@@ -140,13 +199,13 @@ You can view or download the latest logs directly from the **Logs** page in the 
 
 = What happens to plugins during restore? =
 
-Optional **safe mode** (chosen in the Restore screen) saves a snapshot of the active plugin list and sets an admin notice so you can verify the site before clearing the marker. RestoreOne does **not** automatically deactivate or reactivate other plugins; you manage plugins in WordPress as usual. **Exit Safe Mode** only clears the marker and the stored snapshot.
+Optional **safe mode** (on by default in the Restore wizard unless you turn it off) runs **after** a restore import: Museder RestoreOne saves a snapshot of which plugins were active (`museder_restoreone_prev_active_plugins`), sets a **safe mode marker** (`museder_restoreone_safe_mode`), and shows an admin notice on the Dashboard and Restore screens so you can verify the site. Museder RestoreOne does **not** automatically deactivate or reactivate other plugins—their activation state is unchanged. **Exit Safe Mode** (button or AJAX) only deletes the marker and the stored snapshot; you still manage plugins in WordPress as usual.
 
 = Does this plugin send data to external services? =
 
-No. This plugin runs entirely on your server and does not send backup contents or site data to any external API or cloud service as part of the free base plugin.
+No. Museder RestoreOne runs entirely on your server and does not send backup contents or site data to any external API or cloud service.
 
-The **Offline readiness / local rules** scan on the Dashboard uses **local heuristics** only (no remote AI service is invoked by the shipped free build).
+The **Offline readiness / local rules** scan on the Dashboard uses **local heuristics** only (no remote AI service is invoked by the shipped plugin).
 
 = Does the plugin make HTTP requests to my own site? =
 
@@ -174,12 +233,12 @@ Most sites do not need any changes. For unusual server layouts where core admin 
 
 == Screenshots ==
 
-1. Dashboard with environment compatibility, recent backups, and schedule overview.
-2. Backups page showing available backups and the backup progress bar.
-3. Restore Center 3-step wizard: upload & analyze, review options, execute restore.
-4. Schedules page listing upcoming backup jobs and quick schedule builder.
-5. Logs page with log file list and preview panel.
-6. Settings page with general options and system diagnostics.
+1. Dashboard — environment checks, recent backups, and schedule overview for large-site readiness.
+2. Backups — estimated site size, async backup job progress, and full-site archive list.
+3. Restore Center — chunked upload, validate/dry-run, and 3-step restore wizard with progress.
+4. Schedules — automatic backup jobs and quick schedule builder.
+5. Logs — backup and restore log files with preview.
+6. Settings — general options and system diagnostics for shared hosting.
 
 == Changelog ==
 

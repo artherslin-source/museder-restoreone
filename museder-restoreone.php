@@ -1,8 +1,8 @@
 <?php
 /*
-Plugin Name: Museder RestoreOne
+Plugin Name: Museder RestoreOne – WP Backup & Restore
 Plugin URI: https://musederlabs.com/restoreone-plugin/
-Description: Museder RestoreOne is a simple backup & restore plugin for WordPress.
+Description: Large-site WordPress backup & restore—asynchronous jobs, chunked uploads, and local migration.
 Version: 2.7.263
 Requires at least: 5.8
 Tested up to: 6.9
