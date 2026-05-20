@@ -72,6 +72,8 @@ Lite zip 不得包含：
 - [ ] 若 Plugin Check 有 false positive，已有最小範圍註解與審查可理解的說明。
 - [ ] 乾淨 WordPress 安裝可啟用 Lite。
 - [ ] `WP_DEBUG` true 下沒有 fatal error。
+- [ ] 已依 `docs/WP70_SMOKE_TEST_PLAN.md` 完成 WP 7.0 smoke（代碼/功能/規範/頁面/UI）。
+- [ ] 自動化 smoke 已執行：`bash tools/docker/wp70-smoke.sh`
 - [ ] 基本 smoke test：
   - [ ] Dashboard
   - [ ] Backups
