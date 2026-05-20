@@ -52,6 +52,8 @@ Or in Cursor chat: `/add-plugin superpowers`
 | Task | Skill |
 |------|--------|
 | WordPress.org / plugin compliance | `museder-wporg-compliance` |
+| SEO audit, ranking, readme, Schema, AI search | `seo-shen` 或 `seo-audit` / `ai-seo` / `schema` |
+| `<請神：SEO神>` 模式 | `seo-shen`（見 `docs/CURSOR-請神-SEO神.md`） |
 | New feature / behavior change | `brainstorming` → `writing-plans` → `subagent-driven-development` or `executing-plans` |
 | Bug or test failure | `systematic-debugging` |
 | Implementation | `test-driven-development` |
@@ -60,6 +62,19 @@ Or in Cursor chat: `/add-plugin superpowers`
 | All write / review / refactor | `karpathy-guidelines` |
 
 Follow skills via the Skill tool (or read `SKILL.md` in Cloud Agent). Do not skip `using-superpowers` workflow rules.
+
+## Marketing Skills SEO（coreyhaines31/marketingskills）
+
+SEO 子集：`.cursor/skills/`（submodule `.cursor/marketingskills`）— `product-marketing`, `seo-audit`, `ai-seo`, `programmatic-seo`, `schema`, `site-architecture`, `content-strategy`, `competitors`
+
+- **鎖定版本：** `.cursor/marketingskills-lock.json`
+- **產品上下文：** `.agents/product-marketing.md`
+- **請神：SEO神：** `<請神：SEO神>` → `seo-shen` skill（詳見 `docs/CURSOR-請神-SEO神.md`）
+- **全域安裝：** `tools/cursor/setup-global-marketingskills-seo.sh` / `.ps1`
+
+```bash
+git submodule update --init --recursive .cursor/marketingskills .cursor/superpowers
+```
 
 ## Karpathy Guidelines
 
@@ -80,7 +95,7 @@ Apply **karpathy-guidelines** for all write, review, and refactor work:
 - **Plugin:** WordPress backup/restore (PHP 7.4+, GPLv2). Main file: `museder-restoreone.php`; logic in `includes/`.
 - **Do not commit:** `logs/`, local zip archives, secrets, `.env.local`.
 - **Testing:** Prefer changes verifiable without a full WordPress install when possible; document manual QA steps for admin UI / backup-restore flows.
-- **Submodule:** Cloud Agent runs must run `git submodule update --init` if `.cursor/superpowers` is empty.
+- **Submodules:** Run `git submodule update --init --recursive .cursor/superpowers .cursor/marketingskills` if skill folders are empty.
 - Treat GitHub as the development repository and WordPress.org SVN as a release repository.
 - Work on a feature/agent branch by default; do not push directly to `main` unless the user explicitly requests it.
 - Formal packaging is triggered by pushing a `v*` Git tag; only do this after explicit user approval.

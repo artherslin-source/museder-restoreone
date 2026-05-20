@@ -1,0 +1,17 @@
+---
+description: 請神 SEO神 — 當使用者送出 <請神：SEO神> 或進行 SEO/搜尋優化任務時套用
+globs:
+alwaysApply: false
+---
+
+# 請神：SEO神
+
+當使用者訊息**完全相等**於 `<請神：SEO神>` 時：
+
+1. 讀取 `~/.cursor/skills-cursor/seo-shen/SKILL.md`（若不存在則讀專案 `.cursor/skills/seo-shen/SKILL.md`）
+2. 嚴格遵守其中工作流與子 skill 對照表
+3. WordPress 外掛工作須同時遵守 `museder-wporg-compliance`
+
+退出：使用者送出完全相等於 `<退駕>` 的一行（與寫代碼請神模式相同指令）。
+
+與 `<請神：寫代碼>` 可並存；SEO神 管搜尋與行銷可見度，寫代碼請神管 karpathy-guidelines。
