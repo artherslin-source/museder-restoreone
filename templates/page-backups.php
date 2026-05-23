@@ -159,9 +159,9 @@ $settings = class_exists( 'Museder_Restoreone_Settings' ) ? Museder_Restoreone_S
                 <?php esc_html_e( 'Backup Site', 'museder-restoreone' ); ?>
             </button>
         </form>
-        <div class="progress-bar" id="backup-progress-container" style="position: relative; margin-top: 5pt; height: 20pt; border-radius: 5pt; background: #e2e8f0; overflow: hidden;">
-            <div class="progress-bar-fill" id="backup-progress-fill" style="height: 100%; border-radius: 5pt; width: 0; background: var(--primary); transition: width 0.3s ease;"></div>
-            <span id="backup-progress-text" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 11px; font-weight: 600; color: #fff; z-index: 10; pointer-events: none;">0%</span>
+        <div class="progress-bar backup-job-progress" id="backup-progress-container" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-valuetext="0%">
+            <div class="progress-bar-fill" id="backup-progress-fill"></div>
+            <span id="backup-progress-text" class="backup-job-progress-text">0%</span>
         </div>
         <p id="backup-elapsed-time" style="margin: 8px 0 0 0; font-size: 12px; color: #64748b; display: none;"></p>
         <p id="bl-backup-mode-status" style="margin: 6px 0 0 0; font-size: 12px; color: #64748b;"></p>

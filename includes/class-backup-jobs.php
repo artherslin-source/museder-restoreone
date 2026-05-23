@@ -954,51 +954,6 @@ class Museder_Restoreone_Backup_Jobs {
         $processed     = min( $total_files, (int) $job['processed_files'] );
         $total_bytes   = max( 1, (int) $job['total_bytes'] );
         $processed_b   = min( $total_bytes, max( 0, (int) $job['processed_bytes'] ) );
-        $stage         = isset( $job['stage'] ) ? (string) $job['stage'] : '';
-
-        // Progress model:
-        // - preparing: 0–10
-        // - packing: 10–95 (hybrid: file-count backbone + bytes adjustment)
-        // - finalizing: 95–99
-        // - completed: 100
-        $files_ratio = $processed / $total_files;
-        $bytes_ratio = $processed_b / $total_bytes;
-
-        // Prefer file count for smoothness on shared hosting with many small files.
-        // Weight bytes lower to avoid early jumps when a few large files are added first.
-        $hybrid_ratio = ( 0.90 * $files_ratio ) + ( 0.10 * $bytes_ratio );
-        $hybrid_ratio = max( 0, min( 1, $hybrid_ratio ) );
-
-        $percentage = 0;
-        if ( 'completed' === $stage || 'completed' === ( $job['status'] ?? '' ) ) {
-            $percentage = 100;
-        } elseif ( 'finalizing' === $stage ) {
-            // Finalizing work (ZipArchive::close flush / metadata). Keep near-done but not 100.
-            $percentage = 95 + (int) round( 4 * max( 0, min( 1, $bytes_ratio ) ) );
-        } elseif ( 'packing' === $stage || 'running' === ( $job['status'] ?? '' ) ) {
-            // Main work: 10–95.
-            $percentage = 10 + (int) round( 85 * $hybrid_ratio );
-        } elseif ( 'preparing' === $stage || 'pending' === ( $job['status'] ?? '' ) ) {
-            // Preparing runs in background; provide stable 0–10 progression by prep_step.
-            $prep_step = isset( $job['prep_step'] ) ? (string) $job['prep_step'] : '';
-            $map = [
-                'db'       => 1,
-                'meta'     => 3,
-                'archive'  => 5,
-                'manifest' => 8,
-                'selfcheck'=> 9,
-                'done'     => 10,
-            ];
-            $percentage = isset( $map[ $prep_step ] ) ? (int) $map[ $prep_step ] : 0;
-        } else {
-            // Fallback (failed/cancelled/unknown): show best-effort progress, never 100.
-            $percentage = (int) round( 10 + ( 85 * $hybrid_ratio ) );
-        }
-
-        $percentage = max( 0, min( 100, $percentage ) );
-        if ( in_array( ( $job['status'] ?? '' ), [ 'failed', 'cancelled' ], true ) ) {
-            $percentage = min( 99, $percentage );
-        }
 
         $options = isset( $job['options'] ) && is_array( $job['options'] ) ? $job['options'] : [];
         $mode    = isset( $options['backup_mode_effective'] ) ? (string) $options['backup_mode_effective'] : ( isset( $options['backup_mode'] ) ? (string) $options['backup_mode'] : '' );
@@ -1011,6 +966,8 @@ class Museder_Restoreone_Backup_Jobs {
             $smart = '';
         }
 
+        $progress = self::build_progress_payload( $job, $processed, $total_files, $processed_b, $total_bytes );
+
         return [
             'id'              => $job['id'],
             'status'          => $job['status'],
@@ -1020,11 +977,18 @@ class Museder_Restoreone_Backup_Jobs {
             'pack_method'     => isset( $job['pack_method'] ) ? (string) $job['pack_method'] : '',
             'repack_attempted'=> ! empty( $job['repack_attempted'] ),
             'finalize_step'   => isset( $job['finalize_step'] ) ? (string) $job['finalize_step'] : '',
+            'progress_mode'   => $progress['progress_mode'],
+            'progress_basis'  => $progress['progress_basis'],
+            'stage_done'      => $progress['stage_done'],
+            'stage_total'     => $progress['stage_total'],
+            'stage_progress'  => $progress['stage_progress'],
+            'overall_progress'=> $progress['overall_progress'],
             'processed_files' => $processed,
             'total_files'     => $total_files,
             'processed_bytes' => $processed_b,
             'total_bytes'     => $total_bytes,
-            'percentage'      => $percentage,
+            // Keep legacy field for backward compatibility with older UI builds.
+            'percentage'      => (int) round( $progress['overall_progress'] ),
             'attempted_files' => isset( $job['attempted_files'] ) ? (int) $job['attempted_files'] : 0,
             'added_files'     => isset( $job['added_files'] ) ? (int) $job['added_files'] : 0,
             'skipped_files'   => isset( $job['skipped_files'] ) ? (int) $job['skipped_files'] : 0,
@@ -1045,6 +1009,126 @@ class Museder_Restoreone_Backup_Jobs {
             'auto_applied'    => ! empty( $options['backup_auto_applied'] ),
             'large_artifact_warnings' => isset( $job['large_artifact_warnings'] ) && is_array( $job['large_artifact_warnings'] ) ? array_slice( $job['large_artifact_warnings'], 0, 5 ) : [],
         ];
+    }
+
+    /**
+     * Build normalized progress payload (stage + overall).
+     *
+     * @param array $job Job state.
+     * @param int   $processed_files Processed files.
+     * @param int   $total_files Total files.
+     * @param int   $processed_bytes Processed bytes.
+     * @param int   $total_bytes Total bytes.
+     * @return array<string,mixed>
+     */
+    private static function build_progress_payload( $job, $processed_files, $total_files, $processed_bytes, $total_bytes ) {
+        $stage  = isset( $job['stage'] ) ? (string) $job['stage'] : '';
+        $status = isset( $job['status'] ) ? (string) $job['status'] : '';
+
+        $payload = [
+            'progress_mode'   => 'determinate',
+            'progress_basis'  => 'files',
+            'stage_done'      => 0,
+            'stage_total'     => 0,
+            'stage_progress'  => 0.0,
+            'overall_progress'=> 0.0,
+        ];
+
+        // Terminal states.
+        if ( 'completed' === $status || 'completed' === $stage ) {
+            $payload['progress_basis']   = 'steps';
+            $payload['stage_done']       = 1;
+            $payload['stage_total']      = 1;
+            $payload['stage_progress']   = 100.0;
+            $payload['overall_progress'] = 100.0;
+            return $payload;
+        }
+
+        // Preparing: deterministic by prep step count (0-10% of overall).
+        if ( 'preparing' === $stage || 'pending' === $stage ) {
+            $map = [
+                'db'       => 1,
+                'meta'     => 2,
+                'archive'  => 3,
+                'manifest' => 4,
+                'selfcheck'=> 5,
+                'done'     => 5,
+            ];
+            $prep_step = isset( $job['prep_step'] ) ? (string) $job['prep_step'] : '';
+            $done      = isset( $map[ $prep_step ] ) ? (int) $map[ $prep_step ] : 0;
+            $total     = 5;
+            $ratio     = $total > 0 ? ( $done / $total ) : 0.0;
+
+            $payload['progress_basis']   = 'steps';
+            $payload['stage_done']       = $done;
+            $payload['stage_total']      = $total;
+            $payload['stage_progress']   = round( 100.0 * $ratio, 2 );
+            $payload['overall_progress'] = round( 10.0 * $ratio, 2 );
+            return $payload;
+        }
+
+        // Packing: use real file progress (10-95% of overall).
+        if ( 'packing' === $stage || ( '' === $stage && 'running' === $status ) ) {
+            $done  = max( 0, min( $processed_files, $total_files ) );
+            $total = max( 1, $total_files );
+            $ratio = $done / $total;
+
+            $payload['progress_basis']   = 'files';
+            $payload['stage_done']       = (int) $done;
+            $payload['stage_total']      = (int) $total;
+            $payload['stage_progress']   = round( 100.0 * $ratio, 2 );
+            $payload['overall_progress'] = round( 10.0 + ( 85.0 * $ratio ), 2 );
+            return $payload;
+        }
+
+        // Finalizing: deterministic by finalize step (95-99% of overall).
+        if ( 'finalizing' === $stage ) {
+            $finalize_map = [
+                'embed_meta' => 1,
+                'verify'     => 2,
+                'close'      => 3,
+                'complete'   => 4,
+                'done'       => 4,
+            ];
+            $finalize_step = isset( $job['finalize_step'] ) ? (string) $job['finalize_step'] : '';
+            $done          = isset( $finalize_map[ $finalize_step ] ) ? (int) $finalize_map[ $finalize_step ] : 0;
+            $total         = 4;
+            if ( $done <= 0 ) {
+                // Unknown sub-step: do not fake detailed progress.
+                $payload['progress_mode']   = 'indeterminate';
+                $payload['progress_basis']  = 'steps';
+                $payload['stage_done']      = 0;
+                $payload['stage_total']     = 0;
+                $payload['stage_progress']  = 0.0;
+                $payload['overall_progress']= 95.0;
+                return $payload;
+            }
+
+            $ratio = $done / $total;
+            $payload['progress_basis']   = 'steps';
+            $payload['stage_done']       = $done;
+            $payload['stage_total']      = $total;
+            $payload['stage_progress']   = round( 100.0 * $ratio, 2 );
+            $payload['overall_progress'] = round( 95.0 + ( 4.0 * $ratio ), 2 );
+            return $payload;
+        }
+
+        // Cancelled/failed/unknown fallback: keep best effort but never fake 100.
+        $done_files  = max( 0, min( $processed_files, $total_files ) );
+        $files_ratio = $total_files > 0 ? ( $done_files / $total_files ) : 0.0;
+        $bytes_ratio = $total_bytes > 0 ? ( max( 0, min( $processed_bytes, $total_bytes ) ) / $total_bytes ) : 0.0;
+        $hybrid      = max( 0.0, min( 1.0, ( 0.90 * $files_ratio ) + ( 0.10 * $bytes_ratio ) ) );
+        $overall     = round( 10.0 + ( 85.0 * $hybrid ), 2 );
+        if ( in_array( $status, [ 'failed', 'cancelled' ], true ) ) {
+            $overall = min( 99.0, $overall );
+        }
+
+        $payload['progress_basis']   = 'files';
+        $payload['stage_done']       = (int) $done_files;
+        $payload['stage_total']      = (int) max( 1, $total_files );
+        $payload['stage_progress']   = round( 100.0 * $files_ratio, 2 );
+        $payload['overall_progress'] = $overall;
+        return $payload;
     }
 
     /**

@@ -4,8 +4,8 @@ var backupJobContext = {
     lastNudge: 0
 };
 
-// Backup progress smoothing (UX): if server progress stalls, gently advance the bar.
-// Parameters: stallAfterMs=8000, stepEveryMs=2000, stepDelta=0.2
+// Backup progress display helper.
+// Legacy mode can gently smooth stalls; contract mode should follow backend as-is.
 var backupProgressSmoother = {
     display: 0,
     server: 0,
@@ -56,8 +56,10 @@ var backupProgressSmoother = {
         if (stage === 'finalizing') return 99;
         return 99;
     },
-    apply: function (serverProgress, stage, status, job, updateFn) {
+    apply: function (serverProgress, stage, status, job, updateFn, options) {
         var now = Date.now();
+        options = options || {};
+        var allowStallSmoothing = !!options.allowStallSmoothing;
         var sp = Number(serverProgress || 0);
         if (isNaN(sp) || sp < 0) sp = 0;
         if (sp > 100) sp = 100;
@@ -122,7 +124,14 @@ var backupProgressSmoother = {
             return this.display;
         }
 
-        // Only smooth when running and below stage cap.
+        // Optional legacy stall smoothing when server snapshots are sparse.
+        if (!allowStallSmoothing) {
+            this.stopStall();
+            this.display = Math.max(this.display || 0, sp);
+            return this.display;
+        }
+
+        // Legacy smoothing mode: only smooth when running and below stage cap.
         var stallAfterMs = 8000;
         var stepEveryMs = 2000;
         var stepDelta = 0.2;
@@ -887,6 +896,7 @@ var musederRestoreOneTimer = {
     };
 
     var backupFormEl = null;
+    var backupProgressContainerEl = document.getElementById('backup-progress-container');
     var backupProgressEl = document.getElementById('backup-progress-fill');
     var backupProgressText = document.getElementById('backup-progress-text');
     var backupSubmitBtn = null;
@@ -911,6 +921,11 @@ var musederRestoreOneTimer = {
     }
 
     function resetBackupProgress() {
+        if (backupProgressContainerEl) {
+            backupProgressContainerEl.classList.remove('is-indeterminate');
+            backupProgressContainerEl.setAttribute('aria-valuenow', '0');
+            backupProgressContainerEl.setAttribute('aria-valuetext', '0%');
+        }
         if (backupProgressEl) {
             backupProgressEl.style.width = '0%';
         }
@@ -920,14 +935,44 @@ var musederRestoreOneTimer = {
         musederRestoreOneTimer.reset(); // Reset elapsed time timer
     }
 
-    function updateBackupProgress(percent) {
+    function updateBackupProgress(percent, options) {
+        options = options || {};
+        var mode = String(options.mode || 'determinate');
+        var isIndeterminate = mode === 'indeterminate';
+
+        if (backupProgressContainerEl) {
+            if (isIndeterminate) {
+                backupProgressContainerEl.classList.add('is-indeterminate');
+                backupProgressContainerEl.removeAttribute('aria-valuenow');
+                backupProgressContainerEl.setAttribute(
+                    'aria-valuetext',
+                    strings.progressMeasuringAria || 'Measuring progress'
+                );
+            } else {
+                backupProgressContainerEl.classList.remove('is-indeterminate');
+            }
+        }
+
         if (!backupProgressEl) {
             return;
         }
+
+        if (isIndeterminate) {
+            backupProgressEl.style.width = '100%';
+            if (backupProgressText) {
+                backupProgressText.textContent = strings.progressMeasuring || 'Measuring...';
+            }
+            return;
+        }
+
         // Keep one decimal for smoother bar motion while avoiding float artifacts.
         var value = Math.max(0, Math.min(100, percent || 0));
         value = Math.round(value * 10) / 10;
         backupProgressEl.style.width = value + '%';
+        if (backupProgressContainerEl) {
+            backupProgressContainerEl.setAttribute('aria-valuenow', String(value));
+            backupProgressContainerEl.setAttribute('aria-valuetext', value + '%');
+        }
         if (backupProgressText) {
             backupProgressText.textContent = value + '%';
         }
@@ -1107,16 +1152,20 @@ var musederRestoreOneTimer = {
 
     function handleJobResponse(job) {
         backupJobContext.current = job;
-        // Smooth progress when server stalls (UX): 8s stall -> +0.2% every 2s, capped by stage.
-        var rawPct = job.percentage || 0;
+        var rawPct = (typeof job.overall_progress === 'number') ? job.overall_progress : (job.percentage || 0);
+        var hasProgressContract = typeof job.progress_mode === 'string';
+        var isIndeterminate = hasProgressContract && job.progress_mode === 'indeterminate';
+        var progressMode = isIndeterminate ? 'indeterminate' : 'determinate';
+        var allowStallSmoothing = !hasProgressContract;
         var smoothed = backupProgressSmoother.apply(
             rawPct,
             job.stage || '',
             job.status || '',
             job,
-            function (p) { updateBackupProgress(p); }
+            function (p) { updateBackupProgress(p, { mode: progressMode }); },
+            { allowStallSmoothing: allowStallSmoothing }
         );
-        updateBackupProgress(smoothed);
+        updateBackupProgress(smoothed, { mode: progressMode });
         setBackupCancelable(true);
         updateBackupModeStatus(job);
 
@@ -1164,6 +1213,15 @@ var musederRestoreOneTimer = {
             }
         } else if ('finalizing' === job.stage || 'completed' === job.stage) {
             stageMessage = strings.jobFinalizing || stageMessage;
+        }
+        if (hasProgressContract) {
+            var stageDone = Number(job.stage_done || 0);
+            var stageTotal = Number(job.stage_total || 0);
+            if (isIndeterminate) {
+                stageMessage += ' (' + (strings.progressMeasuringSuffix || 'progress: measuring...') + ')';
+            } else if (!isNaN(stageDone) && !isNaN(stageTotal) && stageTotal > 0) {
+                stageMessage += ' (' + stageDone + ' / ' + stageTotal + ')';
+            }
         }
         if (job.large_artifact_warnings && job.large_artifact_warnings.length) {
             stageMessage += '\nDetected large existing backup artifacts in scope. Consider Smart Exclude or custom excludes to speed up packing.';
@@ -1908,7 +1966,16 @@ function initBackupLiteDomReady() {
     if (localizedSettings.activeJob && localizedSettings.activeJob.id) {
         backupJobContext.current = localizedSettings.activeJob;
         setBackupBusy(true);
-        updateBackupProgress(localizedSettings.activeJob.percentage || 0);
+        updateBackupProgress(
+            (typeof localizedSettings.activeJob.overall_progress === 'number')
+                ? localizedSettings.activeJob.overall_progress
+                : (localizedSettings.activeJob.percentage || 0),
+            {
+                mode: (localizedSettings.activeJob.progress_mode === 'indeterminate')
+                    ? 'indeterminate'
+                    : 'determinate'
+            }
+        );
         setBackupStatusMessage(strings.jobResuming || strings.runningMessage || '', 'loading');
         setBackupCancelable(true);
         musederRestoreOneTimer.start(); // Start elapsed time timer for resumed job
