@@ -14,6 +14,7 @@ class Museder_Restoreone_UI {
 
     public static function init() {
         add_action( 'admin_enqueue_scripts', [ __CLASS__, 'enqueue_assets' ] );
+        add_action( 'admin_enqueue_scripts', [ __CLASS__, 'disable_auth_check_during_restore' ], 999 );
         add_action( 'admin_notices', [ __CLASS__, 'render_restore_notice' ] );
         add_action( 'admin_notices', [ __CLASS__, 'render_multisite_experimental_notice' ] );
         add_action( 'admin_init', [ __CLASS__, 'handle_restore_notice_dismiss' ] );
@@ -1766,5 +1767,23 @@ class Museder_Restoreone_UI {
         // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_readfile -- streaming validated path under reports dir
         readfile( $path );
         exit;
+    }
+
+    /**
+     * Suppress WP core auth-check overlay on RestoreOne admin pages.
+     *
+     * During restore, DB import temporarily invalidates session tokens. WordPress
+     * heartbeat detects this and shows "session expired" overlay. We deregister
+     * the auth-check script on all plugin pages so the overlay cannot fire.
+     * Session continuity is handled by the plugin's own restore-token mechanism.
+     */
+    public static function disable_auth_check_during_restore() {
+        // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only page param for conditional script dequeue
+        $page = isset( $_GET['page'] ) ? sanitize_key( wp_unslash( $_GET['page'] ) ) : '';
+        if ( strpos( $page, 'museder-restoreone' ) === 0 || strpos( $page, 'backup-lite' ) === 0 ) {
+            wp_dequeue_script( 'wp-auth-check' );
+            wp_deregister_script( 'wp-auth-check' );
+            remove_action( 'admin_enqueue_scripts', 'wp_auth_check_load' );
+        }
     }
 }

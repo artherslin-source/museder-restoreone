@@ -390,6 +390,18 @@ class Museder_Restoreone_Restore_Service {
             }
             $meta['restore_token'] = $restore_token;
 
+            // Capture the authenticated admin's session tokens NOW (while user is logged in).
+            // WP-Cron runs without an authenticated user, so get_current_user_id() returns 0
+            // inside process_job_slice(). We must save this at execute() time.
+            $executing_user_id = get_current_user_id();
+            $meta['restore_admin_user_id'] = $executing_user_id;
+            if ( $executing_user_id > 0 && class_exists( 'WP_Session_Tokens' ) ) {
+                $token_manager = WP_Session_Tokens::get_instance( $executing_user_id );
+                $meta['restore_admin_session_tokens'] = $token_manager->get_all();
+            } else {
+                $meta['restore_admin_session_tokens'] = [];
+            }
+
             // Schedule background processing (time-sliced).
             // De-duplicate any existing scheduled ticks for this job id.
             if ( function_exists( 'wp_clear_scheduled_hook' ) ) {
