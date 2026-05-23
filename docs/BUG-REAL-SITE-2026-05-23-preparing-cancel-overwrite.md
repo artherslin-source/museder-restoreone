@@ -112,3 +112,63 @@ Suggestion: Add a bytes-based threshold (e.g., total_bytes > 2GB) as an alternat
 
 - **P0** for the cancel overwrite bug (makes cancel unreliable on shared hosting)
 - **P2** for the Smart Exclude threshold design limitation
+
+---
+
+# Bug 2: Session Preservation Fix Fails in WP-Cron Context (2.7.264)
+
+## Summary
+
+The session preservation fix (Fix 1 from `docs/FIX-PLAN-RESTORE-SESSION-LOSS.md`) does NOT work on real production sites because `preserve_session_before_import()` calls `get_current_user_id()` which returns **0** when executed inside WP-Cron.
+
+## Evidence
+
+From production log (`backup-lite-2026-05-23.log`):
+
+```
+[23:22:49] Post-DB-import recovery: lock, active job, and cron re-established.  ← Fix 3 works
+                                                                                   ← "Session tokens re-injected" is MISSING!
+```
+
+The `restore_session_after_import()` log entry is absent, meaning the session was NOT preserved.
+
+## Root Cause
+
+```php
+// includes/class-restore.php — preserve_session_before_import()
+private static function preserve_session_before_import() {
+    $state = [
+        'user_id' => function_exists( 'get_current_user_id' ) ? get_current_user_id() : 0,
+        //           ↑ Returns 0 in WP-Cron context! No user is "logged in" during cron.
+```
+
+**Execution flow on real sites:**
+1. User clicks "Start Restore" → `execute()` runs (user IS authenticated, user_id > 0)
+2. `execute()` schedules WP-Cron: `wp_schedule_single_event(time(), CRON_HOOK_PROCESS, [$job_id])`
+3. WP-Cron fires → `cron_process_job()` → `process_job_slice()` → `stage_import_database()`
+4. Inside `import_database_from_ndjson()`:
+   - `preserve_session_before_import()` calls `get_current_user_id()` → **returns 0!**
+   - `$state['session_tokens'] = []` → nothing is preserved
+5. DB import replaces `wp_usermeta` → user session destroyed
+6. `restore_session_after_import($state)` → `$user_id = 0` → skips session write
+
+**Why Docker testing passed**: In Docker, `process_job_slice()` was called directly from PHP CLI with WP loaded in a context where user_id was implicitly available (or the same-site backup had matching tokens). On real sites, the cron pathway has no authenticated user.
+
+## Fix Required
+
+Save the authenticated user's ID and session tokens at `execute()` time (when user IS logged in), and store them in the job metadata. Then `preserve_session_before_import()` reads from job meta instead of relying on `get_current_user_id()`.
+
+```php
+// In execute():
+$meta['restore_admin_user_id'] = get_current_user_id();
+$manager = WP_Session_Tokens::get_instance( get_current_user_id() );
+$meta['restore_admin_session_tokens'] = $manager->get_all();
+
+// In preserve_session_before_import() — read from job meta:
+$user_id = $meta['restore_admin_user_id'] ?? 0;
+$session_tokens = $meta['restore_admin_session_tokens'] ?? [];
+```
+
+## Severity
+
+**P0** — The primary advertised fix (session preservation) is completely non-functional on production WordPress sites that use WP-Cron for restore processing (which is ALL of them).
