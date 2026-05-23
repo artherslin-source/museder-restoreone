@@ -4,7 +4,7 @@ Tags: backup, migration, restore, clone, site-backup
 Requires at least: 5.8
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 2.7.263
+Stable tag: 2.7.264
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -241,6 +241,13 @@ Most sites do not need any changes. For unusual server layouts where core admin 
 6. Settings — general options and system diagnostics for shared hosting.
 
 == Changelog ==
+
+= 2.7.264 =
+* Backup jobs: fixed cancel race conditions so persisted `cancelled` state is reloaded/merged before scheduling and final save, preventing stale in-memory `running/packing` overwrite after long batches.
+* Backup jobs: added defensive schedule guard to skip `wp_schedule_single_event()` when latest state is terminal or cancel requested.
+* Backup UI: in `pclzip` compatibility repack mode, progress smoothing is capped and status now shows real file progress (`processed_files/total_files`) to avoid misleading near-complete percentages.
+* Backup UX: after cancel success, UI performs a delayed status verification and warns if the same job is still running.
+* Packing diagnostics: detect common large existing backup artifacts (`ai1wm`, `backwpup`, `wordpress-*.tmp`) and surface warnings to help avoid very slow repack behavior.
 
 = 2.7.263 =
 * Restore (P0): preserve admin **session tokens** and re-inject **cron**, **restore lock**, and **active job** state after database import so restores no longer stall when the admin session is invalidated mid-job.
@@ -521,6 +528,9 @@ Most sites do not need any changes. For unusual server layouts where core admin 
 (Older changelog entries are maintained in the project repository.)
 
 == Upgrade Notice ==
+
+= 2.7.264 =
+Fixes backup jobs that could **resume after cancel** due to stale worker state, improves repack progress accuracy, and adds warnings for large existing backup artifacts that can significantly slow packing.
 
 = 2.7.263 =
 Fixes restores that **stopped mid-job** after database import when the admin session was invalidated (session preserved, restore token fallback, resilient progress polling). Recommended for **large-site restores**.

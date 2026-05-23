@@ -173,7 +173,7 @@ class Museder_Restoreone_Backup_Jobs {
 
         // Finalize-guard: if a terminal job somehow gets re-invoked (e.g., lingering cron),
         // do not process again. Also clear active pointer + scheduled events defensively.
-        if ( isset( $job['status'] ) && in_array( $job['status'], [ 'completed', 'failed', 'cancelled' ], true ) ) {
+        if ( self::is_terminal_or_cancel_requested( $job ) ) {
             self::clear_active_job( $job_id );
             self::clear_scheduled_job( $job_id );
             return $job;
@@ -394,6 +394,16 @@ class Museder_Restoreone_Backup_Jobs {
                 $delta_entries   = max( 0, $pointer_after - $pointer_before );
                 $delta_bytes     = max( 0, $processed_after - $processed_before );
 
+                // Gate A: after each long batch returns, reload latest persisted state before any scheduling/save.
+                // If user cancelled during the batch, treat it as terminal immediately.
+                $latest_after_batch = self::load_latest_job_state( $job_id );
+                if ( self::is_terminal_or_cancel_requested( $latest_after_batch ) ) {
+                    $job = self::merge_with_latest_terminal_state( $job, $latest_after_batch );
+                    $job_needs_finalize = false;
+                    $job_completed_in_loop = true;
+                    break;
+                }
+
                 // If a single batch is slower than the time budget, shrink batch limits for the next tick.
                 // This cannot preempt the current long operation, but prevents repeated 30-80s requests that make UI look stuck.
                 if ( $batch_elapsed > (float) $time_budget ) {
@@ -504,15 +514,7 @@ class Museder_Restoreone_Backup_Jobs {
 
             // If job was cancelled during the loop, perform cleanup and stop here.
             if ( isset( $job['status'] ) && 'cancelled' === $job['status'] ) {
-                self::delete_archive_for_job( $job );
-                self::cleanup_job( $job );
-                self::clear_active_job( $job_id );
-                self::clear_scheduled_job( $job_id );
-                $job['processing']    = false;
-                $job['last_activity'] = time();
-                $job['updated_at']    = current_time( 'mysql' );
-                self::save_job( $job );
-                return $job;
+                return self::finalize_cancelled_job_state( $job_id, $job );
             }
 
             // If packing finished, finalize AFTER close so filesize/metadata are accurate.
@@ -606,6 +608,15 @@ class Museder_Restoreone_Backup_Jobs {
                 self::clear_scheduled_job( $job_id );
                 // Don't schedule next event if job is complete
             } else {
+                // Gate B: before scheduling, reload latest persisted state defensively.
+                $latest_before_schedule = self::load_latest_job_state( $job_id );
+                if ( self::is_terminal_or_cancel_requested( $latest_before_schedule ) ) {
+                    $job = self::merge_with_latest_terminal_state( $job, $latest_before_schedule );
+                    if ( isset( $job['status'] ) && 'cancelled' === $job['status'] ) {
+                        return self::finalize_cancelled_job_state( $job_id, $job );
+                    }
+                }
+
                 // Job is still running - schedule next batch with short interval (10-20 seconds)
                 // This implements "short interval single event" scheduling for cron mode
                 self::schedule_next_batch( $job_id, $job );
@@ -615,6 +626,8 @@ class Museder_Restoreone_Backup_Jobs {
             $job['processing']    = false;
             $job['last_activity'] = time();
             $job['updated_at']    = current_time( 'mysql' );
+            // Gate C: final save merges persisted terminal state to avoid stale running overwrite.
+            $job = self::merge_with_latest_terminal_state( $job, self::load_latest_job_state( $job_id ) );
             self::save_job( $job );
 
             return $job;
@@ -631,6 +644,17 @@ class Museder_Restoreone_Backup_Jobs {
      * @param array  $job    Current job state.
      */
     private static function schedule_next_batch( $job_id, $job ) {
+        $latest = self::load_latest_job_state( $job_id );
+        if ( self::is_terminal_or_cancel_requested( $latest ) ) {
+            museder_restoreone_log( 'info', 'Skip scheduling next batch because latest state is terminal/cancelled.', [
+                'job_id'  => $job_id,
+                'status'  => is_array( $latest ) && isset( $latest['status'] ) ? (string) $latest['status'] : '',
+                'stage'   => is_array( $latest ) && isset( $latest['stage'] ) ? (string) $latest['stage'] : '',
+                'reason'  => 'latest_terminal_or_cancelled',
+            ] );
+            return;
+        }
+
         // Only schedule if job is in preparing/packing/finalizing stage
         // Finalizing may be sliced across multiple ticks (metadata embed/verify).
         if ( ! in_array( $job['stage'], [ 'preparing', 'packing', 'finalizing' ], true ) ) {
@@ -709,9 +733,7 @@ class Museder_Restoreone_Backup_Jobs {
         $token = self::acquire_option_lock( $job_id );
         if ( ! empty( $token ) ) {
             try {
-        self::delete_archive_for_job( $job );
-        self::cleanup_job( $job );
-        self::clear_active_job( $job_id );
+                self::finalize_cancelled_job_state( $job_id, $job );
             } finally {
                 self::release_option_lock( $job_id, $token );
             }
@@ -835,6 +857,93 @@ class Museder_Restoreone_Backup_Jobs {
     }
 
     /**
+     * Reload latest persisted job state from disk.
+     *
+     * @param string $job_id Job identifier.
+     * @return array|null
+     */
+    private static function load_latest_job_state( $job_id ) {
+        return self::load_job( $job_id );
+    }
+
+    /**
+     * Whether the job should be treated as terminal for scheduling/saving.
+     *
+     * @param array|null $job Job state.
+     * @return bool
+     */
+    private static function is_terminal_or_cancel_requested( $job ) {
+        if ( ! is_array( $job ) ) {
+            return false;
+        }
+
+        if ( ! empty( $job['cancel_requested'] ) ) {
+            return true;
+        }
+
+        $status = isset( $job['status'] ) ? (string) $job['status'] : '';
+        $stage  = isset( $job['stage'] ) ? (string) $job['stage'] : '';
+
+        return in_array( $status, [ 'cancelled', 'failed', 'completed' ], true ) || 'cancelled' === $stage;
+    }
+
+    /**
+     * Merge in-memory state with latest persisted terminal state to prevent stale overwrite.
+     *
+     * @param array      $in_memory In-memory job state.
+     * @param array|null $latest    Latest persisted state.
+     * @return array
+     */
+    private static function merge_with_latest_terminal_state( $in_memory, $latest ) {
+        if ( ! is_array( $in_memory ) ) {
+            $in_memory = [];
+        }
+        if ( ! self::is_terminal_or_cancel_requested( $latest ) ) {
+            return $in_memory;
+        }
+
+        // Persisted state wins when terminal/cancelled to avoid stale running resurrection.
+        return array_merge( $in_memory, $latest );
+    }
+
+    /**
+     * Finalize a cancelled state with consistent cleanup and persistence.
+     *
+     * @param string $job_id Job identifier.
+     * @param array  $job    Current job state.
+     * @return array
+     */
+    private static function finalize_cancelled_job_state( $job_id, $job ) {
+        if ( ! is_array( $job ) ) {
+            $job = [];
+        }
+
+        $job['id'] = isset( $job['id'] ) ? (string) $job['id'] : (string) $job_id;
+        $job['cancel_requested']    = true;
+        $job['cancel_requested_at'] = isset( $job['cancel_requested_at'] ) && (int) $job['cancel_requested_at'] > 0 ? (int) $job['cancel_requested_at'] : time();
+        $job['status']              = 'cancelled';
+        $job['stage']               = 'cancelled';
+        $job['message']             = isset( $job['message'] ) && '' !== (string) $job['message'] ? (string) $job['message'] : __( 'Backup cancelled by user.', 'museder-restoreone' );
+        $job['processing']          = false;
+        $job['last_activity']       = time();
+        $job['updated_at']          = current_time( 'mysql' );
+
+        museder_restoreone_log( 'info', 'Cancellation detected after batch; stopping job.', [
+            'job_id' => $job_id,
+            'stage'  => $job['stage'],
+            'status' => $job['status'],
+        ] );
+
+        self::delete_archive_for_job( $job );
+        self::cleanup_job( $job );
+        self::clear_active_job( $job_id );
+        self::clear_scheduled_job( $job_id );
+        self::save_job( $job );
+
+        return $job;
+    }
+
+    /**
      * Convert job state into a safe payload for JS.
      *
      * @param array $job Job state.
@@ -909,6 +1018,8 @@ class Museder_Restoreone_Backup_Jobs {
             'message'         => $job['message'],
             'prep_step'       => isset( $job['prep_step'] ) ? (string) $job['prep_step'] : '',
             'pack_method'     => isset( $job['pack_method'] ) ? (string) $job['pack_method'] : '',
+            'repack_attempted'=> ! empty( $job['repack_attempted'] ),
+            'finalize_step'   => isset( $job['finalize_step'] ) ? (string) $job['finalize_step'] : '',
             'processed_files' => $processed,
             'total_files'     => $total_files,
             'processed_bytes' => $processed_b,
@@ -926,11 +1037,13 @@ class Museder_Restoreone_Backup_Jobs {
             'updated_at'      => isset( $job['updated_at'] ) ? $job['updated_at'] : '',
             'last_activity'   => isset( $job['last_activity'] ) ? (int) $job['last_activity'] : 0,
             'started_at'      => isset( $job['started_at'] ) ? (int) $job['started_at'] : 0,
+            'cancel_requested'=> ! empty( $job['cancel_requested'] ),
             'backup_mode'     => $mode,
             'smart_exclude'   => $smart,
             'large_site_detected' => ! empty( $options['backup_large_site_detected'] ),
             'auto_threshold_files' => isset( $options['backup_auto_threshold_files'] ) ? (int) $options['backup_auto_threshold_files'] : 0,
             'auto_applied'    => ! empty( $options['backup_auto_applied'] ),
+            'large_artifact_warnings' => isset( $job['large_artifact_warnings'] ) && is_array( $job['large_artifact_warnings'] ) ? array_slice( $job['large_artifact_warnings'], 0, 5 ) : [],
         ];
     }
 

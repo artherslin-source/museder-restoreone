@@ -1930,6 +1930,31 @@ class Museder_Restoreone_Backup {
     }
 
     /**
+     * Classify known large backup artifact paths that can make packing/repack very slow.
+     *
+     * @param string $path Absolute normalized file path.
+     * @return string
+     */
+    private static function classify_large_backup_artifact_type( $path ) {
+        $normalized = wp_normalize_path( (string) $path );
+        if ( '' === $normalized ) {
+            return '';
+        }
+
+        if ( preg_match( '#/wp-content/ai1wm-backups/[^/]+\.wpress$#i', $normalized ) ) {
+            return 'ai1wm_wpress';
+        }
+        if ( preg_match( '#/wp-content/uploads/backwpup-[^/]+-backups/[^/]+\.zip$#i', $normalized ) ) {
+            return 'backwpup_zip';
+        }
+        if ( preg_match( '#/wp-content/uploads/wordpress-[^/]+\.tmp$#i', $normalized ) ) {
+            return 'wordpress_tmp_archive';
+        }
+
+        return '';
+    }
+
+    /**
      * Resolve effective backup options for Auto mode, including Smart Exclude.
      *
      * - Auto mode switches to Fast + Smart Exclude when file count is above threshold.
@@ -3000,6 +3025,32 @@ class Museder_Restoreone_Backup {
             
             $entry['path'] = $path;
             $entry['size'] = $file_size;
+
+            $artifact_type = self::classify_large_backup_artifact_type( $path );
+            if ( '' !== $artifact_type && $file_size >= 8 * 1024 * 1024 ) {
+                if ( ! isset( $job['large_artifact_warnings'] ) || ! is_array( $job['large_artifact_warnings'] ) ) {
+                    $job['large_artifact_warnings'] = [];
+                }
+
+                if ( count( $job['large_artifact_warnings'] ) < 5 ) {
+                    $job['large_artifact_warnings'][] = [
+                        'type' => $artifact_type,
+                        'path' => $path,
+                        'size' => (int) $file_size,
+                    ];
+                }
+
+                if ( empty( $job['large_artifact_warning_logged'] ) ) {
+                    $job['large_artifact_warning_logged'] = true;
+                    museder_restoreone_log( 'warning', 'Detected large backup artifact inside backup scope. This can significantly slow packing/repack.', [
+                        'job_id' => $job['id'] ?? '',
+                        'type'   => $artifact_type,
+                        'path'   => $path,
+                        'size'   => (int) $file_size,
+                    ] );
+                }
+            }
+
             $batch[]       = $entry;
             $bytes        += $file_size;
         }

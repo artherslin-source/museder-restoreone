@@ -13,6 +13,7 @@ var backupProgressSmoother = {
     lastChangeAt: 0,
     stage: '',
     status: '',
+    jobMeta: null,
     timer: null,
     animTimer: null,
     target: 0,
@@ -38,17 +39,24 @@ var backupProgressSmoother = {
             this.animTimer = null;
         }
     },
-    capForStage: function (stage, status) {
+    isPclzipRepack: function (job) {
+        if (!job) {
+            return false;
+        }
+        return String(job.pack_method || '') === 'pclzip' && !!job.repack_attempted;
+    },
+    capForStage: function (stage, status, job) {
         stage = String(stage || '');
         status = String(status || '');
         if (status === 'completed' || stage === 'completed') return 100;
         if (status === 'failed' || status === 'cancelled') return 100;
         if (stage === 'preparing' || stage === 'pending') return 10;
+        if (stage === 'packing' && this.isPclzipRepack(job)) return 85;
         if (stage === 'packing') return 95;
         if (stage === 'finalizing') return 99;
         return 99;
     },
-    apply: function (serverProgress, stage, status, updateFn) {
+    apply: function (serverProgress, stage, status, job, updateFn) {
         var now = Date.now();
         var sp = Number(serverProgress || 0);
         if (isNaN(sp) || sp < 0) sp = 0;
@@ -63,6 +71,7 @@ var backupProgressSmoother = {
             this.lastChangeAt = now;
             this.stage = stage;
             this.status = status;
+            this.jobMeta = job || null;
             this.target = sp;
             return this.display;
         }
@@ -73,6 +82,7 @@ var backupProgressSmoother = {
         if (stageChanged || statusChanged || progressChanged) {
             this.stage = stage;
             this.status = status;
+            this.jobMeta = job || null;
             this.server = sp;
             this.lastServer = sp;
             this.lastChangeAt = now;
@@ -116,9 +126,18 @@ var backupProgressSmoother = {
         var stallAfterMs = 8000;
         var stepEveryMs = 2000;
         var stepDelta = 0.2;
-        var cap = this.capForStage(stage, status);
+        var cap = this.capForStage(stage, status, job);
         var epsilon = 0.1;
         var capMax = Math.max(0, cap - epsilon);
+
+        // In compatibility repack mode, avoid synthetic near-complete smoothing.
+        // Always follow server progress directly to prevent misleading 94.9% display.
+        if (this.isPclzipRepack(job)) {
+            this.stopStall();
+            this.display = Math.max(this.display || 0, sp);
+            this.display = Math.min(this.display, capMax);
+            return this.display;
+        }
 
         this.display = Math.max(this.display || 0, sp);
         if (this.display >= capMax || cap >= 100 || sp >= 100) {
@@ -130,7 +149,7 @@ var backupProgressSmoother = {
             if (!this.timer && typeof updateFn === 'function') {
                 var self = this;
                 this.timer = window.setInterval(function () {
-                    var capNow = self.capForStage(self.stage, self.status);
+                    var capNow = self.capForStage(self.stage, self.status, self.jobMeta);
                     var capNowMax = Math.max(0, capNow - epsilon);
                     // Never go backwards; never exceed cap.
                     self.display = Math.max(self.display || 0, self.server || 0);
@@ -981,11 +1000,45 @@ var musederRestoreOneTimer = {
                 statusEl.textContent = '';
             }
             showToast(strings.jobCancelSuccess || 'Backup cancelled.', 'warning');
+            verifyCancelledJobState(payload.get('job_id'));
         }).catch(function (error) {
             var message = (error && error.message) ? error.message : (strings.jobCancelFailed || 'Unable to cancel backup.');
             showToast(message, 'error');
             setBackupCancelable(!!(backupJobContext.current && backupJobContext.current.id));
         });
+    }
+
+    function verifyCancelledJobState(jobId) {
+        if (!jobId || !settings.nonce || !settings.ajaxUrl) {
+            return;
+        }
+        window.setTimeout(function () {
+            var payload = new FormData();
+            payload.append('action', 'museder_restoreone_get_job_status');
+            payload.append('nonce', settings.nonce);
+            payload.append('job_id', String(jobId));
+
+            fetch(settings.ajaxUrl, {
+                method: 'POST',
+                credentials: 'same-origin',
+                body: payload
+            }).then(function (response) {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok: ' + response.status);
+                }
+                return response.json();
+            }).then(function (json) {
+                if (!json || !json.success || !json.data || !json.data.job) {
+                    return;
+                }
+                var latest = json.data.job;
+                if (String(latest.id || '') === String(jobId) && String(latest.status || '') === 'running') {
+                    showToast(strings.jobCancelStillRunning || 'Cancellation requested, but this job is still running. Please refresh and check WP-Cron status.', 'warning');
+                }
+            }).catch(function () {
+                // Best-effort verification only.
+            });
+        }, 3000);
     }
 
     function appendBackupOptions(payload) {
@@ -1060,6 +1113,7 @@ var musederRestoreOneTimer = {
             rawPct,
             job.stage || '',
             job.status || '',
+            job,
             function (p) { updateBackupProgress(p); }
         );
         updateBackupProgress(smoothed);
@@ -1099,9 +1153,20 @@ var musederRestoreOneTimer = {
         if ('preparing' === job.stage || 'pending' === job.stage) {
             stageMessage = strings.jobPreparing || stageMessage;
         } else if ('packing' === job.stage) {
-            stageMessage = strings.jobProcessing || stageMessage;
+            if (String(job.pack_method || '') === 'pclzip' && job.repack_attempted) {
+                var processedFiles = Number(job.processed_files || 0);
+                var totalFiles = Number(job.total_files || 0);
+                if (isNaN(processedFiles)) processedFiles = 0;
+                if (isNaN(totalFiles)) totalFiles = 0;
+                stageMessage = 'Compatibility repack in progress: ' + processedFiles + ' / ' + totalFiles + ' files';
+            } else {
+                stageMessage = strings.jobProcessing || stageMessage;
+            }
         } else if ('finalizing' === job.stage || 'completed' === job.stage) {
             stageMessage = strings.jobFinalizing || stageMessage;
+        }
+        if (job.large_artifact_warnings && job.large_artifact_warnings.length) {
+            stageMessage += '\nDetected large existing backup artifacts in scope. Consider Smart Exclude or custom excludes to speed up packing.';
         }
         setBackupStatusMessage(stageMessage, 'loading');
 
