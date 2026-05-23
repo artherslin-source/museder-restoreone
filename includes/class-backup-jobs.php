@@ -958,6 +958,16 @@ class Museder_Restoreone_Backup_Jobs {
         $options = isset( $job['options'] ) && is_array( $job['options'] ) ? $job['options'] : [];
         $mode    = isset( $options['backup_mode_effective'] ) ? (string) $options['backup_mode_effective'] : ( isset( $options['backup_mode'] ) ? (string) $options['backup_mode'] : '' );
         $smart   = isset( $options['backup_smart_exclude_effective'] ) ? (string) $options['backup_smart_exclude_effective'] : ( isset( $options['backup_smart_exclude'] ) ? (string) $options['backup_smart_exclude'] : '' );
+        $artifact_labels = [];
+        if ( isset( $options['backup_auto_excluded_artifacts'] ) && is_array( $options['backup_auto_excluded_artifacts'] ) ) {
+            foreach ( $options['backup_auto_excluded_artifacts'] as $item ) {
+                if ( ! is_array( $item ) || empty( $item['label'] ) ) {
+                    continue;
+                }
+                $artifact_labels[] = (string) $item['label'];
+            }
+        }
+        $artifact_labels = array_values( array_unique( $artifact_labels ) );
 
         if ( ! in_array( $mode, [ 'balanced', 'fast' ], true ) ) {
             $mode = '';
@@ -1007,6 +1017,8 @@ class Museder_Restoreone_Backup_Jobs {
             'large_site_detected' => ! empty( $options['backup_large_site_detected'] ),
             'auto_threshold_files' => isset( $options['backup_auto_threshold_files'] ) ? (int) $options['backup_auto_threshold_files'] : 0,
             'auto_applied'    => ! empty( $options['backup_auto_applied'] ),
+            'auto_excluded_artifact_count' => isset( $options['backup_auto_excluded_artifact_count'] ) ? (int) $options['backup_auto_excluded_artifact_count'] : count( $artifact_labels ),
+            'auto_excluded_artifact_labels' => array_slice( $artifact_labels, 0, 5 ),
             'large_artifact_warnings' => isset( $job['large_artifact_warnings'] ) && is_array( $job['large_artifact_warnings'] ) ? array_slice( $job['large_artifact_warnings'], 0, 5 ) : [],
         ];
     }

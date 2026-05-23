@@ -1320,6 +1320,17 @@ var musederRestoreOneTimer = {
             parts.push(strings.backupModeAutoSwitched || 'Auto enabled Fast mode for a large site.');
         }
 
+        var autoExcludedCount = Number(job.auto_excluded_artifact_count || 0);
+        if (!isNaN(autoExcludedCount) && autoExcludedCount > 0) {
+            var labels = Array.isArray(job.auto_excluded_artifact_labels) ? job.auto_excluded_artifact_labels : [];
+            if (labels.length) {
+                parts.push((strings.autoExcludedArtifactsPrefix || 'Auto excluded backup artifacts') + ': ' + labels.join(', '));
+            } else {
+                var countTemplate = strings.autoExcludedArtifactsCount || 'Auto excluded backup artifact folders: %s';
+                parts.push(countTemplate.replace('%s', String(autoExcludedCount)));
+            }
+        }
+
         statusEl.textContent = parts.join(' · ');
     }
 

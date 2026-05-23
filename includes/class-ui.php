@@ -565,6 +565,8 @@ class Museder_Restoreone_UI {
                 'backupModeUnknown'  => __( '—', 'museder-restoreone' ),
                 'smartExcludeOn'  => __( 'Smart Exclude: On', 'museder-restoreone' ),
                 'smartExcludeOff' => __( 'Smart Exclude: Off', 'museder-restoreone' ),
+                'autoExcludedArtifactsPrefix' => __( 'Auto excluded backup artifacts', 'museder-restoreone' ),
+                'autoExcludedArtifactsCount'  => __( 'Auto excluded backup artifact folders: %s', 'museder-restoreone' ),
                 'backupModeAutoSwitched' => __( 'Auto enabled Fast mode for a large site.', 'museder-restoreone' ),
                 /* translators: %d: Number of hidden notices. */
                 'hiddenNoticesSummary'   => __( 'Hidden notices (%d)', 'museder-restoreone' ),

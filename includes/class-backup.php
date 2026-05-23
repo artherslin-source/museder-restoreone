@@ -810,6 +810,7 @@ class Museder_Restoreone_Backup {
             'bytes' => $manifest_data['bytes'],
             'backup_mode' => $options['backup_mode_effective'] ?? ( $options['backup_mode'] ?? '' ),
             'smart_exclude' => $options['backup_smart_exclude_effective'] ?? ( $options['backup_smart_exclude'] ?? '' ),
+            'auto_excluded_backup_artifacts' => isset( $options['backup_auto_excluded_artifact_count'] ) ? (int) $options['backup_auto_excluded_artifact_count'] : 0,
         ] );
 
         return [
@@ -939,6 +940,7 @@ class Museder_Restoreone_Backup {
                     'bytes' => isset( $job['total_bytes'] ) ? (int) $job['total_bytes'] : 0,
                 'backup_mode' => $options['backup_mode_effective'] ?? ( $options['backup_mode'] ?? '' ),
                 'smart_exclude' => $options['backup_smart_exclude_effective'] ?? ( $options['backup_smart_exclude'] ?? '' ),
+                'auto_excluded_backup_artifacts' => isset( $options['backup_auto_excluded_artifact_count'] ) ? (int) $options['backup_auto_excluded_artifact_count'] : 0,
             ] );
                 $job['prep_step'] = 'selfcheck';
             } else {
@@ -1955,6 +1957,110 @@ class Museder_Restoreone_Backup {
     }
 
     /**
+     * Detect known third-party backup artifact directories that should be auto-excluded.
+     *
+     * @return array<int,array{type:string,label:string,path:string}>
+     */
+    private static function detect_known_backup_artifact_exclusions() {
+        $upload_dir       = wp_upload_dir();
+        $uploads_basedir  = isset( $upload_dir['basedir'] ) ? (string) $upload_dir['basedir'] : '';
+        $uploads_basedir  = '' !== $uploads_basedir ? wp_normalize_path( $uploads_basedir ) : '';
+        $detected         = [];
+        $candidates       = [];
+
+        if ( '' !== $uploads_basedir ) {
+            $candidates[] = [
+                'type'  => 'ai1wm_wpress',
+                'label' => 'All-in-One WP Migration',
+                'path'  => trailingslashit( $uploads_basedir . '/ai1wm-backups' ),
+            ];
+            $candidates[] = [
+                'type'  => 'updraft_zip',
+                'label' => 'UpdraftPlus',
+                'path'  => trailingslashit( $uploads_basedir . '/updraft' ),
+            ];
+            $candidates[] = [
+                'type'  => 'duplicator_archive',
+                'label' => 'Duplicator',
+                'path'  => trailingslashit( $uploads_basedir . '/backups-dup-lite' ),
+            ];
+
+            // BackWPup often uses dynamic folder names: backwpup-<hash>-backups.
+            if ( @is_dir( $uploads_basedir ) ) {
+                try {
+                    $iterator = new DirectoryIterator( $uploads_basedir );
+                    foreach ( $iterator as $item ) {
+                        if ( ! $item->isDir() || $item->isDot() ) {
+                            continue;
+                        }
+                        $name = (string) $item->getFilename();
+                        if ( 0 !== strpos( $name, 'backwpup-' ) || substr( $name, -8 ) !== '-backups' ) {
+                            continue;
+                        }
+                        $dir = wp_normalize_path( (string) $item->getPathname() );
+                        if ( '' === $dir ) {
+                            continue;
+                        }
+                        $candidates[] = [
+                            'type'  => 'backwpup_zip',
+                            'label' => 'BackWPup',
+                            'path'  => trailingslashit( $dir ),
+                        ];
+                    }
+                } catch ( Exception $e ) {
+                    // Ignore directory iteration failures; exclusions are best-effort.
+                }
+            }
+        }
+
+        foreach ( $candidates as $candidate ) {
+            $path = isset( $candidate['path'] ) ? wp_normalize_path( (string) $candidate['path'] ) : '';
+            if ( '' === $path || ! @is_dir( $path ) ) {
+                continue;
+            }
+
+            $detected[] = [
+                'type'  => isset( $candidate['type'] ) ? (string) $candidate['type'] : 'unknown',
+                'label' => isset( $candidate['label'] ) ? (string) $candidate['label'] : 'Backup artifact',
+                'path'  => trailingslashit( $path ),
+            ];
+        }
+
+        return array_values(
+            array_unique(
+                $detected,
+                SORT_REGULAR
+            )
+        );
+    }
+
+    /**
+     * Resolve known backup artifact exclusion prefixes from options (or live detection fallback).
+     *
+     * @param array $options Backup options.
+     * @return array<string>
+     */
+    private static function get_known_backup_artifact_exclude_prefixes( array $options ) {
+        $prefixes = [];
+        $stored   = isset( $options['backup_auto_excluded_artifacts'] ) && is_array( $options['backup_auto_excluded_artifacts'] )
+            ? $options['backup_auto_excluded_artifacts']
+            : self::detect_known_backup_artifact_exclusions();
+
+        foreach ( $stored as $item ) {
+            if ( ! is_array( $item ) ) {
+                continue;
+            }
+            $path = isset( $item['path'] ) ? wp_normalize_path( (string) $item['path'] ) : '';
+            if ( '' === $path ) {
+                continue;
+            }
+            $prefixes[] = trailingslashit( $path );
+        }
+
+        return array_values( array_unique( array_filter( $prefixes ) ) );
+    }
+
+    /**
      * Resolve effective backup options for Auto mode, including Smart Exclude.
      *
      * - Auto mode switches to Fast + Smart Exclude when file count is above threshold.
@@ -2042,6 +2148,14 @@ class Museder_Restoreone_Backup {
         $options['backup_auto_threshold_files'] = $threshold;
         $options['backup_auto_applied'] = ( 'auto' === $requested_mode_raw || 'auto' === $requested_smart_raw );
 
+        // Detect known third-party backup artifact directories when Smart Exclude is active.
+        $auto_excluded_artifacts = [];
+        if ( 'on' === $effective_smart ) {
+            $auto_excluded_artifacts = self::detect_known_backup_artifact_exclusions();
+        }
+        $options['backup_auto_excluded_artifacts'] = $auto_excluded_artifacts;
+        $options['backup_auto_excluded_artifact_count'] = count( $auto_excluded_artifacts );
+
         // Ensure downstream steps use the effective values.
         $options['backup_mode'] = $effective_mode;
         $options['backup_smart_exclude'] = $effective_smart;
@@ -2053,7 +2167,24 @@ class Museder_Restoreone_Backup {
             'scanned_bytes' => isset( $stats['bytes'] ) ? (int) $stats['bytes'] : 0,
             'backup_mode_effective' => $effective_mode,
             'smart_exclude_effective' => $effective_smart,
+            'auto_excluded_backup_artifacts' => count( $auto_excluded_artifacts ),
         ] );
+
+        if ( ! empty( $auto_excluded_artifacts ) ) {
+            museder_restoreone_log( 'info', 'Auto-excluding known backup artifact directories.', [
+                'count' => count( $auto_excluded_artifacts ),
+                'types' => array_values(
+                    array_unique(
+                        array_map(
+                            static function ( $item ) {
+                                return isset( $item['type'] ) ? (string) $item['type'] : 'unknown';
+                            },
+                            $auto_excluded_artifacts
+                        )
+                    )
+                ),
+            ] );
+        }
 
         return $options;
     }
@@ -3140,7 +3271,16 @@ class Museder_Restoreone_Backup {
         }
 
         $job['pointer']         = $index;
-        $job['processed_files'] = min( (int) ( ( $job['added_files'] ?? 0 ) + ( $job['skipped_files'] ?? 0 ) ), $total );
+        // Progress should reflect consumed manifest entries, not only successful archive writes.
+        // This prevents "stuck" progress when compatibility repack is retrying/isolating bad files.
+        $job['processed_files'] = min(
+            $total,
+            max(
+                (int) ( $job['processed_files'] ?? 0 ),
+                (int) $job['pointer'],
+                (int) ( ( $job['added_files'] ?? 0 ) + ( $job['skipped_files'] ?? 0 ) )
+            )
+        );
 
         $total_bytes = isset( $job['total_bytes'] ) ? (int) $job['total_bytes'] : 0;
         $current     = isset( $job['processed_bytes'] ) ? (int) $job['processed_bytes'] : 0;
@@ -3152,6 +3292,37 @@ class Museder_Restoreone_Backup {
         $job['status']  = 'running';
         $job['stage']   = 'packing';
         $job['message'] = __( 'Backup running…', 'museder-restoreone' );
+
+        // Compatibility repack guard: if PclZip repeatedly fails an entire batch, fail fast.
+        // This avoids very long "no completion" loops on hosts where PclZip cannot safely append.
+        $pack_method = isset( $job['pack_method'] ) ? (string) $job['pack_method'] : '';
+        $attempted   = isset( $append_results['attempted'] ) ? (int) $append_results['attempted'] : 0;
+        $added       = isset( $append_results['added'] ) ? (int) $append_results['added'] : 0;
+        $failed      = isset( $append_results['failed'] ) ? (int) $append_results['failed'] : 0;
+        $all_failed_batch = ( 'pclzip' === $pack_method && $attempted > 0 && 0 === $added && $failed >= $attempted );
+        if ( $all_failed_batch ) {
+            $job['pclzip_all_failed_batches'] = isset( $job['pclzip_all_failed_batches'] ) ? ( (int) $job['pclzip_all_failed_batches'] + 1 ) : 1;
+            if ( (int) $job['pclzip_all_failed_batches'] >= 3 ) {
+                museder_restoreone_log( 'error', 'Compatibility repack aborted after repeated all-failed PclZip batches.', [
+                    'job_id' => $job['id'] ?? '',
+                    'attempted' => $attempted,
+                    'failed' => $failed,
+                    'pointer' => (int) ( $job['pointer'] ?? 0 ),
+                    'total_files' => (int) $total,
+                    'samples' => $append_results['failed_samples'] ?? [],
+                ] );
+
+                $job['status']  = 'failed';
+                $job['stage']   = 'failed';
+                $job['message'] = __( 'Backup failed: compatibility repack could not append files on this host. Please enable Smart Exclude or add custom excludes for large backup artifacts, then retry.', 'museder-restoreone' );
+                if ( isset( $job['needs_finalize'] ) ) {
+                    unset( $job['needs_finalize'] );
+                }
+                return $job;
+            }
+        } else {
+            $job['pclzip_all_failed_batches'] = 0;
+        }
 
         if ( $job['pointer'] >= $total ) {
             museder_restoreone_log( 'info', 'Packing reached end pointer; running integrity guards.', [
@@ -3935,6 +4106,10 @@ class Museder_Restoreone_Backup {
     /**
      * Append files to ZIP using PclZip (fallback for hosts where ZipArchive fails).
      *
+     * Strategy:
+     * - Try batch add for performance.
+     * - If batch fails, degrade to per-file add so one bad file does not fail the whole batch.
+     *
      * @param string $archive_path Archive path.
      * @param array  $files        File entries with path/target/size.
      * @return array{attempted:int,added:int,failed:int,added_bytes:int,failed_samples:array<int,array<string,string>>}
@@ -3954,7 +4129,7 @@ class Museder_Restoreone_Backup {
             'failed_samples' => [],
         ];
 
-        $manifest = [];
+        $prepared = [];
         foreach ( $files as $file ) {
             $path = isset( $file['path'] ) ? (string) $file['path'] : '';
             $target = isset( $file['target'] ) ? (string) $file['target'] : '';
@@ -3973,31 +4148,66 @@ class Museder_Restoreone_Backup {
                 continue;
             }
             $results['attempted']++;
-            $manifest[] = [
-                PCLZIP_ATT_FILE_NAME          => $path,
-                PCLZIP_ATT_FILE_NEW_FULL_NAME => ltrim( $target, '/' ),
+            $prepared[] = [
+                'file' => $file,
+                'manifest' => [
+                    PCLZIP_ATT_FILE_NAME          => $path,
+                    PCLZIP_ATT_FILE_NEW_FULL_NAME => ltrim( $target, '/' ),
+                ],
             ];
         }
 
-        if ( empty( $manifest ) ) {
+        if ( empty( $prepared ) ) {
             return $results;
         }
 
         $archive = new PclZip( $archive_path );
+        $manifest = array_map(
+            static function ( $item ) {
+                return $item['manifest'];
+            },
+            $prepared
+        );
         $result  = $archive->add( $manifest );
         if ( 0 === $result ) {
-            $results['failed'] += count( $manifest );
+            $batch_error = (string) $archive->errorInfo( true );
             $results['failed_samples'][] = [
                 'path'   => '',
                 'target' => '',
-                'status' => $archive->errorInfo( true ),
+                'status' => $batch_error,
             ];
+
+            // Degrade to per-file add: isolate problematic files, keep progressing.
+            foreach ( $prepared as $item ) {
+                $single_result = $archive->add( [ $item['manifest'] ] );
+                $file = isset( $item['file'] ) && is_array( $item['file'] ) ? $item['file'] : [];
+                $path = isset( $file['path'] ) ? (string) $file['path'] : '';
+                $target = isset( $file['target'] ) ? (string) $file['target'] : '';
+                if ( 0 === $single_result ) {
+                    $results['failed']++;
+                    if ( count( $results['failed_samples'] ) < 20 ) {
+                        $results['failed_samples'][] = [
+                            'path'   => $path,
+                            'target' => $target,
+                            'status' => (string) $archive->errorInfo( true ),
+                        ];
+                    }
+                    continue;
+                }
+
+                $results['added']++;
+                if ( isset( $file['size'] ) && (int) $file['size'] > 0 ) {
+                    $results['added_bytes'] += (int) $file['size'];
+                }
+            }
+
             return $results;
         }
 
-        // PclZip does not provide per-file success info; assume all added if add() returns >0.
-        $results['added'] = count( $manifest );
-        foreach ( $files as $file ) {
+        // PclZip does not provide per-file success info on batch success; treat all as added.
+        $results['added'] = count( $prepared );
+        foreach ( $prepared as $item ) {
+            $file = isset( $item['file'] ) && is_array( $item['file'] ) ? $item['file'] : [];
             if ( isset( $file['size'] ) && (int) $file['size'] > 0 ) {
                 $results['added_bytes'] += (int) $file['size'];
             }
@@ -4689,6 +4899,7 @@ class Museder_Restoreone_Backup {
         if ( 'on' === $smart ) {
             $smart_prefixes = self::get_smart_exclude_prefixes();
             $prefixes = array_merge( $prefixes, $smart_prefixes );
+            $prefixes = array_merge( $prefixes, self::get_known_backup_artifact_exclude_prefixes( $options ) );
         }
 
         $custom = isset( $options['backup_custom_excludes'] ) ? (string) $options['backup_custom_excludes'] : '';
