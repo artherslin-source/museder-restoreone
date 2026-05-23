@@ -36,6 +36,12 @@
 bash create-package.sh
 ```
 
+或在 Windows：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "tools/release/verify-lite-package-structure.ps1" "dist/museder-restoreone-<version>.zip"
+```
+
 若 Add-on 有變更：
 
 ```bash
@@ -52,6 +58,9 @@ Lite zip 內容只能包含必要執行檔：
 - [ ] `readme.txt`
 - [ ] `uninstall.php`（若存在）
 - [ ] `download-handler.php`（若存在）
+- [ ] zip 內只有一個 top-level 目錄：`museder-restoreone/`
+- [ ] zip 內主檔路徑正確：`museder-restoreone/museder-restoreone.php`
+- [ ] 不得出現 double-wrap：`museder-restoreone-<version>/museder-restoreone/...`
 
 Lite zip 不得包含：
 
@@ -64,6 +73,11 @@ Lite zip 不得包含：
 - [ ] `dist/` 舊 zip
 - [ ] `museder-restoreone-pro/`
 - [ ] AI 產物、審查信、測試報告、開發計畫
+
+封裝 guardrail（本專案規則）：
+
+- [ ] `create-package.sh` 完成後必須通過 `tools/release/verify-lite-package-structure.sh`
+- [ ] 若在 Windows 手動封裝，必須額外執行 `tools/release/verify-lite-package-structure.ps1`
 
 ## 4. Tests
 

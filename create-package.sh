@@ -49,3 +49,12 @@ else
 	echo "error: zip was not created" >&2
 	exit 1
 fi
+
+# Verify package structure guardrail (single top-level slug, required main file, no dev-only paths).
+VERIFY_SCRIPT="${SCRIPT_DIR}/tools/release/verify-lite-package-structure.sh"
+if [[ -x "${VERIFY_SCRIPT}" ]]; then
+	echo "Verifying package structure..."
+	"${VERIFY_SCRIPT}" "${OUTPUT_FILE}"
+else
+	echo "warning: ${VERIFY_SCRIPT} not found or not executable; skip structure verification" >&2
+fi

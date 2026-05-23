@@ -14,6 +14,10 @@
 - Lite zip 只包含執行必要檔：主 PHP、`readme.txt`、`uninstall.php`、`assets/`、`includes/`、`templates/`、`languages/`。
 - 不得打包 `docs/`、`logs/`、`tools/`、`.git/`、`.github/`、`dist/`、AI 回覆、審查信、測試報告、開發計畫、zip 檔或本地 artifact。
 - 第三方 library 必須 GPL 相容、來源清楚、版本更新、授權保留；避免引入 WordPress core 已內建的 library。
+- 封裝後必須通過結構驗證：top-level 只能是 `museder-restoreone/`，且必須存在 `museder-restoreone/museder-restoreone.php`，不得出現 `museder-restoreone-<version>/museder-restoreone/...` double-wrap。
+- 專案封裝 guardrail：
+  - `tools/release/verify-lite-package-structure.sh`（Linux/macOS）
+  - `tools/release/verify-lite-package-structure.ps1`（Windows）
 - 所有可直接執行的 PHP 檔都必須在 `<?php` 後立即加：
   ```php
   if ( ! defined( 'ABSPATH' ) ) {
