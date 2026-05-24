@@ -4,7 +4,7 @@ Tags: backup, migration, restore, clone, site-backup
 Requires at least: 5.8
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 2.7.264
+Stable tag: 2.7.265
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -199,7 +199,7 @@ You can view or download the latest logs directly from the **Logs** page in the 
 
 = What happens to plugins during restore? =
 
-Optional **safe mode** (on by default in the Restore wizard unless you turn it off) runs **after** a restore import: Museder RestoreOne saves a snapshot of which plugins were active (`museder_restoreone_prev_active_plugins`), sets a **safe mode marker** (`museder_restoreone_safe_mode`), and shows an admin notice on the Dashboard and Restore screens so you can verify the site. Museder RestoreOne does **not** automatically deactivate or reactivate other plugins—their activation state is unchanged. **Exit Safe Mode** (button or AJAX) only deletes the marker and the stored snapshot; you still manage plugins in WordPress as usual.
+Optional **safe mode** (on by default in the Restore wizard unless you turn it off) runs **after** a restore import: Museder RestoreOne saves a snapshot of which plugins were active (`museder_restoreone_prev_active_plugins`), sets a **safe mode marker** (`museder_restoreone_safe_mode`), and shows an admin notice on the Dashboard and Restore screens so you can verify the site. During an **in-progress** restore, Museder RestoreOne may temporarily load only itself while files are still being extracted (then restore the backed-up plugin list from the archive)—this avoids fatal errors from incomplete plugin folders on fresh sites. **Exit Safe Mode** (button or AJAX) only deletes the marker and the stored snapshot; you still manage plugins in WordPress as usual.
 
 = Does this plugin send data to external services? =
 
@@ -241,6 +241,10 @@ Most sites do not need any changes. For unusual server layouts where core admin 
 6. Settings — general options and system diagnostics for shared hosting.
 
 == Changelog ==
+
+= 2.7.265 =
+* Restore (critical): after database import, temporarily load **only Museder RestoreOne** while `wp-content` files are still extracting, then restore the backed-up `active_plugins` list when file restore and URL search-replace finish. Prevents mid-restore PHP fatals (e.g. incomplete third-party plugins) that stalled large multi-plugin restores on fresh sites (~76% UI freeze).
+* Restore: release plugin activation snapshot on cancel or job failure so sites are not left with a reduced plugin list.
 
 = 2.7.264 =
 * Backup jobs: fixed cancel race conditions so persisted `cancelled` state is reloaded/merged before scheduling and final save, preventing stale in-memory `running/packing` overwrite after long batches.
@@ -534,6 +538,9 @@ Most sites do not need any changes. For unusual server layouts where core admin 
 (Older changelog entries are maintained in the project repository.)
 
 == Upgrade Notice ==
+
+= 2.7.265 =
+**Critical restore fix** for fresh sites and large multi-plugin backups: prevents restore jobs from stalling after database import when third-party plugin files are not yet on disk. Strongly recommended if you restore **20+ active plugins** to a **new WordPress install**.
 
 = 2.7.264 =
 Fixes backup jobs that could **resume after cancel** due to stale worker state, improves repack progress accuracy, and adds warnings for large existing backup artifacts that can significantly slow packing. **Auto mode** now treats sites as large when file count exceeds **50,000** or total scanned size exceeds **1 GB** (Fast + Smart Exclude). Also improves restore session handling on shared hosting and duplicate backup upload prompts.

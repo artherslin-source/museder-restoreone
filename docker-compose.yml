@@ -27,6 +27,8 @@ services:
       - ./:/tmp/museder-restoreone-src:ro
       # Local test assets (theme/plugin zips)
       - ./logs/test-one:/tmp/test-one:ro
+      # Large restore repro archives (not committed; local only)
+      - ./logs/150525-debug:/tmp/museder-restore-e2e:ro
       # PHP limits for large backup/restore testing
       - ./tools/docker/php.ini:/usr/local/etc/php/conf.d/zzz-museder-restoreone.ini:ro
 
@@ -44,6 +46,7 @@ services:
       - wp_data:/var/www/html
       - ./:/tmp/museder-restoreone-src:ro
       - ./logs/test-one:/tmp/test-one:ro
+      - ./logs/150525-debug:/tmp/museder-restore-e2e:ro
       - ./tools/docker/php.ini:/usr/local/etc/php/conf.d/zzz-museder-restoreone.ini:ro
     working_dir: /var/www/html
     entrypoint: ["wp"]
