@@ -12,6 +12,7 @@
   - [ ] `MUSEDER_RESTOREONE_BUILD_ID`（若本次需要）
   - [ ] `readme.txt` `Stable tag`
   - [ ] `readme.txt` changelog
+- [ ] 若主檔有變更：確認是否仍為 `Author: Jerry Lin`；若是，改為 **`Author: Adrian Lin`**（`Author URI` 維持 `artherslin` 個人頁；readme `Contributors: artherslin` 不變）。PRO 主檔同理。見 `.cursor/rules/plugin-author-display-name.mdc`。
 - [ ] 若 Add-on 有變更，Add-on 版本號同步更新。
 - [ ] `readme.txt` 只有一個清楚的 changelog 區塊。
 - [ ] Plugin URI / Author URI 可公開連線。
@@ -35,6 +36,12 @@
 bash create-package.sh
 ```
 
+或在 Windows：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "tools/release/verify-lite-package-structure.ps1" "dist/museder-restoreone-<version>.zip"
+```
+
 若 Add-on 有變更：
 
 ```bash
@@ -51,6 +58,9 @@ Lite zip 內容只能包含必要執行檔：
 - [ ] `readme.txt`
 - [ ] `uninstall.php`（若存在）
 - [ ] `download-handler.php`（若存在）
+- [ ] zip 內只有一個 top-level 目錄：`museder-restoreone/`
+- [ ] zip 內主檔路徑正確：`museder-restoreone/museder-restoreone.php`
+- [ ] 不得出現 double-wrap：`museder-restoreone-<version>/museder-restoreone/...`
 
 Lite zip 不得包含：
 
@@ -64,6 +74,11 @@ Lite zip 不得包含：
 - [ ] `museder-restoreone-pro/`
 - [ ] AI 產物、審查信、測試報告、開發計畫
 
+封裝 guardrail（本專案規則）：
+
+- [ ] `create-package.sh` 完成後必須通過 `tools/release/verify-lite-package-structure.sh`
+- [ ] 若在 Windows 手動封裝，必須額外執行 `tools/release/verify-lite-package-structure.ps1`
+
 ## 4. Tests
 
 - [ ] 修改過的 PHP 檔通過 `php -l`。
@@ -71,6 +86,8 @@ Lite zip 不得包含：
 - [ ] 若 Plugin Check 有 false positive，已有最小範圍註解與審查可理解的說明。
 - [ ] 乾淨 WordPress 安裝可啟用 Lite。
 - [ ] `WP_DEBUG` true 下沒有 fatal error。
+- [ ] 已依 `docs/WP70_SMOKE_TEST_PLAN.md` 完成 WP 7.0 smoke（代碼/功能/規範/頁面/UI）。
+- [ ] 自動化 smoke 已執行：`bash tools/docker/wp70-smoke.sh`
 - [ ] 基本 smoke test：
   - [ ] Dashboard
   - [ ] Backups

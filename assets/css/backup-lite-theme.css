@@ -281,6 +281,64 @@ body.wp-admin #wpcontent {
     transition: width 0.3s ease;
 }
 
+.backup-job-progress {
+    position: relative;
+    margin-top: 5pt;
+    height: 20pt;
+    border-radius: 5pt;
+    background: #e2e8f0;
+    overflow: hidden;
+}
+
+.backup-job-progress .progress-bar-fill {
+    height: 100%;
+    border-radius: 5pt;
+    width: 0;
+    background: var(--primary);
+    transition: width 0.3s ease;
+}
+
+.backup-job-progress-text {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 11px;
+    font-weight: 600;
+    color: #fff;
+    z-index: 2;
+    pointer-events: none;
+}
+
+.backup-job-progress.is-indeterminate .progress-bar-fill {
+    width: 100% !important;
+    position: relative;
+    background: #1d4ed8;
+}
+
+.backup-job-progress.is-indeterminate .progress-bar-fill::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image: repeating-linear-gradient(
+        -45deg,
+        rgba(255, 255, 255, 0.3) 0,
+        rgba(255, 255, 255, 0.3) 12px,
+        rgba(255, 255, 255, 0.1) 12px,
+        rgba(255, 255, 255, 0.1) 24px
+    );
+    animation: bl-progress-indeterminate-stripes 1s linear infinite;
+}
+
+@keyframes bl-progress-indeterminate-stripes {
+    from {
+        background-position: 0 0;
+    }
+    to {
+        background-position: 48px 0;
+    }
+}
+
 .restore-methods .method-tabs {
     display: flex;
     gap: 8px;
@@ -383,6 +441,117 @@ body.wp-admin #wpcontent {
 .schedule-hero-stat span.value {
     font-size: 20px;
     font-weight: 700;
+}
+
+.schedule-hero--compact {
+    padding: 24px;
+}
+
+.schedule-hero--compact .schedule-hero-header {
+    justify-content: flex-start;
+}
+
+.schedule-hero--compact .schedule-hero-header .badge {
+    display: inline-block;
+    margin-bottom: 8px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.16);
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.bl-schedules-panel-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+}
+
+.bl-schedules-panel-header h2 {
+    margin: 0 0 6px;
+}
+
+.bl-schedules-empty {
+    text-align: center;
+    padding: 36px 20px;
+}
+
+.bl-schedules-empty__title {
+    margin: 0 0 8px;
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-dark);
+}
+
+.bl-schedules-empty__text {
+    margin: 0 auto 18px;
+    max-width: 520px;
+    color: var(--text-muted);
+}
+
+.bl-schedules-empty-row td {
+    border: 0;
+    background: transparent !important;
+}
+
+.bl-schedule-row--editing {
+    background: rgba(59, 130, 246, 0.08) !important;
+}
+
+.bl-schedule-actions-cell {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.bl-schedule-inline-edit-row td {
+    padding: 0 !important;
+    border-top: 0;
+    background: rgba(248, 250, 252, 0.95);
+}
+
+.bl-schedule-inline-editor {
+    padding: 16px 18px 18px;
+    border-top: 2px solid rgba(59, 130, 246, 0.35);
+}
+
+.bl-schedule-inline-editor__title {
+    margin: 0 0 12px;
+    font-weight: 600;
+    color: var(--text-dark);
+}
+
+.bl-schedule-inline-grid {
+    display: grid;
+    gap: 14px;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+
+.backup-lite-admin .bl-schedule-inline-form .bl-schedule-inline-actions {
+    display: flex !important;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 16px !important;
+    margin-top: 16px;
+}
+
+.backup-lite-admin .bl-schedule-inline-form .bl-schedule-inline-actions .button {
+    margin: 0 !important;
+    float: none !important;
+}
+
+.backup-lite-admin .bl-schedule-inline-form .bl-schedule-inline-actions .bl-schedule-inline-cancel {
+    margin-inline-start: 16px !important;
+}
+
+[data-bl-theme="dark"] .bl-schedule-inline-edit-row td {
+    background: rgba(15, 23, 42, 0.55);
 }
 
 .backup-lite-table,
@@ -545,6 +714,52 @@ body.bl-restore-v2-off .restore-stepper {
     justify-content: flex-end;
     gap: 10px;
     margin-top: 20px;
+}
+
+.settings-actions--inline {
+    margin-top: 0;
+    padding-top: 4px;
+}
+
+.settings-actions--footer {
+    margin-top: 8px;
+}
+
+.bl-settings-storage-panel {
+    display: grid;
+    gap: 16px;
+    margin-top: 18px;
+}
+
+.bl-settings-storage-meta {
+    display: grid;
+    gap: 12px;
+    padding: 14px 16px;
+    border-radius: 12px;
+    background: rgba(248, 250, 252, 0.9);
+    border: 1px solid rgba(148, 163, 184, 0.25);
+}
+
+.bl-settings-storage-path code {
+    display: block;
+    margin-top: 6px;
+    word-break: break-all;
+    font-size: 12px;
+}
+
+.bl-settings-storage-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.bl-form-control--full {
+    grid-column: 1 / -1;
+}
+
+[data-bl-theme="dark"] .bl-settings-storage-meta {
+    background: rgba(15, 23, 42, 0.45);
+    border-color: rgba(148, 163, 184, 0.2);
 }
 
 

@@ -173,7 +173,7 @@ class Museder_Restoreone_Backup_Jobs {
 
         // Finalize-guard: if a terminal job somehow gets re-invoked (e.g., lingering cron),
         // do not process again. Also clear active pointer + scheduled events defensively.
-        if ( isset( $job['status'] ) && in_array( $job['status'], [ 'completed', 'failed', 'cancelled' ], true ) ) {
+        if ( self::is_terminal_or_cancel_requested( $job ) ) {
             self::clear_active_job( $job_id );
             self::clear_scheduled_job( $job_id );
             return $job;
@@ -362,6 +362,17 @@ class Museder_Restoreone_Backup_Jobs {
                         }
                     }
 
+                    // Gate B: after preparing step, reload latest persisted state to detect cancel.
+                    // Without this, a long run_preparing_stage() (13-40s on shared hosting)
+                    // can overwrite a cancel that happened mid-preparation.
+                    $latest_after_prep = self::load_latest_job_state( $job_id );
+                    if ( self::is_terminal_or_cancel_requested( $latest_after_prep ) ) {
+                        $job = self::merge_with_latest_terminal_state( $job, $latest_after_prep );
+                        $job_needs_finalize          = false;
+                        $job_completed_in_loop       = true;
+                        break;
+                    }
+
                     // Always save after each preparing step to keep UI responsive.
                     $job['processing']    = true;
                     $job['last_activity'] = time();
@@ -393,6 +404,16 @@ class Museder_Restoreone_Backup_Jobs {
                 $processed_after = isset( $job['processed_bytes'] ) ? (int) $job['processed_bytes'] : $processed_before;
                 $delta_entries   = max( 0, $pointer_after - $pointer_before );
                 $delta_bytes     = max( 0, $processed_after - $processed_before );
+
+                // Gate A: after each long batch returns, reload latest persisted state before any scheduling/save.
+                // If user cancelled during the batch, treat it as terminal immediately.
+                $latest_after_batch = self::load_latest_job_state( $job_id );
+                if ( self::is_terminal_or_cancel_requested( $latest_after_batch ) ) {
+                    $job = self::merge_with_latest_terminal_state( $job, $latest_after_batch );
+                    $job_needs_finalize = false;
+                    $job_completed_in_loop = true;
+                    break;
+                }
 
                 // If a single batch is slower than the time budget, shrink batch limits for the next tick.
                 // This cannot preempt the current long operation, but prevents repeated 30-80s requests that make UI look stuck.
@@ -504,15 +525,7 @@ class Museder_Restoreone_Backup_Jobs {
 
             // If job was cancelled during the loop, perform cleanup and stop here.
             if ( isset( $job['status'] ) && 'cancelled' === $job['status'] ) {
-                self::delete_archive_for_job( $job );
-                self::cleanup_job( $job );
-                self::clear_active_job( $job_id );
-                self::clear_scheduled_job( $job_id );
-                $job['processing']    = false;
-                $job['last_activity'] = time();
-                $job['updated_at']    = current_time( 'mysql' );
-                self::save_job( $job );
-                return $job;
+                return self::finalize_cancelled_job_state( $job_id, $job );
             }
 
             // If packing finished, finalize AFTER close so filesize/metadata are accurate.
@@ -606,6 +619,15 @@ class Museder_Restoreone_Backup_Jobs {
                 self::clear_scheduled_job( $job_id );
                 // Don't schedule next event if job is complete
             } else {
+                // Gate B: before scheduling, reload latest persisted state defensively.
+                $latest_before_schedule = self::load_latest_job_state( $job_id );
+                if ( self::is_terminal_or_cancel_requested( $latest_before_schedule ) ) {
+                    $job = self::merge_with_latest_terminal_state( $job, $latest_before_schedule );
+                    if ( isset( $job['status'] ) && 'cancelled' === $job['status'] ) {
+                        return self::finalize_cancelled_job_state( $job_id, $job );
+                    }
+                }
+
                 // Job is still running - schedule next batch with short interval (10-20 seconds)
                 // This implements "short interval single event" scheduling for cron mode
                 self::schedule_next_batch( $job_id, $job );
@@ -615,6 +637,8 @@ class Museder_Restoreone_Backup_Jobs {
             $job['processing']    = false;
             $job['last_activity'] = time();
             $job['updated_at']    = current_time( 'mysql' );
+            // Gate C: final save merges persisted terminal state to avoid stale running overwrite.
+            $job = self::merge_with_latest_terminal_state( $job, self::load_latest_job_state( $job_id ) );
             self::save_job( $job );
 
             return $job;
@@ -631,6 +655,17 @@ class Museder_Restoreone_Backup_Jobs {
      * @param array  $job    Current job state.
      */
     private static function schedule_next_batch( $job_id, $job ) {
+        $latest = self::load_latest_job_state( $job_id );
+        if ( self::is_terminal_or_cancel_requested( $latest ) ) {
+            museder_restoreone_log( 'info', 'Skip scheduling next batch because latest state is terminal/cancelled.', [
+                'job_id'  => $job_id,
+                'status'  => is_array( $latest ) && isset( $latest['status'] ) ? (string) $latest['status'] : '',
+                'stage'   => is_array( $latest ) && isset( $latest['stage'] ) ? (string) $latest['stage'] : '',
+                'reason'  => 'latest_terminal_or_cancelled',
+            ] );
+            return;
+        }
+
         // Only schedule if job is in preparing/packing/finalizing stage
         // Finalizing may be sliced across multiple ticks (metadata embed/verify).
         if ( ! in_array( $job['stage'], [ 'preparing', 'packing', 'finalizing' ], true ) ) {
@@ -709,9 +744,7 @@ class Museder_Restoreone_Backup_Jobs {
         $token = self::acquire_option_lock( $job_id );
         if ( ! empty( $token ) ) {
             try {
-        self::delete_archive_for_job( $job );
-        self::cleanup_job( $job );
-        self::clear_active_job( $job_id );
+                self::finalize_cancelled_job_state( $job_id, $job );
             } finally {
                 self::release_option_lock( $job_id, $token );
             }
@@ -835,6 +868,93 @@ class Museder_Restoreone_Backup_Jobs {
     }
 
     /**
+     * Reload latest persisted job state from disk.
+     *
+     * @param string $job_id Job identifier.
+     * @return array|null
+     */
+    private static function load_latest_job_state( $job_id ) {
+        return self::load_job( $job_id );
+    }
+
+    /**
+     * Whether the job should be treated as terminal for scheduling/saving.
+     *
+     * @param array|null $job Job state.
+     * @return bool
+     */
+    private static function is_terminal_or_cancel_requested( $job ) {
+        if ( ! is_array( $job ) ) {
+            return false;
+        }
+
+        if ( ! empty( $job['cancel_requested'] ) ) {
+            return true;
+        }
+
+        $status = isset( $job['status'] ) ? (string) $job['status'] : '';
+        $stage  = isset( $job['stage'] ) ? (string) $job['stage'] : '';
+
+        return in_array( $status, [ 'cancelled', 'failed', 'completed' ], true ) || 'cancelled' === $stage;
+    }
+
+    /**
+     * Merge in-memory state with latest persisted terminal state to prevent stale overwrite.
+     *
+     * @param array      $in_memory In-memory job state.
+     * @param array|null $latest    Latest persisted state.
+     * @return array
+     */
+    private static function merge_with_latest_terminal_state( $in_memory, $latest ) {
+        if ( ! is_array( $in_memory ) ) {
+            $in_memory = [];
+        }
+        if ( ! self::is_terminal_or_cancel_requested( $latest ) ) {
+            return $in_memory;
+        }
+
+        // Persisted state wins when terminal/cancelled to avoid stale running resurrection.
+        return array_merge( $in_memory, $latest );
+    }
+
+    /**
+     * Finalize a cancelled state with consistent cleanup and persistence.
+     *
+     * @param string $job_id Job identifier.
+     * @param array  $job    Current job state.
+     * @return array
+     */
+    private static function finalize_cancelled_job_state( $job_id, $job ) {
+        if ( ! is_array( $job ) ) {
+            $job = [];
+        }
+
+        $job['id'] = isset( $job['id'] ) ? (string) $job['id'] : (string) $job_id;
+        $job['cancel_requested']    = true;
+        $job['cancel_requested_at'] = isset( $job['cancel_requested_at'] ) && (int) $job['cancel_requested_at'] > 0 ? (int) $job['cancel_requested_at'] : time();
+        $job['status']              = 'cancelled';
+        $job['stage']               = 'cancelled';
+        $job['message']             = isset( $job['message'] ) && '' !== (string) $job['message'] ? (string) $job['message'] : __( 'Backup cancelled by user.', 'museder-restoreone' );
+        $job['processing']          = false;
+        $job['last_activity']       = time();
+        $job['updated_at']          = current_time( 'mysql' );
+
+        museder_restoreone_log( 'info', 'Cancellation detected after batch; stopping job.', [
+            'job_id' => $job_id,
+            'stage'  => $job['stage'],
+            'status' => $job['status'],
+        ] );
+
+        self::delete_archive_for_job( $job );
+        self::cleanup_job( $job );
+        self::clear_active_job( $job_id );
+        self::clear_scheduled_job( $job_id );
+        self::save_job( $job );
+
+        return $job;
+    }
+
+    /**
      * Convert job state into a safe payload for JS.
      *
      * @param array $job Job state.
@@ -845,55 +965,20 @@ class Museder_Restoreone_Backup_Jobs {
         $processed     = min( $total_files, (int) $job['processed_files'] );
         $total_bytes   = max( 1, (int) $job['total_bytes'] );
         $processed_b   = min( $total_bytes, max( 0, (int) $job['processed_bytes'] ) );
-        $stage         = isset( $job['stage'] ) ? (string) $job['stage'] : '';
-
-        // Progress model:
-        // - preparing: 0–10
-        // - packing: 10–95 (hybrid: file-count backbone + bytes adjustment)
-        // - finalizing: 95–99
-        // - completed: 100
-        $files_ratio = $processed / $total_files;
-        $bytes_ratio = $processed_b / $total_bytes;
-
-        // Prefer file count for smoothness on shared hosting with many small files.
-        // Weight bytes lower to avoid early jumps when a few large files are added first.
-        $hybrid_ratio = ( 0.90 * $files_ratio ) + ( 0.10 * $bytes_ratio );
-        $hybrid_ratio = max( 0, min( 1, $hybrid_ratio ) );
-
-        $percentage = 0;
-        if ( 'completed' === $stage || 'completed' === ( $job['status'] ?? '' ) ) {
-            $percentage = 100;
-        } elseif ( 'finalizing' === $stage ) {
-            // Finalizing work (ZipArchive::close flush / metadata). Keep near-done but not 100.
-            $percentage = 95 + (int) round( 4 * max( 0, min( 1, $bytes_ratio ) ) );
-        } elseif ( 'packing' === $stage || 'running' === ( $job['status'] ?? '' ) ) {
-            // Main work: 10–95.
-            $percentage = 10 + (int) round( 85 * $hybrid_ratio );
-        } elseif ( 'preparing' === $stage || 'pending' === ( $job['status'] ?? '' ) ) {
-            // Preparing runs in background; provide stable 0–10 progression by prep_step.
-            $prep_step = isset( $job['prep_step'] ) ? (string) $job['prep_step'] : '';
-            $map = [
-                'db'       => 1,
-                'meta'     => 3,
-                'archive'  => 5,
-                'manifest' => 8,
-                'selfcheck'=> 9,
-                'done'     => 10,
-            ];
-            $percentage = isset( $map[ $prep_step ] ) ? (int) $map[ $prep_step ] : 0;
-        } else {
-            // Fallback (failed/cancelled/unknown): show best-effort progress, never 100.
-            $percentage = (int) round( 10 + ( 85 * $hybrid_ratio ) );
-        }
-
-        $percentage = max( 0, min( 100, $percentage ) );
-        if ( in_array( ( $job['status'] ?? '' ), [ 'failed', 'cancelled' ], true ) ) {
-            $percentage = min( 99, $percentage );
-        }
 
         $options = isset( $job['options'] ) && is_array( $job['options'] ) ? $job['options'] : [];
         $mode    = isset( $options['backup_mode_effective'] ) ? (string) $options['backup_mode_effective'] : ( isset( $options['backup_mode'] ) ? (string) $options['backup_mode'] : '' );
         $smart   = isset( $options['backup_smart_exclude_effective'] ) ? (string) $options['backup_smart_exclude_effective'] : ( isset( $options['backup_smart_exclude'] ) ? (string) $options['backup_smart_exclude'] : '' );
+        $artifact_labels = [];
+        if ( isset( $options['backup_auto_excluded_artifacts'] ) && is_array( $options['backup_auto_excluded_artifacts'] ) ) {
+            foreach ( $options['backup_auto_excluded_artifacts'] as $item ) {
+                if ( ! is_array( $item ) || empty( $item['label'] ) ) {
+                    continue;
+                }
+                $artifact_labels[] = (string) $item['label'];
+            }
+        }
+        $artifact_labels = array_values( array_unique( $artifact_labels ) );
 
         if ( ! in_array( $mode, [ 'balanced', 'fast' ], true ) ) {
             $mode = '';
@@ -902,6 +987,8 @@ class Museder_Restoreone_Backup_Jobs {
             $smart = '';
         }
 
+        $progress = self::build_progress_payload( $job, $processed, $total_files, $processed_b, $total_bytes );
+
         return [
             'id'              => $job['id'],
             'status'          => $job['status'],
@@ -909,11 +996,20 @@ class Museder_Restoreone_Backup_Jobs {
             'message'         => $job['message'],
             'prep_step'       => isset( $job['prep_step'] ) ? (string) $job['prep_step'] : '',
             'pack_method'     => isset( $job['pack_method'] ) ? (string) $job['pack_method'] : '',
+            'repack_attempted'=> ! empty( $job['repack_attempted'] ),
+            'finalize_step'   => isset( $job['finalize_step'] ) ? (string) $job['finalize_step'] : '',
+            'progress_mode'   => $progress['progress_mode'],
+            'progress_basis'  => $progress['progress_basis'],
+            'stage_done'      => $progress['stage_done'],
+            'stage_total'     => $progress['stage_total'],
+            'stage_progress'  => $progress['stage_progress'],
+            'overall_progress'=> $progress['overall_progress'],
             'processed_files' => $processed,
             'total_files'     => $total_files,
             'processed_bytes' => $processed_b,
             'total_bytes'     => $total_bytes,
-            'percentage'      => $percentage,
+            // Keep legacy field for backward compatibility with older UI builds.
+            'percentage'      => (int) round( $progress['overall_progress'] ),
             'attempted_files' => isset( $job['attempted_files'] ) ? (int) $job['attempted_files'] : 0,
             'added_files'     => isset( $job['added_files'] ) ? (int) $job['added_files'] : 0,
             'skipped_files'   => isset( $job['skipped_files'] ) ? (int) $job['skipped_files'] : 0,
@@ -926,12 +1022,136 @@ class Museder_Restoreone_Backup_Jobs {
             'updated_at'      => isset( $job['updated_at'] ) ? $job['updated_at'] : '',
             'last_activity'   => isset( $job['last_activity'] ) ? (int) $job['last_activity'] : 0,
             'started_at'      => isset( $job['started_at'] ) ? (int) $job['started_at'] : 0,
+            'cancel_requested'=> ! empty( $job['cancel_requested'] ),
             'backup_mode'     => $mode,
             'smart_exclude'   => $smart,
             'large_site_detected' => ! empty( $options['backup_large_site_detected'] ),
             'auto_threshold_files' => isset( $options['backup_auto_threshold_files'] ) ? (int) $options['backup_auto_threshold_files'] : 0,
             'auto_applied'    => ! empty( $options['backup_auto_applied'] ),
+            'auto_excluded_artifact_count' => isset( $options['backup_auto_excluded_artifact_count'] ) ? (int) $options['backup_auto_excluded_artifact_count'] : count( $artifact_labels ),
+            'auto_excluded_artifact_labels' => array_slice( $artifact_labels, 0, 5 ),
+            'large_artifact_warnings' => isset( $job['large_artifact_warnings'] ) && is_array( $job['large_artifact_warnings'] ) ? array_slice( $job['large_artifact_warnings'], 0, 5 ) : [],
         ];
+    }
+
+    /**
+     * Build normalized progress payload (stage + overall).
+     *
+     * @param array $job Job state.
+     * @param int   $processed_files Processed files.
+     * @param int   $total_files Total files.
+     * @param int   $processed_bytes Processed bytes.
+     * @param int   $total_bytes Total bytes.
+     * @return array<string,mixed>
+     */
+    private static function build_progress_payload( $job, $processed_files, $total_files, $processed_bytes, $total_bytes ) {
+        $stage  = isset( $job['stage'] ) ? (string) $job['stage'] : '';
+        $status = isset( $job['status'] ) ? (string) $job['status'] : '';
+
+        $payload = [
+            'progress_mode'   => 'determinate',
+            'progress_basis'  => 'files',
+            'stage_done'      => 0,
+            'stage_total'     => 0,
+            'stage_progress'  => 0.0,
+            'overall_progress'=> 0.0,
+        ];
+
+        // Terminal states.
+        if ( 'completed' === $status || 'completed' === $stage ) {
+            $payload['progress_basis']   = 'steps';
+            $payload['stage_done']       = 1;
+            $payload['stage_total']      = 1;
+            $payload['stage_progress']   = 100.0;
+            $payload['overall_progress'] = 100.0;
+            return $payload;
+        }
+
+        // Preparing: deterministic by prep step count (0-10% of overall).
+        if ( 'preparing' === $stage || 'pending' === $stage ) {
+            $map = [
+                'db'       => 1,
+                'meta'     => 2,
+                'archive'  => 3,
+                'manifest' => 4,
+                'selfcheck'=> 5,
+                'done'     => 5,
+            ];
+            $prep_step = isset( $job['prep_step'] ) ? (string) $job['prep_step'] : '';
+            $done      = isset( $map[ $prep_step ] ) ? (int) $map[ $prep_step ] : 0;
+            $total     = 5;
+            $ratio     = $total > 0 ? ( $done / $total ) : 0.0;
+
+            $payload['progress_basis']   = 'steps';
+            $payload['stage_done']       = $done;
+            $payload['stage_total']      = $total;
+            $payload['stage_progress']   = round( 100.0 * $ratio, 2 );
+            $payload['overall_progress'] = round( 10.0 * $ratio, 2 );
+            return $payload;
+        }
+
+        // Packing: use real file progress (10-95% of overall).
+        if ( 'packing' === $stage || ( '' === $stage && 'running' === $status ) ) {
+            $done  = max( 0, min( $processed_files, $total_files ) );
+            $total = max( 1, $total_files );
+            $ratio = $done / $total;
+
+            $payload['progress_basis']   = 'files';
+            $payload['stage_done']       = (int) $done;
+            $payload['stage_total']      = (int) $total;
+            $payload['stage_progress']   = round( 100.0 * $ratio, 2 );
+            $payload['overall_progress'] = round( 10.0 + ( 85.0 * $ratio ), 2 );
+            return $payload;
+        }
+
+        // Finalizing: deterministic by finalize step (95-99% of overall).
+        if ( 'finalizing' === $stage ) {
+            $finalize_map = [
+                'embed_meta' => 1,
+                'verify'     => 2,
+                'close'      => 3,
+                'complete'   => 4,
+                'done'       => 4,
+            ];
+            $finalize_step = isset( $job['finalize_step'] ) ? (string) $job['finalize_step'] : '';
+            $done          = isset( $finalize_map[ $finalize_step ] ) ? (int) $finalize_map[ $finalize_step ] : 0;
+            $total         = 4;
+            if ( $done <= 0 ) {
+                // Unknown sub-step: do not fake detailed progress.
+                $payload['progress_mode']   = 'indeterminate';
+                $payload['progress_basis']  = 'steps';
+                $payload['stage_done']      = 0;
+                $payload['stage_total']     = 0;
+                $payload['stage_progress']  = 0.0;
+                $payload['overall_progress']= 95.0;
+                return $payload;
+            }
+
+            $ratio = $done / $total;
+            $payload['progress_basis']   = 'steps';
+            $payload['stage_done']       = $done;
+            $payload['stage_total']      = $total;
+            $payload['stage_progress']   = round( 100.0 * $ratio, 2 );
+            $payload['overall_progress'] = round( 95.0 + ( 4.0 * $ratio ), 2 );
+            return $payload;
+        }
+
+        // Cancelled/failed/unknown fallback: keep best effort but never fake 100.
+        $done_files  = max( 0, min( $processed_files, $total_files ) );
+        $files_ratio = $total_files > 0 ? ( $done_files / $total_files ) : 0.0;
+        $bytes_ratio = $total_bytes > 0 ? ( max( 0, min( $processed_bytes, $total_bytes ) ) / $total_bytes ) : 0.0;
+        $hybrid      = max( 0.0, min( 1.0, ( 0.90 * $files_ratio ) + ( 0.10 * $bytes_ratio ) ) );
+        $overall     = round( 10.0 + ( 85.0 * $hybrid ), 2 );
+        if ( in_array( $status, [ 'failed', 'cancelled' ], true ) ) {
+            $overall = min( 99.0, $overall );
+        }
+
+        $payload['progress_basis']   = 'files';
+        $payload['stage_done']       = (int) $done_files;
+        $payload['stage_total']      = (int) max( 1, $total_files );
+        $payload['stage_progress']   = round( 100.0 * $files_ratio, 2 );
+        $payload['overall_progress'] = $overall;
+        return $payload;
     }
 
     /**

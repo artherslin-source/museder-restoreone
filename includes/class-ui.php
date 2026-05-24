@@ -14,6 +14,7 @@ class Museder_Restoreone_UI {
 
     public static function init() {
         add_action( 'admin_enqueue_scripts', [ __CLASS__, 'enqueue_assets' ] );
+        add_action( 'admin_enqueue_scripts', [ __CLASS__, 'disable_auth_check_during_restore' ], 999 );
         add_action( 'admin_notices', [ __CLASS__, 'render_restore_notice' ] );
         add_action( 'admin_notices', [ __CLASS__, 'render_multisite_experimental_notice' ] );
         add_action( 'admin_init', [ __CLASS__, 'handle_restore_notice_dismiss' ] );
@@ -267,11 +268,17 @@ class Museder_Restoreone_UI {
             MUSEDER_RESTOREONE_VERSION
         );
 
+        $theme_css_file = MUSEDER_RESTOREONE_PATH . 'assets/css/backup-lite-theme.css';
+        $theme_css_ver  = MUSEDER_RESTOREONE_VERSION;
+        if ( is_readable( $theme_css_file ) ) {
+            $theme_css_ver .= '.' . (string) filemtime( $theme_css_file );
+        }
+
         wp_enqueue_style(
             'museder-restoreone-theme',
             MUSEDER_RESTOREONE_URL . 'assets/css/backup-lite-theme.css',
             [ 'museder-restoreone-ui' ],
-            MUSEDER_RESTOREONE_VERSION
+            $theme_css_ver
         );
 
         wp_enqueue_style(
@@ -289,11 +296,17 @@ class Museder_Restoreone_UI {
             true
         );
 
+        $admin_js_file = MUSEDER_RESTOREONE_PATH . 'assets/js/admin.js';
+        $admin_js_ver  = MUSEDER_RESTOREONE_VERSION;
+        if ( is_readable( $admin_js_file ) ) {
+            $admin_js_ver .= '.' . (string) filemtime( $admin_js_file );
+        }
+
         wp_enqueue_script(
             'museder-restoreone-admin',
             MUSEDER_RESTOREONE_URL . 'assets/js/admin.js',
             [ 'jquery', 'toastify' ],
-            MUSEDER_RESTOREONE_VERSION,
+            $admin_js_ver,
             true
         );
 
@@ -357,7 +370,7 @@ class Museder_Restoreone_UI {
             'museder-restoreone-chunk-upload-v2',
             MUSEDER_RESTOREONE_URL . 'assets/js/chunk-upload-v2.js',
             [ 'museder-restoreone-admin' ],
-            MUSEDER_RESTOREONE_VERSION,
+            MUSEDER_RESTOREONE_VERSION . '.' . filemtime( MUSEDER_RESTOREONE_PATH . 'assets/js/chunk-upload-v2.js' ),
             true
         );
 
@@ -475,6 +488,9 @@ class Museder_Restoreone_UI {
                 'testEmailSuccess'=> __( 'Test email sent successfully.', 'museder-restoreone' ),
                 'copySuccess'     => __( 'Copied to clipboard', 'museder-restoreone' ),
                 'noSchedules'     => __( 'No schedules configured yet.', 'museder-restoreone' ),
+                'scheduleEmptyTitle' => __( 'No schedules yet', 'museder-restoreone' ),
+                'scheduleEmptyText'  => __( 'Create your first automated backup job. You can set frequency, retention, and optional email alerts.', 'museder-restoreone' ),
+                'addFirstSchedule'   => __( 'Add your first schedule', 'museder-restoreone' ),
                 'scheduleResultSuccess' => __( 'Success', 'museder-restoreone' ),
                 'scheduleResultFailed'  => __( 'Failed', 'museder-restoreone' ),
                 'scheduleResultPending' => __( 'Pending', 'museder-restoreone' ),
@@ -541,12 +557,17 @@ class Museder_Restoreone_UI {
                 'jobCancelConfirm'=> __( 'Cancel the running backup job?', 'museder-restoreone' ),
                 'jobCancelSuccess'=> __( 'Backup job cancelled.', 'museder-restoreone' ),
                 'jobCancelFailed' => __( 'Unable to cancel backup job. Please try again.', 'museder-restoreone' ),
+                'progressMeasuring' => __( 'Measuring...', 'museder-restoreone' ),
+                'progressMeasuringAria' => __( 'Measuring progress', 'museder-restoreone' ),
+                'progressMeasuringSuffix' => __( 'progress: measuring...', 'museder-restoreone' ),
                 'backupModeLabel' => __( 'Mode', 'museder-restoreone' ),
                 'backupModeFast'  => __( 'Fast', 'museder-restoreone' ),
                 'backupModeBalanced' => __( 'Balanced', 'museder-restoreone' ),
                 'backupModeUnknown'  => __( '—', 'museder-restoreone' ),
                 'smartExcludeOn'  => __( 'Smart Exclude: On', 'museder-restoreone' ),
                 'smartExcludeOff' => __( 'Smart Exclude: Off', 'museder-restoreone' ),
+                'autoExcludedArtifactsPrefix' => __( 'Auto excluded backup artifacts', 'museder-restoreone' ),
+                'autoExcludedArtifactsCount'  => __( 'Auto excluded backup artifact folders: %s', 'museder-restoreone' ),
                 'backupModeAutoSwitched' => __( 'Auto enabled Fast mode for a large site.', 'museder-restoreone' ),
                 /* translators: %d: Number of hidden notices. */
                 'hiddenNoticesSummary'   => __( 'Hidden notices (%d)', 'museder-restoreone' ),
@@ -1632,7 +1653,20 @@ class Museder_Restoreone_UI {
 
         // Add inline styles for schedules page.
         if ( in_array( $current_page, [ 'museder-restoreone-schedules' ], true ) ) {
+            $schedules_inline_css = '
+.backup-lite-admin .bl-schedule-inline-form .bl-schedule-inline-actions {
+    display: flex !important;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 16px !important;
+    margin-top: 16px;
+}
+.backup-lite-admin .bl-schedule-inline-form .bl-schedule-inline-actions .bl-schedule-inline-cancel {
+    margin-inline-start: 16px !important;
+}';
             wp_add_inline_style( 'museder-restoreone-theme', $pro_page_css );
+            wp_add_inline_style( 'museder-restoreone-theme', $schedules_inline_css );
             wp_add_inline_script( 'museder-restoreone-admin', $notice_removal_js, 'after' );
         }
     }
@@ -1733,5 +1767,23 @@ class Museder_Restoreone_UI {
         // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_readfile -- streaming validated path under reports dir
         readfile( $path );
         exit;
+    }
+
+    /**
+     * Suppress WP core auth-check overlay on RestoreOne admin pages.
+     *
+     * During restore, DB import temporarily invalidates session tokens. WordPress
+     * heartbeat detects this and shows "session expired" overlay. We deregister
+     * the auth-check script on all plugin pages so the overlay cannot fire.
+     * Session continuity is handled by the plugin's own restore-token mechanism.
+     */
+    public static function disable_auth_check_during_restore() {
+        // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only page param for conditional script dequeue
+        $page = isset( $_GET['page'] ) ? sanitize_key( wp_unslash( $_GET['page'] ) ) : '';
+        if ( strpos( $page, 'museder-restoreone' ) === 0 || strpos( $page, 'backup-lite' ) === 0 ) {
+            wp_dequeue_script( 'wp-auth-check' );
+            wp_deregister_script( 'wp-auth-check' );
+            remove_action( 'admin_enqueue_scripts', 'wp_auth_check_load' );
+        }
     }
 }

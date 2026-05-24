@@ -175,6 +175,10 @@ class Museder_Restoreone_Restore {
             ] );
         }
 
+        if ( class_exists( 'Museder_Restoreone_Restore_Service' ) ) {
+            Museder_Restoreone_Restore_Service::enter_mid_restore_plugin_isolation( '', $db_result );
+        }
+
         if ( is_callable( $progress_cb ) ) {
             call_user_func( $progress_cb, 70, __( 'Restoring files from backup…', 'museder-restoreone' ) );
         }
@@ -190,6 +194,10 @@ class Museder_Restoreone_Restore {
                 call_user_func( $progress_cb, 85, __( 'Applying URL search & replace…', 'museder-restoreone' ) );
             }
             self::run_search_replace( $options['search_replace'] );
+        }
+
+        if ( class_exists( 'Museder_Restoreone_Restore_Service' ) ) {
+            Museder_Restoreone_Restore_Service::exit_mid_restore_plugin_isolation( '' );
         }
 
         if ( is_callable( $progress_cb ) ) {
@@ -1815,7 +1823,23 @@ class Museder_Restoreone_Restore {
             'active_job'     => get_option( 'museder_restoreone_restore_service_active_job_id' ),
         ];
 
-        if ( $state['user_id'] > 0 && class_exists( 'WP_Session_Tokens' ) ) {
+        // In WP-Cron context, get_current_user_id() returns 0.
+        // Retrieve the admin's session from the active restore job metadata,
+        // which was saved at execute() time when the user was authenticated.
+        if ( $state['user_id'] <= 0 ) {
+            $active_job_id = $state['active_job'];
+            if ( ! empty( $active_job_id ) && class_exists( 'Museder_Restoreone_Restore_Service' ) ) {
+                $job_meta = Museder_Restoreone_Restore_Service::get_job_meta( $active_job_id );
+                if ( is_array( $job_meta ) ) {
+                    $state['user_id'] = isset( $job_meta['restore_admin_user_id'] ) ? (int) $job_meta['restore_admin_user_id'] : 0;
+                    $state['session_tokens'] = isset( $job_meta['restore_admin_session_tokens'] ) && is_array( $job_meta['restore_admin_session_tokens'] )
+                        ? $job_meta['restore_admin_session_tokens']
+                        : [];
+                }
+            }
+        }
+
+        if ( $state['user_id'] > 0 && empty( $state['session_tokens'] ) && class_exists( 'WP_Session_Tokens' ) ) {
             $manager = WP_Session_Tokens::get_instance( $state['user_id'] );
             $state['session_tokens'] = $manager->get_all();
         }

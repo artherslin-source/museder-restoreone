@@ -82,9 +82,206 @@ function museder_restoreone_get_storage_root() {
     ];
 }
 
+/**
+ * Normalize a relative subdirectory name under the RestoreOne storage root.
+ *
+ * @param string $subdir Relative path (e.g. "backups" or "backups/extra").
+ * @return string Sanitized relative path.
+ */
+function museder_restoreone_normalize_storage_subdir( $subdir ) {
+    $subdir = is_string( $subdir ) ? $subdir : '';
+    $subdir = str_replace( '\\', '/', $subdir );
+    $subdir = trim( $subdir, '/' );
+
+    if ( '' === $subdir ) {
+        return 'backups';
+    }
+
+    $parts = array_filter( explode( '/', $subdir ), 'strlen' );
+    $clean = [];
+
+    foreach ( $parts as $part ) {
+        if ( '.' === $part || '..' === $part ) {
+            continue;
+        }
+        $sanitized = sanitize_file_name( $part );
+        if ( '' !== $sanitized ) {
+            $clean[] = $sanitized;
+        }
+    }
+
+    if ( empty( $clean ) ) {
+        return 'backups';
+    }
+
+    return implode( '/', $clean );
+}
+
+/**
+ * Derive a storage subdir from a legacy absolute backup directory path.
+ *
+ * @param string $absolute_path Absolute directory path.
+ * @return string Relative subdir under the storage root.
+ */
+function museder_restoreone_subdir_from_absolute_backup_path( $absolute_path ) {
+    if ( ! is_string( $absolute_path ) || '' === $absolute_path ) {
+        return 'backups';
+    }
+
+    $root      = museder_restoreone_get_storage_root();
+    $norm_root = trailingslashit( wp_normalize_path( $root['path'] ) );
+    $norm_path = wp_normalize_path( $absolute_path );
+
+    if ( 0 === strpos( $norm_path, $norm_root ) ) {
+        $relative = substr( $norm_path, strlen( $norm_root ) );
+        return museder_restoreone_normalize_storage_subdir( $relative );
+    }
+
+    return 'backups';
+}
+
+/**
+ * Read configured backup storage subdir from options without calling get_backup_dir().
+ *
+ * @return string Relative subdir.
+ */
+function museder_restoreone_get_configured_backup_storage_subdir() {
+    $stored = get_option( 'museder_restoreone_options', [] );
+    if ( ! is_array( $stored ) ) {
+        return 'backups';
+    }
+
+    if ( ! empty( $stored['backup_storage_subdir'] ) ) {
+        return museder_restoreone_normalize_storage_subdir( (string) $stored['backup_storage_subdir'] );
+    }
+
+    if ( ! empty( $stored['backup_directory'] ) ) {
+        return museder_restoreone_subdir_from_absolute_backup_path( (string) $stored['backup_directory'] );
+    }
+
+    return 'backups';
+}
+
+/**
+ * Ensure an absolute path stays inside the RestoreOne storage root.
+ *
+ * @param string $absolute_path Candidate absolute path.
+ * @return string Safe absolute path.
+ */
+function museder_restoreone_validate_path_under_storage_root( $absolute_path ) {
+    $root      = museder_restoreone_get_storage_root();
+    $fallback  = trailingslashit( wp_normalize_path( $root['path'] ) ) . 'backups';
+    $norm_root = wp_normalize_path( $root['path'] );
+
+    museder_restoreone_ensure_directory( $absolute_path );
+
+    $real_root = realpath( $norm_root );
+    $real_path = realpath( $absolute_path );
+
+    if ( ! $real_root || ! $real_path ) {
+        museder_restoreone_ensure_directory( $fallback );
+        return $fallback;
+    }
+
+    $prefix = trailingslashit( wp_normalize_path( $real_root ) );
+    if ( 0 !== strpos( wp_normalize_path( $real_path ), $prefix ) ) {
+        museder_restoreone_ensure_directory( $fallback );
+        return $fallback;
+    }
+
+    return $real_path;
+}
+
+/**
+ * List selectable backup storage folders under the RestoreOne storage root.
+ *
+ * @return array<int,string> Relative subdirectory names.
+ */
+function museder_restoreone_list_storage_subdirs() {
+    $root    = museder_restoreone_get_storage_root();
+    $subdirs = [ 'backups' ];
+
+    if ( ! is_dir( $root['path'] ) ) {
+        return $subdirs;
+    }
+
+    $items = scandir( $root['path'] );
+    if ( ! is_array( $items ) ) {
+        return $subdirs;
+    }
+
+    foreach ( $items as $item ) {
+        if ( '.' === $item || '..' === $item ) {
+            continue;
+        }
+
+        $path = trailingslashit( $root['path'] ) . $item;
+        if ( ! is_dir( $path ) ) {
+            continue;
+        }
+
+        $norm = museder_restoreone_normalize_storage_subdir( $item );
+        if ( ! in_array( $norm, $subdirs, true ) ) {
+            $subdirs[] = $norm;
+        }
+    }
+
+    $configured = museder_restoreone_get_configured_backup_storage_subdir();
+    if ( ! in_array( $configured, $subdirs, true ) ) {
+        $subdirs[] = $configured;
+    }
+
+    sort( $subdirs );
+
+    return array_values( array_unique( $subdirs ) );
+}
+
+/**
+ * Return summary stats for the active backup directory.
+ *
+ * @return array{path:string,count:int,size:int,writable:bool}
+ */
+function museder_restoreone_get_backup_dir_stats() {
+    $dir      = museder_restoreone_get_backup_dir();
+    $count    = 0;
+    $size     = 0;
+    $writable = wp_is_writable( $dir );
+
+    if ( is_dir( $dir ) ) {
+        $patterns = [
+            trailingslashit( $dir ) . '*.zip',
+            trailingslashit( $dir ) . '*.wpress',
+        ];
+
+        foreach ( $patterns as $pattern ) {
+            $files = glob( $pattern );
+            if ( ! is_array( $files ) ) {
+                continue;
+            }
+            foreach ( $files as $file ) {
+                if ( ! is_file( $file ) ) {
+                    continue;
+                }
+                $count++;
+                $size += (int) filesize( $file );
+            }
+        }
+    }
+
+    return [
+        'path'     => $dir,
+        'count'    => $count,
+        'size'     => $size,
+        'writable' => $writable,
+    ];
+}
+
 function museder_restoreone_get_backup_dir() {
-    $root = museder_restoreone_get_storage_root();
-    $dir  = trailingslashit( $root['path'] ) . 'backups';
+    $root   = museder_restoreone_get_storage_root();
+    $subdir = museder_restoreone_get_configured_backup_storage_subdir();
+    $dir    = trailingslashit( wp_normalize_path( $root['path'] ) ) . $subdir;
+
+    $dir = museder_restoreone_validate_path_under_storage_root( $dir );
     museder_restoreone_ensure_directory( $dir );
 
     return $dir;

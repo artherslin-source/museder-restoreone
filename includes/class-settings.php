@@ -42,10 +42,12 @@ class Museder_Restoreone_Settings {
             return;
         }
 
-        $mapped = [
-            'backup_directory'   => isset( $legacy['backup_dir'] ) ? $legacy['backup_dir'] : museder_restoreone_get_backup_dir(),
-            'notification_email' => isset( $legacy['notify_email'] ) ? $legacy['notify_email'] : get_option( 'admin_email' ),
-            'min_role'           => isset( $legacy['role'] ) ? $legacy['role'] : 'administrator',
+        $legacy_backup_dir = isset( $legacy['backup_dir'] ) ? (string) $legacy['backup_dir'] : '';
+        $mapped            = [
+            'backup_storage_subdir' => museder_restoreone_subdir_from_absolute_backup_path( $legacy_backup_dir ),
+            'backup_directory'      => $legacy_backup_dir,
+            'notification_email'    => isset( $legacy['notify_email'] ) ? $legacy['notify_email'] : get_option( 'admin_email' ),
+            'min_role'              => isset( $legacy['role'] ) ? $legacy['role'] : 'administrator',
         ];
 
         update_option( self::OPTION_KEY, self::sanitize( $mapped ) );
@@ -67,8 +69,19 @@ class Museder_Restoreone_Settings {
             $requested_role = $default_role;
         }
 
-        $backup_directory = isset( $value['backup_directory'] ) ? sanitize_text_field( $value['backup_directory'] ) : museder_restoreone_get_backup_dir();
-        $backup_directory = wp_normalize_path( $backup_directory );
+        $storage_root = museder_restoreone_get_storage_root();
+        $storage_path = wp_normalize_path( $storage_root['path'] );
+
+        $backup_subdir = '';
+        if ( isset( $value['backup_storage_subdir'] ) ) {
+            $backup_subdir = museder_restoreone_normalize_storage_subdir( (string) $value['backup_storage_subdir'] );
+        } elseif ( isset( $value['backup_directory'] ) ) {
+            $backup_subdir = museder_restoreone_subdir_from_absolute_backup_path( (string) $value['backup_directory'] );
+        } else {
+            $backup_subdir = 'backups';
+        }
+
+        $backup_directory = wp_normalize_path( trailingslashit( $storage_path ) . $backup_subdir );
 
         $ui_theme = $value['ui_theme'] ?? 'auto';
         $ui_theme = in_array( $ui_theme, [ 'auto', 'light', 'dark' ], true ) ? $ui_theme : 'auto';
@@ -80,6 +93,7 @@ class Museder_Restoreone_Settings {
         $backup_smart_exclude_default = in_array( $backup_smart_exclude_default, [ 'auto', 'on', 'off' ], true ) ? $backup_smart_exclude_default : 'auto';
 
         $sanitized = [
+            'backup_storage_subdir'     => $backup_subdir,
             'backup_directory'          => $backup_directory,
             'notification_email'        => isset( $value['notification_email'] ) ? sanitize_email( $value['notification_email'] ) : get_option( 'admin_email' ),
             'min_role'                  => $requested_role,
@@ -137,8 +151,12 @@ class Museder_Restoreone_Settings {
      * @return array
      */
     public static function get_settings() {
+        $storage_root = museder_restoreone_get_storage_root();
+        $storage_path = wp_normalize_path( $storage_root['path'] );
+
         $defaults = [
-            'backup_directory'            => museder_restoreone_get_backup_dir(),
+            'backup_storage_subdir'       => 'backups',
+            'backup_directory'            => trailingslashit( $storage_path ) . 'backups',
             'notification_email'          => get_option( 'admin_email' ),
             'min_role'                    => 'administrator',
             'ui_theme'                    => 'auto',

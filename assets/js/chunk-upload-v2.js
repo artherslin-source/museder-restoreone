@@ -341,15 +341,18 @@
         // Use the shared REST helper so query-style REST bases work and metadata can be sent as query params too.
         // Some hosts drop custom headers on large/binary POST requests; sending upload_id/file_sha1 redundantly
         // improves compatibility without weakening security (nonce + capability checks still apply).
+        const overwrite = window._musederRestoreOneOverwrite ? '1' : '0';
         return await restRequest('finalize', {
             method: 'POST',
             headers: buildHeaders({
                 'X-Backup-Lite-Upload-Id': uploadId,
-                'X-File-Sha1': fileSha1Hex
+                'X-File-Sha1': fileSha1Hex,
+                'X-Overwrite': overwrite
             }),
             query: {
                 upload_id: uploadId,
-                file_sha1: fileSha1Hex
+                file_sha1: fileSha1Hex,
+                overwrite: overwrite
             },
             body: null
         });
@@ -403,6 +406,27 @@
         uploadId = prepareData.upload_id || prepareData.uploadId;
         if (!uploadId) {
             throw new Error('Upload ID missing from prepare response');
+        }
+
+        // Duplicate file detection: if same filename already exists on the server,
+        // ask the user whether to use the existing file or overwrite it.
+        if (prepareData.file_exists) {
+            const useExisting = confirm(
+                (ui.strings && ui.strings.fileExistsPrompt
+                    ? ui.strings.fileExistsPrompt
+                    : 'A backup file with the same name already exists on the server.\n\nClick OK to use the existing server file (no upload needed).\nClick Cancel to upload and overwrite the existing file.')
+            );
+            if (useExisting) {
+                // Skip upload entirely — proceed directly to restore using existing file.
+                updateStatus(ui.strings && ui.strings.usingExisting ? ui.strings.usingExisting : 'Using existing file on server...');
+                updateProgress(100);
+                if (typeof ui.onComplete === 'function') {
+                    ui.onComplete({ skipped_upload: true, file_name: file.name, used_existing: true });
+                }
+                return;
+            }
+            // User chose to overwrite — mark for finalize.
+            window._musederRestoreOneOverwrite = true;
         }
 
         for (let index = 0; index < totalChunks; index++) {

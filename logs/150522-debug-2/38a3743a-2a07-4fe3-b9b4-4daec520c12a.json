@@ -1,0 +1,296 @@
+{
+    "id": "38a3743a-2a07-4fe3-b9b4-4daec520c12a",
+    "status": "running",
+    "stage": "packing",
+    "message": "Packing large files\u2026 (last step took 120.4 seconds). Please keep this tab open.",
+    "created_at": "2026-05-22 00:53:23",
+    "updated_at": "2026-05-22 18:12:57",
+    "processing": false,
+    "pointer": 3751,
+    "processed_files": 3751,
+    "processed_bytes": 1579905781,
+    "total_files": 12884,
+    "total_bytes": 1846891113,
+    "attempted_files": 3751,
+    "added_files": 3751,
+    "skipped_files": 0,
+    "added_bytes": 1579905781,
+    "skipped_bytes": 0,
+    "skip_reasons": [],
+    "diagnostic_samples": [],
+    "pack_method": "pclzip",
+    "selfcheck": {
+        "failed": false,
+        "roots": {
+            "uploads": {
+                "root": "/home/eo8lmixijvfj/public_html/ciouyinghao.com/wp-content/uploads",
+                "exists": true,
+                "readable": true,
+                "sampled": 8,
+                "read_ok": 5,
+                "zip_add_ok": 5,
+                "zip_add_failed": 0,
+                "samples": [
+                    {
+                        "path": "/home/eo8lmixijvfj/public_html/ciouyinghao.com/wp-content/uploads/000_CaseForNo7/2016/1050111\u5229\u5fb7\u53f0\u5317\u516b\u5fb7\u8def1\u6bb576\u865f-SS\u6ac3\u9032\u5834-\u80b2\u54f2/3735230515076-100x80.jpg",
+                        "readable": true,
+                        "error": "",
+                        "zip_add": true
+                    },
+                    {
+                        "path": "/home/eo8lmixijvfj/public_html/ciouyinghao.com/wp-content/uploads/000_CaseForNo7/2016/1050111\u5229\u5fb7\u53f0\u5317\u516b\u5fb7\u8def1\u6bb576\u865f-SS\u6ac3\u9032\u5834-\u80b2\u54f2/3735230781222-100x80.jpg",
+                        "readable": true,
+                        "error": "",
+                        "zip_add": true
+                    },
+                    {
+                        "path": "/home/eo8lmixijvfj/public_html/ciouyinghao.com/wp-content/uploads/000_CaseForNo7/2016/1050111\u5229\u5fb7\u53f0\u5317\u516b\u5fb7\u8def1\u6bb576\u865f-SS\u6ac3\u9032\u5834-\u80b2\u54f2/3735230827853-100x80.jpg",
+                        "readable": true,
+                        "error": "",
+                        "zip_add": true
+                    },
+                    {
+                        "path": "/home/eo8lmixijvfj/public_html/ciouyinghao.com/wp-content/uploads/000_CaseForNo7/2016/1050111\u5229\u5fb7\u53f0\u5317\u516b\u5fb7\u8def1\u6bb576\u865f-SS\u6ac3\u9032\u5834-\u80b2\u54f2/3735230543752-100x80.jpg",
+                        "readable": true,
+                        "error": "",
+                        "zip_add": true
+                    },
+                    {
+                        "path": "/home/eo8lmixijvfj/public_html/ciouyinghao.com/wp-content/uploads/000_CaseForNo7/2017/1060125\u5929\u4e0bAVIS\u8ca9\u8ce3\u6a5f2\u53f0\u9001\u57fa\u9686\u4e2d\u548c\u8def2-1\u865f/5550828838446-100x80.jpg",
+                        "readable": true,
+                        "error": "",
+                        "zip_add": true
+                    }
+                ],
+                "errors": []
+            },
+            "plugins": {
+                "root": "/home/eo8lmixijvfj/public_html/ciouyinghao.com/wp-content/plugins",
+                "exists": true,
+                "readable": true,
+                "sampled": 8,
+                "read_ok": 5,
+                "zip_add_ok": 5,
+                "zip_add_failed": 0,
+                "samples": [
+                    {
+                        "path": "/home/eo8lmixijvfj/public_html/ciouyinghao.com/wp-content/plugins/akismet/class.akismet.php",
+                        "readable": true,
+                        "error": "",
+                        "zip_add": true
+                    },
+                    {
+                        "path": "/home/eo8lmixijvfj/public_html/ciouyinghao.com/wp-content/plugins/akismet/class.akismet-admin.php",
+                        "readable": true,
+                        "error": "",
+                        "zip_add": true
+                    },
+                    {
+                        "path": "/home/eo8lmixijvfj/public_html/ciouyinghao.com/wp-content/plugins/akismet/class.akismet-rest-api.php",
+                        "readable": true,
+                        "error": "",
+                        "zip_add": true
+                    },
+                    {
+                        "path": "/home/eo8lmixijvfj/public_html/ciouyinghao.com/wp-content/plugins/akismet/wrapper.php",
+                        "readable": true,
+                        "error": "",
+                        "zip_add": true
+                    },
+                    {
+                        "path": "/home/eo8lmixijvfj/public_html/ciouyinghao.com/wp-content/plugins/akismet/_inc/fonts/inter.css",
+                        "readable": true,
+                        "error": "",
+                        "zip_add": true
+                    }
+                ],
+                "errors": []
+            },
+            "themes": {
+                "root": "/home/eo8lmixijvfj/public_html/ciouyinghao.com/wp-content/themes",
+                "exists": true,
+                "readable": true,
+                "sampled": 8,
+                "read_ok": 5,
+                "zip_add_ok": 5,
+                "zip_add_failed": 0,
+                "samples": [
+                    {
+                        "path": "/home/eo8lmixijvfj/public_html/ciouyinghao.com/wp-content/themes/twentytwentyfive/style.min.css",
+                        "readable": true,
+                        "error": "",
+                        "zip_add": true
+                    },
+                    {
+                        "path": "/home/eo8lmixijvfj/public_html/ciouyinghao.com/wp-content/themes/twentytwentyfive/styles/colors/08-midnight.json",
+                        "readable": true,
+                        "error": "",
+                        "zip_add": true
+                    },
+                    {
+                        "path": "/home/eo8lmixijvfj/public_html/ciouyinghao.com/wp-content/themes/twentytwentyfive/styles/colors/04-afternoon.json",
+                        "readable": true,
+                        "error": "",
+                        "zip_add": true
+                    },
+                    {
+                        "path": "/home/eo8lmixijvfj/public_html/ciouyinghao.com/wp-content/themes/twentytwentyfive/styles/colors/05-twilight.json",
+                        "readable": true,
+                        "error": "",
+                        "zip_add": true
+                    },
+                    {
+                        "path": "/home/eo8lmixijvfj/public_html/ciouyinghao.com/wp-content/themes/twentytwentyfive/styles/colors/06-morning.json",
+                        "readable": true,
+                        "error": "",
+                        "zip_add": true
+                    }
+                ],
+                "errors": []
+            },
+            "wp-content": {
+                "root": "/home/eo8lmixijvfj/public_html/ciouyinghao.com/wp-content",
+                "exists": true,
+                "readable": true,
+                "sampled": 8,
+                "read_ok": 5,
+                "zip_add_ok": 5,
+                "zip_add_failed": 0,
+                "samples": [
+                    {
+                        "path": "/home/eo8lmixijvfj/public_html/ciouyinghao.com/wp-content/themes/twentytwentyfive/style.min.css",
+                        "readable": true,
+                        "error": "",
+                        "zip_add": true
+                    },
+                    {
+                        "path": "/home/eo8lmixijvfj/public_html/ciouyinghao.com/wp-content/themes/twentytwentyfive/styles/colors/08-midnight.json",
+                        "readable": true,
+                        "error": "",
+                        "zip_add": true
+                    },
+                    {
+                        "path": "/home/eo8lmixijvfj/public_html/ciouyinghao.com/wp-content/themes/twentytwentyfive/styles/colors/04-afternoon.json",
+                        "readable": true,
+                        "error": "",
+                        "zip_add": true
+                    },
+                    {
+                        "path": "/home/eo8lmixijvfj/public_html/ciouyinghao.com/wp-content/themes/twentytwentyfive/styles/colors/05-twilight.json",
+                        "readable": true,
+                        "error": "",
+                        "zip_add": true
+                    },
+                    {
+                        "path": "/home/eo8lmixijvfj/public_html/ciouyinghao.com/wp-content/themes/twentytwentyfive/styles/colors/06-morning.json",
+                        "readable": true,
+                        "error": "",
+                        "zip_add": true
+                    }
+                ],
+                "errors": []
+            }
+        },
+        "version": "2.7.263"
+    },
+    "prep_step": "done",
+    "archive_path": "/home/eo8lmixijvfj/public_html/ciouyinghao.com/wp-content/uploads/museder-restoreone/backups/ciouyinghao.com-20260522005323-YakglV.zip",
+    "download_url": "https://ciouyinghao.com/wp-admin/admin-post.php?action=museder_restoreone_download_backup&amp;file=ciouyinghao.com-20260522005323-YakglV.zip&amp;_museder_restoreone_download_nonce=4c00dafa22",
+    "temp_dir": "/home/eo8lmixijvfj/public_html/ciouyinghao.com/wp-content/uploads/museder-restoreone/temp/build-20260522-005323-x4zl4x",
+    "manifest_file": "/home/eo8lmixijvfj/public_html/ciouyinghao.com/wp-content/uploads/museder-restoreone/jobs/38a3743a-2a07-4fe3-b9b4-4daec520c12a-manifest.json",
+    "manifest_ndjson_file": "/home/eo8lmixijvfj/public_html/ciouyinghao.com/wp-content/uploads/museder-restoreone/jobs/38a3743a-2a07-4fe3-b9b4-4daec520c12a-manifest.ndjson",
+    "manifest_offset": 645779,
+    "manifest_migrated": false,
+    "sql_path": "/home/eo8lmixijvfj/public_html/ciouyinghao.com/wp-content/uploads/museder-restoreone/temp/build-20260522-005323-x4zl4x/database.ndjson",
+    "meta_path": "/home/eo8lmixijvfj/public_html/ciouyinghao.com/wp-content/uploads/museder-restoreone/temp/build-20260522-005323-x4zl4x/meta.json",
+    "options": {
+        "backup_mode": "balanced",
+        "backup_smart_exclude": "off",
+        "backup_mode_effective": "balanced",
+        "backup_smart_exclude_effective": "off",
+        "backup_large_site_detected": false,
+        "backup_auto_threshold_files": 50000,
+        "backup_auto_applied": true
+    },
+    "last_activity": 1779444777,
+    "last_tick": 1779444656,
+    "started_at": 1779382403,
+    "cancel_requested": false,
+    "cancel_requested_at": 0,
+    "db_state": {
+        "started": true,
+        "tables": [
+            "wp_booking",
+            "wp_bookingdates",
+            "wp_commentmeta",
+            "wp_comments",
+            "wp_failed_jobs",
+            "wp_gamipress_logs",
+            "wp_gamipress_logs_meta",
+            "wp_gamipress_user_earnings",
+            "wp_gamipress_user_earnings_meta",
+            "wp_links",
+            "wp_mailchimp_carts",
+            "wp_masterslider_options",
+            "wp_masterslider_sliders",
+            "wp_mgmlp_folders",
+            "wp_nm_personalized",
+            "wp_options",
+            "wp_postmeta",
+            "wp_posts",
+            "wp_queue",
+            "wp_term_relationships",
+            "wp_term_taxonomy",
+            "wp_termmeta",
+            "wp_terms",
+            "wp_usermeta",
+            "wp_users",
+            "wp_wc_download_log",
+            "wp_wc_webhooks",
+            "wp_wdp_order_items",
+            "wp_wdp_orders",
+            "wp_wdp_rules",
+            "wp_woocommerce_api_keys",
+            "wp_woocommerce_attribute_taxonomies",
+            "wp_woocommerce_downloadable_product_permissions",
+            "wp_woocommerce_log",
+            "wp_woocommerce_order_itemmeta",
+            "wp_woocommerce_order_items",
+            "wp_woocommerce_payment_tokenmeta",
+            "wp_woocommerce_payment_tokens",
+            "wp_woocommerce_sessions",
+            "wp_woocommerce_shipping_zone_locations",
+            "wp_woocommerce_shipping_zone_methods",
+            "wp_woocommerce_shipping_zones",
+            "wp_woocommerce_tax_rate_locations",
+            "wp_woocommerce_tax_rates",
+            "wp_wow_fmp",
+            "wp_wp_floating_menu_custom_templates",
+            "wp_wp_floating_menu_details",
+            "wp_yoast_seo_links",
+            "wp_yoast_seo_meta"
+        ],
+        "table_index": 49,
+        "row_offset": 0,
+        "schema_done": false,
+        "current_table": "wp_yoast_seo_meta",
+        "row_count": 99
+    },
+    "directories": {
+        "": "/home/eo8lmixijvfj/public_html/ciouyinghao.com"
+    },
+    "manifest_state": {
+        "started": true,
+        "queue": [],
+        "current": null,
+        "count": 12884,
+        "bytes": 1846891113
+    },
+    "finalize_step": "embed_meta",
+    "repack_attempted": true,
+    "adaptive_pack": {
+        "max_files": 10,
+        "max_bytes": 4194304,
+        "last_batch_seconds": 120.44
+    }
+}

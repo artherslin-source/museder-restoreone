@@ -24,6 +24,12 @@ Before making changes, read and apply:
 - Release packages must exclude docs, tools, logs, zip files, AI outputs, Git metadata, GitHub workflow files, review emails, and other development-only artifacts.
 - Run or request Plugin Check and clean WordPress `WP_DEBUG` smoke tests before release-facing changes.
 
+### Author display name (pending — agents must remind)
+
+- **Deferred (readme-only SVN, 2.7.263):** plugin headers still use `Author: Jerry Lin`. Next change that ships `museder-restoreone.php` should switch to **`Author: Adrian Lin`**; keep **`Author URI: https://profiles.wordpress.org/artherslin/`** and readme **`Contributors: artherslin`** (WP.org userid, not display name).
+- **PRO:** when editing or releasing `museder-restoreone-pro/museder-restoreone-pro.php`, apply the same `Author: Adrian Lin` reminder if the header still says Jerry Lin.
+- **Rule file:** `.cursor/rules/plugin-author-display-name.mdc` (`alwaysApply: true`) — any agent touching Lite/PRO main files, packaging, or release must **remind the user** before finishing.
+
 ## Superpowers (obra/superpowers)
 
 This repository ships [Superpowers](https://github.com/obra/superpowers) for Cursor / Cloud Agents:
