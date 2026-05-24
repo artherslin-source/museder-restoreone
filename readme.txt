@@ -244,10 +244,16 @@ Most sites do not need any changes. For unusual server layouts where core admin 
 
 = 2.7.264 =
 * Backup jobs: fixed cancel race conditions so persisted `cancelled` state is reloaded/merged before scheduling and final save, preventing stale in-memory `running/packing` overwrite after long batches.
+* Backup jobs: added **Gate B** cancel check after preparing stage — prevents cancel from being overwritten by `save_job()` during slow manifest scans on shared hosting (13–40 seconds).
 * Backup jobs: added defensive schedule guard to skip `wp_schedule_single_event()` when latest state is terminal or cancel requested.
 * Backup UI: in `pclzip` compatibility repack mode, progress smoothing is capped and status now shows real file progress (`processed_files/total_files`) to avoid misleading near-complete percentages.
 * Backup UX: after cancel success, UI performs a delayed status verification and warns if the same job is still running.
 * Packing diagnostics: detect common large existing backup artifacts (`ai1wm`, `backwpup`, `wordpress-*.tmp`) and surface warnings to help avoid very slow repack behavior.
+* Backup (Auto mode): large-site detection now applies when **file count exceeds 50,000** OR **total scanned size exceeds 1 GB**, so media-heavy sites with fewer files correctly use Fast mode and Smart Exclude instead of Balanced with Smart Exclude off.
+* Restore session: admin **session tokens** are now saved at `execute()` time (when user is authenticated) and read from job metadata during WP-Cron import, fixing session loss on real shared hosting where `get_current_user_id()` returns 0 in cron context.
+* Restore session: **WordPress Heartbeat `wp-auth-check`** is disabled on plugin admin pages during active restores to prevent the core "session expired" overlay from firing during the DB import window.
+* Restore upload: **duplicate file detection** — when uploading a local backup file that already exists on the server, a confirmation dialog offers to use the existing file (skip upload) or upload and overwrite. Prevents duplicate `-1` suffix copies.
+* Backup export: runtime plugin options (`restore_lock`, `active_job_id`, `restore_token`) are excluded from NDJSON database exports to prevent stale state from being carried in backups.
 
 = 2.7.263 =
 * Restore (P0): preserve admin **session tokens** and re-inject **cron**, **restore lock**, and **active job** state after database import so restores no longer stall when the admin session is invalidated mid-job.
@@ -530,7 +536,7 @@ Most sites do not need any changes. For unusual server layouts where core admin 
 == Upgrade Notice ==
 
 = 2.7.264 =
-Fixes backup jobs that could **resume after cancel** due to stale worker state, improves repack progress accuracy, and adds warnings for large existing backup artifacts that can significantly slow packing.
+Fixes backup jobs that could **resume after cancel** due to stale worker state, improves repack progress accuracy, and adds warnings for large existing backup artifacts that can significantly slow packing. **Auto mode** now treats sites as large when file count exceeds **50,000** or total scanned size exceeds **1 GB** (Fast + Smart Exclude). Also improves restore session handling on shared hosting and duplicate backup upload prompts.
 
 = 2.7.263 =
 Fixes restores that **stopped mid-job** after database import when the admin session was invalidated (session preserved, restore token fallback, resilient progress polling). Recommended for **large-site restores**.

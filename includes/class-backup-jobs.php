@@ -362,6 +362,17 @@ class Museder_Restoreone_Backup_Jobs {
                         }
                     }
 
+                    // Gate B: after preparing step, reload latest persisted state to detect cancel.
+                    // Without this, a long run_preparing_stage() (13-40s on shared hosting)
+                    // can overwrite a cancel that happened mid-preparation.
+                    $latest_after_prep = self::load_latest_job_state( $job_id );
+                    if ( self::is_terminal_or_cancel_requested( $latest_after_prep ) ) {
+                        $job = self::merge_with_latest_terminal_state( $job, $latest_after_prep );
+                        $job_needs_finalize          = false;
+                        $job_completed_in_loop       = true;
+                        break;
+                    }
+
                     // Always save after each preparing step to keep UI responsive.
                     $job['processing']    = true;
                     $job['last_activity'] = time();
