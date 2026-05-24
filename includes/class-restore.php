@@ -175,6 +175,10 @@ class Museder_Restoreone_Restore {
             ] );
         }
 
+        if ( class_exists( 'Museder_Restoreone_Restore_Service' ) ) {
+            Museder_Restoreone_Restore_Service::enter_mid_restore_plugin_isolation( '', $db_result );
+        }
+
         if ( is_callable( $progress_cb ) ) {
             call_user_func( $progress_cb, 70, __( 'Restoring files from backup…', 'museder-restoreone' ) );
         }
@@ -190,6 +194,10 @@ class Museder_Restoreone_Restore {
                 call_user_func( $progress_cb, 85, __( 'Applying URL search & replace…', 'museder-restoreone' ) );
             }
             self::run_search_replace( $options['search_replace'] );
+        }
+
+        if ( class_exists( 'Museder_Restoreone_Restore_Service' ) ) {
+            Museder_Restoreone_Restore_Service::exit_mid_restore_plugin_isolation( '' );
         }
 
         if ( is_callable( $progress_cb ) ) {

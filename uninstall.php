@@ -44,6 +44,8 @@ function museder_restoreone_uninstall_for_site() {
         'museder_restoreone_prev_active_plugins',
         'museder_restoreone_restored_active_plugins',
         'museder_restoreone_restored_active_plugins_last',
+        'museder_restoreone_restored_active_sitewide_plugins',
+        'museder_restoreone_mid_restore_isolation',
 
         // Misc.
         'museder_restoreone_legacy_storage_migrated',
