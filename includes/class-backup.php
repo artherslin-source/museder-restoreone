@@ -2132,6 +2132,14 @@ class Museder_Restoreone_Backup {
 
         $is_large = ! empty( $stats['reached_threshold'] );
 
+        // Also treat as large if total bytes exceeds 1 GB, even with few files.
+        // Sites with large media (high-res images, videos, PDFs) can have <50K files
+        // but still need Fast mode + Smart Exclude for reliable backup.
+        $bytes_threshold = 1 * 1024 * 1024 * 1024; // 1 GB
+        if ( ! $is_large && isset( $stats['bytes'] ) && (int) $stats['bytes'] > $bytes_threshold ) {
+            $is_large = true;
+        }
+
         $effective_mode = $requested_mode;
         if ( 'auto' === $requested_mode ) {
             $effective_mode = $is_large ? 'fast' : 'balanced';
