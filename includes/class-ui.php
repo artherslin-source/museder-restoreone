@@ -370,7 +370,7 @@ class Museder_Restoreone_UI {
             'museder-restoreone-chunk-upload-v2',
             MUSEDER_RESTOREONE_URL . 'assets/js/chunk-upload-v2.js',
             [ 'museder-restoreone-admin' ],
-            MUSEDER_RESTOREONE_VERSION,
+            MUSEDER_RESTOREONE_VERSION . '.' . filemtime( MUSEDER_RESTOREONE_PATH . 'assets/js/chunk-upload-v2.js' ),
             true
         );
 

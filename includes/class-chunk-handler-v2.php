@@ -255,10 +255,16 @@ class Museder_Restoreone_Chunk_V2 {
             'chunks'    => $total_chunks,
         ] );
 
+        // Check if file with same name already exists in backup directory.
+        $backup_dir    = museder_restoreone_get_backup_dir();
+        $existing_file = trailingslashit( $backup_dir ) . $filename;
+        $file_exists   = file_exists( $existing_file );
+
         return self::rest_success( [
             'upload_id'    => $upload_id,
             'chunk_size'   => $chunk_size,
             'total_chunks' => $total_chunks,
+            'file_exists'  => $file_exists,
         ] );
     }
 
@@ -877,8 +883,24 @@ class Museder_Restoreone_Chunk_V2 {
         if ( 'zip' !== strtolower( pathinfo( $base_name, PATHINFO_EXTENSION ) ) ) {
             $base_name .= '.zip';
         }
-        $unique      = wp_unique_filename( $backup_dir, $base_name );
-        $destination = trailingslashit( $backup_dir ) . $unique;
+        // Support overwrite mode: if client signals overwrite, use base_name directly.
+        $overwrite_mode = false;
+        $ow_raw = self::pull_value( $headers, $req, [ 'x-overwrite' ], [ 'overwrite' ] );
+        if ( '1' === (string) $ow_raw || 'true' === strtolower( (string) $ow_raw ) ) {
+            $overwrite_mode = true;
+        }
+
+        if ( $overwrite_mode ) {
+            $destination = trailingslashit( $backup_dir ) . $base_name;
+            // Remove existing file before moving new one into place.
+            if ( file_exists( $destination ) ) {
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- overwrite by user request
+                @unlink( $destination );
+            }
+        } else {
+            $unique      = wp_unique_filename( $backup_dir, $base_name );
+            $destination = trailingslashit( $backup_dir ) . $unique;
+        }
 
         // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
         // $final_path and $destination are from plugin-controlled directories
