@@ -26,15 +26,16 @@ for i in {1..60}; do
 done
 
 echo "[docker] Waiting for WordPress..."
-for i in {1..60}; do
-  if docker compose exec -T wordpress bash -lc 'test -f /var/www/html/wp-config.php' >/dev/null 2>&1; then
+for i in {1..90}; do
+  if docker compose exec wordpress test -f /var/www/html/wp-config.php >/dev/null 2>&1; then
     break
   fi
   sleep 2
 done
 
-for i in {1..60}; do
-  if docker compose run --rm wpcli db check >/dev/null 2>&1; then
+echo "[docker] Waiting for WP-CLI..."
+for i in {1..90}; do
+  if docker compose run --rm wpcli core version >/dev/null 2>&1; then
     break
   fi
   sleep 2
