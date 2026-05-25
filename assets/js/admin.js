@@ -1931,8 +1931,11 @@ function initRestoreCenter() {
         var startButton = document.getElementById('startRestore');
         var overwriteToggle = document.getElementById('overwriteData');
         var applyReplaceToggle = document.getElementById('applyReplace');
-        var skipConfigToggle = document.getElementById('skipConfig');
         var autoBackupToggle = document.getElementById('autoBackup');
+        var pauseOtherPluginsToggle = document.getElementById('pauseOtherPlugins');
+        var preflightHintsEl = document.getElementById('restore-preflight-hints');
+        var restoreOrderDbFirst = document.getElementById('restoreOrderDbFirst');
+        var restoreOrderFilesFirst = document.getElementById('restoreOrderFilesFirst');
         var safeModeToggle = document.getElementById('safeMode');
         var filesOnlyWrap = document.getElementById('restore-files-only-wrap');
         var filesOnlyToggle = document.getElementById('filesOnly');
@@ -4841,6 +4844,57 @@ function initRestoreCenter() {
             return formData;
         }
 
+        function applyRestorePreflightHints(summary) {
+            if (!summary) {
+                return;
+            }
+            if (preflightHintsEl) {
+                var lines = [];
+                if (summary.restore_profile_label) {
+                    lines.push((strings.restoreProfileLabel || 'Site profile') + ': ' + summary.restore_profile_label);
+                }
+                if (summary.fresh_db_overwrite_notice) {
+                    lines.push('ℹ️ ' + summary.fresh_db_overwrite_notice);
+                }
+                if (summary.suggest_files_first && summary.default_restore_order === 'files_then_db') {
+                    lines.push('ℹ️ ' + (strings.restoreSuggestFilesFirst || 'Files will be restored before the database (recommended for this site profile).'));
+                }
+                if (summary.bootstrap_recommended) {
+                    lines.push('ℹ️ ' + (strings.restoreBootstrapHint || 'Copy museder-restoreone-restore-bootstrap.php to the site root if wp-admin is unavailable during restore.'));
+                }
+                if (summary.preflight_warnings && summary.preflight_warnings.length) {
+                    summary.preflight_warnings.forEach(function (w) {
+                        lines.push('⚠️ ' + w);
+                    });
+                }
+                if (summary.preflight_blocked && summary.preflight_message) {
+                    lines.push('⛔ ' + summary.preflight_message);
+                }
+                if (lines.length) {
+                    preflightHintsEl.style.display = '';
+                    preflightHintsEl.innerHTML = lines.map(function (line) {
+                        return '<p style="margin:4px 0;">' + line + '</p>';
+                    }).join('');
+                } else {
+                    preflightHintsEl.style.display = 'none';
+                    preflightHintsEl.innerHTML = '';
+                }
+            }
+            if (autoBackupToggle && summary.force_auto_backup) {
+                autoBackupToggle.checked = true;
+                autoBackupToggle.disabled = true;
+            } else if (autoBackupToggle) {
+                autoBackupToggle.disabled = false;
+            }
+            if (restoreOrderDbFirst && restoreOrderFilesFirst && summary.default_restore_order) {
+                if (summary.default_restore_order === 'files_then_db') {
+                    restoreOrderFilesFirst.checked = true;
+                } else {
+                    restoreOrderDbFirst.checked = true;
+                }
+            }
+        }
+
         function handleSummaryResponse(json) {
             if (!json) {
                 return;
@@ -4862,9 +4916,20 @@ function initRestoreCenter() {
                 return;
             }
             if (payload.summary) {
+                if (payload.summary.preflight_blocked) {
+                    isAnalyzing = false;
+                    analysisError = true;
+                    hasAnalyzed = false;
+                    syncWizard();
+                    notifyError({ message: payload.summary.preflight_message || (strings.errorGeneric || 'This backup cannot be restored on this site.') });
+                    clearStep1Started();
+                    updateStep1TimerDisplay('');
+                    return;
+                }
                 renderSummary(payload.summary);
                 // Keep JS state in sync for same-page flow (prevents requiring hard reload to enable Step 3).
                 restoreData.summary = payload.summary;
+                applyRestorePreflightHints(payload.summary);
             }
 
             // If DB payload is missing, surface a clear UI hint and offer files-only restore.
@@ -5270,7 +5335,13 @@ function initRestoreCenter() {
                 var formData = prepareFormData('museder_restoreone_restore_enqueue');
                 formData.append('overwrite', overwriteToggle.checked ? 'true' : 'false');
                 formData.append('autoBackup', autoBackupToggle && autoBackupToggle.checked ? 'true' : 'false');
-                formData.append('skipConfig', skipConfigToggle && skipConfigToggle.checked ? 'true' : 'false');
+                var wpConfigModeEl = document.querySelector('input[name="wpConfigMode"]:checked');
+                formData.append('wpConfigMode', wpConfigModeEl ? wpConfigModeEl.value : 'backup');
+                var restoreOrderEl = document.querySelector('input[name="restoreOrder"]:checked');
+                formData.append('restoreOrder', restoreOrderEl ? restoreOrderEl.value : 'db_then_files');
+                var restoreScopeEl = document.querySelector('input[name="restoreScope"]:checked');
+                formData.append('restoreScope', restoreScopeEl ? restoreScopeEl.value : 'full');
+                formData.append('pauseOtherPlugins', pauseOtherPluginsToggle && pauseOtherPluginsToggle.checked ? 'true' : 'false');
                 formData.append('safeMode', safeModeToggle && safeModeToggle.checked ? 'true' : 'false');
                 formData.append('filesOnly', filesOnlyToggle && filesOnlyToggle.checked ? 'true' : 'false');
                 if (applyReplaceToggle && applyReplaceToggle.checked) {

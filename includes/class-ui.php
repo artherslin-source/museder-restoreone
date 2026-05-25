@@ -554,6 +554,9 @@ class Museder_Restoreone_UI {
                 'restoreCancelSuccess' => __( 'Restore process cancelled.', 'museder-restoreone' ),
                 'restoreCancelFailed'  => __( 'Unable to cancel restore process. Please try again.', 'museder-restoreone' ),
                 'dbMissingHint'        => __( 'Database file not found in this backup. Files-only restore is recommended.', 'museder-restoreone' ),
+                'restoreProfileLabel'  => __( 'Site profile', 'museder-restoreone' ),
+                'restoreSuggestFilesFirst' => __( 'Files will be restored before the database (recommended for this site profile).', 'museder-restoreone' ),
+                'restoreBootstrapHint' => __( 'Copy museder-restoreone-restore-bootstrap.php from the plugin folder to your site root if wp-admin is unavailable during restore.', 'museder-restoreone' ),
                 'dbSqlManualHint'      => __( 'This backup contains database.sql. Automatic database import is disabled; files will be restored and database must be imported manually.', 'museder-restoreone' ),
                 'chunkPreparing'        => __( 'Preparing upload…', 'museder-restoreone' ),
                 /* translators: 1: Current chunk number, 2: Total chunks, 3: Progress percentage. */

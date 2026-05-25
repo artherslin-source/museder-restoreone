@@ -207,7 +207,23 @@ class Museder_Restoreone_Restore_Controller {
     }
 
     public static function check_permissions( WP_REST_Request $request ) {
+        // --- Restore-token helper (used as fallback below) ---
+        $try_restore_token = static function () use ( $request ) {
+            if ( ! class_exists( 'Museder_Restoreone_Restore_Token' ) ) {
+                return false;
+            }
+            $rt = (string) $request->get_header( 'X-Restore-Token' );
+            if ( '' === $rt ) {
+                $rt = (string) $request->get_param( '_restore_token' );
+            }
+            return '' !== $rt && Museder_Restoreone_Restore_Token::verify( $rt );
+        };
+
         if ( ! current_user_can( 'manage_options' ) ) {
+            // Session may have been destroyed by DB import — try restore token.
+            if ( $try_restore_token() ) {
+                return true;
+            }
             return new WP_Error( 'museder_restoreone_forbidden', __( 'You are not allowed to perform this action.', 'museder-restoreone' ), [ 'status' => 403 ] );
         }
 
@@ -217,11 +233,11 @@ class Museder_Restoreone_Restore_Controller {
         }
 
         // WordPress.org review: empty check and verify_nonce as separate steps (same pattern as AI REST).
-        if ( '' === $nonce ) {
-            return new WP_Error( 'museder_restoreone_invalid_nonce', __( 'Invalid security token.', 'museder-restoreone' ), [ 'status' => 401 ] );
-        }
-
-        if ( ! wp_verify_nonce( $nonce, 'wp_rest' ) ) {
+        if ( '' === $nonce || ! wp_verify_nonce( $nonce, 'wp_rest' ) ) {
+            // Nonce missing or invalid — try restore token fallback.
+            if ( $try_restore_token() ) {
+                return true;
+            }
             return new WP_Error( 'museder_restoreone_invalid_nonce', __( 'Invalid security token.', 'museder-restoreone' ), [ 'status' => 401 ] );
         }
 

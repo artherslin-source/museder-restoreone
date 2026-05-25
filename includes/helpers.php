@@ -69,6 +69,20 @@ if ( ! function_exists( 'museder_restoreone_local_time' ) ) {
  * @return array{path:string,url:string}
  */
 function museder_restoreone_get_storage_root() {
+    if ( defined( 'MUSEDER_RESTOREONE_BOOTSTRAP_ROOT' ) && MUSEDER_RESTOREONE_BOOTSTRAP_ROOT ) {
+        $base = trailingslashit( wp_normalize_path( (string) MUSEDER_RESTOREONE_BOOTSTRAP_ROOT ) ) . 'wp-content/uploads/museder-restoreone';
+        if ( function_exists( 'museder_restoreone_ensure_directory' ) ) {
+            museder_restoreone_ensure_directory( $base );
+        } elseif ( ! file_exists( $base ) ) {
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_mkdir
+            @mkdir( $base, 0755, true );
+        }
+        return [
+            'path' => $base,
+            'url'  => '',
+        ];
+    }
+
     $upload_dir = wp_upload_dir();
     $base       = trailingslashit( $upload_dir['basedir'] ) . 'museder-restoreone';
     $url        = trailingslashit( $upload_dir['baseurl'] ) . 'museder-restoreone';
@@ -899,6 +913,16 @@ function museder_restoreone_ensure_access_controls() {
  * @return string Normalized wp-content absolute path or empty string.
  */
 function museder_restoreone_get_wp_content_dir() {
+    if ( defined( 'MUSEDER_RESTOREONE_BOOTSTRAP_ROOT' ) && MUSEDER_RESTOREONE_BOOTSTRAP_ROOT ) {
+        $content = trailingslashit( wp_normalize_path( (string) MUSEDER_RESTOREONE_BOOTSTRAP_ROOT ) ) . 'wp-content';
+        if ( is_dir( $content ) || function_exists( 'museder_restoreone_ensure_directory' ) ) {
+            if ( ! is_dir( $content ) && function_exists( 'museder_restoreone_ensure_directory' ) ) {
+                museder_restoreone_ensure_directory( $content );
+            }
+            return wp_normalize_path( $content );
+        }
+    }
+
     $uploads = wp_upload_dir();
     $basedir = isset( $uploads['basedir'] ) ? wp_normalize_path( (string) $uploads['basedir'] ) : '';
     if ( '' !== $basedir ) {
@@ -1269,6 +1293,20 @@ function museder_restoreone_verify_download_token( $file, $expires, $token ) {
  *
  * @return void
  */
+/**
+ * Best-effort: nudge document-root restore bootstrap (Approach B empty docroot).
+ *
+ * @param string $job_id Restore job ID.
+ * @return void
+ */
+function museder_restoreone_nudge_restore_bootstrap( $job_id ) {
+    $job_id = (string) $job_id;
+    if ( '' === $job_id || ! class_exists( 'Museder_Restoreone_Restore_Bootstrap' ) ) {
+        return;
+    }
+    Museder_Restoreone_Restore_Bootstrap::nudge_from_wordpress( $job_id );
+}
+
 function museder_restoreone_nudge_wp_cron() {
     if ( ! function_exists( 'wp_remote_post' ) || ! function_exists( 'site_url' ) || ! function_exists( 'set_transient' ) || ! function_exists( 'get_transient' ) ) {
         return;

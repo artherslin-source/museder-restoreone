@@ -11,7 +11,13 @@ class Museder_Restoreone_Restore_Service {
     const CRON_HOOK_BG_CLEANUP = 'museder_restoreone_restore_service_background_cleanup';
     const DEFAULT_SLICE_SECONDS = 10;
     const ACTIVE_JOB_OPTION = 'museder_restoreone_restore_service_active_job_id';
+    const OPTION_MID_RESTORE_ISOLATION       = 'museder_restoreone_mid_restore_isolation';
+    const OPTION_RESTORED_ACTIVE_PLUGINS     = 'museder_restoreone_restored_active_plugins';
+    const OPTION_RESTORED_SITEWIDE_PLUGINS   = 'museder_restoreone_restored_active_sitewide_plugins';
+    const MU_ISOLATION_GUARD_FILE            = 'museder-restoreone-restore-isolation.php';
     const ZIP_WP_CONTENT_PREFIX = 'wp-content/';
+    const ZIP_SELF_PLUGIN_PREFIX = 'wp-content/plugins/museder-restoreone/';
+    const ZIP_METADATA_BASENAMES = [ 'database.ndjson', 'meta.json', 'package.json', 'manifest.ndjson', 'multisite.json', 'blogs.json' ];
     const WPRESS_DB_FILES = [ 'database.ndjson' ];
     const WPRESS_FILES_EXCLUDE = [ 'database.ndjson', 'package.json', 'multisite.json', 'blogs.json' ];
 
@@ -58,6 +64,7 @@ class Museder_Restoreone_Restore_Service {
     public static function init() {
         add_action( self::CRON_HOOK_PROCESS, [ __CLASS__, 'cron_process_job' ], 10, 1 );
         add_action( self::CRON_HOOK_BG_CLEANUP, [ __CLASS__, 'cron_background_cleanup' ], 10, 1 );
+        add_action( 'plugins_loaded', [ __CLASS__, 'ensure_mu_plugin_isolation_guard' ], 0 );
     }
 
     /**
@@ -144,6 +151,24 @@ class Museder_Restoreone_Restore_Service {
     }
 
     /**
+     * @param string $backup_ver  WP version from backup metadata.
+     * @param string $current_wp  Current site WP version.
+     * @return array{backup:string,current:string,ok:bool,warning?:bool}
+     */
+    protected static function build_wp_compat_validation( $backup_ver, $current_wp ) {
+        $row = [
+            'backup'  => (string) $backup_ver,
+            'current' => (string) $current_wp,
+            'ok'      => true,
+        ];
+        if ( class_exists( 'Museder_Restoreone_Restore_Preflight' ) && '' !== $backup_ver && '' !== $current_wp
+            && Museder_Restoreone_Restore_Preflight::wp_versions_differ_significantly( $backup_ver, $current_wp ) ) {
+            $row['warning'] = true;
+        }
+        return $row;
+    }
+
+    /**
      * Validate the prepared job and record compatibility results.
      *
      * @param string $job_id Job identifier.
@@ -187,7 +212,7 @@ class Museder_Restoreone_Restore_Service {
                 'sha1'   => $checksum_value,
             ],
             'compat'   => [
-                'wp'  => [ 'backup' => isset( $metadata['wp_version'] ) ? $metadata['wp_version'] : '', 'current' => $current_wp, 'ok' => true ],
+                'wp'  => self::build_wp_compat_validation( isset( $metadata['wp_version'] ) ? (string) $metadata['wp_version'] : '', $current_wp ),
                 'php' => [ 'backup' => isset( $metadata['php_version'] ) ? $metadata['php_version'] : '', 'current' => $current_php, 'ok' => true ],
                 'db'  => [ 'backup' => isset( $metadata['db_version'] ) ? $metadata['db_version'] : '', 'current' => $current_db, 'ok' => true ],
             ],
@@ -281,6 +306,19 @@ class Museder_Restoreone_Restore_Service {
         }
 
         try {
+            $file_path_early = isset( $meta['file'] ) ? (string) $meta['file'] : '';
+            if ( class_exists( 'Museder_Restoreone_Restore_Preflight' ) ) {
+                $options = Museder_Restoreone_Restore_Preflight::normalize_options( $options );
+                $preflight = Museder_Restoreone_Restore_Preflight::preflight( $file_path_early, $options );
+                if ( ! empty( $preflight['blocked'] ) ) {
+                    throw new RuntimeException( esc_html( (string) $preflight['message'] ) );
+                }
+                $options = $preflight['options'];
+                $meta['restore_profile']     = $preflight['profile'];
+                $meta['preflight_warnings']  = $preflight['warnings'];
+                $meta['archive_has_core']    = ! empty( $preflight['archive_has_core'] );
+            }
+
             $pre_backup = [];
             $do_pre_backup = ! empty( $options['auto_backup'] );
             if ( $do_pre_backup ) {
@@ -329,9 +367,14 @@ class Museder_Restoreone_Restore_Service {
             if ( empty( $meta['started_at'] ) ) {
                 $meta['started_at'] = time();
             }
-            $meta['stage']       = 'restore-extract-db';
+            $initial_stage = class_exists( 'Museder_Restoreone_Restore_Preflight' )
+                ? Museder_Restoreone_Restore_Preflight::initial_stage( $options )
+                : 'restore-extract-db';
+            $meta['stage']       = $initial_stage;
             $meta['progress']    = 70;
-            $meta['message']     = __( 'Restore queued. Preparing to extract database…', 'museder-restoreone' );
+            $meta['message']     = ( 'restore-files' === $initial_stage )
+                ? __( 'Restore queued. Preparing to restore files…', 'museder-restoreone' )
+                : __( 'Restore queued. Preparing to extract database…', 'museder-restoreone' );
             $meta['updated_at']  = current_time( 'mysql' );
             $meta['completed']   = false;
             $meta['cancel_requested'] = false;
@@ -383,18 +426,53 @@ class Museder_Restoreone_Restore_Service {
             // Track as active restore job (for UI bootstrap / polling recovery).
             update_option( self::ACTIVE_JOB_OPTION, $job_id, false );
 
-            // Schedule background processing (time-sliced).
-            // De-duplicate any existing scheduled ticks for this job id.
-            if ( function_exists( 'wp_clear_scheduled_hook' ) ) {
-                wp_clear_scheduled_hook( self::CRON_HOOK_PROCESS, [ $job_id ] );
+            // Generate a file-based restore token that survives DB import.
+            $restore_token = '';
+            if ( class_exists( 'Museder_Restoreone_Restore_Token' ) ) {
+                $restore_token = Museder_Restoreone_Restore_Token::generate( $job_id );
             }
-            wp_schedule_single_event( time(), self::CRON_HOOK_PROCESS, [ $job_id ] );
-            self::spawn_cron();
+            $meta['restore_token'] = $restore_token;
+
+            // Capture the authenticated admin's session tokens NOW (while user is logged in).
+            // WP-Cron runs without an authenticated user, so get_current_user_id() returns 0
+            // inside process_job_slice(). We must save this at execute() time.
+            $executing_user_id = get_current_user_id();
+            $meta['restore_admin_user_id'] = $executing_user_id;
+            if ( $executing_user_id > 0 && class_exists( 'WP_Session_Tokens' ) ) {
+                $token_manager = WP_Session_Tokens::get_instance( $executing_user_id );
+                $meta['restore_admin_session_tokens'] = $token_manager->get_all();
+            } else {
+                $meta['restore_admin_session_tokens'] = [];
+            }
+
+            $profile_for_handoff = isset( $meta['restore_profile'] ) ? (string) $meta['restore_profile'] : '';
+            $use_bootstrap       = class_exists( 'Museder_Restoreone_Restore_Bootstrap' )
+                && Museder_Restoreone_Restore_Bootstrap::should_use_bootstrap_handoff( $options, $profile_for_handoff );
+
+            // Schedule background processing (time-sliced).
+            if ( function_exists( 'wp_schedule_single_event' ) ) {
+                if ( function_exists( 'wp_clear_scheduled_hook' ) ) {
+                    wp_clear_scheduled_hook( self::CRON_HOOK_PROCESS, [ $job_id ] );
+                }
+                wp_schedule_single_event( time(), self::CRON_HOOK_PROCESS, [ $job_id ] );
+                self::spawn_cron();
+            }
+
+            if ( $use_bootstrap ) {
+                $handoff_secret = ! empty( $options['bootstrap_secret'] ) ? (string) $options['bootstrap_secret'] : '';
+                Museder_Restoreone_Restore_Bootstrap::write_handoff( $job_id, $handoff_secret );
+                if ( function_exists( 'museder_restoreone_nudge_restore_bootstrap' ) ) {
+                    museder_restoreone_nudge_restore_bootstrap( $job_id );
+                } elseif ( '' !== $handoff_secret ) {
+                    Museder_Restoreone_Restore_Bootstrap::spawn_loopback( $job_id, $handoff_secret );
+                }
+            }
 
             return [
                 'ok'                 => true,
                 'message'            => __( 'Restore started. You can monitor progress on this page.', 'museder-restoreone' ),
                 'rollback_available' => ! empty( $pre_backup ) && ! empty( $pre_backup['file'] ),
+                'restore_token'      => $restore_token,
             ];
         } catch ( Exception $e ) {
             museder_restoreone_log( 'error', 'Restore execution start failed.', [ 'job_id' => $job_id, 'error' => $e->getMessage() ] );
@@ -455,6 +533,10 @@ class Museder_Restoreone_Restore_Service {
                 $meta['completed']  = true;
                 $meta['updated_at'] = current_time( 'mysql' );
                 self::write_job_meta( $job_id, $meta );
+                if ( class_exists( 'Museder_Restoreone_Restore_Token' ) ) {
+                    Museder_Restoreone_Restore_Token::revoke();
+                }
+                self::exit_mid_restore_plugin_isolation( $job_id );
                 Museder_Restoreone_Restore_Lock::release();
 
                 // Restore History: mark cancelled.
@@ -531,17 +613,19 @@ class Museder_Restoreone_Restore_Service {
                     throw new RuntimeException( esc_html__( 'Restore job is in an unknown stage.', 'museder-restoreone' ) );
             }
 
-            // Re-schedule if not done (cron only).
-            if ( $reschedule ) {
-                $meta_after = self::get_job_meta( $job_id );
-                if ( empty( $meta_after['completed'] ) && ! wp_next_scheduled( self::CRON_HOOK_PROCESS, [ $job_id ] ) ) {
+            $meta_after = self::get_job_meta( $job_id );
+            if ( empty( $meta_after['completed'] ) ) {
+                if ( ! wp_next_scheduled( self::CRON_HOOK_PROCESS, [ $job_id ] ) ) {
                     wp_schedule_single_event( time() + 1, self::CRON_HOOK_PROCESS, [ $job_id ] );
-                    self::spawn_cron();
                 }
+                self::spawn_cron();
+            }
+
+            if ( $reschedule ) {
                 return [ 'ok' => true, 'meta' => $meta_after ];
             }
 
-            return [ 'ok' => true, 'meta' => self::get_job_meta( $job_id ) ];
+            return [ 'ok' => true, 'meta' => $meta_after ];
                 } catch ( Exception $e ) {
             museder_restoreone_log( 'error', 'Restore job slice failed.', [ 'job_id' => $job_id, 'source' => $source, 'error' => $e->getMessage() ] );
             try {
@@ -585,6 +669,7 @@ class Museder_Restoreone_Restore_Service {
             if ( $active === $job_id ) {
                 delete_option( self::ACTIVE_JOB_OPTION );
             }
+            self::exit_mid_restore_plugin_isolation( $job_id );
             Museder_Restoreone_Restore_Lock::release();
             return [ 'ok' => false, 'meta' => [], 'reason' => 'failed' ];
         } finally {
@@ -670,6 +755,12 @@ class Museder_Restoreone_Restore_Service {
             // Ignore.
         }
 
+        if ( class_exists( 'Museder_Restoreone_Restore_Token' ) ) {
+            Museder_Restoreone_Restore_Token::revoke();
+        }
+
+        self::exit_mid_restore_plugin_isolation( $job_id );
+
         Museder_Restoreone_Restore_Lock::release();
 
         return [ 'ok' => true, 'message' => __( 'Restore cancelled.', 'museder-restoreone' ) ];
@@ -689,6 +780,871 @@ class Museder_Restoreone_Restore_Service {
         if ( function_exists( 'museder_restoreone_nudge_wp_cron' ) ) {
             museder_restoreone_nudge_wp_cron();
         }
+    }
+
+    /**
+     * Public wrapper for bootstrap / cron nudges.
+     *
+     * @return void
+     */
+    public static function spawn_cron_public() {
+        self::spawn_cron();
+    }
+
+    /**
+     * Mark a prepared job as validated (bootstrap start without wp-admin).
+     *
+     * @param string $job_id Job ID.
+     * @return void
+     */
+    public static function mark_job_validated_for_bootstrap( $job_id ) {
+        $meta = self::get_job_meta( $job_id );
+        $meta['stage']      = 'validated';
+        $meta['progress']   = 30;
+        $meta['message']    = __( 'Validation skipped (bootstrap).', 'museder-restoreone' );
+        $meta['updated_at'] = current_time( 'mysql' );
+        $meta['validation'] = [
+            'checksum' => [ 'ok' => true, 'sha1' => '' ],
+            'compat'   => [
+                'wp'  => [ 'backup' => '', 'current' => '', 'ok' => true ],
+                'php' => [ 'backup' => '', 'current' => PHP_VERSION, 'ok' => true ],
+                'db'  => [ 'backup' => '', 'current' => '', 'ok' => true ],
+            ],
+        ];
+        self::write_job_meta( $job_id, $meta );
+    }
+
+    /**
+     * Process restore-files stage slices without a full WordPress bootstrap (empty docroot).
+     *
+     * @param string $job_id        Job ID.
+     * @param int    $slice_seconds Slice budget.
+     * @return array{ok:bool,meta:array,reason?:string}
+     */
+    public static function process_bootstrap_files_only_slice( $job_id, $slice_seconds = 25 ) {
+        $job_id = (string) $job_id;
+        $slice  = max( 1, (int) $slice_seconds );
+        $lock_fp = null;
+
+        try {
+            $lock_fp = self::acquire_job_run_lock( $job_id );
+            if ( ! $lock_fp ) {
+                return [ 'ok' => false, 'meta' => [], 'reason' => 'busy' ];
+            }
+
+            $meta = self::get_job_meta( $job_id );
+            if ( ! empty( $meta['completed'] ) ) {
+                return [ 'ok' => true, 'meta' => $meta ];
+            }
+
+            $stage = isset( $meta['stage'] ) ? (string) $meta['stage'] : '';
+            if ( 'restore-files' !== $stage ) {
+                $meta['bootstrap_needs_wp'] = true;
+                self::write_job_meta( $job_id, $meta );
+                return [ 'ok' => true, 'meta' => $meta, 'reason' => 'needs_wp' ];
+            }
+
+            if ( Museder_Restoreone_Restore_Lock::is_locked() && ! self::is_current_lock( $job_id ) ) {
+                return [ 'ok' => false, 'meta' => $meta, 'reason' => 'locked_by_other' ];
+            }
+            Museder_Restoreone_Restore_Lock::refresh( $job_id );
+
+            $end = time() + $slice;
+            while ( time() < $end ) {
+                $meta = self::get_job_meta( $job_id );
+                if ( empty( $meta['completed'] ) && 'restore-files' === ( isset( $meta['stage'] ) ? (string) $meta['stage'] : '' ) ) {
+                    self::stage_restore_files( $job_id, $meta, min( 10, $end - time() ) );
+                } else {
+                    break;
+                }
+            }
+
+            $meta_after = self::get_job_meta( $job_id );
+            return [ 'ok' => true, 'meta' => $meta_after ];
+        } catch ( Exception $e ) {
+            museder_restoreone_log( 'error', 'Bootstrap files slice failed.', [ 'job_id' => $job_id, 'error' => $e->getMessage() ] );
+            try {
+                $meta = self::get_job_meta( $job_id );
+                $meta['stage']     = 'failed';
+                $meta['completed'] = true;
+                $meta['message']   = $e->getMessage();
+                self::write_job_meta( $job_id, $meta );
+            } catch ( Exception $inner ) {
+                // Ignore.
+            }
+            Museder_Restoreone_Restore_Lock::release();
+            return [ 'ok' => false, 'meta' => [], 'reason' => 'failed' ];
+        } finally {
+            self::release_job_run_lock( $lock_fp );
+        }
+    }
+
+    /**
+     * Recover runtime state after DB import replaced wp_options.
+     *
+     * The NDJSON import DROP+rebuilds wp_options, which destroys:
+     * - WP-Cron schedule for this job
+     * - Restore lock (option + transient)
+     * - Active job pointer
+     *
+     * This method re-writes them so the next cron tick can proceed.
+     *
+     * @param string $job_id Current restore job ID.
+     */
+    private static function post_db_import_recovery( $job_id ) {
+        // Flush object cache so update_option writes to the real DB.
+        if ( function_exists( 'wp_cache_flush' ) ) {
+            wp_cache_flush();
+        }
+
+        // Re-establish the restore lock.
+        $lock_payload = [
+            'job_id'      => $job_id,
+            'acquired_at' => time(),
+        ];
+        update_option( Museder_Restoreone_Restore_Lock::OPTION_KEY, $lock_payload, false );
+        if ( function_exists( 'set_site_transient' ) ) {
+            set_site_transient(
+                Museder_Restoreone_Restore_Lock::TRANSIENT_KEY,
+                $lock_payload,
+                30 * MINUTE_IN_SECONDS
+            );
+        }
+
+        // Re-establish active job pointer.
+        update_option( self::ACTIVE_JOB_OPTION, $job_id, false );
+
+        // MU guard must exist before loopback wp-cron loads plugins (object-cache hosts).
+        self::ensure_mu_plugin_isolation_guard();
+
+        // Ensure cron is scheduled for the next tick.
+        if ( ! wp_next_scheduled( self::CRON_HOOK_PROCESS, [ $job_id ] ) ) {
+            wp_schedule_single_event( time() + 2, self::CRON_HOOK_PROCESS, [ $job_id ] );
+        }
+
+        // Nudge cron.
+        self::spawn_cron();
+
+        if ( function_exists( 'museder_restoreone_log' ) ) {
+            museder_restoreone_log( 'info', 'Post-DB-import recovery: lock, active job, and cron re-established.', [ 'job_id' => $job_id ] );
+        }
+    }
+
+    /**
+     * Plugin basename for this plugin (used during mid-restore isolation).
+     *
+     * @return string
+     */
+    protected static function get_restoreone_plugin_basename() {
+        if ( defined( 'MUSEDER_RESTOREONE_PATH' ) ) {
+            return plugin_basename( MUSEDER_RESTOREONE_PATH . 'museder-restoreone.php' );
+        }
+
+        return 'museder-restoreone/museder-restoreone.php';
+    }
+
+    /**
+     * Keep the must-use isolation guard in sync with the mid-restore option flag.
+     *
+     * MU-plugins load before regular plugins, so wp-cron cannot bootstrap incomplete third-party
+     * plugins when object cache still holds the full active_plugins list from the imported DB.
+     *
+     * @return void
+     */
+    public static function ensure_mu_plugin_isolation_guard() {
+        if ( '1' === (string) get_option( self::OPTION_MID_RESTORE_ISOLATION, '' ) ) {
+            self::install_mu_plugin_isolation_guard();
+            return;
+        }
+        self::remove_mu_plugin_isolation_guard();
+    }
+
+    /**
+     * @return bool True when the guard file exists (or was written).
+     */
+    protected static function install_mu_plugin_isolation_guard() {
+        $dir = self::resolve_mu_plugins_dir();
+        if ( '' === $dir ) {
+            return false;
+        }
+
+        $path = trailingslashit( $dir ) . self::MU_ISOLATION_GUARD_FILE;
+        if ( is_readable( $path ) && filesize( $path ) > 100 ) {
+            return true;
+        }
+
+        $body = self::get_mu_plugin_isolation_guard_source();
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- MU guard must exist before plugin bootstrap
+        $ok = file_put_contents( $path, $body, LOCK_EX );
+        if ( false === $ok ) {
+            if ( function_exists( 'museder_restoreone_log' ) ) {
+                museder_restoreone_log( 'warning', 'Failed to write mid-restore MU isolation guard.', [ 'path' => $path ] );
+            }
+            return false;
+        }
+
+        if ( function_exists( 'museder_restoreone_log' ) ) {
+            museder_restoreone_log( 'info', 'Mid-restore MU isolation guard installed.', [ 'path' => $path ] );
+        }
+
+        return true;
+    }
+
+    /**
+     * @return void
+     */
+    protected static function remove_mu_plugin_isolation_guard() {
+        $dir = self::resolve_mu_plugins_dir();
+        if ( '' === $dir ) {
+            return;
+        }
+
+        $path = trailingslashit( $dir ) . self::MU_ISOLATION_GUARD_FILE;
+        if ( ! file_exists( $path ) ) {
+            return;
+        }
+
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- remove auto-managed MU guard
+        @unlink( $path );
+
+        if ( function_exists( 'museder_restoreone_log' ) ) {
+            museder_restoreone_log( 'info', 'Mid-restore MU isolation guard removed.', [ 'path' => $path ] );
+        }
+    }
+
+    /**
+     * @return string Normalized mu-plugins directory (no trailing slash) or empty.
+     */
+    protected static function resolve_mu_plugins_dir() {
+        $dir = '';
+        if ( function_exists( 'museder_restoreone_get_mu_plugins_dir' ) ) {
+            $dir = museder_restoreone_get_mu_plugins_dir();
+        }
+
+        if ( '' === $dir && function_exists( 'museder_restoreone_get_wp_content_dir' ) ) {
+            $content = museder_restoreone_get_wp_content_dir();
+            if ( '' !== $content ) {
+                $dir = wp_normalize_path( trailingslashit( $content ) . 'mu-plugins' );
+                if ( ! is_dir( $dir ) && function_exists( 'wp_mkdir_p' ) ) {
+                    wp_mkdir_p( $dir );
+                }
+            }
+        }
+
+        if ( '' === $dir || ! is_dir( $dir ) ) {
+            return '';
+        }
+
+        return wp_normalize_path( $dir );
+    }
+
+    /**
+     * PHP source for the auto-managed MU guard (written to wp-content/mu-plugins).
+     *
+     * @return string
+     */
+    protected static function get_mu_plugin_isolation_guard_source() {
+        $self = self::get_restoreone_plugin_basename();
+
+        return '<?php
+/**
+ * Plugin Name: Museder RestoreOne — restore isolation guard
+ * Description: During mid-restore, load only RestoreOne so wp-cron cannot fatal on incomplete plugins. Auto-managed; do not edit.
+ * Version: 1.0.0
+ * Author: Adrian Lin
+ * License: GPLv2 or later
+ */
+if ( ! defined( \'ABSPATH\' ) ) {
+	exit;
+}
+
+/**
+ * @return bool
+ */
+function museder_restoreone_mu_guard_is_active() {
+	global $wpdb;
+	if ( ! isset( $wpdb->options ) ) {
+		return false;
+	}
+	static $active = null;
+	if ( null !== $active ) {
+		return $active;
+	}
+	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+	$val    = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s LIMIT 1", \'museder_restoreone_mid_restore_isolation\' ) );
+	$active = ( \'1\' === (string) $val );
+	return $active;
+}
+
+/**
+ * @param mixed $pre Option value preempt.
+ * @return mixed
+ */
+function museder_restoreone_mu_filter_active_plugins( $pre ) {
+	if ( ! museder_restoreone_mu_guard_is_active() ) {
+		return $pre;
+	}
+	return array( \'' . $self . '\' );
+}
+
+add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active_plugins\', 1 );
+';
+    }
+
+    /**
+     * Temporarily load only RestoreOne while wp-content files are still being extracted.
+     *
+     * Scoped to an in-progress restore job: snapshots active_plugins (and network plugins on multisite),
+     * then reduces the active list so cron/AJAX ticks cannot fatal on incomplete third-party plugins.
+     *
+     * @param string              $job_id        Restore job ID (optional for legacy sync restore).
+     * @param array<string,mixed> $import_result Result from Museder_Restoreone_Restore::import_database().
+     * @return bool True when isolation was applied.
+     */
+    public static function enter_mid_restore_plugin_isolation( $job_id, $import_result = [] ) {
+        $job_id = (string) $job_id;
+        $self   = self::get_restoreone_plugin_basename();
+
+        $plugins = [];
+        if ( is_array( $import_result ) && ! empty( $import_result['active_plugins'] ) && is_array( $import_result['active_plugins'] ) ) {
+            $plugins = $import_result['active_plugins'];
+        }
+
+        if ( empty( $plugins ) ) {
+            $stored = get_option( self::OPTION_RESTORED_ACTIVE_PLUGINS, [] );
+            if ( is_array( $stored ) && ! empty( $stored ) ) {
+                $plugins = $stored;
+            }
+        }
+
+        if ( empty( $plugins ) ) {
+            $current = get_option( 'active_plugins', [] );
+            if ( is_array( $current ) ) {
+                $plugins = $current;
+            }
+        }
+
+        $plugins = array_values( array_unique( array_filter( array_map( 'strval', $plugins ) ) ) );
+
+        if ( count( $plugins ) <= 1 && ( empty( $plugins ) || $plugins[0] === $self ) ) {
+            return false;
+        }
+
+        if ( ! in_array( $self, $plugins, true ) ) {
+            $plugins[] = $self;
+        }
+
+        update_option( self::OPTION_RESTORED_ACTIVE_PLUGINS, $plugins, false );
+
+        if ( is_multisite() && function_exists( 'get_site_option' ) && function_exists( 'update_site_option' ) ) {
+            $sitewide = get_site_option( 'active_sitewide_plugins', [] );
+            if ( is_array( $sitewide ) && ! empty( $sitewide ) ) {
+                update_option( self::OPTION_RESTORED_SITEWIDE_PLUGINS, $sitewide, false );
+                $sitewide_minimal = [];
+                if ( isset( $sitewide[ $self ] ) ) {
+                    $sitewide_minimal[ $self ] = $sitewide[ $self ];
+                }
+                update_site_option( 'active_sitewide_plugins', $sitewide_minimal );
+            }
+        }
+
+        update_option( 'active_plugins', [ $self ], false );
+        update_option( self::OPTION_MID_RESTORE_ISOLATION, '1', false );
+
+        if ( function_exists( 'wp_cache_delete' ) ) {
+            wp_cache_delete( 'active_plugins', 'options' );
+            wp_cache_delete( 'alloptions', 'options' );
+        }
+
+        if ( '' !== $job_id ) {
+            $meta = self::get_job_meta( $job_id );
+            if ( is_array( $meta ) ) {
+                $cp = isset( $meta['checkpoints'] ) && is_array( $meta['checkpoints'] ) ? $meta['checkpoints'] : [];
+                $cp['plugin_isolation'] = [
+                    'active'        => 1,
+                    'isolated_at'   => time(),
+                    'plugins_count' => count( $plugins ),
+                ];
+                $meta['checkpoints'] = $cp;
+                self::write_job_meta( $job_id, $meta );
+            }
+        }
+
+        self::install_mu_plugin_isolation_guard();
+
+        if ( function_exists( 'museder_restoreone_log' ) ) {
+            museder_restoreone_log( 'info', 'Mid-restore plugin isolation enabled (RestoreOne only until files finish).', [
+                'job_id'          => $job_id,
+                'restored_count'  => count( $plugins ),
+                'self_plugin'     => $self,
+            ] );
+        }
+
+        return true;
+    }
+
+    /**
+     * Restore active_plugins snapshot after file restore and search-replace complete.
+     *
+     * @param string $job_id Restore job ID (optional).
+     * @return bool True when a snapshot was restored.
+     */
+    public static function exit_mid_restore_plugin_isolation( $job_id = '' ) {
+        $job_id = (string) $job_id;
+
+        if ( '1' !== (string) get_option( self::OPTION_MID_RESTORE_ISOLATION, '' ) ) {
+            return false;
+        }
+
+        $plugins = get_option( self::OPTION_RESTORED_ACTIVE_PLUGINS, [] );
+        if ( ! is_array( $plugins ) || empty( $plugins ) ) {
+            delete_option( self::OPTION_MID_RESTORE_ISOLATION );
+            return false;
+        }
+
+        $plugins = array_values( array_unique( array_filter( array_map( 'strval', $plugins ) ) ) );
+
+        $filtered = self::filter_active_plugins_with_existing_main_files( $plugins, $job_id );
+        $plugins  = $filtered['plugins'];
+        $skipped  = $filtered['skipped'];
+
+        update_option( 'active_plugins', $plugins, false );
+
+        $sitewide = get_option( self::OPTION_RESTORED_SITEWIDE_PLUGINS, null );
+        if ( is_multisite() && is_array( $sitewide ) && function_exists( 'update_site_option' ) ) {
+            update_site_option( 'active_sitewide_plugins', $sitewide );
+            delete_option( self::OPTION_RESTORED_SITEWIDE_PLUGINS );
+        }
+
+        delete_option( self::OPTION_MID_RESTORE_ISOLATION );
+        self::remove_mu_plugin_isolation_guard();
+
+        if ( function_exists( 'wp_cache_delete' ) ) {
+            wp_cache_delete( 'active_plugins', 'options' );
+            wp_cache_delete( 'alloptions', 'options' );
+        }
+
+        if ( '' !== $job_id ) {
+            $meta = self::get_job_meta( $job_id );
+            if ( is_array( $meta ) ) {
+                $cp = isset( $meta['checkpoints'] ) && is_array( $meta['checkpoints'] ) ? $meta['checkpoints'] : [];
+                if ( isset( $cp['plugin_isolation'] ) && is_array( $cp['plugin_isolation'] ) ) {
+                    $cp['plugin_isolation']['active']      = 0;
+                    $cp['plugin_isolation']['restored_at'] = time();
+                }
+                $meta['checkpoints'] = $cp;
+                self::write_job_meta( $job_id, $meta );
+            }
+        }
+
+        if ( function_exists( 'museder_restoreone_log' ) ) {
+            museder_restoreone_log( 'info', 'Mid-restore plugin isolation released; active_plugins restored from backup snapshot.', [
+                'job_id'         => $job_id,
+                'plugins_count'  => count( $plugins ),
+                'skipped_count'  => count( $skipped ),
+                'skipped'        => $skipped,
+            ] );
+        }
+
+        return true;
+    }
+
+    /**
+     * Re-filter active_plugins after restore (or on demand) so broken/partial plugin trees are not left enabled.
+     *
+     * @param string $job_id Optional restore job ID for logging/meta.
+     * @return array{changed:bool,plugins_count:int,skipped:array<int,string>}
+     */
+    public static function reapply_safe_active_plugins_after_restore( $job_id = '' ) {
+        $job_id  = (string) $job_id;
+        $before  = get_option( 'active_plugins', [] );
+        if ( ! is_array( $before ) ) {
+            $before = [];
+        }
+
+        $filtered = self::filter_active_plugins_with_existing_main_files( $before, $job_id );
+        $after    = $filtered['plugins'];
+        $skipped  = $filtered['skipped'];
+
+        $before_norm = array_values( array_unique( array_map( 'strval', $before ) ) );
+        $after_norm  = array_values( array_unique( array_map( 'strval', $after ) ) );
+        sort( $before_norm );
+        sort( $after_norm );
+        $changed = ( $before_norm !== $after_norm );
+
+        if ( $changed ) {
+            update_option( 'active_plugins', $after_norm, false );
+            if ( function_exists( 'wp_cache_delete' ) ) {
+                wp_cache_delete( 'active_plugins', 'options' );
+                wp_cache_delete( 'alloptions', 'options' );
+            }
+        }
+
+        if ( function_exists( 'museder_restoreone_log' ) ) {
+            museder_restoreone_log( $changed ? 'warning' : 'info', 'Reapplied safe active_plugins filter after restore.', [
+                'job_id'         => $job_id,
+                'changed'        => $changed ? 1 : 0,
+                'plugins_count'  => count( $after_norm ),
+                'skipped_count'  => count( $skipped ),
+                'skipped'        => $skipped,
+            ] );
+        }
+
+        return [
+            'changed'        => $changed,
+            'plugins_count'  => count( $after_norm ),
+            'skipped'        => $skipped,
+        ];
+    }
+
+    /**
+     * Known plugins that fatal or wp_die when vendor/autoload is missing (partial backup trees).
+     *
+     * @return array<string,array<int,string>> Plugin basename => required paths relative to plugin root.
+     */
+    protected static function get_known_restore_plugin_required_paths() {
+        $map = [
+            'all-in-one-seo-pack/all_in_one_seo_pack.php'     => [ 'vendor/autoload.php' ],
+            'all-in-one-seo-pack-pro/all_in_one_seo_pack.php' => [ 'vendor/autoload.php' ],
+            'all-in-one-wp-migration/all-in-one-wp-migration.php' => [],
+            'all-in-one-wp-migration-unlimited-extension/all-in-one-wp-migration-unlimited-extension.php' => [
+                'lib/vendor/servmask/command/ai1wm-wp-cli.php',
+            ],
+            'wp-statistics/wp-statistics.php' => [ 'vendor/autoload.php' ],
+            'real-media-library-lite/index.php' => [ 'public/vendor/autoload.php' ],
+        ];
+
+        /**
+         * Filter known required relative paths per plugin basename (restore release safety).
+         *
+         * @param array<string,array<int,string>> $map Plugin basename => paths relative to plugin directory.
+         */
+        return (array) apply_filters( 'museder_restoreone_known_restore_plugin_required_paths', $map );
+    }
+
+    /**
+     * Relative paths that must exist under the plugin directory before we keep it in active_plugins.
+     *
+     * @param string $plugin_basename Plugin basename (e.g. foo/bar.php).
+     * @param string $plugin_dir      Absolute plugin directory path.
+     * @param string $main_file       Absolute main plugin file path.
+     * @return array<int,string>
+     */
+    /**
+     * Pull vendor/lib relative paths referenced by require/include in a PHP snippet.
+     *
+     * @param string $snippet PHP source (bounded read).
+     * @return array<int,string>
+     */
+    protected static function extract_dependency_paths_from_php_snippet( $snippet ) {
+        if ( ! is_string( $snippet ) || '' === $snippet ) {
+            return [];
+        }
+
+        $paths = [];
+        if ( preg_match_all( '/(?:require|include)(?:_once)?\s*(?:\(\s*)?[\'"]([^\'"]+)[\'"]/i', $snippet, $matches ) ) {
+            foreach ( $matches[1] as $rel ) {
+                $rel = ltrim( str_replace( '\\', '/', (string) $rel ), './' );
+                if ( false !== strpos( $rel, 'vendor/' ) ) {
+                    $paths[] = $rel;
+                }
+            }
+        }
+
+        return array_values( array_unique( $paths ) );
+    }
+
+    protected static function get_restore_required_relative_paths( $plugin_basename, $plugin_dir, $main_file ) {
+        $plugin_basename = (string) $plugin_basename;
+        $paths           = [];
+
+        $known = self::get_known_restore_plugin_required_paths();
+        if ( isset( $known[ $plugin_basename ] ) && is_array( $known[ $plugin_basename ] ) ) {
+            $paths = array_merge( $paths, $known[ $plugin_basename ] );
+        }
+
+        $snippet = '';
+        if ( is_readable( $main_file ) ) {
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- bounded read for restore safety.
+            $snippet = (string) file_get_contents( $main_file, false, null, 0, 32768 );
+        }
+
+        $paths = array_merge( $paths, self::extract_dependency_paths_from_php_snippet( $snippet ) );
+
+        foreach ( self::extract_dependency_paths_from_php_snippet( $snippet ) as $rel ) {
+            if ( strlen( $rel ) < 5 || '.php' !== substr( $rel, -4 ) ) {
+                continue;
+            }
+            $inc = $plugin_dir . '/' . $rel;
+            if ( ! is_readable( $inc ) ) {
+                continue;
+            }
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- bounded read for restore safety.
+            $inc_snippet = (string) file_get_contents( $inc, false, null, 0, 32768 );
+            $paths       = array_merge( $paths, self::extract_dependency_paths_from_php_snippet( $inc_snippet ) );
+        }
+
+        $scan_for = [ 'vendor/autoload.php', 'lib/vendor/autoload.php', 'public/vendor/autoload.php' ];
+        foreach ( $scan_for as $rel ) {
+            if ( '' !== $snippet && false !== strpos( $snippet, $rel ) ) {
+                $paths[] = $rel;
+            }
+        }
+
+        $loader = $plugin_dir . '/loader.php';
+        if ( is_readable( $loader ) ) {
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- bounded read for restore safety.
+            $loader_snippet = (string) file_get_contents( $loader, false, null, 0, 32768 );
+            $paths          = array_merge( $paths, self::extract_dependency_paths_from_php_snippet( $loader_snippet ) );
+        }
+
+        $paths = array_values( array_unique( array_filter( array_map( 'strval', $paths ) ) ) );
+
+        /**
+         * Filter required relative paths for a plugin before restore re-enables it.
+         *
+         * @param array<int,string> $paths           Relative paths under the plugin directory.
+         * @param string            $plugin_basename Plugin basename.
+         * @param string            $plugin_dir      Plugin directory absolute path.
+         */
+        return (array) apply_filters( 'museder_restoreone_plugin_restore_required_paths', $paths, $plugin_basename, $plugin_dir );
+    }
+
+    /**
+     * Whether a plugin directory contains at least one PHP file within a depth limit.
+     *
+     * @param string $dir       Directory to scan.
+     * @param int    $max_depth Maximum recursion depth.
+     * @return bool
+     */
+    protected static function directory_has_php_files( $dir, $max_depth = 6 ) {
+        $dir = (string) $dir;
+        if ( '' === $dir || ! is_dir( $dir ) ) {
+            return false;
+        }
+
+        try {
+            $iterator = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator( $dir, FilesystemIterator::SKIP_DOTS ),
+                RecursiveIteratorIterator::SELF_FIRST
+            );
+            foreach ( $iterator as $file ) {
+                if ( $iterator->getDepth() > $max_depth ) {
+                    continue;
+                }
+                if ( $file->isFile() && 'php' === strtolower( $file->getExtension() ) ) {
+                    return true;
+                }
+            }
+        } catch ( Exception $e ) {
+            return false;
+        }
+
+        return false;
+    }
+
+    /**
+     * Detect incomplete Servmask/vendor trees (AI1WM-style loaders use VENDOR_PATH constants).
+     *
+     * @param string $plugin_dir Absolute plugin directory.
+     * @param string $main_file  Absolute main plugin file.
+     * @return bool True when vendor tree looks complete or not required.
+     */
+    protected static function plugin_vendor_tree_looks_complete( $plugin_dir, $main_file ) {
+        $plugin_dir = trailingslashit( wp_normalize_path( (string) $plugin_dir ) );
+        $snippets   = [];
+
+        if ( is_readable( $main_file ) ) {
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- bounded read for restore safety.
+            $snippets[] = (string) file_get_contents( $main_file, false, null, 0, 32768 );
+        }
+
+        $loader = $plugin_dir . 'loader.php';
+        if ( is_readable( $loader ) ) {
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- bounded read for restore safety.
+            $snippets[] = (string) file_get_contents( $loader, false, null, 0, 32768 );
+        }
+
+        $includes_dir = $plugin_dir . 'includes';
+        if ( is_dir( $includes_dir ) ) {
+            $inc_files = glob( $includes_dir . '/*.php' );
+            if ( is_array( $inc_files ) ) {
+                $inc_files = array_slice( $inc_files, 0, 20 );
+                foreach ( $inc_files as $inc_file ) {
+                    if ( ! is_readable( $inc_file ) ) {
+                        continue;
+                    }
+                    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- bounded read for restore safety.
+                    $snippets[] = (string) file_get_contents( $inc_file, false, null, 0, 8192 );
+                }
+            }
+        }
+
+        $blob = implode( "\n", $snippets );
+        if ( false !== strpos( $blob, 'vendor/autoload.php' ) && ! is_readable( $plugin_dir . 'vendor/autoload.php' ) ) {
+            return false;
+        }
+
+        if ( is_dir( $plugin_dir . 'vendor' ) && ! is_readable( $plugin_dir . 'vendor/autoload.php' ) ) {
+            return false;
+        }
+
+        $vendor_subdirs = [ 'lib/vendor', 'admin/vendor', 'public/vendor', 'vendor' ];
+        $needs_vendor   = ( false !== strpos( $blob, 'VENDOR_PATH' ) );
+        foreach ( $vendor_subdirs as $subdir ) {
+            if ( false !== strpos( $blob, $subdir ) ) {
+                $needs_vendor = true;
+                if ( ! self::directory_has_php_files( $plugin_dir . $subdir, 8 ) ) {
+                    return false;
+                }
+            }
+        }
+
+        if ( ! $needs_vendor ) {
+            return true;
+        }
+
+        if ( false !== strpos( $blob, 'servmask' ) ) {
+            return self::directory_has_php_files( $plugin_dir . 'lib/vendor/servmask', 8 );
+        }
+
+        return self::directory_has_php_files( $plugin_dir . 'lib/vendor', 6 );
+    }
+
+    /**
+     * Whether a plugin tree is complete enough to stay in active_plugins after restore.
+     *
+     * @param string $plugin_basename Plugin basename.
+     * @return bool
+     */
+    protected static function plugin_is_safe_to_activate_after_restore( $plugin_basename, array $candidate_plugins = [] ) {
+        $plugin_basename = (string) $plugin_basename;
+        if ( '' === $plugin_basename || ! defined( 'WP_PLUGIN_DIR' ) ) {
+            return false;
+        }
+
+        $main = WP_PLUGIN_DIR . '/' . $plugin_basename;
+        if ( ! is_readable( $main ) ) {
+            return false;
+        }
+
+        $plugin_dir = dirname( $main );
+        $required   = self::get_restore_required_relative_paths( $plugin_basename, $plugin_dir, $main );
+        foreach ( $required as $rel ) {
+            $path = $plugin_dir . '/' . ltrim( $rel, '/\\' );
+            if ( ! is_readable( $path ) ) {
+                return false;
+            }
+        }
+
+        if ( ! self::plugin_vendor_tree_looks_complete( $plugin_dir, $main ) ) {
+            return false;
+        }
+
+        if ( ! self::plugin_required_siblings_are_available( $plugin_basename, $candidate_plugins ) ) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Skip plugins that depend on another plugin slug that is not in the restore list or on disk.
+     *
+     * @param string            $plugin_basename   Plugin basename being evaluated.
+     * @param array<int,string> $candidate_plugins Full plugin list being restored.
+     * @return bool
+     */
+    protected static function plugin_required_siblings_are_available( $plugin_basename, array $candidate_plugins ) {
+        $requires = [
+            'elementor-pro/elementor-pro.php' => 'elementor/elementor.php',
+        ];
+
+        /**
+         * Filter plugin sibling requirements (child => required parent main file).
+         *
+         * @param array<string,string> $requires          Child basename => required plugin basename.
+         * @param string               $plugin_basename   Plugin being evaluated.
+         * @param array<int,string>    $candidate_plugins Candidate active plugin list.
+         */
+        $requires = (array) apply_filters( 'museder_restoreone_restore_plugin_sibling_requirements', $requires, $plugin_basename, $candidate_plugins );
+
+        if ( ! isset( $requires[ $plugin_basename ] ) ) {
+            return true;
+        }
+
+        $required = (string) $requires[ $plugin_basename ];
+        if ( in_array( $required, $candidate_plugins, true ) ) {
+            $required_main = WP_PLUGIN_DIR . '/' . $required;
+            return is_readable( $required_main );
+        }
+
+        return false;
+    }
+
+    /**
+     * Only return plugins whose main file and declared vendor/lib dependencies exist after file restore.
+     *
+     * @param array<int,string> $plugins Plugin basenames from backup snapshot.
+     * @param string            $job_id  Restore job ID (optional).
+     * @return array{plugins:array<int,string>,skipped:array<int,string>}
+     */
+    protected static function filter_active_plugins_with_existing_main_files( array $plugins, $job_id = '' ) {
+        $job_id  = (string) $job_id;
+        $ok      = [];
+        $skipped = [];
+
+        if ( ! defined( 'WP_PLUGIN_DIR' ) ) {
+            return [
+                'plugins' => array_values( $plugins ),
+                'skipped' => [],
+            ];
+        }
+
+        foreach ( $plugins as $plugin ) {
+            $plugin = (string) $plugin;
+            if ( '' === $plugin ) {
+                continue;
+            }
+            // Never drop RestoreOne from the active list during restore safety filtering.
+            if ( 0 === strpos( $plugin, 'museder-restoreone/' ) ) {
+                $ok[] = $plugin;
+                continue;
+            }
+            if ( self::plugin_is_safe_to_activate_after_restore( $plugin, $plugins ) ) {
+                $ok[] = $plugin;
+            } else {
+                $skipped[] = $plugin;
+            }
+        }
+
+        if ( ! empty( $skipped ) ) {
+            update_option( 'museder_restoreone_skipped_plugins_after_restore', $skipped, false );
+
+            if ( '' !== $job_id ) {
+                $meta = self::get_job_meta( $job_id );
+                if ( is_array( $meta ) ) {
+                    $cp = isset( $meta['checkpoints'] ) && is_array( $meta['checkpoints'] ) ? $meta['checkpoints'] : [];
+                    $cp['plugins_skipped_missing_files'] = $skipped;
+                    $meta['checkpoints']                 = $cp;
+                    self::write_job_meta( $job_id, $meta );
+                }
+            }
+
+            if ( function_exists( 'museder_restoreone_log' ) ) {
+                museder_restoreone_log( 'warning', 'Skipped activating plugins with missing main file or required dependencies after file restore.', [
+                    'job_id'  => $job_id,
+                    'skipped' => $skipped,
+                ] );
+            }
+        } else {
+            delete_option( 'museder_restoreone_skipped_plugins_after_restore' );
+        }
+
+        return [
+            'plugins' => array_values( $ok ),
+            'skipped' => array_values( $skipped ),
+        ];
     }
 
     protected static function stage_extract_database( $job_id, array $meta, $slice_seconds ) {
@@ -805,6 +1761,15 @@ class Museder_Restoreone_Restore_Service {
         // Legacy SQL backups are manual-only (Museder_Restoreone_Restore::import_database returns manual_db_required).
         $result = Museder_Restoreone_Restore::import_database( $db_file );
 
+        $restore_options = isset( $meta['options'] ) && is_array( $meta['options'] ) ? $meta['options'] : [];
+        if ( self::should_enter_plugin_isolation_after_db_import( $restore_options ) ) {
+            self::enter_mid_restore_plugin_isolation( $job_id, is_array( $result ) ? $result : [] );
+        }
+
+        // DB import replaces wp_options (cron schedule, lock, active job pointer).
+        // Force-recover these runtime values so the restore pipeline continues.
+        self::post_db_import_recovery( $job_id );
+
         // Manual DB fallback: allow file restore to proceed when backup format is SQL.
         if ( empty( $result['success'] ) && isset( $result['code'] ) && 'manual_db_required' === (string) $result['code'] ) {
             $job_dir = self::ensure_job_directory( $job_id );
@@ -838,6 +1803,7 @@ class Museder_Restoreone_Restore_Service {
             $meta['progress'] = 80;
             $meta['message']  = isset( $result['message'] ) ? (string) $result['message'] : __( 'Database import failed.', 'museder-restoreone' );
             $meta['stage']    = 'failed';
+            self::exit_mid_restore_plugin_isolation( $job_id );
         }
         $meta['updated_at'] = current_time( 'mysql' );
             self::write_job_meta( $job_id, $meta );
@@ -1194,11 +2160,95 @@ class Museder_Restoreone_Restore_Service {
         }
     }
 
+    /**
+     * @param array<string, mixed> $options Restore job options.
+     * @return bool
+     */
+    protected static function should_enter_plugin_isolation_after_db_import( array $options ) {
+        if ( empty( $options['pause_other_plugins'] ) ) {
+            return false;
+        }
+        $order = isset( $options['restore_order'] ) ? (string) $options['restore_order'] : Museder_Restoreone_Restore_Preflight::ORDER_DB_THEN_FILES;
+        return Museder_Restoreone_Restore_Preflight::ORDER_DB_THEN_FILES === $order;
+    }
+
+    /**
+     * @param string               $job_id
+     * @param array<string, mixed> $meta
+     */
+    protected static function maybe_enter_plugin_isolation_at_files_stage( $job_id, array $meta ) {
+        $options = isset( $meta['options'] ) && is_array( $meta['options'] ) ? $meta['options'] : [];
+        if ( empty( $options['pause_other_plugins'] ) ) {
+            return;
+        }
+        $order   = isset( $options['restore_order'] ) ? (string) $options['restore_order'] : '';
+        $profile = isset( $options['restore_profile'] ) ? (string) $options['restore_profile'] : '';
+        if ( Museder_Restoreone_Restore_Preflight::ORDER_FILES_THEN_DB !== $order
+            && Museder_Restoreone_Restore_Preflight::PROFILE_EMPTY !== $profile ) {
+            return;
+        }
+        $cp = isset( $meta['checkpoints'] ) && is_array( $meta['checkpoints'] ) ? $meta['checkpoints'] : [];
+        if ( ! empty( $cp['plugin_isolation']['active'] ) || '1' === (string) get_option( self::OPTION_MID_RESTORE_ISOLATION, '' ) ) {
+            return;
+        }
+        self::enter_mid_restore_plugin_isolation( $job_id, [] );
+    }
+
+    /**
+     * @param string               $job_id
+     * @param array<string, mixed> $meta
+     */
+    protected static function complete_files_stage_and_advance( $job_id, array &$meta ) {
+        $file_path = isset( $meta['file'] ) ? (string) $meta['file'] : '';
+        $options   = isset( $meta['options'] ) && is_array( $meta['options'] ) ? $meta['options'] : [];
+
+        if ( function_exists( 'is_multisite' ) && is_multisite() && ! empty( $meta['options']['target_blog_id'] ) ) {
+            self::remap_multisite_uploads_to_target_blog_if_present( $meta['options']['target_blog_id'] );
+        }
+        if ( function_exists( 'is_multisite' ) && ! is_multisite() ) {
+            self::flatten_multisite_uploads_if_present();
+        }
+
+        if ( class_exists( 'Museder_Restoreone_Restore_Preflight' ) && '' !== $file_path ) {
+            Museder_Restoreone_Restore_Preflight::apply_wp_config_policy( $job_id, $options, $file_path );
+        }
+
+        $scope = isset( $options['restore_scope'] ) ? (string) $options['restore_scope'] : Museder_Restoreone_Restore_Preflight::SCOPE_FULL;
+        $files_only = ! empty( $options['files_only'] );
+        $order      = isset( $options['restore_order'] ) ? (string) $options['restore_order'] : Museder_Restoreone_Restore_Preflight::ORDER_DB_THEN_FILES;
+
+        if ( $files_only || Museder_Restoreone_Restore_Preflight::SCOPE_CONTENT === $scope ) {
+            $meta['stage']      = 'search-replace';
+            $meta['progress']   = 96;
+            $meta['message']    = __( 'Preparing URL replacement…', 'museder-restoreone' );
+            $meta['updated_at'] = current_time( 'mysql' );
+            self::write_job_meta( $job_id, $meta );
+            return;
+        }
+
+        if ( Museder_Restoreone_Restore_Preflight::ORDER_FILES_THEN_DB === $order ) {
+            $meta['stage']      = 'restore-extract-db';
+            $meta['progress']   = 75;
+            $meta['message']    = __( 'Files restored. Preparing database…', 'museder-restoreone' );
+            $meta['updated_at'] = current_time( 'mysql' );
+            self::write_job_meta( $job_id, $meta );
+            return;
+        }
+
+        $meta['stage']      = 'search-replace';
+        $meta['progress']   = 96;
+        $meta['message']    = __( 'Preparing URL replacement…', 'museder-restoreone' );
+        $meta['updated_at'] = current_time( 'mysql' );
+        self::write_job_meta( $job_id, $meta );
+    }
+
     protected static function stage_restore_files( $job_id, array $meta, $slice_seconds ) {
         $file_path = isset( $meta['file'] ) ? $meta['file'] : '';
         if ( empty( $file_path ) || ! file_exists( $file_path ) ) {
             throw new RuntimeException( esc_html__( 'Restore source file missing.', 'museder-restoreone' ) );
         }
+
+        self::maybe_enter_plugin_isolation_at_files_stage( $job_id, $meta );
 
         $engine = isset( $meta['engine'] ) ? $meta['engine'] : 'zip';
 
@@ -1265,19 +2315,17 @@ class Museder_Restoreone_Restore_Service {
             self::write_job_meta( $job_id, $meta );
 
             if ( $ok && ( $phase_idx + 1 ) >= count( $phases ) ) {
-                $meta['stage']      = 'search-replace';
-                $meta['progress']   = 96;
-                $meta['message']    = __( 'Preparing URL replacement…', 'museder-restoreone' );
-                $meta['updated_at'] = current_time( 'mysql' );
-                self::write_job_meta( $job_id, $meta );
+                self::complete_files_stage_and_advance( $job_id, $meta );
             }
         } else {
-            // ZIP restore: extract wp-content/ into site wp-content (streamed per entry, sliced).
+            // ZIP restore: phase 0 = wp-content/, phase 1 = wp-admin/, wp-includes/, site root files.
             $cp = isset( $meta['checkpoints'] ) && is_array( $meta['checkpoints'] ) ? $meta['checkpoints'] : [];
+            $zip_phase = isset( $cp['zip_files_phase'] ) ? (int) $cp['zip_files_phase'] : 0;
             $zip_index  = isset( $cp['zip_index'] ) ? (int) $cp['zip_index'] : 0;
             $zip_offset = isset( $cp['zip_entry_offset'] ) ? (int) $cp['zip_entry_offset'] : 0;
             $zip_total  = isset( $cp['zip_total_entries'] ) ? (int) $cp['zip_total_entries'] : 0;
             $skipped_self_total = isset( $cp['zip_skipped_self'] ) ? (int) $cp['zip_skipped_self'] : 0;
+            $restore_options = isset( $meta['options'] ) && is_array( $meta['options'] ) ? $meta['options'] : [];
 
             if ( $zip_total <= 0 && class_exists( 'ZipArchive' ) ) {
                 $zip = new ZipArchive();
@@ -1290,7 +2338,16 @@ class Museder_Restoreone_Restore_Service {
 
             $content_dir = function_exists( 'museder_restoreone_get_wp_content_dir' ) ? museder_restoreone_get_wp_content_dir() : '';
             $site_root   = '' !== $content_dir ? wp_normalize_path( (string) dirname( $content_dir ) ) : '';
-            $result = self::extract_zip_prefix_sliced( $file_path, self::ZIP_WP_CONTENT_PREFIX, $site_root, $zip_index, $zip_offset, (int) $slice_seconds );
+
+            if ( 0 === $zip_phase ) {
+                $result = self::extract_zip_prefix_sliced( $file_path, self::ZIP_WP_CONTENT_PREFIX, $site_root, $zip_index, $zip_offset, (int) $slice_seconds );
+                $meta['message'] = __( 'Restoring wp-content…', 'museder-restoreone' );
+            } else {
+                $result = self::extract_zip_site_root_sliced( $file_path, $site_root, $restore_options, $zip_index, $zip_offset, (int) $slice_seconds );
+                $meta['message'] = __( 'Restoring WordPress core and site root files…', 'museder-restoreone' );
+            }
+
+            $meta['checkpoints']['zip_files_phase'] = $zip_phase;
             $meta['checkpoints']['zip_index']        = $zip_index;
             $meta['checkpoints']['zip_entry_offset'] = $zip_offset;
             if ( is_array( $result ) && isset( $result['skipped_self'] ) ) {
@@ -1300,33 +2357,38 @@ class Museder_Restoreone_Restore_Service {
                     museder_restoreone_log( 'info', 'Restore files: self-protect skipped plugin files.', [
                         'skipped' => (int) $result['skipped_self'],
                         'total'   => (int) $skipped_self_total,
-                        'prefix'  => 'wp-content/plugins/museder-restoreone/',
+                        'prefix'  => self::ZIP_SELF_PLUGIN_PREFIX,
                     ] );
                 }
             }
+
+            $phase_span = 3;
+            $phase_base = 90 + ( $zip_phase * $phase_span );
             $pct = ( $zip_total > 0 ) ? min( 1.0, max( 0.0, $zip_index / $zip_total ) ) : 0.0;
-            $meta['progress']   = min( 96, 90 + (int) floor( $pct * 6 ) );
-            $meta['message']    = __( 'Restoring files…', 'museder-restoreone' );
+            $meta['progress']   = min( 96, $phase_base + (int) floor( $pct * $phase_span ) );
             $meta['updated_at'] = current_time( 'mysql' );
             self::write_job_meta( $job_id, $meta );
 
             if ( ! empty( $result['completed'] ) ) {
-                // Multisite target mapping: move extracted sites/{source} -> sites/{target} if requested.
-                if ( function_exists( 'is_multisite' ) && is_multisite() && ! empty( $meta['options']['target_blog_id'] ) ) {
-                    self::remap_multisite_uploads_to_target_blog_if_present( $meta['options']['target_blog_id'] );
+                if ( 0 === $zip_phase ) {
+                    $scope = isset( $restore_options['restore_scope'] ) ? (string) $restore_options['restore_scope'] : Museder_Restoreone_Restore_Preflight::SCOPE_FULL;
+                    if ( Museder_Restoreone_Restore_Preflight::SCOPE_CONTENT === $scope ) {
+                        self::complete_files_stage_and_advance( $job_id, $meta );
+                        return;
+                    }
+
+                    $has_core = self::zip_archive_has_wp_core( $file_path );
+                    $meta['checkpoints']['zip_has_wp_core'] = $has_core ? 1 : 0;
+                    if ( $has_core ) {
+                        $meta['checkpoints']['zip_files_phase'] = 1;
+                        $meta['checkpoints']['zip_index']        = 0;
+                        $meta['checkpoints']['zip_entry_offset'] = 0;
+                        self::write_job_meta( $job_id, $meta );
+                        return;
+                    }
                 }
 
-                // If this looks like a multisite subsite export (wp-content/uploads/sites/{id}),
-                // flatten it into uploads/ for single-site restore.
-                if ( function_exists( 'is_multisite' ) && ! is_multisite() ) {
-                    self::flatten_multisite_uploads_if_present();
-                }
-
-                $meta['stage']      = 'search-replace';
-                $meta['progress']   = 96;
-                $meta['message']    = __( 'Preparing URL replacement…', 'museder-restoreone' );
-                $meta['updated_at'] = current_time( 'mysql' );
-                self::write_job_meta( $job_id, $meta );
+                self::complete_files_stage_and_advance( $job_id, $meta );
             }
         }
     }
@@ -1669,6 +2731,9 @@ class Museder_Restoreone_Restore_Service {
         $start = microtime( true );
         $slice_seconds = (int) $slice_seconds;
 
+        // File restore + search-replace are done; restore the backed-up plugin activation list.
+        self::exit_mid_restore_plugin_isolation( $job_id );
+
         // Checkpoints container.
         $cp = isset( $meta['checkpoints'] ) && is_array( $meta['checkpoints'] ) ? $meta['checkpoints'] : [];
         $cleanup = isset( $cp['cleanup'] ) && is_array( $cp['cleanup'] ) ? $cp['cleanup'] : [];
@@ -1745,6 +2810,7 @@ class Museder_Restoreone_Restore_Service {
                     if ( function_exists( 'flush_rewrite_rules' ) ) {
                         flush_rewrite_rules( false );
                     }
+                    self::ensure_site_root_htaccess();
                     $cleanup['step'] = 'clear_alloptions_cache';
                     break;
 
@@ -1888,6 +2954,10 @@ class Museder_Restoreone_Restore_Service {
                                 'restore_duration_seconds'=> $duration,
                             ]
                         );
+                    }
+
+                    if ( class_exists( 'Museder_Restoreone_Restore_Token' ) ) {
+                        Museder_Restoreone_Restore_Token::revoke();
                     }
 
             Museder_Restoreone_Restore_Lock::release();
@@ -2039,7 +3109,7 @@ class Museder_Restoreone_Restore_Service {
         return [ 'done' => false, 'deleted' => $deleted ];
     }
 
-    protected static function extract_zip_entry_to_path( $zip_path, $entry_name, $dest_path ) {
+    public static function extract_zip_entry_to_path( $zip_path, $entry_name, $dest_path ) {
         // Prefer ZipArchive streaming extraction when available; fall back to bundled PclZip on hosts
         // where ZipArchive cannot open large ZIPs (observed as ZipArchive::open error 19).
         if ( class_exists( 'ZipArchive' ) ) {
@@ -2110,9 +3180,212 @@ class Museder_Restoreone_Restore_Service {
         }
     }
 
+    /**
+     * Whether a ZIP archive contains WordPress core directories (full-site backup).
+     *
+     * @param string $zip_path Archive path.
+     * @return bool
+     */
+    protected static function zip_archive_has_wp_core( $zip_path ) {
+        if ( ! class_exists( 'ZipArchive' ) || ! is_readable( $zip_path ) ) {
+            return false;
+        }
+
+        $zip = new ZipArchive();
+        if ( true !== $zip->open( $zip_path ) ) {
+            return false;
+        }
+
+        $found_admin    = false;
+        $found_includes = false;
+        $limit          = min( (int) $zip->numFiles, 8000 );
+
+        for ( $i = 0; $i < $limit; $i++ ) {
+            $name = $zip->getNameIndex( $i );
+            if ( false === $name ) {
+                continue;
+            }
+            $name = wp_normalize_path( (string) $name );
+            if ( 0 === strpos( $name, 'wp-admin/' ) ) {
+                $found_admin = true;
+            }
+            if ( 0 === strpos( $name, 'wp-includes/' ) ) {
+                $found_includes = true;
+            }
+            if ( $found_admin && $found_includes ) {
+                break;
+            }
+        }
+
+        $zip->close();
+        return $found_admin && $found_includes;
+    }
+
+    /**
+     * @param string $entry_name ZIP entry path.
+     * @return bool
+     */
+    protected static function zip_entry_is_restore_metadata( $entry_name ) {
+        $base = strtolower( basename( wp_normalize_path( (string) $entry_name ) ) );
+        return in_array( $base, self::ZIP_METADATA_BASENAMES, true );
+    }
+
+    /**
+     * Site root / core entries for phase-1 ZIP restore (excludes wp-content/ and metadata).
+     *
+     * @param string $entry_name ZIP entry path.
+     * @return bool
+     */
+    protected static function zip_entry_is_site_root_restore_target( $entry_name ) {
+        $name = wp_normalize_path( (string) $entry_name );
+        if ( '' === $name || self::zip_entry_is_restore_metadata( $name ) ) {
+            return false;
+        }
+        if ( 0 === strpos( $name, 'wp-content/' ) ) {
+            return false;
+        }
+        if ( 0 === strpos( $name, 'wp-admin/' ) || 0 === strpos( $name, 'wp-includes/' ) ) {
+            return true;
+        }
+        return false === strpos( $name, '/' );
+    }
+
+    /**
+     * @param string               $entry_name ZIP entry path.
+     * @param array<string, mixed> $options    Restore job options.
+     * @return bool
+     */
+    protected static function zip_entry_should_skip_restore( $entry_name, array $options ) {
+        $name = wp_normalize_path( (string) $entry_name );
+        if ( self::zip_entry_is_restore_metadata( $name ) ) {
+            return true;
+        }
+
+        $protect_self = (bool) apply_filters( 'museder_restoreone_restore_protect_self', true );
+        if ( $protect_self && 0 === strpos( $name, self::ZIP_SELF_PLUGIN_PREFIX ) ) {
+            return true;
+        }
+
+        $basename = strtolower( basename( $name ) );
+        if ( ! in_array( $basename, [ 'wp-config.php', 'wp-config-sample.php' ], true ) ) {
+            return false;
+        }
+
+        if ( class_exists( 'Museder_Restoreone_Restore_Preflight' ) && Museder_Restoreone_Restore_Preflight::should_skip_wp_config_in_zip( $options ) ) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Write standard permalink .htaccess when missing after restore (Apache hosts).
+     */
+    protected static function ensure_site_root_htaccess() {
+        $content_dir = function_exists( 'museder_restoreone_get_wp_content_dir' ) ? museder_restoreone_get_wp_content_dir() : '';
+        $site_root   = '' !== $content_dir ? wp_normalize_path( (string) dirname( $content_dir ) ) : '';
+        if ( '' === $site_root ) {
+            return;
+        }
+
+        $htaccess = trailingslashit( $site_root ) . '.htaccess';
+        if ( file_exists( $htaccess ) ) {
+            return;
+        }
+
+        if ( function_exists( 'save_mod_rewrite_rules' ) ) {
+            save_mod_rewrite_rules();
+            if ( file_exists( $htaccess ) ) {
+                return;
+            }
+        }
+
+        $rules = "# BEGIN WordPress\n<IfModule mod_rewrite.c>\nRewriteEngine On\nRewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]\nRewriteBase /\nRewriteRule ^index\\.php$ - [L]\nRewriteCond %{REQUEST_FILENAME} !-f\nRewriteCond %{REQUEST_FILENAME} !-d\nRewriteRule . /index.php [L]\n</IfModule>\n# END WordPress\n";
+        /**
+         * Filter fallback .htaccess rules when the archive did not include one.
+         *
+         * @param string $rules     Default WordPress rewrite block.
+         * @param string $site_root WordPress install root path.
+         */
+        $rules = (string) apply_filters( 'museder_restoreone_restore_fallback_htaccess_rules', $rules, $site_root );
+        if ( '' === $rules ) {
+            return;
+        }
+
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- site root .htaccess after restore
+        @file_put_contents( $htaccess, $rules );
+    }
+
     protected static function extract_zip_prefix_sliced( $zip_path, $prefix, $dest_base, &$entry_index, &$entry_offset, $slice_seconds ) {
+        $prefix = (string) $prefix;
+        $protect_self = (bool) apply_filters( 'museder_restoreone_restore_protect_self', true );
+
+        return self::extract_zip_filtered_sliced(
+            $zip_path,
+            $dest_base,
+            function ( $name ) use ( $prefix, $protect_self ) {
+                if ( 0 !== strpos( $name, $prefix ) ) {
+                    return false;
+                }
+                if ( $protect_self && 0 === strpos( $name, self::ZIP_SELF_PLUGIN_PREFIX ) ) {
+                    return false;
+                }
+                return true;
+            },
+            $entry_index,
+            $entry_offset,
+            $slice_seconds,
+            $protect_self
+        );
+    }
+
+    /**
+     * Restore wp-admin/, wp-includes/, and site root files from a full-site ZIP.
+     *
+     * @param string               $zip_path
+     * @param string               $dest_base Site root.
+     * @param array<string, mixed> $options
+     * @param int                  $entry_index
+     * @param int                  $entry_offset
+     * @param int                  $slice_seconds
+     * @return array{completed:bool,skipped_self:int}
+     */
+    protected static function extract_zip_site_root_sliced( $zip_path, $dest_base, array $options, &$entry_index, &$entry_offset, $slice_seconds ) {
+        return self::extract_zip_filtered_sliced(
+            $zip_path,
+            $dest_base,
+            function ( $name ) use ( $options ) {
+                if ( self::zip_entry_should_skip_restore( $name, $options ) ) {
+                    return false;
+                }
+                return self::zip_entry_is_site_root_restore_target( $name );
+            },
+            $entry_index,
+            $entry_offset,
+            $slice_seconds,
+            false
+        );
+    }
+
+    /**
+     * Stream ZIP entries matching $entry_filter into dest_base (sliced).
+     *
+     * @param string   $zip_path
+     * @param string   $dest_base
+     * @param callable $entry_filter function( string $name ): bool
+     * @param int      $entry_index
+     * @param int      $entry_offset
+     * @param int      $slice_seconds
+     * @param bool     $count_self_skips When true, count skipped self-plugin paths in skipped_self.
+     * @return array{completed:bool,skipped_self:int}
+     */
+    protected static function extract_zip_filtered_sliced( $zip_path, $dest_base, $entry_filter, &$entry_index, &$entry_offset, $slice_seconds, $count_self_skips = false ) {
         if ( ! class_exists( 'ZipArchive' ) ) {
             throw new RuntimeException( esc_html__( 'ZipArchive is not available on this server.', 'museder-restoreone' ) );
+        }
+
+        if ( ! is_callable( $entry_filter ) ) {
+            throw new RuntimeException( esc_html__( 'Invalid ZIP restore filter.', 'museder-restoreone' ) );
         }
 
         $start = microtime( true );
@@ -2121,33 +3394,23 @@ class Museder_Restoreone_Restore_Service {
             throw new RuntimeException( esc_html__( 'Unable to open ZIP archive.', 'museder-restoreone' ) );
         }
 
-        $count = $zip->numFiles;
-        $prefix = (string) $prefix;
-
-        // Allow sites to disable self-protection if they truly need to restore the plugin itself.
-        // Default: true (protect this plugin from being overwritten mid-restore).
-        $protect_self = (bool) apply_filters( 'museder_restoreone_restore_protect_self', true );
-        $self_prefix  = 'wp-content/plugins/museder-restoreone/';
+        $count        = $zip->numFiles;
         $skipped_self = 0;
 
         for ( $i = $entry_index; $i < $count; $i++ ) {
-            $name = $zip->getNameIndex( $i );
-            if ( $name === false ) {
+            $raw_name = $zip->getNameIndex( $i );
+            if ( $raw_name === false ) {
                 continue;
             }
-            if ( strpos( $name, $prefix ) !== 0 ) {
-                continue;
-            }
-            // Protect the currently-running plugin from being overwritten mid-restore.
-            // This prevents admin-ajax actions from disappearing (returning "0") and stalling the UI/processor.
-            if ( $protect_self && strpos( $name, $self_prefix ) === 0 ) {
-                $skipped_self++;
+            $name = wp_normalize_path( (string) $raw_name );
+
+            if ( ! call_user_func( $entry_filter, $name ) ) {
+                if ( $count_self_skips && 0 === strpos( $name, self::ZIP_SELF_PLUGIN_PREFIX ) ) {
+                    $skipped_self++;
+                }
                 continue;
             }
             if ( substr( $name, -1 ) === '/' ) {
-                continue;
-            }
-            if ( museder_restoreone_safe_path_join( $dest_base, $name ) === false ) {
                 continue;
             }
 
@@ -2156,7 +3419,7 @@ class Museder_Restoreone_Restore_Service {
                 continue;
             }
 
-            $in = $zip->getStream( $name );
+            $in = $zip->getStream( $raw_name );
             if ( ! $in ) {
                 continue;
             }
@@ -2166,7 +3429,6 @@ class Museder_Restoreone_Restore_Service {
             // Large ZIP streaming requires direct file operations for performance and compatibility.
             $out = fopen( $target, ( $entry_offset > 0 ? 'ab' : 'wb' ) ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- Stream extraction to disk.
             if ( $out ) {
-                // Skip bytes if resuming the same entry.
                 $to_skip = (int) $entry_offset;
                 while ( $to_skip > 0 && ! feof( $in ) ) {
                     $skip_chunk = $to_skip > 65536 ? 65536 : $to_skip;
@@ -2177,7 +3439,6 @@ class Museder_Restoreone_Restore_Service {
                     $to_skip -= strlen( $buf );
                 }
 
-                $written_this_entry = 0;
                 while ( ! feof( $in ) ) {
                     $buf = fread( $in, 512000 ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- Stream extraction to disk.
                     if ( $buf === false ) {
@@ -2190,7 +3451,6 @@ class Museder_Restoreone_Restore_Service {
                     if ( $w === false ) {
                         break;
                     }
-                    $written_this_entry += $w;
                     $entry_offset += $w;
 
                     if ( $slice_seconds > 0 && ( microtime( true ) - $start ) > $slice_seconds ) {
@@ -2205,7 +3465,6 @@ class Museder_Restoreone_Restore_Service {
             }
             fclose( $in ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Stream from ZipArchive.
 
-            // Move to next entry.
             $entry_offset = 0;
             $entry_index  = $i + 1;
 
@@ -3434,10 +4693,15 @@ class Museder_Restoreone_Restore_Service {
 
     /**
      * Record plugin list found in the restored database for admin visibility.
-     * Note: Per WordPress.org policy, we do not change activation status of other plugins.
+     *
+     * Mid-restore isolation (enter/exit) is scoped to an active restore job only; this recorder
+     * does not change activation outside that window.
      */
     protected static function record_restored_plugin_list() {
-        $active_plugins = get_option( 'active_plugins', [] );
+        $active_plugins = get_option( self::OPTION_RESTORED_ACTIVE_PLUGINS, [] );
+        if ( ! is_array( $active_plugins ) || empty( $active_plugins ) ) {
+            $active_plugins = get_option( 'active_plugins', [] );
+        }
         if ( ! is_array( $active_plugins ) || empty( $active_plugins ) ) {
             museder_restoreone_log( 'info', 'No active plugins found in restored database.', [] );
             return;
@@ -3445,7 +4709,7 @@ class Museder_Restoreone_Restore_Service {
 
         update_option( 'museder_restoreone_restored_active_plugins_last', $active_plugins, false );
 
-        museder_restoreone_log( 'info', 'Restore completed. Plugin activation status was not modified automatically.', [
+        museder_restoreone_log( 'info', 'Restore completed. Active plugin list recorded for admin review.', [
             'active_plugins_count' => count( $active_plugins ),
         ] );
     }
@@ -3453,13 +4717,13 @@ class Museder_Restoreone_Restore_Service {
     /**
      * Legacy hook: restore plugin activation status.
      *
-     * IMPORTANT: Per WordPress.org policy, we do not change activation state of other plugins automatically.
-     * We keep this method as a no-op/safe recorder so the cleanup pipeline doesn't fatal.
+     * Activation is restored from backup snapshot in exit_mid_restore_plugin_isolation() at cleanup start.
+     * This step records the list for admin visibility after that release.
      *
      * @return void
      */
     protected static function restore_plugin_status() {
-        // Record the restored plugin list for admin visibility (no activation changes).
+        self::reapply_safe_active_plugins_after_restore( '' );
         self::record_restored_plugin_list();
     }
 

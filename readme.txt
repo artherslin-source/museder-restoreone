@@ -4,7 +4,7 @@ Tags: backup, migration, restore, site-backup, database-backup
 Requires at least: 5.8
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 2.7.262
+Stable tag: 2.7.267
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -182,6 +182,15 @@ Most sites do not need any changes. For unusual server layouts where core admin 
 6. Settings page with general options and system diagnostics.
 
 == Changelog ==
+
+= 2.7.267 =
+* Restore (Approach B): **site profile** detection (existing / fresh / no core), preflight blocks, and Step 2 **restore order**, **scope**, **wp-config mode** (backup / keep / merge), and **pause other plugins** (default on).
+* Restore: **populated sites** require a pre-restore snapshot; default order **database then files** (user can switch to files-first).
+* Restore: **fresh / empty** profiles default to **files then database** with UI notices (including DB overwrite on fresh installs).
+* Restore: **empty docroot** full-site restores can use **`museder-restoreone-restore-bootstrap.php`** (copy to site root) for loopback file slices before WordPress core exists.
+* Restore: ZIP restores use a **two-phase file stage** (wp-content, then WordPress core and site root files when present in the archive).
+* Restore: includes **2.7.265** mid-restore plugin isolation, restore token, and safe-plugin reapply after restore.
+* Restore: writes a fallback **.htaccess** when missing after permalink flush (Apache).
 
 = 2.7.262 =
 * Backup reliability: when **PclZip** compatibility repack is active, the async job runner **no longer keeps a long-lived `ZipArchive` handle** on the same `.zip` file (PclZip and ZipArchive were both mutating the archive, making `close()` extremely slow on large sites and risking central-directory corruption).
