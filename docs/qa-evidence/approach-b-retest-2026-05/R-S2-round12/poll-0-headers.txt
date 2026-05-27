@@ -1,0 +1,9 @@
+HTTP/1.1 200 OK
+Date: Wed, 27 May 2026 15:33:50 GMT
+Server: Apache/2.4.62 (Debian)
+X-Powered-By: PHP/8.2.25
+X-Museder-Restoreone-Bootstrap: 1
+Vary: Accept-Encoding
+Content-Length: 445
+Content-Type: text/html; charset=utf-8
+

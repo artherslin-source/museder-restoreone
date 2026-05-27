@@ -9,28 +9,27 @@ if ( ! defined( 'ABSPATH' ) && ! defined( 'MUSEDER_RESTOREONE_BOOTSTRAP_ROOT' ) 
     exit;
 }
 
-if ( ! class_exists( 'WP_Error' ) ) {
+/**
+ * Pre–wp-load error object (never named WP_Error — avoids conflict with WordPress core).
+ */
+class Museder_Restoreone_Bootstrap_WP_Error {
+    /** @var string */
+    protected $message = '';
+
     /**
-     * Minimal WP_Error for bootstrap-only context.
+     * @param string $code    Code.
+     * @param string $message Message.
      */
-    class WP_Error {
-        /** @var string */
-        protected $message = '';
+    public function __construct( $code, $message ) {
+        unset( $code );
+        $this->message = (string) $message;
+    }
 
-        /**
-         * @param string $code    Code.
-         * @param string $message Message.
-         */
-        public function __construct( $code, $message ) {
-            $this->message = (string) $message;
-        }
-
-        /**
-         * @return string
-         */
-        public function get_error_message() {
-            return $this->message;
-        }
+    /**
+     * @return string
+     */
+    public function get_error_message() {
+        return $this->message;
     }
 }
 
@@ -45,7 +44,7 @@ class Museder_Restoreone_Restore_Bootstrap {
      * @return void
      */
     public static function handle_request() {
-        self::register_wordpress_stubs();
+        self::bootstrap_prepare_runtime();
 
         if ( ! self::bootstrap_root() ) {
             self::render_error( 'Bootstrap root is not defined.' );
@@ -60,7 +59,7 @@ class Museder_Restoreone_Restore_Bootstrap {
         if ( isset( $_POST['museder_bootstrap_start'] ) && '' !== $secret ) {
             $backup = isset( $_POST['backup'] ) ? sanitize_file_name( wp_unslash( (string) $_POST['backup'] ) ) : '';
             $started = self::start_restore_from_bootstrap( $backup, $secret );
-            if ( is_wp_error( $started ) ) {
+            if ( self::bootstrap_is_error( $started ) ) {
                 self::render_page( '', $secret, $started->get_error_message() );
                 return;
             }
@@ -90,8 +89,7 @@ class Museder_Restoreone_Restore_Bootstrap {
         $message     = '';
         $progress    = 0;
 
-        if ( self::wordpress_is_loadable() ) {
-            self::load_wordpress();
+        if ( self::wordpress_is_ready() ) {
             if ( class_exists( 'Museder_Restoreone_Restore_Service' ) ) {
                 $end = time() + $max_seconds;
                 while ( time() < $end ) {
@@ -117,8 +115,8 @@ class Museder_Restoreone_Restore_Bootstrap {
             $message  = isset( $meta['message'] ) ? (string) $meta['message'] : '';
             if ( ! empty( $meta['completed'] ) || ( isset( $meta['stage'] ) && in_array( $meta['stage'], [ 'failed', 'cancelled' ], true ) ) ) {
                 $completed = true;
-            } elseif ( self::wordpress_is_loadable() ) {
-                self::load_wordpress();
+            } elseif ( self::wordpress_is_loadable() && class_exists( 'Museder_Restoreone_Restore_Service' ) ) {
+                // wp-load.php appeared during this request; DB stage runs on the next poll (stubs block in-request wp-load).
                 Museder_Restoreone_Restore_Service::spawn_cron_public();
             }
         }
@@ -163,15 +161,106 @@ class Museder_Restoreone_Restore_Bootstrap {
     }
 
     /**
+     * Whether WordPress core is loaded for this request.
+     *
+     * @return bool
+     */
+    public static function wordpress_is_ready() {
+        return function_exists( 'wp_get_environment_type' );
+    }
+
+    /**
+     * True when this HTTP request registered bootstrap stubs (must not load wp-load.php in the same request).
+     *
+     * @return bool
+     */
+    public static function bootstrap_stubs_are_active() {
+        return defined( 'MUSEDER_RESTOREONE_BOOTSTRAP_STUBS_ACTIVE' ) && MUSEDER_RESTOREONE_BOOTSTRAP_STUBS_ACTIVE;
+    }
+
+    /**
+     * Load wp-load.php when present; safe to call repeatedly.
+     *
+     * Stubs and core cannot coexist in one request (e.g. apply_filters is declared bare in plugin.php).
+     * When stubs are active, defer loading to the next loopback/poll request.
+     *
+     * @return bool True when core is ready.
+     */
+    public static function maybe_load_wordpress() {
+        if ( self::wordpress_is_ready() ) {
+            return true;
+        }
+        if ( self::bootstrap_stubs_are_active() ) {
+            return false;
+        }
+        if ( ! self::wordpress_is_loadable() ) {
+            return false;
+        }
+        self::load_wordpress();
+        return self::wordpress_is_ready();
+    }
+
+    /**
+     * Bootstrap entry: load core when possible, otherwise register stubs (no WP_Error / is_wp_error shims).
+     *
+     * @return void
+     */
+    public static function bootstrap_prepare_runtime() {
+        if ( ! defined( 'MUSEDER_RESTOREONE_BOOTSTRAP_MODE' ) ) {
+            define( 'MUSEDER_RESTOREONE_BOOTSTRAP_MODE', true );
+        }
+        if ( self::maybe_load_wordpress() ) {
+            return;
+        }
+        self::register_wordpress_stubs();
+    }
+
+    /**
+     * @param string $code    Error code.
+     * @param string $message Message.
+     * @return Museder_Restoreone_Bootstrap_WP_Error|WP_Error
+     */
+    public static function bootstrap_wp_error( $code, $message ) {
+        if ( self::wordpress_is_ready() && class_exists( 'WP_Error' ) ) {
+            return new WP_Error( (string) $code, (string) $message );
+        }
+        return new Museder_Restoreone_Bootstrap_WP_Error( (string) $code, (string) $message );
+    }
+
+    /**
+     * @param mixed $thing Value to test.
+     * @return bool
+     */
+    public static function bootstrap_is_error( $thing ) {
+        if ( $thing instanceof Museder_Restoreone_Bootstrap_WP_Error ) {
+            return true;
+        }
+        return function_exists( 'is_wp_error' ) && is_wp_error( $thing );
+    }
+
+    /**
      * @return void
      */
     public static function load_wordpress() {
         if ( defined( 'ABSPATH' ) && function_exists( 'wp_get_environment_type' ) ) {
             return;
         }
+        if ( self::bootstrap_stubs_are_active() ) {
+            return;
+        }
         $root = self::bootstrap_root();
         if ( '' === $root || ! is_readable( $root . '/wp-load.php' ) ) {
             return;
+        }
+        if ( ! defined( 'WP_USE_THEMES' ) ) {
+            define( 'WP_USE_THEMES', false );
+        }
+        if ( ! defined( 'DOING_CRON' ) ) {
+            define( 'DOING_CRON', true );
+        }
+        // Core is on disk but DB not imported yet: skip wp-admin/install.php redirect (see wp_not_installed()).
+        if ( defined( 'MUSEDER_RESTOREONE_BOOTSTRAP_MODE' ) && MUSEDER_RESTOREONE_BOOTSTRAP_MODE && ! defined( 'WP_INSTALLING' ) ) {
+            define( 'WP_INSTALLING', true );
         }
         // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- loading core bootstrap
         require_once $root . '/wp-load.php';
@@ -181,8 +270,22 @@ class Museder_Restoreone_Restore_Bootstrap {
      * @return void
      */
     public static function register_wordpress_stubs() {
-        if ( ! defined( 'MUSEDER_RESTOREONE_BOOTSTRAP_MODE' ) ) {
-            define( 'MUSEDER_RESTOREONE_BOOTSTRAP_MODE', true );
+        if ( self::wordpress_is_ready() ) {
+            return;
+        }
+
+        // WordPress time constants (wp-includes/default-constants.php) — used by helpers / Restore_Service before wp-load.
+        if ( ! defined( 'MINUTE_IN_SECONDS' ) ) {
+            define( 'MINUTE_IN_SECONDS', 60 );
+        }
+        if ( ! defined( 'HOUR_IN_SECONDS' ) ) {
+            define( 'HOUR_IN_SECONDS', 3600 );
+        }
+        if ( ! defined( 'DAY_IN_SECONDS' ) ) {
+            define( 'DAY_IN_SECONDS', 86400 );
+        }
+        if ( ! defined( 'WEEK_IN_SECONDS' ) ) {
+            define( 'WEEK_IN_SECONDS', 604800 );
         }
         if ( ! function_exists( 'trailingslashit' ) ) {
             /**
@@ -248,6 +351,49 @@ class Museder_Restoreone_Restore_Bootstrap {
                 return gmdate( 'Y-m-d H:i:s', time() );
             }
         }
+        if ( ! function_exists( 'wp_timezone' ) ) {
+            /**
+             * @return \DateTimeZone
+             */
+            function wp_timezone() {
+                return new DateTimeZone( 'UTC' );
+            }
+        }
+        if ( ! function_exists( 'wp_date' ) ) {
+            /**
+             * Bootstrap-safe date formatting (UTC) for job ids / logs before wp-load.php.
+             *
+             * @param string              $format    Format.
+             * @param int|\DateTimeInterface|null $timestamp Timestamp.
+             * @param \DateTimeZone|null  $timezone  Timezone (ignored in bootstrap).
+             * @return string
+             */
+            function wp_date( $format, $timestamp = null, $timezone = null ) {
+                unset( $timezone );
+                if ( $timestamp instanceof DateTimeInterface ) {
+                    $timestamp = $timestamp->getTimestamp();
+                }
+                if ( null === $timestamp ) {
+                    $timestamp = time();
+                }
+                return gmdate( (string) $format, (int) $timestamp );
+            }
+        }
+        if ( ! function_exists( 'date_i18n' ) ) {
+            /**
+             * @param string    $format    Format.
+             * @param int|false $timestamp Timestamp.
+             * @param bool      $gmt       GMT flag (ignored).
+             * @return string
+             */
+            function date_i18n( $format, $timestamp = false, $gmt = false ) {
+                unset( $gmt );
+                if ( false === $timestamp ) {
+                    $timestamp = time();
+                }
+                return gmdate( (string) $format, (int) $timestamp );
+            }
+        }
         if ( ! function_exists( 'wp_parse_args' ) ) {
             /**
              * @param array $args     Args.
@@ -285,6 +431,63 @@ class Museder_Restoreone_Restore_Bootstrap {
             function wp_normalize_path( $path ) {
                 $path = str_replace( '\\', '/', (string) $path );
                 return preg_replace( '|(?<=.)/+|', '/', $path );
+            }
+        }
+        if ( ! defined( 'WP_PLUGIN_DIR' ) ) {
+            $br = self::bootstrap_root();
+            if ( '' !== $br ) {
+                define( 'WP_PLUGIN_DIR', wp_normalize_path( trailingslashit( $br ) . 'wp-content/plugins' ) );
+            }
+        }
+        if ( ! function_exists( 'plugin_basename' ) ) {
+            /**
+             * Minimal plugin_basename for mid-restore isolation before wp-load.php.
+             *
+             * @param string $file Plugin file path.
+             * @return string
+             */
+            function plugin_basename( $file ) {
+                $file = wp_normalize_path( (string) $file );
+                if ( defined( 'WP_PLUGIN_DIR' ) && WP_PLUGIN_DIR && 0 === strpos( $file, WP_PLUGIN_DIR ) ) {
+                    return ltrim( substr( $file, strlen( WP_PLUGIN_DIR ) ), '/' );
+                }
+                $needle = '/wp-content/plugins/';
+                $pos    = strpos( $file, $needle );
+                if ( false !== $pos ) {
+                    return substr( $file, $pos + strlen( $needle ) );
+                }
+                return basename( $file );
+            }
+        }
+        if ( ! function_exists( 'wp_generate_password' ) ) {
+            /**
+             * @param int  $length            Length.
+             * @param bool $special_chars     Special chars.
+             * @param bool $extra_special_chars Extra special.
+             * @return string
+             */
+            function wp_generate_password( $length = 12, $special_chars = true, $extra_special_chars = false ) {
+                $chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+                if ( $special_chars ) {
+                    $chars .= '!@#$%^&*()';
+                }
+                if ( $extra_special_chars ) {
+                    $chars .= '[]{}|:<>?~`';
+                }
+                $password = '';
+                $max      = strlen( $chars ) - 1;
+                for ( $i = 0; $i < (int) $length; $i++ ) {
+                    $password .= $chars[ random_int( 0, $max ) ];
+                }
+                return $password;
+            }
+        }
+        if ( ! function_exists( 'get_current_user_id' ) ) {
+            /**
+             * @return int
+             */
+            function get_current_user_id() {
+                return 0;
             }
         }
         if ( ! function_exists( 'sanitize_file_name' ) ) {
@@ -333,6 +536,30 @@ class Museder_Restoreone_Restore_Bootstrap {
                 // phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited
                 require $version_file;
                 return isset( $wp_version ) ? (string) $wp_version : '';
+            }
+        }
+        if ( ! function_exists( 'wp_upload_dir' ) ) {
+            /**
+             * Bootstrap uploads path for helpers (backup dirs, legacy scan) before wp-load.php.
+             *
+             * @return array<string, mixed>
+             */
+            function wp_upload_dir() {
+                $basedir = '';
+                if ( defined( 'MUSEDER_RESTOREONE_BOOTSTRAP_ROOT' ) && MUSEDER_RESTOREONE_BOOTSTRAP_ROOT ) {
+                    $basedir = trailingslashit( wp_normalize_path( (string) MUSEDER_RESTOREONE_BOOTSTRAP_ROOT ) ) . 'wp-content/uploads';
+                    if ( function_exists( 'wp_mkdir_p' ) ) {
+                        wp_mkdir_p( $basedir );
+                    }
+                }
+                return [
+                    'path'    => $basedir,
+                    'url'     => '',
+                    'subdir'  => '',
+                    'basedir' => $basedir,
+                    'baseurl' => '',
+                    'error'   => false,
+                ];
             }
         }
         if ( ! function_exists( 'sanitize_text_field' ) ) {
@@ -386,11 +613,14 @@ class Museder_Restoreone_Restore_Bootstrap {
         }
         if ( ! function_exists( 'apply_filters' ) ) {
             /**
+             * Passthrough only while stubs are active; core defines apply_filters() bare — never load wp-load in the same request.
+             *
              * @param string $tag  Tag.
              * @param mixed  $value Value.
              * @return mixed
              */
             function apply_filters( $tag, $value ) {
+                unset( $tag );
                 return $value;
             }
         }
@@ -427,15 +657,6 @@ class Museder_Restoreone_Restore_Bootstrap {
             function wp_parse_url( $url ) {
                 $parts = parse_url( $url );
                 return is_array( $parts ) ? $parts : [];
-            }
-        }
-        if ( ! function_exists( 'is_wp_error' ) ) {
-            /**
-             * @param mixed $thing Thing.
-             * @return bool
-             */
-            function is_wp_error( $thing ) {
-                return is_object( $thing ) && class_exists( 'WP_Error' ) && $thing instanceof WP_Error;
             }
         }
         if ( ! function_exists( 'get_option' ) ) {
@@ -496,6 +717,59 @@ class Museder_Restoreone_Restore_Bootstrap {
                 return $base . '/' . preg_replace( '/[^a-zA-Z0-9._-]/', '_', (string) $option ) . '.json';
             }
         }
+        if ( ! function_exists( 'museder_restoreone_bootstrap_auth_salt' ) ) {
+            /**
+             * Stable auth salt for wp_hash() during bootstrap (persisted under storage root).
+             *
+             * @return string
+             */
+            function museder_restoreone_bootstrap_auth_salt() {
+                static $salt = null;
+                if ( null !== $salt ) {
+                    return $salt;
+                }
+                $path = museder_restoreone_bootstrap_option_path( '_museder_bootstrap_auth_salt' );
+                if ( is_readable( $path ) ) {
+                    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
+                    $salt = trim( (string) file_get_contents( $path ) );
+                    if ( '' !== $salt ) {
+                        return $salt;
+                    }
+                }
+                $salt = bin2hex( random_bytes( 32 ) );
+                $dir  = dirname( $path );
+                if ( ! is_dir( $dir ) ) {
+                    wp_mkdir_p( $dir );
+                }
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+                file_put_contents( $path, $salt, LOCK_EX );
+                return $salt;
+            }
+        }
+        if ( ! function_exists( 'wp_salt' ) ) {
+            /**
+             * @param string $scheme Scheme.
+             * @return string
+             */
+            function wp_salt( $scheme = 'auth' ) {
+                unset( $scheme );
+                return museder_restoreone_bootstrap_auth_salt();
+            }
+        }
+        if ( ! function_exists( 'wp_hash' ) ) {
+            /**
+             * @param string $data   Data.
+             * @param string $scheme Scheme.
+             * @return string
+             */
+            function wp_hash( $data, $scheme = 'auth' ) {
+                return hash_hmac( 'sha256', (string) $data, wp_salt( $scheme ) );
+            }
+        }
+
+        if ( ! defined( 'MUSEDER_RESTOREONE_BOOTSTRAP_STUBS_ACTIVE' ) ) {
+            define( 'MUSEDER_RESTOREONE_BOOTSTRAP_STUBS_ACTIVE', true );
+        }
     }
 
     /**
@@ -518,6 +792,7 @@ class Museder_Restoreone_Restore_Bootstrap {
         require_once MUSEDER_RESTOREONE_PATH . 'includes/class-restore-lock.php';
         require_once MUSEDER_RESTOREONE_PATH . 'includes/class-restore-token.php';
         require_once MUSEDER_RESTOREONE_PATH . 'includes/class-restore-preflight.php';
+        require_once MUSEDER_RESTOREONE_PATH . 'includes/class-restore.php';
         require_once MUSEDER_RESTOREONE_PATH . 'includes/class-restore-service.php';
     }
 
@@ -726,18 +1001,18 @@ class Museder_Restoreone_Restore_Bootstrap {
      *
      * @param string $backup_basename Backup zip basename in uploads storage backups/.
      * @param string $secret          Shared secret from operator.
-     * @return array{job_id:string}|WP_Error
+     * @return array{job_id:string}|Museder_Restoreone_Bootstrap_WP_Error|WP_Error
      */
     public static function start_restore_from_bootstrap( $backup_basename, $secret ) {
         if ( '' === $backup_basename ) {
-            return new WP_Error( 'museder_bootstrap', 'Backup file name is required.' );
+            return self::bootstrap_wp_error( 'museder_bootstrap', 'Backup file name is required.' );
         }
         if ( strlen( (string) $secret ) < 8 ) {
-            return new WP_Error( 'museder_bootstrap', 'Bootstrap secret must be at least 8 characters.' );
+            return self::bootstrap_wp_error( 'museder_bootstrap', 'Bootstrap secret must be at least 8 characters.' );
         }
 
         if ( ! class_exists( 'Museder_Restoreone_Restore_Service' ) ) {
-            return new WP_Error( 'museder_bootstrap', 'Restore service is not available.' );
+            return self::bootstrap_wp_error( 'museder_bootstrap', 'Restore service is not available.' );
         }
 
         $options = Museder_Restoreone_Restore_Preflight::normalize_options(
@@ -761,7 +1036,7 @@ class Museder_Restoreone_Restore_Bootstrap {
             self::spawn_loopback( $job_id, $secret );
             return [ 'job_id' => $job_id ];
         } catch ( Exception $e ) {
-            return new WP_Error( 'museder_bootstrap', $e->getMessage() );
+            return self::bootstrap_wp_error( 'museder_bootstrap', $e->getMessage() );
         }
     }
 
@@ -774,11 +1049,30 @@ class Museder_Restoreone_Restore_Bootstrap {
      * @param bool   $completed  Completed flag.
      * @return void
      */
-    protected static function render_page( $job_id = '', $secret = '', $error = '', $progress = 0, $message = '', $completed = false ) {
+    /**
+     * Send bootstrap HTML response headers (works with and without WordPress core loaded).
+     *
+     * @param bool $refresh Whether to add Refresh header for polling.
+     * @return void
+     */
+    protected static function send_bootstrap_response_headers( $refresh = false ) {
+        if ( headers_sent() ) {
+            return;
+        }
+        if ( function_exists( 'status_header' ) ) {
+            status_header( 200 );
+        } else {
+            header( 'HTTP/1.1 200 OK', true, 200 );
+        }
         header( 'Content-Type: text/html; charset=utf-8' );
-        if ( ! $completed && '' !== $job_id ) {
+        header( 'X-Museder-Restoreone-Bootstrap: 1' );
+        if ( $refresh ) {
             header( 'Refresh: 15' );
         }
+    }
+
+    protected static function render_page( $job_id = '', $secret = '', $error = '', $progress = 0, $message = '', $completed = false ) {
+        self::send_bootstrap_response_headers( ! $completed && '' !== $job_id );
         $backups = [];
         $dir     = function_exists( 'museder_restoreone_get_backup_dir' ) ? museder_restoreone_get_backup_dir() : '';
         if ( $dir && is_dir( $dir ) ) {

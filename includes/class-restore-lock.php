@@ -11,11 +11,12 @@ class Museder_Restoreone_Restore_Lock {
     const FILE_LOCK_NAME = 'bootstrap-restore.lock';
 
     /**
+     * Bootstrap runs before wp-load.php: use a file lock under uploads storage, not site transients.
+     *
      * @return bool
      */
     protected static function use_file_lock() {
-        return ( defined( 'MUSEDER_RESTOREONE_BOOTSTRAP_MODE' ) && MUSEDER_RESTOREONE_BOOTSTRAP_MODE )
-            && ! function_exists( 'update_option' );
+        return defined( 'MUSEDER_RESTOREONE_BOOTSTRAP_MODE' ) && MUSEDER_RESTOREONE_BOOTSTRAP_MODE;
     }
 
     /**

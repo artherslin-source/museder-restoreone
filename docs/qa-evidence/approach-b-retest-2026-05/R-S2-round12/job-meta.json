@@ -1,0 +1,91 @@
+﻿{
+    "logs": [],
+    "id": "rjb_20260527_153349_owtrvd",
+    "source": "existing",
+    "file": "/var/www/html/wp-content/uploads/museder-restoreone/backups/localhost-20260527083521-E02Tyj.zip",
+    "file_name": "localhost-20260527083521-E02Tyj.zip",
+    "sha1": "",
+    "created_at": "2026-05-27 15:33:49",
+    "updated_at": "2026-05-27 15:33:52",
+    "stage": "done",
+    "progress": 100,
+    "message": "Restore completed successfully.",
+    "validation": {
+        "checksum": {
+            "ok": true,
+            "sha1": ""
+        },
+        "compat": {
+            "wp": {
+                "backup": "",
+                "current": "",
+                "ok": true
+            },
+            "php": {
+                "backup": "",
+                "current": "8.2.25",
+                "ok": true
+            },
+            "db": {
+                "backup": "",
+                "current": "",
+                "ok": true
+            }
+        }
+    },
+    "tmp_dir": "/var/www/html/wp-content/uploads/museder-restoreone/temp/rjb_20260527_153349_owtrvd",
+    "reports": [],
+    "restore_profile": "empty_shell",
+    "preflight_warnings": [
+        "No WordPress core detected yet. Restore will extract core from the archive first. Keep this page open or use the document-root bootstrap URL until completion."
+    ],
+    "archive_has_core": true,
+    "options": {
+        "restore_profile": "empty_shell",
+        "restore_order": "files_then_db",
+        "auto_backup": false,
+        "overwrite": true,
+        "pause_other_plugins": true,
+        "bootstrap_mode": true,
+        "restore_scope": "full",
+        "wp_config_mode": "backup",
+        "skip_config": false,
+        "bootstrap_secret": "qa-secret-12345"
+    },
+    "pre_backup": [],
+    "engine": "zip",
+    "started_at": 1779896029,
+    "completed": true,
+    "cancel_requested": false,
+    "last_tick": 1779896031,
+    "checkpoints": {
+        "wpress_archive_offset": 0,
+        "wpress_file_offset": 0,
+        "wpress_processed_bytes": 0,
+        "files_phase": 0,
+        "db_offset": 0,
+        "db_query_buffer": "",
+        "sr_tables": [],
+        "sr_table_index": 0,
+        "sr_pk_last": null,
+        "sr_row_offset": 0,
+        "sr_scanned_rows": 0,
+        "sr_updated_rows": 0,
+        "sr_table_cache": [],
+        "zip_total_entries": 3347,
+        "zip_files_phase": 1,
+        "zip_index": 3283,
+        "zip_entry_offset": 0,
+        "zip_skipped_self": 73,
+        "zip_has_wp_core": 1,
+        "cleanup": {
+            "step": "finish",
+            "transients_last_id": 128,
+            "transients_batches": 1,
+            "transients_deleted_total": 5,
+            "safe_mode_entered": 1
+        }
+    },
+    "tick_source": "bootstrap",
+    "db_file": "/var/www/html/wp-content/uploads/museder-restoreone/temp/rjb_20260527_153349_owtrvd/db/database.ndjson"
+}

@@ -314,7 +314,7 @@ class Museder_Restoreone_Restore_Preflight {
         }
 
         $dest_config = trailingslashit( $site_root ) . 'wp-config.php';
-        $job_dir     = class_exists( 'Museder_Restoreone_Restore_Service' ) ? Museder_Restoreone_Restore_Service::ensure_job_tmp_directory( $job_id ) : '';
+        $job_dir     = class_exists( 'Museder_Restoreone_Restore_Service' ) ? Museder_Restoreone_Restore_Service::get_job_tmp_directory( $job_id ) : '';
         $backup_tmp  = trailingslashit( $job_dir ) . 'wp-config-from-archive.php';
 
         if ( self::MODE_CONFIG_MERGE === $mode ) {

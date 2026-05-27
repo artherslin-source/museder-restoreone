@@ -507,6 +507,10 @@ class Museder_Restoreone_Restore_Service {
         $job_id = (string) $job_id;
         $slice  = max( 1, (int) $slice_seconds );
 
+        if ( 'bootstrap' === $source && class_exists( 'Museder_Restoreone_Restore_Bootstrap' ) ) {
+            Museder_Restoreone_Restore_Bootstrap::maybe_load_wordpress();
+        }
+
         $lock_fp = null;
         try {
             $lock_fp = self::acquire_job_run_lock( $job_id );
@@ -1136,7 +1140,7 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
 
         update_option( self::OPTION_RESTORED_ACTIVE_PLUGINS, $plugins, false );
 
-        if ( is_multisite() && function_exists( 'get_site_option' ) && function_exists( 'update_site_option' ) ) {
+        if ( function_exists( 'is_multisite' ) && is_multisite() && function_exists( 'get_site_option' ) && function_exists( 'update_site_option' ) ) {
             $sitewide = get_site_option( 'active_sitewide_plugins', [] );
             if ( is_array( $sitewide ) && ! empty( $sitewide ) ) {
                 update_option( self::OPTION_RESTORED_SITEWIDE_PLUGINS, $sitewide, false );
@@ -1211,7 +1215,7 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
         update_option( 'active_plugins', $plugins, false );
 
         $sitewide = get_option( self::OPTION_RESTORED_SITEWIDE_PLUGINS, null );
-        if ( is_multisite() && is_array( $sitewide ) && function_exists( 'update_site_option' ) ) {
+        if ( function_exists( 'is_multisite' ) && is_multisite() && is_array( $sitewide ) && function_exists( 'update_site_option' ) ) {
             update_site_option( 'active_sitewide_plugins', $sitewide );
             delete_option( self::OPTION_RESTORED_SITEWIDE_PLUGINS );
         }
@@ -1787,18 +1791,38 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
                 'file'     => $dest_name,
             ];
 
-            $meta['stage']      = 'restore-files';
-            $meta['progress']   = 90;
-            $meta['message']    = __( 'Manual database import required. Restoring files now…', 'museder-restoreone' );
+            $order = isset( $restore_options['restore_order'] )
+                ? (string) $restore_options['restore_order']
+                : Museder_Restoreone_Restore_Preflight::ORDER_DB_THEN_FILES;
+            if ( Museder_Restoreone_Restore_Preflight::ORDER_FILES_THEN_DB === $order ) {
+                $meta['stage']    = 'search-replace';
+                $meta['progress'] = 96;
+                $meta['message']  = __( 'Manual database import required. Preparing URL replacement…', 'museder-restoreone' );
+            } else {
+                $meta['stage']    = 'restore-files';
+                $meta['progress'] = 90;
+                $meta['message']  = __( 'Manual database import required. Restoring files now…', 'museder-restoreone' );
+            }
             $meta['updated_at'] = current_time( 'mysql' );
             self::write_job_meta( $job_id, $meta );
             return;
         }
 
         if ( ! empty( $result['success'] ) ) {
-            $meta['progress'] = 90;
-            $meta['message']  = __( 'Database import completed.', 'museder-restoreone' );
-            $meta['stage']    = 'restore-files';
+            $order = isset( $restore_options['restore_order'] )
+                ? (string) $restore_options['restore_order']
+                : Museder_Restoreone_Restore_Preflight::ORDER_DB_THEN_FILES;
+            if ( Museder_Restoreone_Restore_Preflight::ORDER_FILES_THEN_DB === $order ) {
+                // Files were restored before DB (empty-shell bootstrap). Do not re-enter restore-files
+                // or complete_files_stage_and_advance() will loop back to restore-extract-db.
+                $meta['stage']    = 'search-replace';
+                $meta['progress'] = 96;
+                $meta['message']  = __( 'Database import completed. Preparing URL replacement…', 'museder-restoreone' );
+            } else {
+                $meta['progress'] = 90;
+                $meta['message']  = __( 'Database import completed.', 'museder-restoreone' );
+                $meta['stage']    = 'restore-files';
+            }
         } else {
             $meta['progress'] = 80;
             $meta['message']  = isset( $result['message'] ) ? (string) $result['message'] : __( 'Database import failed.', 'museder-restoreone' );
@@ -3924,6 +3948,16 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
             museder_restoreone_ensure_directory( $dir );
         }
         return $dir;
+    }
+
+    /**
+     * Public accessor for job temp directory (Preflight / external callers).
+     *
+     * @param string $job_id Job ID.
+     * @return string Absolute path.
+     */
+    public static function get_job_tmp_directory( $job_id ) {
+        return self::ensure_job_tmp_directory( $job_id );
     }
 
     /**

@@ -21,6 +21,45 @@
 
 ---
 
+## 回歸輪（2026-05-27，`ae87d28` / 2.7.268）
+
+依 `docs/QA-APPROACH-B-RETEST-PROPOSAL-2026-05.md` 執行。
+
+| 項目 | 結果 |
+|------|------|
+| Docker QA 佈建 | ✅ A1/B1 等可連（8081/8083） |
+| R-S13（AB-003） | ✅ Pass |
+| R-S3-progress（AB-002） | ✅ Pass（靜態） |
+| R-S2（AB-001 E2E） | ❌ Fail — **BUG-AB-005**（bootstrap POST `sanitize_key` fatal） |
+| AB-001 程式修復 | ✅ 靜態確認 `pause_other_plugins => true` |
+| 新 Bug | **BUG-AB-005** → `docs/BUG-INVESTIGATION-2026-05-27-bootstrap-sanitize-key-R-S2.md` |
+
+**回歸輪結論：** AB-002/003 可標 Verified；AB-001 **E2E 未驗證**（被 AB-005 阻擋）。開發 Agent **優先修 AB-005**，再重跑 R-S2。
+
+### AB-005 第二輪（2026-05-27）
+
+| 項目 | 結果 |
+|------|------|
+| `sanitize_key` / `get_bloginfo` stub | ✅ POST 已過 preflight |
+| POST 全路徑 | ❌ 仍 500 — **`wp_upload_dir()`** |
+| R-S2 / S2 / AB-001 / AB-005 Verified | ❌ 未達成 |
+
+證據：`docs/qa-evidence/approach-b-retest-2026-05/R-S2-round2/`
+
+### AB-005 第三輪（2026-05-27）
+
+| 項目 | 結果 |
+|------|------|
+| `wp_upload_dir` / legacy skip | ✅ POST 已過該關 |
+| POST 全路徑 | ❌ 仍 500 — **`HOUR_IN_SECONDS`**（`generate_job_id`） |
+| R-S2 / S2 / AB-001 / AB-005 Verified | ❌ 未達成 |
+
+證據：`docs/qa-evidence/approach-b-retest-2026-05/R-S2-round3/`
+
+**證據目錄：** `docs/qa-evidence/approach-b-retest-2026-05/`（R-S13、R-S2 Apache log）
+
+---
+
 ## 2. 交付物清單
 
 | 檔案 | 狀態 |

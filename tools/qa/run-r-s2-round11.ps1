@@ -1,0 +1,123 @@
+# R-S2 round 11 — QA-A1 bootstrap E2E (send_bootstrap_response_headers + class-restore.php)
+$ErrorActionPreference = 'Stop'
+$Repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+$Evidence = Join-Path $Repo 'docs\qa-evidence\approach-b-retest-2026-05\R-S2-round11'
+$A1 = 'museder-restoreone-qa-a1-1'
+$BaseUrl = 'http://localhost:8081/museder-restoreone-restore-bootstrap.php'
+$Secret = 'qa-secret-12345'
+$Backup = 'localhost-20260527083521-E02Tyj.zip'
+
+New-Item -ItemType Directory -Force -Path $Evidence | Out-Null
+
+$deploy = @(
+    @{ src = 'includes\class-restore-bootstrap.php'; dst = '/var/www/html/wp-content/plugins/museder-restoreone/includes/class-restore-bootstrap.php' },
+    @{ src = 'includes\class-restore-service.php'; dst = '/var/www/html/wp-content/plugins/museder-restoreone/includes/class-restore-service.php' },
+    @{ src = 'includes\class-restore-preflight.php'; dst = '/var/www/html/wp-content/plugins/museder-restoreone/includes/class-restore-preflight.php' },
+    @{ src = 'includes\class-restore-lock.php'; dst = '/var/www/html/wp-content/plugins/museder-restoreone/includes/class-restore-lock.php' },
+    @{ src = 'includes\helpers.php'; dst = '/var/www/html/wp-content/plugins/museder-restoreone/includes/helpers.php' },
+    @{ src = 'museder-restoreone-restore-bootstrap.php'; dst = '/var/www/html/museder-restoreone-restore-bootstrap.php' }
+)
+foreach ($f in $deploy) {
+    docker cp (Join-Path $Repo $f.src) "${A1}:$($f.dst)"
+}
+
+$hdrFn = (docker exec $A1 bash -lc 'grep -c send_bootstrap_response_headers /var/www/html/wp-content/plugins/museder-restoreone/includes/class-restore-bootstrap.php').Trim()
+$restorePhp = (docker exec $A1 bash -lc 'grep -c class-restore.php /var/www/html/wp-content/plugins/museder-restoreone/includes/class-restore-bootstrap.php').Trim()
+if ([int]$hdrFn -lt 1) { throw 'Round 11 send_bootstrap_response_headers not deployed' }
+if ([int]$restorePhp -lt 1) { throw 'Round 11 class-restore.php require not deployed' }
+Write-Host "deployed: send_bootstrap_response_headers=$hdrFn class-restore.php refs=$restorePhp"
+
+docker exec $A1 bash -lc "echo 'memory_limit=2048M' > /usr/local/etc/php/conf.d/zzz-qa-mem.ini"
+docker exec $A1 bash -lc "cd /var/www/html && rm -rf wp-admin wp-includes && rm -f index.php wp-*.php xmlrpc.php readme.html license.txt && rm -rf wp-content/uploads/museder-restoreone/jobs/* wp-content/uploads/museder-restoreone/bootstrap-handoff.json wp-content/uploads/museder-restoreone/bootstrap-restore.lock && mkdir -p wp-content/uploads/museder-restoreone/backups wp-content/uploads/museder-restoreone/jobs && chmod -R 777 wp-content/uploads/museder-restoreone"
+
+Write-Host '[R-S2 R11] POST start...'
+$postFile = Join-Path $Evidence 'bootstrap-post.html'
+$postCode = curl.exe -s -o $postFile -w '%{http_code}' --max-time 600 -X POST `
+    -d "museder_bootstrap_start=1&backup=$Backup&secret=$Secret" $BaseUrl
+"POST HTTP: $postCode" | Set-Content (Join-Path $Evidence 'bootstrap-post-status.txt') -Encoding utf8
+Write-Host "POST HTTP: $postCode"
+if ($postCode -notmatch '^2') {
+    docker logs $A1 2>&1 | Select-String -Pattern 'Fatal' | Select-Object -Last 8 | Out-String | Write-Host
+    throw "POST failed: $postCode"
+}
+
+docker exec $A1 test -f /var/www/html/wp-content/uploads/museder-restoreone/bootstrap-handoff.json
+if ($LASTEXITCODE -ne 0) { throw 'bootstrap-handoff.json missing' }
+docker exec $A1 cat /var/www/html/wp-content/uploads/museder-restoreone/bootstrap-handoff.json | Set-Content (Join-Path $Evidence 'bootstrap-handoff.json') -Encoding utf8
+
+$html = Get-Content $postFile -Raw
+$jobId = ''
+if ($html -match 'Job:</strong>\s*([a-zA-Z0-9_]+)') { $jobId = $Matches[1] }
+if ($jobId -eq '' -and (Get-Content (Join-Path $Evidence 'bootstrap-handoff.json') -Raw) -match '"job_id"\s*:\s*"([^"]+)"') {
+    $jobId = $Matches[1]
+}
+if ($jobId -eq '') {
+    $latest = (docker exec $A1 bash -lc 'ls -t /var/www/html/wp-content/uploads/museder-restoreone/jobs/*.json 2>/dev/null | head -1').Trim()
+    if ($latest -match '([a-zA-Z0-9_]+)\.json') { $jobId = $Matches[1] }
+}
+if ($jobId -eq '') { throw 'job_id not found' }
+$jobId | Set-Content (Join-Path $Evidence 'job-id.txt') -Encoding utf8
+Write-Host "job_id=$jobId"
+
+docker exec $A1 cat "/var/www/html/wp-content/uploads/museder-restoreone/jobs/${jobId}.json" | Set-Content (Join-Path $Evidence 'job-meta-post.json') -Encoding utf8
+
+$pollUrl = "$BaseUrl`?job_id=$jobId&secret=$Secret"
+$pollHeadersFile = Join-Path $Evidence 'poll-0-headers.txt'
+curl.exe -s -D $pollHeadersFile -o (Join-Path $Evidence 'poll-0-body.html') --max-time 300 $pollUrl | Out-Null
+$hdrRaw = Get-Content $pollHeadersFile -Raw -ErrorAction SilentlyContinue
+$hasBootstrapHdr = $hdrRaw -match 'X-Museder-Restoreone-Bootstrap:\s*1'
+$isInstallRedirect = $hdrRaw -match 'install\.php'
+"poll-0 X-Museder-Restoreone-Bootstrap: $hasBootstrapHdr" | Set-Content (Join-Path $Evidence 'poll-0-header-check.txt') -Encoding utf8
+Write-Host "poll-0 bootstrap_hdr=$hasBootstrapHdr install_redirect=$isInstallRedirect"
+
+$finished = $false
+for ($i = 0; $i -lt 240; $i++) {
+    Start-Sleep -Seconds 10
+    $pollFile = Join-Path $Evidence "poll-$i.html"
+    $pollCode = curl.exe -s -L -o $pollFile -w '%{http_code}' --max-time 300 $pollUrl
+    $pollBody = Get-Content $pollFile -Raw -ErrorAction SilentlyContinue
+    $isBootstrap = $pollBody -match 'Restore Bootstrap|Museder RestoreOne'
+    $isInstall = $pollBody -match 'wp-admin/install|WordPress.+Installation'
+    if ($pollCode -notmatch '^2' -or (-not $isBootstrap -and $isInstall)) {
+        Write-Host "poll $i HTTP=$pollCode bootstrap=$isBootstrap install=$isInstall"
+        continue
+    }
+    $metaJson = docker exec $A1 cat "/var/www/html/wp-content/uploads/museder-restoreone/jobs/${jobId}.json" 2>$null
+    if (-not $metaJson) { Write-Host "poll $i no meta"; continue }
+    $prog = 0
+    if ($metaJson -match '"progress"\s*:\s*(\d+)') { $prog = [int]$Matches[1] }
+    $comp = $metaJson -match '"completed"\s*:\s*true'
+    $stage = 'unknown'
+    if ($metaJson -match '"stage"\s*:\s*"([^"]+)"') { $stage = $Matches[1] }
+    Write-Host "poll $i HTTP=$pollCode prog=$prog stage=$stage completed=$comp"
+    if ($comp -or $prog -ge 100) {
+        $finished = $true
+        break
+    }
+}
+
+$metaJson = docker exec $A1 cat "/var/www/html/wp-content/uploads/museder-restoreone/jobs/${jobId}.json"
+$metaJson | Set-Content (Join-Path $Evidence 'job-meta.json') -Encoding utf8
+$core = (docker exec $A1 bash -lc 'test -f /var/www/html/wp-admin/index.php && test -f /var/www/html/wp-load.php && echo CORE_OK || echo CORE_MISSING').Trim()
+$core | Set-Content (Join-Path $Evidence 'core-check.txt') -Encoding utf8
+$pauseOk = $metaJson -match '"pause_other_plugins"\s*:\s*true'
+$completed = $metaJson -match '"completed"\s*:\s*true'
+
+@{
+    post_code     = $postCode
+    job_id        = $jobId
+    finished      = $finished
+    completed     = $completed
+    core          = $core
+    pause_ok      = $pauseOk
+    bootstrap_hdr = $hasBootstrapHdr
+} | ConvertTo-Json | Set-Content (Join-Path $Evidence 'r-s2-summary.json') -Encoding utf8
+
+docker logs $A1 2>&1 | Select-String -Pattern 'Fatal' | Select-Object -Last 8 | Out-String | Set-Content (Join-Path $Evidence 'apache-fatals-tail.txt') -Encoding utf8
+
+if ($postCode -notmatch '^2') { throw 'POST not 2xx' }
+if (-not $hasBootstrapHdr) { throw 'poll-0 missing X-Museder-Restoreone-Bootstrap: 1' }
+if (-not $pauseOk) { throw 'pause_other_plugins not true' }
+if (-not $completed) { throw 'job completed not true' }
+if ($core -ne 'CORE_OK') { throw "core: $core" }
+Write-Host '[R-S2 R11] PASS'

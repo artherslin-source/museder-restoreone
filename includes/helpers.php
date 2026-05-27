@@ -34,6 +34,13 @@ if ( ! function_exists( 'museder_restoreone_local_time' ) ) {
      * @return string Formatted date/time in site timezone.
      */
     function museder_restoreone_local_time( $format = 'Y-m-d H:i:s', $timestamp = null ) {
+        if ( defined( 'MUSEDER_RESTOREONE_BOOTSTRAP_MODE' ) && MUSEDER_RESTOREONE_BOOTSTRAP_MODE ) {
+            if ( null === $timestamp ) {
+                $timestamp = time();
+            }
+            return gmdate( (string) $format, (int) $timestamp );
+        }
+
         // Use wp_date() for WordPress 5.3+ (handles timezone conversion automatically)
         if ( function_exists( 'wp_date' ) ) {
             // wp_date() expects UTC timestamp and converts to local timezone
@@ -258,6 +265,18 @@ function museder_restoreone_format_local_time( $time, $format = '' ) {
         $format = get_option( 'date_format' ) . ' ' . get_option( 'time_format' );
     }
 
+    if ( defined( 'MUSEDER_RESTOREONE_BOOTSTRAP_MODE' ) && MUSEDER_RESTOREONE_BOOTSTRAP_MODE ) {
+        if ( is_numeric( $time ) ) {
+            $timestamp = (int) $time;
+        } else {
+            $timestamp = strtotime( (string) $time );
+        }
+        if ( ! $timestamp ) {
+            return '';
+        }
+        return gmdate( (string) $format, $timestamp );
+    }
+
     // Normalize to Unix timestamp.
     if ( is_numeric( $time ) ) {
         $timestamp = (int) $time;
@@ -341,6 +360,10 @@ function museder_restoreone_get_log_dir() {
  * @return array<int,string> Array of absolute legacy roots (e.g. .../uploads/backup-lite)
  */
 function museder_restoreone_get_legacy_storage_roots() {
+    if ( defined( 'MUSEDER_RESTOREONE_BOOTSTRAP_MODE' ) && MUSEDER_RESTOREONE_BOOTSTRAP_MODE ) {
+        return [];
+    }
+
     $candidates = [];
 
     $upload_dir = wp_upload_dir();
@@ -364,6 +387,10 @@ function museder_restoreone_get_legacy_storage_roots() {
  * @return array<int,string> Array of absolute legacy log directories (e.g. .../uploads/backup-lite-logs)
  */
 function museder_restoreone_get_legacy_log_dirs() {
+    if ( defined( 'MUSEDER_RESTOREONE_BOOTSTRAP_MODE' ) && MUSEDER_RESTOREONE_BOOTSTRAP_MODE ) {
+        return [];
+    }
+
     $candidates = [];
 
     $upload_dir = wp_upload_dir();
