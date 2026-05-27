@@ -3186,7 +3186,7 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
      * @param string $zip_path Archive path.
      * @return bool
      */
-    protected static function zip_archive_has_wp_core( $zip_path ) {
+    public static function zip_archive_has_wp_core( $zip_path ) {
         if ( ! class_exists( 'ZipArchive' ) || ! is_readable( $zip_path ) ) {
             return false;
         }

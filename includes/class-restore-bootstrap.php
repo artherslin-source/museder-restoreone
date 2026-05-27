@@ -45,12 +45,13 @@ class Museder_Restoreone_Restore_Bootstrap {
      * @return void
      */
     public static function handle_request() {
+        self::register_wordpress_stubs();
+
         if ( ! self::bootstrap_root() ) {
             self::render_error( 'Bootstrap root is not defined.' );
             return;
         }
 
-        self::register_wordpress_stubs();
         self::load_plugin_stack();
 
         $job_id = isset( $_REQUEST['job_id'] ) ? sanitize_text_field( wp_unslash( (string) $_REQUEST['job_id'] ) ) : '';
@@ -133,10 +134,14 @@ class Museder_Restoreone_Restore_Bootstrap {
      * @return string Normalized document root or empty.
      */
     public static function bootstrap_root() {
-        if ( defined( 'MUSEDER_RESTOREONE_BOOTSTRAP_ROOT' ) ) {
-            return wp_normalize_path( rtrim( (string) MUSEDER_RESTOREONE_BOOTSTRAP_ROOT, "/\\\n\r\t " ) );
+        if ( ! defined( 'MUSEDER_RESTOREONE_BOOTSTRAP_ROOT' ) ) {
+            return '';
         }
-        return '';
+        $root = rtrim( (string) MUSEDER_RESTOREONE_BOOTSTRAP_ROOT, "/\\\n\r\t " );
+        if ( function_exists( 'wp_normalize_path' ) ) {
+            return wp_normalize_path( $root );
+        }
+        return str_replace( '\\', '/', $root );
     }
 
     /**
@@ -179,8 +184,18 @@ class Museder_Restoreone_Restore_Bootstrap {
         if ( ! defined( 'MUSEDER_RESTOREONE_BOOTSTRAP_MODE' ) ) {
             define( 'MUSEDER_RESTOREONE_BOOTSTRAP_MODE', true );
         }
+        if ( ! function_exists( 'trailingslashit' ) ) {
+            /**
+             * @param string $string String.
+             * @return string
+             */
+            function trailingslashit( $string ) {
+                return rtrim( (string) $string, "/\\\n\r\t " ) . '/';
+            }
+        }
         if ( ! defined( 'ABSPATH' ) ) {
-            define( 'ABSPATH', trailingslashit( self::bootstrap_root() ) );
+            $root = self::bootstrap_root();
+            define( 'ABSPATH', '' !== $root ? trailingslashit( $root ) : '' );
         }
         if ( ! function_exists( '__' ) ) {
             /**
@@ -208,6 +223,15 @@ class Museder_Restoreone_Restore_Bootstrap {
              * @return string
              */
             function esc_html( $text ) {
+                return htmlspecialchars( (string) $text, ENT_QUOTES, 'UTF-8' );
+            }
+        }
+        if ( ! function_exists( 'esc_attr' ) ) {
+            /**
+             * @param string $text Text.
+             * @return string
+             */
+            function esc_attr( $text ) {
                 return htmlspecialchars( (string) $text, ENT_QUOTES, 'UTF-8' );
             }
         }
@@ -261,15 +285,6 @@ class Museder_Restoreone_Restore_Bootstrap {
             function wp_normalize_path( $path ) {
                 $path = str_replace( '\\', '/', (string) $path );
                 return preg_replace( '|(?<=.)/+|', '/', $path );
-            }
-        }
-        if ( ! function_exists( 'trailingslashit' ) ) {
-            /**
-             * @param string $string String.
-             * @return string
-             */
-            function trailingslashit( $string ) {
-                return rtrim( (string) $string, "/\\\n\r\t " ) . '/';
             }
         }
         if ( ! function_exists( 'sanitize_file_name' ) ) {
@@ -458,7 +473,7 @@ class Museder_Restoreone_Restore_Bootstrap {
             define( 'MUSEDER_RESTOREONE_PATH', trailingslashit( dirname( $plugin ) ) );
         }
         if ( ! defined( 'MUSEDER_RESTOREONE_VERSION' ) ) {
-            define( 'MUSEDER_RESTOREONE_VERSION', '2.7.267' );
+            define( 'MUSEDER_RESTOREONE_VERSION', '2.7.268' );
         }
 
         require_once MUSEDER_RESTOREONE_PATH . 'includes/helpers.php';

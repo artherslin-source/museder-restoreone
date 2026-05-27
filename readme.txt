@@ -4,7 +4,7 @@ Tags: backup, migration, restore, site-backup, database-backup
 Requires at least: 5.8
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 2.7.267
+Stable tag: 2.7.268
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -182,6 +182,10 @@ Most sites do not need any changes. For unusual server layouts where core admin 
 6. Settings page with general options and system diagnostics.
 
 == Changelog ==
+
+= 2.7.268 =
+* Restore: make `zip_archive_has_wp_core()` public so preflight can detect full-site archives without a fatal error (BUG-SUN-001).
+* Restore bootstrap: register WordPress stubs before `bootstrap_root()`; add `esc_attr()` stub; define `trailingslashit` before `ABSPATH` (BUG-SUN-003, BUG-SUN-004).
 
 = 2.7.267 =
 * Restore (Approach B): **site profile** detection (existing / fresh / no core), preflight blocks, and Step 2 **restore order**, **scope**, **wp-config mode** (backup / keep / merge), and **pause other plugins** (default on).
