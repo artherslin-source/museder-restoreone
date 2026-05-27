@@ -488,7 +488,7 @@
             if (stage === 'prepared') return 10;
             if (stage === 'validated') return 30;
             if (stage === 'dry-run') return 60;
-            if (stage === 'restore-extract-db' || stage === 'restore-import-db') return 80;
+            if (stage === 'restore-extract-db' || stage === 'restore-import-db' || stage === 'restore-db') return 80;
             if (stage === 'search-replace') return 96;
             if (stage === 'restore-files' || stage === 'cleanup') return 99;
             if (stage === 'done' || stage === 'failed' || stage === 'cancelled') return 100;

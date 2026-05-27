@@ -61,11 +61,19 @@ git status
 git status
 ```
 
-打包 Lite：
+打包 Lite（規範見 `docs/PACKAGING.md`）：
 
-```powershell
+```bash
 bash create-package.sh
 ```
+
+Windows 且無 bash 時：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/package-lite-windows.ps1
+```
+
+**禁止**使用 PowerShell `Compress-Archive` 建 Lite zip。
 
 若 Add-on 原始碼存在且需要驗證：
 

@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # Build the WordPress.org Lite release ZIP for Museder RestoreOne.
+#
+# Canonical packaging rules: docs/PACKAGING.md
+# Windows: do NOT use Compress-Archive; use tools/package-lite-windows.ps1 or bash here.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

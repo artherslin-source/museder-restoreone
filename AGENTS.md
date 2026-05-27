@@ -11,6 +11,7 @@ Before making changes, read and apply:
 - `docs/DEVELOPMENT_WORKFLOW.md`
 - `docs/WORDPRESS_ORG_DEVELOPMENT_GUIDE.md`
 - `docs/RELEASE_CHECKLIST.md` before release-facing work
+- `docs/PACKAGING.md` before building or uploading Lite ZIP (Windows: never use `Compress-Archive`)
 - `docs/NEW_MACHINE_BOOTSTRAP.md` before machine handoff or environment setup
 
 ### Core Rules
@@ -36,6 +37,12 @@ After clone, initialize the submodule:
 
 ```bash
 git submodule update --init --recursive .cursor/superpowers
+```
+
+**Windows:** Git may checkout skill symlinks as plain text files (broken). After submodule init, run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\cursor\fix-superpowers-skills-windows.ps1
 ```
 
 On a **new machine**, also install globally (optional but recommended):

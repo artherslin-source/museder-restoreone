@@ -708,7 +708,7 @@ class Museder_Restoreone_Restore_Bootstrap {
                 'restore_order'      => Museder_Restoreone_Restore_Preflight::ORDER_FILES_THEN_DB,
                 'auto_backup'        => false,
                 'overwrite'          => true,
-                'pause_other_plugins'=> false,
+                'pause_other_plugins'=> true,
                 'bootstrap_mode'     => true,
             ]
         );

@@ -177,6 +177,15 @@ class Museder_Restoreone_Restore_Preflight {
             }
         }
 
+        if (
+            self::ORDER_DB_THEN_FILES === $options['restore_order']
+            && empty( $options['pause_other_plugins'] )
+            && self::SCOPE_FULL === $options['restore_scope']
+            && in_array( $profile, [ self::PROFILE_POPULATED, self::PROFILE_FRESH ], true )
+        ) {
+            $warnings[] = __( 'Restore order is “database first” with other plugins left enabled. WordPress may load incomplete plugin files after the database step and fail. Keep “Pause other plugins during restore” enabled unless you accept this risk.', 'museder-restoreone' );
+        }
+
         if ( self::PROFILE_FRESH === $profile && self::SCOPE_FULL === $options['restore_scope'] ) {
             $warnings[] = __( 'After WordPress core files are restored, the backup database will replace the database created by the WordPress installer. This is expected for a fresh install.', 'museder-restoreone' );
         }
