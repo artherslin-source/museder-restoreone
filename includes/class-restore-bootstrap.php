@@ -297,6 +297,44 @@ class Museder_Restoreone_Restore_Bootstrap {
                 return (string) $filename;
             }
         }
+        if ( ! function_exists( 'sanitize_key' ) ) {
+            /**
+             * Minimal stub for Preflight::normalize_options() before wp-load.php (bootstrap POST).
+             *
+             * @param string $key Key.
+             * @return string
+             */
+            function sanitize_key( $key ) {
+                $key = strtolower( (string) $key );
+                return (string) preg_replace( '/[^a-z0-9_\-]/', '', $key );
+            }
+        }
+        if ( ! function_exists( 'get_bloginfo' ) ) {
+            /**
+             * Minimal stub for preflight version check when core is not loaded yet.
+             *
+             * @param string $show   Field.
+             * @param string $filter Filter.
+             * @return string
+             */
+            function get_bloginfo( $show = '', $filter = 'raw' ) {
+                unset( $filter );
+                if ( 'version' !== $show ) {
+                    return '';
+                }
+                if ( ! defined( 'ABSPATH' ) || '' === ABSPATH ) {
+                    return '';
+                }
+                $version_file = ABSPATH . 'wp-includes/version.php';
+                if ( ! is_readable( $version_file ) ) {
+                    return '';
+                }
+                $wp_version = '';
+                // phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited
+                require $version_file;
+                return isset( $wp_version ) ? (string) $wp_version : '';
+            }
+        }
         if ( ! function_exists( 'sanitize_text_field' ) ) {
             /**
              * @param string $str String.
