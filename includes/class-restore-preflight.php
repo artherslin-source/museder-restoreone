@@ -114,9 +114,7 @@ class Museder_Restoreone_Restore_Preflight {
             }
         }
 
-        $plugins = get_option( 'active_plugins', [] );
-        $plugin_count = is_array( $plugins ) ? count( $plugins ) : 0;
-        if ( $plugin_count > 2 ) {
+        if ( self::count_meaningful_active_plugins() > 2 ) {
             return self::PROFILE_POPULATED;
         }
 
@@ -129,7 +127,7 @@ class Museder_Restoreone_Restore_Preflight {
                     $leaf = basename( $dir );
                     if ( is_numeric( $leaf ) && (int) $leaf > 2000 ) {
                         $files = glob( trailingslashit( $dir ) . '*/*' );
-                        if ( is_array( $files ) && count( $files ) > 2 ) {
+                        if ( is_array( $files ) && self::count_meaningful_upload_files( $files ) > 2 ) {
                             return self::PROFILE_POPULATED;
                         }
                     }
@@ -141,13 +139,59 @@ class Museder_Restoreone_Restore_Preflight {
     }
 
     /**
+     * Count active plugins excluding this plugin (avoids test sites misclassified as populated).
+     *
+     * @return int
+     */
+    private static function count_meaningful_active_plugins() {
+        $plugins = get_option( 'active_plugins', [] );
+        if ( ! is_array( $plugins ) ) {
+            return 0;
+        }
+        $count = 0;
+        foreach ( $plugins as $plugin ) {
+            $plugin = (string) $plugin;
+            if ( '' === $plugin ) {
+                continue;
+            }
+            if ( false !== strpos( $plugin, 'museder-restoreone' ) ) {
+                continue;
+            }
+            ++$count;
+        }
+        return $count;
+    }
+
+    /**
+     * Count upload files under year/month dirs, excluding plugin runtime data paths.
+     *
+     * @param array<int, string> $files File paths from glob.
+     * @return int
+     */
+    private static function count_meaningful_upload_files( array $files ) {
+        $count = 0;
+        foreach ( $files as $file ) {
+            $path = wp_normalize_path( (string) $file );
+            if ( '' === $path || ! is_file( $path ) ) {
+                continue;
+            }
+            if ( false !== strpos( $path, '/museder-restoreone/' ) ) {
+                continue;
+            }
+            ++$count;
+        }
+        return $count;
+    }
+
+    /**
      * Run preflight checks before restore starts.
      *
      * @param string               $archive_path Absolute path to backup archive.
      * @param array<string, mixed> $options      Restore options (normalized in-place).
+     * @param bool                 $for_analysis When true, Step 1 analysis: overwrite requirement is a warning, not a block.
      * @return array{blocked:bool,message:string,profile:string,warnings:array<int,string>,options:array<string,mixed>,archive_has_core:bool}
      */
-    public static function preflight( $archive_path, array $options ) {
+    public static function preflight( $archive_path, array $options, $for_analysis = false ) {
         $options = self::normalize_options( $options );
         $profile = (string) $options['restore_profile'];
         $warnings = [];
@@ -172,8 +216,13 @@ class Museder_Restoreone_Restore_Preflight {
         if ( self::PROFILE_POPULATED === $profile ) {
             $warnings[] = __( 'This site already has content. A pre-restore snapshot of the current site is required.', 'museder-restoreone' );
             if ( empty( $options['overwrite'] ) && self::SCOPE_FULL === $options['restore_scope'] ) {
-                $blocked = true;
-                $message = __( 'Full-site restore on a site with existing content requires enabling “Overwrite existing data”.', 'museder-restoreone' );
+                $overwrite_notice = __( 'Full-site restore on a site with existing content requires enabling “Overwrite existing data”.', 'museder-restoreone' );
+                if ( $for_analysis ) {
+                    $warnings[] = $overwrite_notice;
+                } else {
+                    $blocked = true;
+                    $message = $overwrite_notice;
+                }
             }
         }
 
@@ -223,9 +272,14 @@ class Museder_Restoreone_Restore_Preflight {
      * @return array<string, mixed>
      */
     public static function hints_for_summary( $archive_path, array $options = [] ) {
-        $preflight = self::preflight( $archive_path, $options );
+        $preflight = self::preflight( $archive_path, $options, true );
         $profile = $preflight['profile'];
         $suggest_files_first = in_array( $profile, [ self::PROFILE_FRESH, self::PROFILE_EMPTY ], true );
+        $requires_overwrite = (
+            self::PROFILE_POPULATED === $profile
+            && empty( $options['overwrite'] )
+            && self::SCOPE_FULL === $preflight['options']['restore_scope']
+        );
 
         return [
             'restore_profile'       => $profile,
@@ -235,6 +289,7 @@ class Museder_Restoreone_Restore_Preflight {
             'preflight_warnings'    => $preflight['warnings'],
             'preflight_blocked'     => $preflight['blocked'],
             'preflight_message'     => $preflight['message'],
+            'requires_overwrite'    => $requires_overwrite,
             'force_auto_backup'     => ( self::PROFILE_POPULATED === $profile ),
             'suggest_files_first'   => $suggest_files_first,
             'fresh_db_overwrite_notice' => ( self::PROFILE_FRESH === $profile )

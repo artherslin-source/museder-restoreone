@@ -4898,6 +4898,8 @@ function initRestoreCenter() {
                 }
                 if (summary.preflight_blocked && summary.preflight_message) {
                     lines.push('⛔ ' + summary.preflight_message);
+                } else if (summary.requires_overwrite) {
+                    lines.push('ℹ️ ' + (strings.restoreRequiresOverwrite || 'Enable “Overwrite existing data” in Step 2 before starting a full-site restore on this site.'));
                 }
                 if (lines.length) {
                     preflightHintsEl.style.display = '';
@@ -4973,15 +4975,10 @@ function initRestoreCenter() {
                 return;
             }
             if (payload.summary) {
-                if (payload.summary.preflight_blocked) {
-                    isAnalyzing = false;
-                    analysisError = true;
-                    hasAnalyzed = false;
-                    syncWizard();
-                    notifyError({ message: payload.summary.preflight_message || (strings.errorGeneric || 'This backup cannot be restored on this site.') });
-                    clearStep1Started();
-                    updateStep1TimerDisplay('');
-                    return;
+                if (payload.summary.preflight_blocked && payload.summary.preflight_message) {
+                    showToast('⚠️ ' + payload.summary.preflight_message, 'warning');
+                } else if (payload.summary.requires_overwrite) {
+                    showToast('ℹ️ ' + (strings.restoreRequiresOverwrite || 'Enable “Overwrite existing data” in Step 2 before starting restore.'), 'info');
                 }
                 renderSummary(payload.summary);
                 // Keep JS state in sync for same-page flow (prevents requiring hard reload to enable Step 3).

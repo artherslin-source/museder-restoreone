@@ -4,7 +4,7 @@ Tags: backup, migration, restore, site-backup, database-backup
 Requires at least: 5.8
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 2.7.269
+Stable tag: 2.7.270
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -182,6 +182,10 @@ Most sites do not need any changes. For unusual server layouts where core admin 
 6. Settings page with general options and system diagnostics.
 
 == Changelog ==
+
+= 2.7.270 =
+* Restore Step 1: separate **analysis** from **execute** preflight — populated-site overwrite requirement is a Step 2 warning, not a Step 1 failure (fixes “Analysis complete” + empty Summary + “Analysis failed” on chunk finalize).
+* Restore: profile detection ignores this plugin in active-plugin count and excludes `uploads/museder-restoreone/` from uploads heuristics (reduces test-site false “populated” classification).
 
 = 2.7.269 =
 * Restore Step 1: cache archive analysis after chunk finalize so **Load Info** on large backups reuses results instead of re-scanning the ZIP (fixes timeout on 500MB+ server files).
