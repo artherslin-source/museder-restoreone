@@ -4924,6 +4924,34 @@ function initRestoreCenter() {
             }
         }
 
+        function summaryMatchesSelectedFilename(summary, filename) {
+            if (!summary || !filename) {
+                return false;
+            }
+            var summaryName = String(summary.name || summary.filename || '').trim();
+            var selected = String(filename || '').trim();
+            if (!summaryName || !selected) {
+                return false;
+            }
+            return summaryName === selected;
+        }
+
+        function applyCachedSummaryForSelectedFile(filename) {
+            if (!summaryMatchesSelectedFilename(restoreData.summary, filename)) {
+                return false;
+            }
+            renderSummary(restoreData.summary);
+            applyRestorePreflightHints(restoreData.summary);
+            isAnalyzing = false;
+            analysisError = false;
+            hasAnalyzed = true;
+            reviewCompleted = true;
+            restoreCompleted = false;
+            syncWizard();
+            updateRestoreCancelState();
+            return true;
+        }
+
         function handleSummaryResponse(json) {
             if (!json) {
                 return;
@@ -5290,6 +5318,10 @@ function initRestoreCenter() {
                     notifyError({ message: strings.noFileSelected || 'Please select a backup file first.' });
                     return;
                 }
+                if (applyCachedSummaryForSelectedFile(value)) {
+                    showToast('✅ ' + (strings.messageReady || 'Backup ready for restore.'), 'info');
+                    return;
+                }
                 var formData = prepareFormData('museder_restoreone_restore_from_backup');
                 formData.append('filename', value);
 
@@ -5308,6 +5340,16 @@ function initRestoreCenter() {
                     handleSummaryResponse(json);
                 }).catch(function (error) {
                     existingButton.disabled = false;
+                    if (applyCachedSummaryForSelectedFile(value)) {
+                        showToast('✅ ' + (strings.messageReady || 'Backup ready for restore.'), 'info');
+                        return;
+                    }
+                    try {
+                        renderSummary(null);
+                    } catch (e) {}
+                    try {
+                        restoreData.summary = null;
+                    } catch (e2) {}
                     isAnalyzing = false;
                     analysisError = true;
                     hasAnalyzed = false;

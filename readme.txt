@@ -4,7 +4,7 @@ Tags: backup, migration, restore, site-backup, database-backup
 Requires at least: 5.8
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 2.7.268
+Stable tag: 2.7.269
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -182,6 +182,11 @@ Most sites do not need any changes. For unusual server layouts where core admin 
 6. Settings page with general options and system diagnostics.
 
 == Changelog ==
+
+= 2.7.269 =
+* Restore Step 1: cache archive analysis after chunk finalize so **Load Info** on large backups reuses results instead of re-scanning the ZIP (fixes timeout on 500MB+ server files).
+* Restore Step 1: fix wizard UI when Load Info fails — no more stale File Summary with "Analysis failed"; reuse valid session summary when the same backup was already analyzed.
+* Restore upload: chunk finalize now calls `MusederRestoreOneUI.handleSummaryResponse` first (wizard unlock without page reload).
 
 = 2.7.268 =
 * Restore: **large-site reliability** — after database import, progress polling continues via a file-backed **restore token** (survives session/nonce loss during NDJSON restore).

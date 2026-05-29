@@ -453,8 +453,21 @@
             // Try to call handleSummaryResponse from admin.js via window or ui object
             var handled = false;
             
-            // Method 1: Check if it's available on window.BackupLiteUI
-            if (typeof window.BackupLiteUI !== 'undefined' && typeof window.BackupLiteUI.handleSummaryResponse === 'function') {
+            // Method 1: Museder RestoreOne UI (primary)
+            if (typeof window.MusederRestoreOneUI !== 'undefined' && typeof window.MusederRestoreOneUI.handleSummaryResponse === 'function') {
+                console.log('[Finalize] Calling handleSummaryResponse via window.MusederRestoreOneUI');
+                window.MusederRestoreOneUI.handleSummaryResponse({
+                    success: true,
+                    data: {
+                        summary: finalizeData.summary,
+                        progress: finalizeData.progress
+                    }
+                });
+                handled = true;
+            }
+
+            // Method 2: Legacy BackupLiteUI alias
+            if (!handled && typeof window.BackupLiteUI !== 'undefined' && typeof window.BackupLiteUI.handleSummaryResponse === 'function') {
                 console.log('[Finalize] Calling handleSummaryResponse via window.BackupLiteUI');
                 window.BackupLiteUI.handleSummaryResponse({
                     success: true,
@@ -466,7 +479,7 @@
                 handled = true;
             }
             
-            // Method 2: Check if it's available on ui object
+            // Method 3: Check if it's available on ui object
             if (!handled && typeof ui.handleSummaryResponse === 'function') {
                 console.log('[Finalize] Calling handleSummaryResponse via ui object');
                 ui.handleSummaryResponse({
@@ -479,7 +492,7 @@
                 handled = true;
             }
             
-            // Method 3: Dispatch custom event for admin.js to handle
+            // Method 4: Dispatch custom event for admin.js to handle
             if (!handled) {
                 console.log('[Finalize] Dispatching custom event for summary response');
                 var event = new CustomEvent('backup-lite-summary-ready', {

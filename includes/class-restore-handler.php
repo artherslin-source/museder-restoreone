@@ -473,7 +473,11 @@ class Museder_Restoreone_Restore_Handler {
                 wp_send_json_error( [ 'message' => esc_html__( 'Backup file not found.', 'museder-restoreone' ) ], 404 );
                 return;
             }
-            
+
+            if ( function_exists( 'set_time_limit' ) ) {
+                @set_time_limit( 300 );
+            }
+
             $summary = self::prepare_session( $path, 'existing' );
             
             wp_send_json_success( [
@@ -1824,6 +1828,15 @@ class Museder_Restoreone_Restore_Handler {
 
     public static function prepare_session( $file_path, $source, $extra = [] ) {
         $file_path = wp_normalize_path( $file_path );
+
+        if ( function_exists( 'set_time_limit' ) ) {
+            @set_time_limit( 300 );
+        }
+
+        $reused = self::try_reuse_cached_prepare_session( $file_path, $source, $extra );
+        if ( null !== $reused ) {
+            return $reused;
+        }
         
         if ( ! file_exists( $file_path ) || ! is_readable( $file_path ) ) {
             throw new RuntimeException( esc_html__( 'Backup file not found or unreadable.', 'museder-restoreone' ) );
@@ -1883,9 +1896,86 @@ class Museder_Restoreone_Restore_Handler {
             'completed' => false,
         ];
 
+        $state['extra']['summary_cache'] = self::build_summary_cache_for_archive( $file_path );
+
         self::set_state( $state );
 
         return self::compose_summary( $state );
+    }
+
+    /**
+     * Reuse cached zip analysis when the same backup was already prepared (e.g. chunk finalize then Load Info).
+     *
+     * @param string               $file_path Absolute archive path.
+     * @param string               $source    Session source slug.
+     * @param array<string, mixed> $extra     Optional extra state fields.
+     * @return array<string, mixed>|null Summary array or null when cache cannot be reused.
+     */
+    private static function try_reuse_cached_prepare_session( $file_path, $source, $extra = [] ) {
+        $file_name = basename( (string) $file_path );
+        if ( '' === $file_name ) {
+            return null;
+        }
+
+        $state = self::get_state();
+        $state_file = isset( $state['file'] ) ? basename( (string) $state['file'] ) : '';
+        if ( '' === $state_file || $state_file !== $file_name ) {
+            return null;
+        }
+
+        $extra_state = ( isset( $state['extra'] ) && is_array( $state['extra'] ) ) ? $state['extra'] : [];
+        if ( empty( $extra_state['summary_cache'] ) || ! is_array( $extra_state['summary_cache'] ) ) {
+            return null;
+        }
+
+        if ( ! file_exists( $file_path ) || ! is_readable( $file_path ) ) {
+            return null;
+        }
+
+        $disk_size  = (float) filesize( $file_path );
+        $state_size = isset( $state['size'] ) ? (float) $state['size'] : 0;
+        if ( $state_size > 0 && abs( $state_size - $disk_size ) > 1 ) {
+            return null;
+        }
+
+        global $wpdb;
+
+        $state['source'] = sanitize_text_field( (string) $source );
+        $state['size']   = $disk_size;
+        $state['extra']  = array_merge( $extra_state, is_array( $extra ) ? $extra : [] );
+        $state['extra']['db_prefix_target'] = isset( $wpdb->prefix ) ? (string) $wpdb->prefix : '';
+        $state['progress'] = self::format_progress( 10, __( 'File ready. Review summary before restoring.', 'museder-restoreone' ), true );
+
+        self::set_state( $state );
+
+        if ( function_exists( 'museder_restoreone_log' ) ) {
+            museder_restoreone_log( 'info', 'Restore prepare: reusing cached summary analysis.', [
+                'file'   => $file_name,
+                'source' => (string) $source,
+            ] );
+        }
+
+        return self::compose_summary( $state );
+    }
+
+    /**
+     * One-pass archive hints for compose_summary (avoids repeated ZipArchive scans on Load Info).
+     *
+     * @param string $file_path Absolute archive path.
+     * @return array<string, mixed>
+     */
+    private static function build_summary_cache_for_archive( $file_path ) {
+        $cache = [
+            'db_hint' => self::detect_db_payload_from_archive( $file_path ),
+        ];
+
+        if ( class_exists( 'Museder_Restoreone_Restore_Preflight' ) ) {
+            $cache['preflight_hints'] = Museder_Restoreone_Restore_Preflight::hints_for_summary( $file_path, [] );
+        } else {
+            $cache['preflight_hints'] = [];
+        }
+
+        return $cache;
     }
 
     public static function current_summary() {
@@ -2141,14 +2231,22 @@ class Museder_Restoreone_Restore_Handler {
         $db_prefix_target = isset( $extra['db_prefix_target'] ) ? (string) $extra['db_prefix_target'] : '';
 
         // DB payload hint for UI: detect whether archive contains database.ndjson or database.sql.
-        $db_hint = [ 'present' => false, 'type' => '' ];
-        if ( $path && file_exists( $path ) ) {
-            $db_hint = self::detect_db_payload_from_archive( $path );
-        }
+        $db_hint           = [ 'present' => false, 'type' => '' ];
+        $preflight_hints   = [];
+        $summary_cache     = isset( $extra['summary_cache'] ) && is_array( $extra['summary_cache'] ) ? $extra['summary_cache'] : [];
 
-        $preflight_hints = [];
-        if ( $path && file_exists( $path ) && class_exists( 'Museder_Restoreone_Restore_Preflight' ) ) {
-            $preflight_hints = Museder_Restoreone_Restore_Preflight::hints_for_summary( $path, [] );
+        if ( ! empty( $summary_cache ) ) {
+            if ( isset( $summary_cache['db_hint'] ) && is_array( $summary_cache['db_hint'] ) ) {
+                $db_hint = $summary_cache['db_hint'];
+            }
+            if ( isset( $summary_cache['preflight_hints'] ) && is_array( $summary_cache['preflight_hints'] ) ) {
+                $preflight_hints = $summary_cache['preflight_hints'];
+            }
+        } elseif ( $path && file_exists( $path ) ) {
+            $db_hint = self::detect_db_payload_from_archive( $path );
+            if ( class_exists( 'Museder_Restoreone_Restore_Preflight' ) ) {
+                $preflight_hints = Museder_Restoreone_Restore_Preflight::hints_for_summary( $path, [] );
+            }
         }
 
         return array_merge(
