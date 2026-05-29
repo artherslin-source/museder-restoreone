@@ -37,8 +37,10 @@ Before writing, refactoring, or reviewing Museder RestoreOne code:
 
 ## Release Checklist
 
+- Before packaging Lite ZIP, read `docs/PACKAGING.md`. Use `bash create-package.sh` or `tools/package-lite-windows.ps1` only; **never** PowerShell `Compress-Archive` (breaks Linux unzip / WP plugin paths).
 - Main plugin `Version`, `readme.txt` `Stable tag`, Git tag, package name, and SVN tag agree.
 - Lite package excludes Add-on and dev-only paths.
+- ZIP must contain `museder-restoreone/museder-restoreone.php` with forward slashes; verify no `\` in entry names.
 - `readme.txt` has one changelog, accurate external-service/privacy notes, reachable Plugin URI / Author URI, and no marketplace-style locked-feature copy.
 - WordPress.org SVN is treated as a release system: commit only ready-to-use files, tag every release, never upload zip files to SVN.
 - Cloud Agent and local work should use feature/agent branches by default; do not push directly to `main` unless explicitly requested.
@@ -49,6 +51,7 @@ Before writing, refactoring, or reviewing Museder RestoreOne code:
 - Full guide: `docs/WORDPRESS_ORG_DEVELOPMENT_GUIDE.md`
 - Workflow guide: `docs/DEVELOPMENT_WORKFLOW.md`
 - Release checklist: `docs/RELEASE_CHECKLIST.md`
+- Packaging rules: `docs/PACKAGING.md`
 - New machine bootstrap: `docs/NEW_MACHINE_BOOTSTRAP.md`
 - Detailed checklist: [REFERENCE.md](REFERENCE.md)
 

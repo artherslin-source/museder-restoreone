@@ -127,7 +127,8 @@ git push -u origin HEAD
 ### 基本檢查
 
 - PHP 語法檢查：針對修改過的 PHP 檔執行 `php -l`。
-- 打包檢查：`bash create-package.sh`。
+- 打包檢查：`bash create-package.sh`（規範見 **`docs/PACKAGING.md`**）。
+- Windows 本機：`powershell -File tools/package-lite-windows.ps1`（**禁止** `Compress-Archive`）。
 - Add-on 打包：只有在 Add-on 有變更時執行 `bash create-package-pro.sh`。
 - WordPress 測試環境：可用 `tools/docker/setup.sh` 建立本地測試站。
 
@@ -226,8 +227,8 @@ Lite package contents only:
 - Cursor。
 - PHP 7.4+ 或專案測試需要的 PHP 版本。
 - Docker Desktop（若使用本地 WordPress 測試環境）。
-- Bash 環境（Git Bash、WSL 或相容 shell，用於 `create-package.sh`）。
-- zip 工具。
+- Bash 環境（Git Bash、WSL 或相容 shell，用於 `create-package.sh`）；或 Windows 內建 `tar.exe`（見 `docs/PACKAGING.md`）。
+- zip 工具（**勿**以 PowerShell `Compress-Archive` 取代官方封裝腳本）。
 - SVN client（只有正式 WordPress.org 發佈者需要）。
 
 接手步驟：

@@ -1,0 +1,174 @@
+# Approach B QA matrix — five isolated WordPress docroots.
+# Usage: docker compose -f docker-compose.qa.yml up -d
+# Provision: bash tools/qa/approach-b-provision.sh all
+
+x-wp-qa-base: &wp-qa-base
+  image: wordpress:6.6.2-php8.2-apache
+  environment: &wp-qa-env
+    WORDPRESS_DB_USER: wordpress
+    WORDPRESS_DB_PASSWORD: wordpress
+    WORDPRESS_DEBUG: "1"
+  volumes:
+    - ./:/tmp/museder-restoreone-src:ro
+    - ./tools/docker/php.ini:/usr/local/etc/php/conf.d/zzz-museder-restoreone.ini:ro
+
+x-db-qa-base: &db-qa-base
+  image: mariadb:10.11
+  environment:
+    MYSQL_USER: wordpress
+    MYSQL_PASSWORD: wordpress
+    MYSQL_ROOT_PASSWORD: root
+
+services:
+  qa-a1-db:
+    <<: *db-qa-base
+    environment:
+      MYSQL_DATABASE: wordpress_a1
+      MYSQL_USER: wordpress
+      MYSQL_PASSWORD: wordpress
+      MYSQL_ROOT_PASSWORD: root
+    volumes:
+      - qa_a1_db:/var/lib/mysql
+
+  qa-a1:
+    <<: *wp-qa-base
+    ports:
+      - "8081:80"
+    depends_on:
+      - qa-a1-db
+    environment:
+      <<: *wp-qa-env
+      WORDPRESS_DB_HOST: qa-a1-db:3306
+      WORDPRESS_DB_NAME: wordpress_a1
+    volumes:
+      - qa_a1_wp:/var/www/html
+      - ./:/tmp/museder-restoreone-src:ro
+      - ./tools/docker/php.ini:/usr/local/etc/php/conf.d/zzz-museder-restoreone.ini:ro
+
+  qa-a2-db:
+    <<: *db-qa-base
+    environment:
+      MYSQL_DATABASE: wordpress_a2
+      MYSQL_USER: wordpress
+      MYSQL_PASSWORD: wordpress
+      MYSQL_ROOT_PASSWORD: root
+    volumes:
+      - qa_a2_db:/var/lib/mysql
+
+  qa-a2:
+    <<: *wp-qa-base
+    ports:
+      - "8082:80"
+    depends_on:
+      - qa-a2-db
+    environment:
+      <<: *wp-qa-env
+      WORDPRESS_DB_HOST: qa-a2-db:3306
+      WORDPRESS_DB_NAME: wordpress_a2
+    volumes:
+      - qa_a2_wp:/var/www/html
+      - ./:/tmp/museder-restoreone-src:ro
+      - ./tools/docker/php.ini:/usr/local/etc/php/conf.d/zzz-museder-restoreone.ini:ro
+
+  qa-b1-db:
+    <<: *db-qa-base
+    environment:
+      MYSQL_DATABASE: wordpress_b1
+      MYSQL_USER: wordpress
+      MYSQL_PASSWORD: wordpress
+      MYSQL_ROOT_PASSWORD: root
+    volumes:
+      - qa_b1_db:/var/lib/mysql
+
+  qa-b1:
+    <<: *wp-qa-base
+    ports:
+      - "8083:80"
+    depends_on:
+      - qa-b1-db
+    environment:
+      <<: *wp-qa-env
+      WORDPRESS_DB_HOST: qa-b1-db:3306
+      WORDPRESS_DB_NAME: wordpress_b1
+    volumes:
+      - qa_b1_wp:/var/www/html
+      - ./:/tmp/museder-restoreone-src:ro
+      - ./tools/docker/php.ini:/usr/local/etc/php/conf.d/zzz-museder-restoreone.ini:ro
+
+  qa-c1-db:
+    <<: *db-qa-base
+    environment:
+      MYSQL_DATABASE: wordpress_c1
+      MYSQL_USER: wordpress
+      MYSQL_PASSWORD: wordpress
+      MYSQL_ROOT_PASSWORD: root
+    volumes:
+      - qa_c1_db:/var/lib/mysql
+
+  qa-c1:
+    <<: *wp-qa-base
+    ports:
+      - "8084:80"
+    depends_on:
+      - qa-c1-db
+    environment:
+      <<: *wp-qa-env
+      WORDPRESS_DB_HOST: qa-c1-db:3306
+      WORDPRESS_DB_NAME: wordpress_c1
+    volumes:
+      - qa_c1_wp:/var/www/html
+      - ./:/tmp/museder-restoreone-src:ro
+      - ./tools/docker/php.ini:/usr/local/etc/php/conf.d/zzz-museder-restoreone.ini:ro
+
+  qa-c2-db:
+    <<: *db-qa-base
+    environment:
+      MYSQL_DATABASE: wordpress_c2
+      MYSQL_USER: wordpress
+      MYSQL_PASSWORD: wordpress
+      MYSQL_ROOT_PASSWORD: root
+    volumes:
+      - qa_c2_db:/var/lib/mysql
+
+  qa-c2:
+    <<: *wp-qa-base
+    ports:
+      - "8085:80"
+    depends_on:
+      - qa-c2-db
+    environment:
+      <<: *wp-qa-env
+      WORDPRESS_DB_HOST: qa-c2-db:3306
+      WORDPRESS_DB_NAME: wordpress_c2
+    volumes:
+      - qa_c2_wp:/var/www/html
+      - ./:/tmp/museder-restoreone-src:ro
+      - ./tools/docker/php.ini:/usr/local/etc/php/conf.d/zzz-museder-restoreone.ini:ro
+
+  qa-wpcli-a1:
+    image: wordpress:cli-php8.2
+    user: "33:33"
+    depends_on:
+      - qa-a1
+    environment:
+      WORDPRESS_DB_HOST: qa-a1-db:3306
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: wordpress
+      WORDPRESS_DB_NAME: wordpress_a1
+    volumes:
+      - qa_a1_wp:/var/www/html
+      - ./:/tmp/museder-restoreone-src:ro
+    working_dir: /var/www/html
+    entrypoint: ["wp"]
+
+volumes:
+  qa_a1_db:
+  qa_a1_wp:
+  qa_a2_db:
+  qa_a2_wp:
+  qa_b1_db:
+  qa_b1_wp:
+  qa_c1_db:
+  qa_c1_wp:
+  qa_c2_db:
+  qa_c2_wp:

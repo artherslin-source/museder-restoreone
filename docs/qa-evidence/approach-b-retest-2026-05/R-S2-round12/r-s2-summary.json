@@ -1,0 +1,12 @@
+﻿{
+  "post_code": "200",
+  "job_id": "rjb_20260527_153349_owtrvd",
+  "finished": true,
+  "completed": true,
+  "core": "CORE_OK",
+  "pause_ok": true,
+  "bootstrap_hdr": true,
+  "progress": 100,
+  "stage": "done",
+  "verdict": "PASS"
+}

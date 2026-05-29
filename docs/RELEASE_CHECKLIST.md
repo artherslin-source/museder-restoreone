@@ -29,11 +29,23 @@
 
 ## 3. Package Checks
 
+**封裝規範（必讀）：** [`docs/PACKAGING.md`](PACKAGING.md) — 含 ZIP 目錄結構、禁止的 Windows 壓縮方式、封裝後驗證。
+
 執行：
 
 ```bash
 bash create-package.sh
 ```
+
+Windows 本機（無 bash 時）：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/package-lite-windows.ps1
+```
+
+- [ ] ZIP 內有 **`museder-restoreone/museder-restoreone.php`**（正斜線 `/`，非 `\`）
+- [ ] **未**使用 `Compress-Archive` 或手動壓縮取代上述腳本
+- [ ] 上傳 WP 後目錄為 `plugins/museder-restoreone/`，非 `plugins/museder-restoreone-{version}/`
 
 若 Add-on 有變更：
 

@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # Build the WordPress.org Lite release ZIP for Museder RestoreOne.
+#
+# Canonical packaging rules: docs/PACKAGING.md
+# Windows: do NOT use Compress-Archive; use tools/package-lite-windows.ps1 or bash here.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -27,6 +30,9 @@ if [[ -d "${SCRIPT_DIR}/languages" ]]; then
 fi
 
 cp "${SCRIPT_DIR}/museder-restoreone.php" "${SCRIPT_DIR}/readme.txt" "${PLUGIN_DIR}/"
+if [[ -f "${SCRIPT_DIR}/museder-restoreone-restore-bootstrap.php" ]]; then
+	cp "${SCRIPT_DIR}/museder-restoreone-restore-bootstrap.php" "${PLUGIN_DIR}/"
+fi
 if [[ -f "${SCRIPT_DIR}/uninstall.php" ]]; then
 	cp "${SCRIPT_DIR}/uninstall.php" "${PLUGIN_DIR}/"
 fi

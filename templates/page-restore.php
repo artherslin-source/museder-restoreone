@@ -217,10 +217,58 @@ if ( class_exists( 'Museder_Restoreone_Restore_Service' ) && method_exists( 'Mus
                     <span class="status-text"><?php esc_html_e( 'Complete Step 1 first to unlock these options.', 'museder-restoreone' ); ?></span>
                 </div>
             </div>
+            <div id="restore-preflight-hints" class="notice notice-info inline" style="display:none; margin: 0 0 12px 0; padding: 10px 12px;"></div>
             <label><input type="checkbox" id="overwriteData"> <?php esc_html_e( 'Overwrite existing data', 'museder-restoreone' ); ?></label><br>
             <label><input type="checkbox" id="applyReplace"> <?php esc_html_e( 'Apply URL Search & Replace', 'museder-restoreone' ); ?></label><br>
-            <label><input type="checkbox" id="skipConfig"> <?php esc_html_e( 'Skip site configuration file', 'museder-restoreone' ); ?></label><br>
+            <fieldset style="margin: 12px 0; border: 0; padding: 0;">
+                <legend style="font-weight: 600; margin-bottom: 6px;"><?php esc_html_e( 'wp-config.php', 'museder-restoreone' ); ?></legend>
+                <label style="display:block; margin-bottom: 4px;">
+                    <input type="radio" name="wpConfigMode" id="wpConfigModeBackup" value="backup" checked>
+                    <?php esc_html_e( 'Restore entire wp-config.php from backup (default)', 'museder-restoreone' ); ?>
+                </label>
+                <label style="display:block; margin-bottom: 4px;">
+                    <input type="radio" name="wpConfigMode" id="wpConfigModeMerge" value="merge">
+                    <?php esc_html_e( 'Merge: keep this server’s database settings, use backup for everything else', 'museder-restoreone' ); ?>
+                </label>
+                <label style="display:block; margin-bottom: 4px;">
+                    <input type="radio" name="wpConfigMode" id="wpConfigModeKeep" value="keep">
+                    <?php esc_html_e( 'Keep current wp-config.php on this server', 'museder-restoreone' ); ?>
+                </label>
+            </fieldset>
+            <fieldset style="margin: 12px 0; border: 0; padding: 0;">
+                <legend style="font-weight: 600; margin-bottom: 6px;"><?php esc_html_e( 'Restore order', 'museder-restoreone' ); ?></legend>
+                <label style="display:block; margin-bottom: 4px;">
+                    <input type="radio" name="restoreOrder" id="restoreOrderDbFirst" value="db_then_files" checked>
+                    <?php esc_html_e( 'Database first, then files (recommended for sites with existing content)', 'museder-restoreone' ); ?>
+                </label>
+                <label style="display:block; margin-bottom: 4px;">
+                    <input type="radio" name="restoreOrder" id="restoreOrderFilesFirst" value="files_then_db">
+                    <?php esc_html_e( 'Files first, then database (recommended for fresh or empty installs)', 'museder-restoreone' ); ?>
+                </label>
+            </fieldset>
+            <fieldset style="margin: 12px 0; border: 0; padding: 0;">
+                <legend style="font-weight: 600; margin-bottom: 6px;"><?php esc_html_e( 'Restore scope', 'museder-restoreone' ); ?></legend>
+                <label style="display:block; margin-bottom: 4px;">
+                    <input type="radio" name="restoreScope" id="restoreScopeFull" value="full" checked>
+                    <?php esc_html_e( 'Full site (files + database when present)', 'museder-restoreone' ); ?>
+                </label>
+                <label style="display:block; margin-bottom: 4px;">
+                    <input type="radio" name="restoreScope" id="restoreScopeContent" value="content_only">
+                    <?php esc_html_e( 'wp-content only (requires WordPress core already installed)', 'museder-restoreone' ); ?>
+                </label>
+                <label style="display:block; margin-bottom: 4px;">
+                    <input type="radio" name="restoreScope" id="restoreScopeDb" value="db_only">
+                    <?php esc_html_e( 'Database only', 'museder-restoreone' ); ?>
+                </label>
+            </fieldset>
             <label><input type="checkbox" id="autoBackup" checked> <?php esc_html_e( 'Backup current site before restore', 'museder-restoreone' ); ?></label><br>
+            <label style="margin-top: 8px; display: block;">
+                <input type="checkbox" id="pauseOtherPlugins" checked>
+                <?php esc_html_e( 'Pause other plugins during restore (recommended)', 'museder-restoreone' ); ?>
+            </label>
+            <p class="description" style="margin: 6px 0 12px 0;">
+                <?php esc_html_e( 'Temporarily loads only RestoreOne while files and database are being restored. Your plugin list is restored afterward; unsafe plugins may stay inactive until you re-enable them.', 'museder-restoreone' ); ?>
+            </p>
             <div id="restore-files-only-wrap" style="margin-top: 12px; display: none;">
                 <label>
                     <input type="checkbox" id="filesOnly">

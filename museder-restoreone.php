@@ -3,11 +3,11 @@
 Plugin Name: Museder RestoreOne
 Plugin URI: https://musederlabs.com/restoreone-plugin/
 Description: Museder RestoreOne is a simple backup & restore plugin for WordPress.
-Version: 2.7.263
+Version: 2.7.268
 Requires at least: 5.8
-Tested up to: 6.9
+Tested up to: 7.0
 Requires PHP: 7.4
-Author: Jerry Lin
+Author: Adrian Lin
 Author URI: https://profiles.wordpress.org/artherslin/
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -17,9 +17,9 @@ Domain Path: /languages
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-define( 'MUSEDER_RESTOREONE_VERSION', '2.7.263' );
+define( 'MUSEDER_RESTOREONE_VERSION', '2.7.268' );
 // Build identifier for debugging host-side opcode caching issues.
-define( 'MUSEDER_RESTOREONE_BUILD_ID', '2.7.263-1' );
+define( 'MUSEDER_RESTOREONE_BUILD_ID', '2.7.268' );
 define( 'MUSEDER_RESTOREONE_PATH', plugin_dir_path( __FILE__ ) );
 define( 'MUSEDER_RESTOREONE_URL', plugin_dir_url( __FILE__ ) );
 
@@ -29,9 +29,12 @@ require_once MUSEDER_RESTOREONE_PATH . 'includes/class-backup-jobs.php';
 require_once MUSEDER_RESTOREONE_PATH . 'includes/class-restore.php';
 require_once MUSEDER_RESTOREONE_PATH . 'includes/class-ui.php';
 require_once MUSEDER_RESTOREONE_PATH . 'includes/class-restore-handler.php';
-require_once MUSEDER_RESTOREONE_PATH . 'includes/class-restore-service.php';
-require_once MUSEDER_RESTOREONE_PATH . 'includes/class-restore-lock.php';
 require_once MUSEDER_RESTOREONE_PATH . 'includes/class-restore-token.php';
+require_once MUSEDER_RESTOREONE_PATH . 'includes/class-restore-preflight.php';
+require_once MUSEDER_RESTOREONE_PATH . 'includes/class-restore-bootstrap.php';
+require_once MUSEDER_RESTOREONE_PATH . 'includes/class-restore-service.php';
+require_once MUSEDER_RESTOREONE_PATH . 'includes/class-restore-media-paths.php';
+require_once MUSEDER_RESTOREONE_PATH . 'includes/class-restore-lock.php';
 require_once MUSEDER_RESTOREONE_PATH . 'includes/class-restore-report.php';
 require_once MUSEDER_RESTOREONE_PATH . 'includes/class-restore-controller.php';
 require_once MUSEDER_RESTOREONE_PATH . 'includes/class-schedule-handler.php';
@@ -444,7 +447,6 @@ function museder_restoreone_render_restore_page() {
             'summary' => $museder_restoreone_summary,
             'progress'=> $museder_restoreone_progress,
             'history' => $museder_restoreone_history,
-            'restoreToken' => '',
             'job'     => $museder_restoreone_active_job ? array_merge( [ 'id' => $museder_restoreone_active_job_id ], $museder_restoreone_active_job ) : null,
             'labels'  => [
                 'noBackups'    => __( 'No backups available.', 'museder-restoreone' ),

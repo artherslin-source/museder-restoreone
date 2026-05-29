@@ -2,9 +2,9 @@
 Contributors: artherslin
 Tags: backup, migration, restore, site-backup, database-backup
 Requires at least: 5.8
-Tested up to: 6.9
+Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 2.7.263
+Stable tag: 2.7.268
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -183,10 +183,23 @@ Most sites do not need any changes. For unusual server layouts where core admin 
 
 == Changelog ==
 
-= 2.7.263 =
-* Restore (P0): preserve admin **session tokens** and re-inject **cron**, **restore lock**, and **active job** state after database import so restores no longer stall when the admin session is invalidated mid-job.
-* Restore: add file-based **restore token** (survives DB rebuild) with REST **fallback** when WordPress nonces expire during long restores.
-* Restore UI: polling tolerates transient **401/403** responses during DB import instead of stopping immediately.
+= 2.7.268 =
+* Restore: **large-site reliability** — after database import, progress polling continues via a file-backed **restore token** (survives session/nonce loss during NDJSON restore).
+* Restore: **nopriv AJAX** handlers for restore progress (`job_status`, `restore_tick`) so polling works when the WordPress login cookie is invalidated mid-restore.
+* Restore: **post-complete read grant** so the UI can confirm 100% success after the token is revoked at job completion.
+* Restore: **media path reconcile** — after restore, match uploads database paths to on-disk filenames (UTF-8 vs ASCII) and log `MEDIA_PATHS_RECONCILE_DONE`.
+* Restore: stable job meta paths (canonical storage), multi-slice tick drain, and improved `restore_job_status` mapping after DB import.
+* Restore: make `zip_archive_has_wp_core()` public so preflight can detect full-site archives without a fatal error (BUG-SUN-001).
+* Restore bootstrap: register WordPress stubs before `bootstrap_root()`; add `esc_attr()` stub; define `trailingslashit` before `ABSPATH` (BUG-SUN-003, BUG-SUN-004).
+
+= 2.7.267 =
+* Restore (Approach B): **site profile** detection (existing / fresh / no core), preflight blocks, and Step 2 **restore order**, **scope**, **wp-config mode** (backup / keep / merge), and **pause other plugins** (default on).
+* Restore: **populated sites** require a pre-restore snapshot; default order **database then files** (user can switch to files-first).
+* Restore: **fresh / empty** profiles default to **files then database** with UI notices (including DB overwrite on fresh installs).
+* Restore: **empty docroot** full-site restores can use **`museder-restoreone-restore-bootstrap.php`** (copy to site root) for loopback file slices before WordPress core exists.
+* Restore: ZIP restores use a **two-phase file stage** (wp-content, then WordPress core and site root files when present in the archive).
+* Restore: includes **2.7.265** mid-restore plugin isolation, restore token, and safe-plugin reapply after restore.
+* Restore: writes a fallback **.htaccess** when missing after permalink flush (Apache).
 
 = 2.7.262 =
 * Backup reliability: when **PclZip** compatibility repack is active, the async job runner **no longer keeps a long-lived `ZipArchive` handle** on the same `.zip` file (PclZip and ZipArchive were both mutating the archive, making `close()` extremely slow on large sites and risking central-directory corruption).
@@ -462,9 +475,6 @@ Most sites do not need any changes. For unusual server layouts where core admin 
 (Older changelog entries are maintained in the project repository.)
 
 == Upgrade Notice ==
-
-= 2.7.263 =
-Fixes restores that **stopped mid-job** after database import when the admin session was invalidated (session preserved, restore token fallback, resilient progress polling). Recommended for **large-site restores**.
 
 = 2.7.262 =
 Fixes large-site backup jobs that could appear **stuck near 95%** after a failed post-close verification (PclZip repack conflicting with an open ZipArchive handle). Recommended if you run **large full-site backups** on production.
