@@ -2,7 +2,7 @@
 Contributors: artherslin
 Tags: backup, migration, restore, site-backup, database-backup
 Requires at least: 5.8
-Tested up to: 6.9
+Tested up to: 7.0
 Requires PHP: 7.4
 Stable tag: 2.7.268
 License: GPLv2 or later
@@ -184,6 +184,11 @@ Most sites do not need any changes. For unusual server layouts where core admin 
 == Changelog ==
 
 = 2.7.268 =
+* Restore: **large-site reliability** — after database import, progress polling continues via a file-backed **restore token** (survives session/nonce loss during NDJSON restore).
+* Restore: **nopriv AJAX** handlers for restore progress (`job_status`, `restore_tick`) so polling works when the WordPress login cookie is invalidated mid-restore.
+* Restore: **post-complete read grant** so the UI can confirm 100% success after the token is revoked at job completion.
+* Restore: **media path reconcile** — after restore, match uploads database paths to on-disk filenames (UTF-8 vs ASCII) and log `MEDIA_PATHS_RECONCILE_DONE`.
+* Restore: stable job meta paths (canonical storage), multi-slice tick drain, and improved `restore_job_status` mapping after DB import.
 * Restore: make `zip_archive_has_wp_core()` public so preflight can detect full-site archives without a fatal error (BUG-SUN-001).
 * Restore bootstrap: register WordPress stubs before `bootstrap_root()`; add `esc_attr()` stub; define `trailingslashit` before `ABSPATH` (BUG-SUN-003, BUG-SUN-004).
 

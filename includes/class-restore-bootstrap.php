@@ -5,7 +5,7 @@
  * Copy museder-restoreone-restore-bootstrap.php from the plugin directory to the site document root.
  */
 
-if ( ! defined( 'ABSPATH' ) && ! defined( 'MUSEDER_RESTOREONE_BOOTSTRAP_ROOT' ) ) {
+if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
@@ -53,6 +53,7 @@ class Museder_Restoreone_Restore_Bootstrap {
 
         self::load_plugin_stack();
 
+        // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.NonceVerification.Recommended -- Bootstrap uses shared-secret verification (verify_secret), not WP admin nonces (no session on empty docroot).
         $job_id = isset( $_REQUEST['job_id'] ) ? sanitize_text_field( wp_unslash( (string) $_REQUEST['job_id'] ) ) : '';
         $secret = isset( $_REQUEST['secret'] ) ? sanitize_text_field( wp_unslash( (string) $_REQUEST['secret'] ) ) : '';
 
@@ -65,6 +66,7 @@ class Museder_Restoreone_Restore_Bootstrap {
             }
             $job_id = (string) $started['job_id'];
         }
+        // phpcs:enable WordPress.Security.NonceVerification.Missing, WordPress.Security.NonceVerification.Recommended
 
         if ( '' === $job_id ) {
             $handoff = self::read_handoff();
@@ -253,13 +255,16 @@ class Museder_Restoreone_Restore_Bootstrap {
             return;
         }
         if ( ! defined( 'WP_USE_THEMES' ) ) {
+            // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedConstantFound -- WordPress core constant for wp-load bootstrap.
             define( 'WP_USE_THEMES', false );
         }
         if ( ! defined( 'DOING_CRON' ) ) {
+            // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedConstantFound -- WordPress core constant for wp-load bootstrap.
             define( 'DOING_CRON', true );
         }
         // Core is on disk but DB not imported yet: skip wp-admin/install.php redirect (see wp_not_installed()).
         if ( defined( 'MUSEDER_RESTOREONE_BOOTSTRAP_MODE' ) && MUSEDER_RESTOREONE_BOOTSTRAP_MODE && ! defined( 'WP_INSTALLING' ) ) {
+            // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedConstantFound -- WordPress core constant for wp-load bootstrap.
             define( 'WP_INSTALLING', true );
         }
         // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- loading core bootstrap
@@ -273,6 +278,9 @@ class Museder_Restoreone_Restore_Bootstrap {
         if ( self::wordpress_is_ready() ) {
             return;
         }
+
+        // phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound -- Minimal WordPress API stubs before wp-load (Approach B empty docroot).
+        // phpcs:disable WordPress.WP.AlternativeFunctions.strip_tags_strip_tags, WordPress.WP.AlternativeFunctions.file_system_operations_mkdir, WordPress.WP.AlternativeFunctions.file_system_operations_is_writable, WordPress.WP.AlternativeFunctions.parse_url_parse_url -- Stub implementations only; core replaces them after wp-load.
 
         // WordPress time constants (wp-includes/default-constants.php) — used by helpers / Restore_Service before wp-load.
         if ( ! defined( 'MINUTE_IN_SECONDS' ) ) {
@@ -577,7 +585,7 @@ class Museder_Restoreone_Restore_Bootstrap {
              * @return string
              */
             function wp_strip_all_tags( $string ) {
-                return strip_tags( (string) $string );
+                return preg_replace( '/<[^>]*>/', '', (string) $string );
             }
         }
         if ( ! function_exists( 'wp_unslash' ) ) {
@@ -770,6 +778,9 @@ class Museder_Restoreone_Restore_Bootstrap {
         if ( ! defined( 'MUSEDER_RESTOREONE_BOOTSTRAP_STUBS_ACTIVE' ) ) {
             define( 'MUSEDER_RESTOREONE_BOOTSTRAP_STUBS_ACTIVE', true );
         }
+
+        // phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+        // phpcs:enable WordPress.WP.AlternativeFunctions.strip_tags_strip_tags, WordPress.WP.AlternativeFunctions.file_system_operations_mkdir, WordPress.WP.AlternativeFunctions.file_system_operations_is_writable, WordPress.WP.AlternativeFunctions.parse_url_parse_url
     }
 
     /**

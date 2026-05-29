@@ -75,6 +75,32 @@ if ( ! function_exists( 'museder_restoreone_local_time' ) ) {
  *
  * @return array{path:string,url:string}
  */
+/**
+ * Default plugin storage under wp-content/uploads (ignores upload_path option drift during restore).
+ *
+ * @return string Absolute path without trailing slash.
+ */
+function museder_restoreone_get_canonical_storage_base() {
+    if ( defined( 'MUSEDER_RESTOREONE_BOOTSTRAP_ROOT' ) && MUSEDER_RESTOREONE_BOOTSTRAP_ROOT ) {
+        return wp_normalize_path( trailingslashit( (string) MUSEDER_RESTOREONE_BOOTSTRAP_ROOT ) . 'wp-content/uploads/museder-restoreone' );
+    }
+
+    return wp_normalize_path( trailingslashit( WP_CONTENT_DIR ) . 'uploads/museder-restoreone' );
+}
+
+/**
+ * Canonical jobs directory (stable across DB import when upload_path option changes).
+ *
+ * @return string
+ */
+function museder_restoreone_get_canonical_jobs_dir() {
+    $dir = trailingslashit( museder_restoreone_get_canonical_storage_base() ) . 'jobs';
+    museder_restoreone_ensure_directory( $dir );
+    museder_restoreone_maybe_protect_directory( $dir );
+
+    return $dir;
+}
+
 function museder_restoreone_get_storage_root() {
     if ( defined( 'MUSEDER_RESTOREONE_BOOTSTRAP_ROOT' ) && MUSEDER_RESTOREONE_BOOTSTRAP_ROOT ) {
         $base = trailingslashit( wp_normalize_path( (string) MUSEDER_RESTOREONE_BOOTSTRAP_ROOT ) ) . 'wp-content/uploads/museder-restoreone';

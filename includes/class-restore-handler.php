@@ -13,11 +13,14 @@ class Museder_Restoreone_Restore_Handler {
         add_action( 'wp_ajax_museder_restoreone_restore_progress', [ __CLASS__, 'progress' ] );
         add_action( 'wp_ajax_museder_restoreone_restore_enqueue', [ __CLASS__, 'enqueue_restore_job' ] );
         add_action( 'wp_ajax_museder_restoreone_restore_job_status', [ __CLASS__, 'job_status' ] );
+        add_action( 'wp_ajax_nopriv_museder_restoreone_restore_job_status', [ __CLASS__, 'job_status' ] );
         add_action( 'wp_ajax_museder_restoreone_restore_job_cancel', [ __CLASS__, 'job_cancel' ] );
         add_action( 'wp_ajax_museder_restoreone_restore_tick', [ __CLASS__, 'restore_tick' ] );
+        add_action( 'wp_ajax_nopriv_museder_restoreone_restore_tick', [ __CLASS__, 'restore_tick' ] );
         add_action( 'wp_ajax_museder_restoreone_restore_confirm', [ __CLASS__, 'confirm' ] );
         add_action( 'wp_ajax_museder_restoreone_restore_cancel', [ __CLASS__, 'cancel_restore' ] );
         add_action( 'wp_ajax_museder_restoreone_trigger_restore_job', [ __CLASS__, 'trigger_restore_job' ] );
+        add_action( 'wp_ajax_nopriv_museder_restoreone_trigger_restore_job', [ __CLASS__, 'trigger_restore_job' ] );
         add_action( 'wp_ajax_museder_restoreone_restore_chunk_prepare', [ __CLASS__, 'chunk_prepare' ] );
         add_action( 'wp_ajax_museder_restoreone_restore_chunk_upload', [ __CLASS__, 'chunk_upload' ] );
         add_action( 'wp_ajax_museder_restoreone_restore_chunk_finalize', [ __CLASS__, 'chunk_finalize' ] );
@@ -655,13 +658,19 @@ class Museder_Restoreone_Restore_Handler {
             // status() can throw if job metadata is missing/corrupted; treat as a failure but cleanup pointers.
             $status = Museder_Restoreone_Restore_Service::status( $job_id );
 
+        $restore_token = '';
+            if ( is_array( $exec ) && ! empty( $exec['restore_token'] ) ) {
+                $restore_token = (string) $exec['restore_token'];
+            }
+
         wp_send_json_success(
             [
-                    'job'       => self::map_restore_service_status_to_job( $job_id, $status ),
-                    'progress'  => self::format_progress( 10, __( 'Restore started. Monitoring progress…', 'museder-restoreone' ), false ),
-                    'history'   => self::history_for_js( 10 ),
-                    'file_size' => $file_size,
-                    'exec'      => $exec,
+                    'job'           => self::map_restore_service_status_to_job( $job_id, $status ),
+                    'progress'      => self::format_progress( 10, __( 'Restore started. Monitoring progress…', 'museder-restoreone' ), false ),
+                    'history'       => self::history_for_js( 10 ),
+                    'file_size'     => $file_size,
+                    'exec'          => $exec,
+                    'restore_token' => $restore_token,
                 ]
             );
         } catch ( Exception $e ) {
@@ -739,7 +748,13 @@ class Museder_Restoreone_Restore_Handler {
                 }
                 return true;
             } catch ( Exception $e ) {
-                // Missing/corrupted meta => stale.
+                // Job meta may exist on canonical path while status() cannot read yet (upload_path drift).
+                if ( class_exists( 'Museder_Restoreone_Restore_Service' ) ) {
+                    $path = Museder_Restoreone_Restore_Service::locate_job_meta_path( $job_id );
+                    if ( '' !== $path ) {
+                        return true;
+                    }
+                }
                 return false;
             }
         };
@@ -781,21 +796,23 @@ class Museder_Restoreone_Restore_Handler {
         }
     }
 
+    /**
+     * Return restore job status for admin UI polling.
+     *
+     * @wp_ajax museder_restoreone_restore_job_status
+     * @wp_ajax_nopriv museder_restoreone_restore_job_status Token-only when logged out.
+     */
     public static function job_status() {
         // Ensure clean output for JSON response (flush current buffer only; do not pop the stack).
         if ( ob_get_level() ) {
             @ob_clean();
         }
 
-        self::ensure_permission();
-        Museder_Restoreone_UI::verify_ajax_request();
-        // Additional nonce verification for plugin-check.
-        check_ajax_referer( Museder_Restoreone_UI::NONCE, 'nonce' );
-
-        // Nonce verified above
-        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- verified in verify_restore_progress_request()
         $job_id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
         // phpcs:enable WordPress.Security.NonceVerification.Missing
+
+        Museder_Restoreone_UI::verify_restore_progress_request( $job_id );
         if ( empty( $job_id ) ) {
             // No job id: fall back to Restore_Service active job id or return history only.
             $active_job_id = class_exists( 'Museder_Restoreone_Restore_Service' ) ? Museder_Restoreone_Restore_Service::get_active_job_id() : '';
@@ -833,7 +850,48 @@ class Museder_Restoreone_Restore_Handler {
         try {
             $status = Museder_Restoreone_Restore_Service::status( $job_id );
             $job    = self::map_restore_service_status_to_job( $job_id, $status );
+
+            if ( ! empty( $status['completed'] ) ) {
+                $active = (string) get_option( Museder_Restoreone_Restore_Service::ACTIVE_JOB_OPTION, '' );
+                if ( $active === $job_id ) {
+                    delete_option( Museder_Restoreone_Restore_Service::ACTIVE_JOB_OPTION );
+                }
+            } elseif ( class_exists( 'Museder_Restoreone_Restore_Service' ) ) {
+                $active = (string) get_option( Museder_Restoreone_Restore_Service::ACTIVE_JOB_OPTION, '' );
+                if ( '' === $active ) {
+                    update_option( Museder_Restoreone_Restore_Service::ACTIVE_JOB_OPTION, $job_id, false );
+                }
+            }
         } catch ( Exception $e ) {
+            if ( class_exists( 'Museder_Restoreone_Restore_Service' ) ) {
+                Museder_Restoreone_Restore_Service::sync_job_meta_paths_after_db_import( $job_id );
+                try {
+                    $status = Museder_Restoreone_Restore_Service::status( $job_id );
+                    $job    = self::map_restore_service_status_to_job( $job_id, $status );
+                    update_option( Museder_Restoreone_Restore_Service::ACTIVE_JOB_OPTION, $job_id, false );
+                } catch ( Exception $inner ) {
+                    unset( $inner );
+                    $job = null;
+                }
+                if ( null !== $job ) {
+                    $safe_mode_active = ( get_option( 'museder_restoreone_safe_mode', '' ) === '1' );
+                    $prev_plugins_count = 0;
+                    if ( $safe_mode_active ) {
+                        $prev_plugins = get_option( 'museder_restoreone_prev_active_plugins', [] );
+                        $prev_plugins_count = is_array( $prev_plugins ) ? count( $prev_plugins ) : 0;
+                    }
+                    wp_send_json_success(
+                        [
+                            'job'                => $job,
+                            'history'            => self::history_for_js( 10 ),
+                            'safe_mode_active'   => (bool) $safe_mode_active,
+                            'prev_plugins_count' => (int) $prev_plugins_count,
+                        ]
+                    );
+                    return;
+                }
+            }
+
             wp_send_json_success( [
                 'job'     => null,
                 'history' => self::history_for_js( 10 ),
@@ -862,15 +920,11 @@ class Museder_Restoreone_Restore_Handler {
     }
 
     public static function trigger_restore_job() {
-        self::ensure_permission();
-        Museder_Restoreone_UI::verify_ajax_request();
-        // Additional nonce verification for plugin-check
-        check_ajax_referer( Museder_Restoreone_UI::NONCE, 'nonce' );
-
-        // Nonce verified above
-        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- verified via token or nonce below
         $job_id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
         // phpcs:enable WordPress.Security.NonceVerification.Missing
+
+        Museder_Restoreone_UI::verify_restore_progress_request( $job_id );
         if ( empty( $job_id ) ) {
             // @plugin-check: escaped
             wp_send_json_error( [ 'message' => esc_html__( 'Job identifier is required.', 'museder-restoreone' ) ], 400 );
@@ -901,18 +955,15 @@ class Museder_Restoreone_Restore_Handler {
      * This is a fallback for environments where WP-Cron loopback is unreliable.
      *
      * @wp_ajax museder_restoreone_restore_tick
+     * @wp_ajax_nopriv museder_restoreone_restore_tick Token-only when logged out.
      */
     public static function restore_tick() {
-        self::ensure_permission();
-        Museder_Restoreone_UI::verify_ajax_request();
-        // Additional nonce verification for plugin-check
-        check_ajax_referer( Museder_Restoreone_UI::NONCE, 'nonce' );
-
-        // Nonce verified above
-        // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified in verify_ajax_request() and check_ajax_referer() above
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- verified in verify_restore_progress_request()
         $job_id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
         $slice  = isset( $_POST['slice'] ) ? absint( wp_unslash( $_POST['slice'] ) ) : 0;
         // phpcs:enable WordPress.Security.NonceVerification.Missing
+
+        Museder_Restoreone_UI::verify_restore_progress_request( $job_id );
 
         if ( empty( $job_id ) ) {
             // @plugin-check: escaped
@@ -928,9 +979,10 @@ class Museder_Restoreone_Restore_Handler {
         try {
             $meta = Museder_Restoreone_Restore_Service::get_job_meta( $job_id );
             if ( ! empty( $meta['completed'] ) ) {
+                $status = Museder_Restoreone_Restore_Service::status( $job_id );
                 wp_send_json_success(
                     [
-                        'job' => Museder_Restoreone_Restore_Service::status( $job_id ),
+                        'job' => self::map_restore_service_status_to_job( $job_id, $status ),
                     ]
                 );
             }
@@ -969,8 +1021,21 @@ class Museder_Restoreone_Restore_Handler {
                 update_option( Museder_Restoreone_Restore_Service::ACTIVE_JOB_OPTION, $job_id, false );
             }
 
-            $result = Museder_Restoreone_Restore_Service::process_job_slice( $job_id, $slice, false, 'ajax' );
-            if ( empty( $result['ok'] ) && ! empty( $result['reason'] ) && 'busy' === $result['reason'] ) {
+            $deadline   = time() + $slice;
+            $last_result = [ 'ok' => true ];
+            while ( time() < $deadline ) {
+                $remaining = max( 1, $deadline - time() );
+                $last_result = Museder_Restoreone_Restore_Service::process_job_slice( $job_id, $remaining, false, 'ajax' );
+                if ( empty( $last_result['ok'] ) && ! empty( $last_result['reason'] ) && 'busy' === $last_result['reason'] ) {
+                    break;
+                }
+                $meta_tick = Museder_Restoreone_Restore_Service::get_job_meta( $job_id );
+                if ( ! empty( $meta_tick['completed'] ) ) {
+                    break;
+                }
+            }
+
+            if ( empty( $last_result['ok'] ) && ! empty( $last_result['reason'] ) && 'busy' === $last_result['reason'] ) {
                 wp_send_json_error(
                     [
                         // @plugin-check: escaped
@@ -980,9 +1045,10 @@ class Museder_Restoreone_Restore_Handler {
                 );
             }
 
+            $status = Museder_Restoreone_Restore_Service::status( $job_id );
             wp_send_json_success(
                 [
-                    'job' => Museder_Restoreone_Restore_Service::status( $job_id ),
+                    'job' => self::map_restore_service_status_to_job( $job_id, $status ),
                 ]
             );
         } catch ( Exception $e ) {

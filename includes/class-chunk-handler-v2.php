@@ -917,7 +917,13 @@ class Museder_Restoreone_Chunk_V2 {
             try {
                 $summary = Museder_Restoreone_Restore_Handler::prepare_session( $destination, 'upload' );
                 $progress = Museder_Restoreone_Restore_Handler::format_progress();
-                
+
+                if ( function_exists( 'museder_restoreone_log' ) ) {
+                    museder_restoreone_log( 'info', 'PREPARE_SESSION_OK after finalize.', [
+                        'file' => basename( $destination ),
+                    ] );
+                }
+
                 return new WP_REST_Response( [
                     'ok'       => true,
                     'sha1'     => $server_sha1,
@@ -926,7 +932,7 @@ class Museder_Restoreone_Chunk_V2 {
                     'summary'  => $summary,
                     'progress' => $progress,
                 ], 200 );
-            } catch ( Exception $e ) {
+            } catch ( Throwable $e ) {
                 museder_restoreone_log( 'error', 'Failed to prepare restore session after finalize', [
                     'error' => $e->getMessage(),
                     'file'  => $destination,

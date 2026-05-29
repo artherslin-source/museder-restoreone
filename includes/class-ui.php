@@ -1365,6 +1365,98 @@ class Museder_Restoreone_UI {
         }
     }
 
+    /**
+     * Authorize restore progress AJAX after DB import when WP nonces/sessions are invalid.
+     *
+     * Accepts the file-backed restore token (survives NDJSON import) or standard admin nonce.
+     *
+     * @param string $job_id Restore job id (binds token when provided).
+     * @return void
+     */
+    public static function verify_restore_progress_request( $job_id = '' ) {
+        $job_id = sanitize_text_field( (string) $job_id );
+
+        if ( self::restore_progress_token_is_valid( $job_id ) ) {
+            return;
+        }
+
+        if ( self::restore_post_complete_read_is_valid( $job_id ) ) {
+            return;
+        }
+
+        // wp_ajax_nopriv_*: session cookie dies after NDJSON import; never fall back to nonce alone.
+        if ( ! is_user_logged_in() ) {
+            wp_send_json_error(
+                [
+                    'code'    => 'invalid_restore_token',
+                    // @plugin-check: escaped
+                    'message' => esc_html__( 'Restore authorization expired or invalid.', 'museder-restoreone' ),
+                ],
+                403
+            );
+        }
+
+        self::verify_ajax_request();
+        check_ajax_referer( self::NONCE, 'nonce' );
+    }
+
+    /**
+     * @param string $job_id Optional job id for token binding.
+     * @return bool
+     */
+    public static function restore_progress_token_is_valid( $job_id = '' ) {
+        if ( ! class_exists( 'Museder_Restoreone_Restore_Token' ) ) {
+            return false;
+        }
+
+        $raw = '';
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- token fallback when nonce is dead post-import
+        if ( isset( $_POST['restore_token'] ) ) {
+            $raw = sanitize_text_field( wp_unslash( (string) $_POST['restore_token'] ) );
+        }
+        // phpcs:enable WordPress.Security.NonceVerification.Missing
+
+        if ( '' === $raw && isset( $_SERVER['HTTP_X_MUSEDER_RESTORE_TOKEN'] ) ) {
+            $raw = sanitize_text_field( wp_unslash( (string) $_SERVER['HTTP_X_MUSEDER_RESTORE_TOKEN'] ) );
+        }
+
+        if ( '' === $raw ) {
+            return false;
+        }
+
+        return Museder_Restoreone_Restore_Token::verify( $raw, $job_id );
+    }
+
+    /**
+     * Post-revoke read-only grant: same restore_token + completed job meta.
+     *
+     * @param string $job_id Restore job id.
+     * @return bool
+     */
+    public static function restore_post_complete_read_is_valid( $job_id = '' ) {
+        $job_id = sanitize_text_field( (string) $job_id );
+        if ( '' === $job_id || ! class_exists( 'Museder_Restoreone_Restore_Token' ) ) {
+            return false;
+        }
+
+        $raw = '';
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- post-complete read grant uses restore_token
+        if ( isset( $_POST['restore_token'] ) ) {
+            $raw = sanitize_text_field( wp_unslash( (string) $_POST['restore_token'] ) );
+        }
+        // phpcs:enable WordPress.Security.NonceVerification.Missing
+
+        if ( '' === $raw && isset( $_SERVER['HTTP_X_MUSEDER_RESTORE_TOKEN'] ) ) {
+            $raw = sanitize_text_field( wp_unslash( (string) $_SERVER['HTTP_X_MUSEDER_RESTORE_TOKEN'] ) );
+        }
+
+        if ( '' === $raw ) {
+            return false;
+        }
+
+        return Museder_Restoreone_Restore_Token::verify_post_complete_read( $raw, $job_id );
+    }
+
     public static function ajax_refresh_nonce() {
         if ( ! current_user_can( 'manage_options' ) ) {
             // @plugin-check: escaped

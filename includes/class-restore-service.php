@@ -582,6 +582,8 @@ class Museder_Restoreone_Restore_Service {
             $meta['tick_source'] = $source; // safe string for debugging only
             self::write_job_meta( $job_id, $meta );
 
+            $slice_start = microtime( true );
+
             switch ( $meta['stage'] ) {
                 case 'restore-extract-db':
                     self::stage_extract_database( $job_id, $meta, $slice );
@@ -617,7 +619,11 @@ class Museder_Restoreone_Restore_Service {
                     throw new RuntimeException( esc_html__( 'Restore job is in an unknown stage.', 'museder-restoreone' ) );
             }
 
-            $meta_after = self::get_job_meta( $job_id );
+            $meta_after = self::drain_restore_stage_slices( $job_id, $slice, $slice_start );
+
+            if ( ! is_array( $meta_after ) ) {
+                $meta_after = self::get_job_meta( $job_id );
+            }
             if ( empty( $meta_after['completed'] ) ) {
                 if ( ! wp_next_scheduled( self::CRON_HOOK_PROCESS, [ $job_id ] ) ) {
                     wp_schedule_single_event( time() + 1, self::CRON_HOOK_PROCESS, [ $job_id ] );
@@ -929,8 +935,49 @@ class Museder_Restoreone_Restore_Service {
         // Nudge cron.
         self::spawn_cron();
 
+        self::sync_job_meta_paths_after_db_import( $job_id );
+
         if ( function_exists( 'museder_restoreone_log' ) ) {
             museder_restoreone_log( 'info', 'Post-DB-import recovery: lock, active job, and cron re-established.', [ 'job_id' => $job_id ] );
+        }
+    }
+
+    /**
+     * Mirror job meta JSON to all known paths (upload_path option may move jobs dir after DB import).
+     *
+     * @param string $job_id Job ID.
+     * @return void
+     */
+    public static function sync_job_meta_paths_after_db_import( $job_id ) {
+        $job_id = sanitize_file_name( (string) $job_id );
+        if ( '' === $job_id ) {
+            return;
+        }
+
+        $paths   = self::get_job_meta_candidate_paths( $job_id );
+        $source  = '';
+        $payload = '';
+
+        foreach ( $paths as $path ) {
+            if ( is_readable( $path ) ) {
+                $payload = file_get_contents( $path );
+                if ( is_string( $payload ) && '' !== $payload ) {
+                    $source = $path;
+                    break;
+                }
+            }
+        }
+
+        if ( '' === $source || '' === $payload ) {
+            return;
+        }
+
+        foreach ( $paths as $dest ) {
+            if ( $dest === $source ) {
+                continue;
+            }
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- restore job meta sync
+            file_put_contents( $dest, $payload, LOCK_EX );
         }
     }
 
@@ -2857,6 +2904,22 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
                     self::write_job_meta( $job_id, $meta );
 
                     self::ensure_site_urls_match_current_host();
+                    $cleanup['step'] = 'reconcile_upload_paths';
+                    break;
+
+                case 'reconcile_upload_paths':
+                    if ( class_exists( 'Museder_Restoreone_Restore_Media_Paths' ) ) {
+                        $media_result = Museder_Restoreone_Restore_Media_Paths::reconcile_sliced( $cleanup, $slice_seconds, $start, $job_id );
+                        $meta['progress']   = 99;
+                        $meta['message']    = __( 'Finalising restore…', 'museder-restoreone' );
+                        $meta['updated_at'] = current_time( 'mysql' );
+                        $cp['cleanup']      = $cleanup;
+                        $meta['checkpoints'] = $cp;
+                        self::write_job_meta( $job_id, $meta );
+                        if ( empty( $media_result['done'] ) ) {
+                            break;
+                        }
+                    }
                     $cleanup['step'] = 'restore_plugin_status';
                     break;
 
@@ -2954,9 +3017,13 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
                     $meta['checkpoints'] = $cp;
             $meta['stage']      = 'done';
             $meta['progress']   = 100;
-                    $meta['message']    = $background_cleanup
+                    $finish_message = $background_cleanup
                         ? __( 'Restore completed successfully. Background cleanup queued.', 'museder-restoreone' )
                         : __( 'Restore completed successfully.', 'museder-restoreone' );
+                    if ( class_exists( 'Museder_Restoreone_Restore_Media_Paths' ) ) {
+                        $meta['media_paths'] = Museder_Restoreone_Restore_Media_Paths::build_report_from_cleanup( $cleanup );
+                    }
+                    $meta['message']    = $finish_message;
             $meta['completed']  = true;
             $meta['updated_at'] = current_time( 'mysql' );
             self::write_job_meta( $job_id, $meta );
@@ -3905,8 +3972,8 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
      * Read job metadata.
      */
     public static function get_job_meta( $job_id ) {
-        $path = self::job_meta_path( $job_id );
-        if ( ! file_exists( $path ) ) {
+        $path = self::locate_job_meta_path( $job_id );
+        if ( '' === $path ) {
             throw new RuntimeException( esc_html__( 'Restore job not found.', 'museder-restoreone' ) );
         }
 
@@ -3918,6 +3985,85 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
         }
 
         return $data;
+    }
+
+    /**
+     * Candidate absolute paths for a job meta JSON file (current + canonical uploads).
+     *
+     * @param string $job_id Job ID.
+     * @return array<int, string>
+     */
+    protected static function get_job_meta_candidate_paths( $job_id ) {
+        $job_id = sanitize_file_name( (string) $job_id );
+        $paths  = [];
+
+        if ( function_exists( 'museder_restoreone_get_jobs_dir' ) ) {
+            $paths[] = trailingslashit( museder_restoreone_get_jobs_dir() ) . $job_id . self::JOB_META_EXTENSION;
+        }
+        if ( function_exists( 'museder_restoreone_get_canonical_jobs_dir' ) ) {
+            $paths[] = trailingslashit( museder_restoreone_get_canonical_jobs_dir() ) . $job_id . self::JOB_META_EXTENSION;
+        }
+
+        if ( function_exists( 'museder_restoreone_get_temp_dir' ) ) {
+            $paths[] = trailingslashit( museder_restoreone_get_temp_dir() ) . $job_id . '/restore-job.meta.json';
+        }
+
+        return array_values( array_unique( array_filter( $paths ) ) );
+    }
+
+    /**
+     * @param string $job_id Job ID.
+     * @return string Readable job meta path or empty.
+     */
+    public static function locate_job_meta_path( $job_id ) {
+        foreach ( self::get_job_meta_candidate_paths( $job_id ) as $path ) {
+            if ( is_readable( $path ) ) {
+                return $path;
+            }
+        }
+
+        return '';
+    }
+
+    /**
+     * Keep processing restore-files (and follow-on stages) within one slice budget.
+     *
+     * @param string $job_id      Job ID.
+     * @param int    $slice       Slice seconds.
+     * @param float  $slice_start microtime( true ) at slice start.
+     * @return array<string, mixed>|null
+     */
+    protected static function drain_restore_stage_slices( $job_id, $slice, $slice_start ) {
+        $meta_after = self::get_job_meta( $job_id );
+        $drain_stages = [ 'restore-files', 'search-replace', 'cleanup' ];
+
+        while ( ! empty( $meta_after ) && empty( $meta_after['completed'] ) ) {
+            $stage = isset( $meta_after['stage'] ) ? (string) $meta_after['stage'] : '';
+            if ( ! in_array( $stage, $drain_stages, true ) ) {
+                break;
+            }
+            if ( ( microtime( true ) - $slice_start ) >= $slice ) {
+                break;
+            }
+
+            $remaining = max( 1, (int) floor( $slice - ( microtime( true ) - $slice_start ) ) );
+
+            switch ( $stage ) {
+                case 'restore-files':
+                    self::stage_restore_files( $job_id, $meta_after, $remaining );
+                    break;
+                case 'search-replace':
+                    self::stage_search_replace_sliced( $job_id, $meta_after, $remaining );
+                    break;
+                case 'cleanup':
+                    self::stage_cleanup_and_finish( $job_id, $meta_after, $remaining );
+                    break;
+            }
+
+            $meta_after = self::get_job_meta( $job_id );
+        }
+
+        return $meta_after;
     }
 
     /**
@@ -3964,19 +4110,43 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
      * Persist job metadata to disk.
      */
     protected static function write_job_meta( $job_id, array $meta ) {
-        $path = self::job_meta_path( $job_id );
         $meta = wp_parse_args( $meta, [ 'logs' => [] ] );
         $json = wp_json_encode( $meta, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES );
+        if ( false === $json ) {
+            throw new RuntimeException( esc_html__( 'Unable to encode restore job metadata.', 'museder-restoreone' ) );
+        }
 
-        if ( false === file_put_contents( $path, $json, LOCK_EX ) ) {
+        $paths = self::get_job_meta_candidate_paths( $job_id );
+        if ( empty( $paths ) ) {
+            throw new RuntimeException( esc_html__( 'Unable to write restore job metadata.', 'museder-restoreone' ) );
+        }
+
+        $written = false;
+        foreach ( $paths as $path ) {
+            $dir = dirname( $path );
+            if ( function_exists( 'museder_restoreone_ensure_directory' ) ) {
+                museder_restoreone_ensure_directory( $dir );
+            }
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- restore job meta
+            if ( false !== file_put_contents( $path, $json, LOCK_EX ) ) {
+                $written = true;
+            }
+        }
+
+        if ( ! $written ) {
             throw new RuntimeException( esc_html__( 'Unable to write restore job metadata.', 'museder-restoreone' ) );
         }
     }
 
     /**
-     * Resolve job metadata path.
+     * Resolve job metadata path (primary write target).
      */
     protected static function job_meta_path( $job_id ) {
+        $paths = self::get_job_meta_candidate_paths( $job_id );
+        if ( ! empty( $paths ) ) {
+            return $paths[0];
+        }
+
         return trailingslashit( museder_restoreone_get_jobs_dir() ) . $job_id . self::JOB_META_EXTENSION;
     }
 
@@ -4455,6 +4625,19 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
         }
 
         return $unique_pairs;
+    }
+
+    /**
+     * Apply relative upload path replacements across the database (post-restore cleanup).
+     *
+     * @param array<int, array{search:string,replace:string}> $pairs Search/replace pairs.
+     * @return void
+     */
+    public static function apply_path_replacements_for_restore( array $pairs ) {
+        if ( empty( $pairs ) ) {
+            return;
+        }
+        self::run_search_replace( $pairs );
     }
 
     /**

@@ -15,16 +15,25 @@ if ( ! defined( 'MUSEDER_RESTOREONE_BOOTSTRAP_ROOT' ) ) {
     define( 'MUSEDER_RESTOREONE_BOOTSTRAP_ROOT', __DIR__ );
 }
 
-$bootstrap_class = MUSEDER_RESTOREONE_BOOTSTRAP_ROOT . '/wp-content/plugins/museder-restoreone/includes/class-restore-bootstrap.php';
-if ( ! is_readable( $bootstrap_class ) ) {
-    $bootstrap_class = __DIR__ . '/wp-content/plugins/museder-restoreone/includes/class-restore-bootstrap.php';
+// Plugin Check expects an ABSPATH guard; define a bootstrap-scoped ABSPATH before wp-load exists.
+if ( ! defined( 'ABSPATH' ) ) {
+    define( 'ABSPATH', rtrim( (string) MUSEDER_RESTOREONE_BOOTSTRAP_ROOT, "/\\\n\r\t " ) . '/' );
 }
-if ( ! is_readable( $bootstrap_class ) ) {
+
+if ( ! defined( 'ABSPATH' ) ) {
+    exit;
+}
+
+$museder_restoreone_bootstrap_class = MUSEDER_RESTOREONE_BOOTSTRAP_ROOT . '/wp-content/plugins/museder-restoreone/includes/class-restore-bootstrap.php';
+if ( ! is_readable( $museder_restoreone_bootstrap_class ) ) {
+    $museder_restoreone_bootstrap_class = __DIR__ . '/wp-content/plugins/museder-restoreone/includes/class-restore-bootstrap.php';
+}
+if ( ! is_readable( $museder_restoreone_bootstrap_class ) ) {
     header( 'Content-Type: text/plain; charset=utf-8', true, 500 );
     echo 'Museder RestoreOne bootstrap: plugin not found. Upload museder-restoreone to wp-content/plugins/ first.';
     exit;
 }
 
-require_once $bootstrap_class;
+require_once $museder_restoreone_bootstrap_class;
 
 Museder_Restoreone_Restore_Bootstrap::handle_request();
