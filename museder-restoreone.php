@@ -3,7 +3,7 @@
 Plugin Name: Museder RestoreOne
 Plugin URI: https://musederlabs.com/restoreone-plugin/
 Description: Museder RestoreOne is a simple backup & restore plugin for WordPress.
-Version: 2.7.270
+Version: 2.7.271
 Requires at least: 5.8
 Tested up to: 7.0
 Requires PHP: 7.4
@@ -17,9 +17,9 @@ Domain Path: /languages
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-define( 'MUSEDER_RESTOREONE_VERSION', '2.7.270' );
+define( 'MUSEDER_RESTOREONE_VERSION', '2.7.271' );
 // Build identifier for debugging host-side opcode caching issues.
-define( 'MUSEDER_RESTOREONE_BUILD_ID', '2.7.270' );
+define( 'MUSEDER_RESTOREONE_BUILD_ID', '2.7.271' );
 define( 'MUSEDER_RESTOREONE_PATH', plugin_dir_path( __FILE__ ) );
 define( 'MUSEDER_RESTOREONE_URL', plugin_dir_url( __FILE__ ) );
 
@@ -395,14 +395,7 @@ function museder_restoreone_render_restore_page() {
     $museder_restoreone_progress = Museder_Restoreone_Restore_Handler::current_progress();
     $museder_restoreone_history  = Museder_Restoreone_Restore_Handler::history_for_js( 10 );
     $museder_restoreone_active_job_id = class_exists( 'Museder_Restoreone_Restore_Service' ) ? Museder_Restoreone_Restore_Service::get_active_job_id() : '';
-    $museder_restoreone_active_job = null;
-    if ( ! empty( $museder_restoreone_active_job_id ) ) {
-        try {
-            $museder_restoreone_active_job = Museder_Restoreone_Restore_Service::status( $museder_restoreone_active_job_id );
-        } catch ( Exception $e ) {
-            $museder_restoreone_active_job = null;
-        }
-    }
+    $museder_restoreone_active_job    = Museder_Restoreone_Restore_Handler::active_job_for_page();
 
     $museder_restoreone_backups = array_map(
         function ( $item ) {
@@ -447,7 +440,7 @@ function museder_restoreone_render_restore_page() {
             'summary' => $museder_restoreone_summary,
             'progress'=> $museder_restoreone_progress,
             'history' => $museder_restoreone_history,
-            'job'     => $museder_restoreone_active_job ? array_merge( [ 'id' => $museder_restoreone_active_job_id ], $museder_restoreone_active_job ) : null,
+            'job'     => $museder_restoreone_active_job,
             'labels'  => [
                 'noBackups'    => __( 'No backups available.', 'museder-restoreone' ),
                 'noValidation' => __( 'Validation results will appear here once the job is prepared.', 'museder-restoreone' ),

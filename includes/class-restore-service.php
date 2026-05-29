@@ -2433,10 +2433,11 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
                 }
             }
 
-            $phase_span = 3;
-            $phase_base = 90 + ( $zip_phase * $phase_span );
-            $pct = ( $zip_total > 0 ) ? min( 1.0, max( 0.0, $zip_index / $zip_total ) ) : 0.0;
-            $meta['progress']   = min( 96, $phase_base + (int) floor( $pct * $phase_span ) );
+            $phase_floor   = ( 0 === $zip_phase ) ? 75 : 85;
+            $phase_ceiling = ( 0 === $zip_phase ) ? 85 : 96;
+            $pct           = ( $zip_total > 0 ) ? min( 1.0, max( 0.0, $zip_index / $zip_total ) ) : 0.0;
+            $phase_span    = max( 1, $phase_ceiling - $phase_floor );
+            $meta['progress']   = min( $phase_ceiling, $phase_floor + (int) floor( $pct * $phase_span ) );
             $meta['updated_at'] = current_time( 'mysql' );
             self::write_job_meta( $job_id, $meta );
 

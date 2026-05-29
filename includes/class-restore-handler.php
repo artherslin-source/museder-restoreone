@@ -2096,6 +2096,7 @@ class Museder_Restoreone_Restore_Handler {
             // 9. Build clean array for template (no nested arrays, no foreach on strings, no 'undefined' strings)
             $prepared[] = [
                 'id'               => $id,
+                'job_id'           => isset( $row['job_id'] ) ? sanitize_text_field( (string) $row['job_id'] ) : '',
                 'file'             => $file_name,
                 'result'           => $result,
                 'timestamp_utc'   => $timestamp_utc,
@@ -2107,6 +2108,34 @@ class Museder_Restoreone_Restore_Handler {
         }
 
         return $prepared;
+    }
+
+    /**
+     * Active restore job payload for admin page bootstrap (includes derived status for admin.js).
+     *
+     * @return array<string, mixed>|null
+     */
+    public static function active_job_for_page() {
+        if ( ! class_exists( 'Museder_Restoreone_Restore_Service' ) ) {
+            return null;
+        }
+
+        $job_id = Museder_Restoreone_Restore_Service::get_active_job_id();
+        if ( empty( $job_id ) ) {
+            return null;
+        }
+
+        try {
+            $status = Museder_Restoreone_Restore_Service::status( $job_id );
+        } catch ( Exception $e ) {
+            return null;
+        }
+
+        if ( empty( $status ) || ! is_array( $status ) ) {
+            return null;
+        }
+
+        return self::map_restore_service_status_to_job( $job_id, $status );
     }
 
     private static function ensure_permission() {
@@ -2502,7 +2531,7 @@ class Museder_Restoreone_Restore_Handler {
      * @param array  $status
      * @return array
      */
-    private static function map_restore_service_status_to_job( $job_id, array $status ) {
+    public static function map_restore_service_status_to_job( $job_id, array $status ) {
         $stage     = isset( $status['stage'] ) ? (string) $status['stage'] : '';
         $completed = ! empty( $status['completed'] );
         $progress  = isset( $status['progress'] ) ? (float) $status['progress'] : 0;

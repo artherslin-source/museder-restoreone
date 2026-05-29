@@ -2056,6 +2056,54 @@ function initRestoreCenter() {
             }
         }
 
+        function escapeRestoreHtml(text) {
+            if (text === null || text === undefined) {
+                return '';
+            }
+            return String(text)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        }
+
+        function resolveRestoreJobStatus(job) {
+            if (!job) {
+                return '';
+            }
+            if (job.status) {
+                return String(job.status);
+            }
+            if (job.completed === true) {
+                var doneStage = String(job.stage || '').toLowerCase();
+                if (doneStage === 'done' || doneStage === 'rollback-done') {
+                    return 'success';
+                }
+                if (doneStage === 'cancelled') {
+                    return 'cancelled';
+                }
+                return 'failed';
+            }
+            var stage = String(job.stage || '').toLowerCase();
+            if (stage && stage !== 'done' && stage !== 'failed' && stage !== 'cancelled') {
+                return 'running';
+            }
+            if (job.id && job.completed !== true) {
+                return 'running';
+            }
+            return '';
+        }
+
+        function normalizeRestoreJobPayload(job) {
+            if (!job) {
+                return job;
+            }
+            if (!job.status) {
+                job.status = resolveRestoreJobStatus(job);
+            }
+            return job;
+        }
+
         function pushRestoreJobTick(jobId) {
             if (!jobId) {
                 return Promise.reject(new Error('missing_job_id'));
@@ -2466,7 +2514,7 @@ function initRestoreCenter() {
                 }
                 
                 var payload = getJsonPayload(json) || {};
-                var job = payload.job || payload;
+                var job = normalizeRestoreJobPayload(payload.job || payload);
                 
                 // Check if job is complete
                 if (job && (job.status === 'success' || job.status === 'completed')) {
@@ -2517,6 +2565,15 @@ function initRestoreCenter() {
                             confirmText: strings.restoreOverlayConfirm || strings.close || 'Got it',
                             type: 'error'
                         });
+                    }
+                    return;
+                }
+
+                if (job && (job.status === 'running' || job.status === 'pending' || job.status === 'cancelling')) {
+                    console.log('[Backup Lite] Job still running on fallback check, resuming monitor', { jobId: jobId, status: job.status });
+                    if (activeRestoreJobId !== jobId || !restoreInProgress) {
+                        var resumeFileSize = (restoreData.summary && restoreData.summary.size) ? restoreData.summary.size : 0;
+                        startRestoreJobMonitor(job, resumeFileSize);
                     }
                     return;
                 }
@@ -2594,6 +2651,13 @@ function initRestoreCenter() {
                                 confirmText: strings.restoreOverlayConfirm || strings.close || 'Got it',
                                 type: 'error'
                             });
+                        }
+                        return;
+                    } else if (latestHistory && latestHistory.result === 'running') {
+                        console.log('[Backup Lite] History shows running restore, resuming monitor', { jobId: jobId, latestHistory: latestHistory });
+                        if (activeRestoreJobId !== jobId || !restoreInProgress) {
+                            var runningFileSize = (restoreData.summary && restoreData.summary.size) ? restoreData.summary.size : 0;
+                            startRestoreJobMonitor(job || { id: jobId, status: 'running' }, runningFileSize);
                         }
                         return;
                     }
@@ -2791,6 +2855,7 @@ function initRestoreCenter() {
             if (!job || !job.id) {
                 return;
             }
+            job = normalizeRestoreJobPayload(job);
             
             // Prevent auto-resuming failed, cancelled, or completed jobs
             var jobStatus = job.status || '';
@@ -2869,7 +2934,7 @@ function initRestoreCenter() {
             }
             syncWizard();
             updateRestoreCancelState();
-            setProgress(5, job.message || (strings.runningMessage || 'Starting restore…'), false);
+            setProgress(Math.max(5, Math.min(96, job.progress || 5)), job.message || (strings.runningMessage || 'Starting restore…'), false);
             
             // Start simulated progress from 5% to 85%
             startSimulatedProgress();
@@ -3096,16 +3161,16 @@ function initRestoreCenter() {
             var nowMs = Date.now();
             var lastSignalMs = Math.max(restoreJobLastTickMs || 0, restoreJobLastStatusAtMs || 0);
             if (lastSignalMs && (nowMs - lastSignalMs) > RESTORE_JOB_STALE_THRESHOLD) {
-                // Stale: stop polling but don't mark as failed. User can check logs or refresh later.
-                stopRestoreJobMonitor();
-                restoreInProgress = false;
+                // Stale: pause polling but keep in-progress UI (cron may still be advancing the job).
+                pauseRestoreJobMonitor();
+                restoreInProgress = true;
                 if (startButton) {
-                    startButton.disabled = false;
+                    startButton.disabled = true;
                 }
                 syncWizard();
                 updateRestoreCancelState();
-                console.warn('[Backup Lite] Restore job polling stale (no updates)', { jobId, lastSignalMs: lastSignalMs });
-                showToast('⚠️ ' + (strings.errorGeneric || 'No progress updates received. Please refresh later or check logs.'), 'warning');
+                console.warn('[Backup Lite] Restore job polling stale (no updates)', { jobId: jobId, lastSignalMs: lastSignalMs });
+                showToast('⚠️ ' + (strings.restoreStaleProgress || 'No progress updates received. The restore may still be running — refresh this page or check logs.'), 'warning');
                 return;
             }
             
@@ -3118,7 +3183,7 @@ function initRestoreCenter() {
                 }
                 
                 var payload = getJsonPayload(json) || {};
-                var job = payload.job || payload;
+                var job = normalizeRestoreJobPayload(payload.job || payload);
                 restoreJobLastStatusAtMs = Date.now();
                 
                 // Check if nonce expired flag is set
@@ -3279,8 +3344,7 @@ function initRestoreCenter() {
                 };
                 
                 if (payload.history) {
-                    // DISABLED: Restore History is now rendered server-side in PHP template
-                    // renderHistory(payload.history);
+                    renderHistory(payload.history);
                     
                     var latestHistory = payload.history.length ? payload.history[0] : null;
                     if (latestHistory) {
@@ -3898,6 +3962,13 @@ function initRestoreCenter() {
                         }
                     });
                 } else {
+                    // Poll failed without an active job payload — keep monitoring when this tab still tracks the job.
+                    if (jobId && (jobId === activeRestoreJobId || jobId === restoreMonitor.jobId) && restoreInProgress) {
+                        if (!silent) {
+                            console.warn('[Backup Lite] Restore job status failed but monitor still active; will retry', error);
+                        }
+                        return;
+                    }
                     // No active job, but we got an error - might be a stale request
                     // CRITICAL: If progress is at 100%, check history before resetting state
                     // This prevents showing error when restore actually completed
@@ -4835,26 +4906,36 @@ function initRestoreCenter() {
             summaryContainer.innerHTML = html;
         }
 
-        // DISABLED: Restore History is now rendered server-side in PHP template (page-restore.php)
-        // This function was causing "undefined" display issues by overwriting PHP-rendered content.
-        // The table is now fully rendered in PHP with proper escaping and data structure.
-        /*
+        // Restore History table updates (same-page session); PHP renders initial rows on full page load.
         function renderHistory(history) {
+            var historyTable = document.getElementById('restoreHistory');
             if (!historyTable) {
                 return;
             }
             if (!history || !history.length) {
-                historyTable.innerHTML = '<tr><td colspan="4">' + (strings.noHistory || 'No restore history recorded yet.') + '</td></tr>';
+                historyTable.innerHTML = '<tr class="no-items"><td class="colspanchange" colspan="6">' + escapeRestoreHtml(strings.noHistory || 'No restore history found.') + '</td></tr>';
                 return;
             }
             var downloadLabel = strings.downloadLog || 'Download';
             historyTable.innerHTML = history.map(function (item) {
-                var result = item.result ? item.result.charAt(0).toUpperCase() + item.result.slice(1) : '';
-                var logCell = item.log_url ? '<a class=\"button button-small\" href=\"' + item.log_url + '\" target=\"_blank\" rel=\"noopener noreferrer\">' + downloadLabel + '</a>' : '<em>N/A</em>';
-                return '<tr><td>' + item.timestamp + '</td><td>' + item.file + '</td><td>' + result + '</td><td>' + logCell + '</td></tr>';
+                var result = item.result ? String(item.result) : '';
+                var resultLabel = result ? result.charAt(0).toUpperCase() + result.slice(1) : '—';
+                var resultClass = result ? result.toLowerCase() : 'unknown';
+                var duration = item.duration_human || (item.duration >= 0 ? String(item.duration) + 's' : '—');
+                var logCell = item.log_download_url
+                    ? '<a class="button button-secondary" href="' + escapeRestoreHtml(item.log_download_url) + '" target="_blank" rel="noopener noreferrer">' + escapeRestoreHtml(downloadLabel) + '</a>'
+                    : '&mdash;';
+                var rowId = item.id || item.timestamp_utc || 0;
+                return '<tr>'
+                    + '<th scope="row" class="check-column"><input type="checkbox" name="restore_history_ids[]" value="' + escapeRestoreHtml(rowId) + '" /></th>'
+                    + '<td>' + escapeRestoreHtml(item.date_human || item.timestamp || '—') + '</td>'
+                    + '<td class="column-primary"><strong>' + escapeRestoreHtml(item.file || '—') + '</strong></td>'
+                    + '<td><span class="backup-lite-restore-status backup-lite-restore-status--' + escapeRestoreHtml(resultClass) + '">' + escapeRestoreHtml(resultLabel) + '</span></td>'
+                    + '<td>' + escapeRestoreHtml(duration) + '</td>'
+                    + '<td>' + logCell + '</td>'
+                    + '</tr>';
             }).join('');
         }
-        */
 
         function getJsonPayload(response) {
             if (!response) {
@@ -5112,14 +5193,14 @@ function initRestoreCenter() {
             renderSummary(restoreData.summary);
         }
         if (restoreData.history) {
-            // DISABLED: Restore History is now rendered server-side in PHP template
-            // renderHistory(restoreData.history);
+            renderHistory(restoreData.history);
         }
         
         // Check for active or completed restore job
         if (restoreData.job && restoreData.job.id) {
+            restoreData.job = normalizeRestoreJobPayload(restoreData.job);
             var fileSize = (restoreData.summary && restoreData.summary.size) ? restoreData.summary.size : 0;
-            var jobStatus = restoreData.job.status || '';
+            var jobStatus = restoreData.job.status || resolveRestoreJobStatus(restoreData.job);
             
             // Check if job is already complete on page load (e.g., after re-login)
             if (jobStatus === 'success' || jobStatus === 'completed') {
@@ -5154,6 +5235,17 @@ function initRestoreCenter() {
                 }
                 startRestoreJobMonitor(restoreData.job, fileSize);
             } else {
+                // Infer running from service fields when status mapping was missing (legacy page payloads).
+                if (!jobStatus && restoreData.job.completed !== true) {
+                    jobStatus = resolveRestoreJobStatus(restoreData.job);
+                }
+                if (jobStatus === 'running' || jobStatus === 'pending' || jobStatus === 'cancelling') {
+                    console.log('[Backup Lite] Inferred running job on page load, resuming monitoring', { jobId: restoreData.job.id, status: jobStatus });
+                    if (startButton) {
+                        startButton.disabled = true;
+                    }
+                    startRestoreJobMonitor(restoreData.job, fileSize);
+                } else {
                 // Unknown status or empty status - treat as failed to prevent auto-resume
                 console.warn('[Backup Lite] Job has unknown or empty status on page load, resetting state (NOT auto-resuming)', { jobId: restoreData.job.id, status: jobStatus });
                 stopRestoreJobMonitor();
@@ -5168,8 +5260,26 @@ function initRestoreCenter() {
                 setProgress(0, '', false);
                 syncWizard();
                 updateRestoreCancelState();
+                }
             }
         } else {
+            // No active job injected — resume from history when a restore is still running server-side.
+            if (restoreData.history && restoreData.history.length > 0) {
+                var runningHistoryEntry = null;
+                for (var historyIdx = 0; historyIdx < restoreData.history.length; historyIdx++) {
+                    var historyRow = restoreData.history[historyIdx];
+                    if (historyRow && historyRow.result === 'running' && historyRow.job_id) {
+                        runningHistoryEntry = historyRow;
+                        break;
+                    }
+                }
+                if (runningHistoryEntry) {
+                    console.log('[Backup Lite] Found running restore in history on page load, resuming monitor', runningHistoryEntry);
+                    var historyFileSize = (restoreData.summary && restoreData.summary.size) ? restoreData.summary.size : 0;
+                    startRestoreJobMonitor({ id: runningHistoryEntry.job_id, status: 'running' }, historyFileSize);
+                    return;
+                }
+            }
             // No active job - check history to see if a restore just completed
             // This handles the case where restore completed but job was cleaned up
             if (restoreData.history && restoreData.history.length > 0) {
@@ -5463,7 +5573,7 @@ function initRestoreCenter() {
 
                 ajaxRequest(formData).then(function (json) {
                     var payload = getJsonPayload(json) || {};
-                    var job = payload.job || payload;
+                    var job = normalizeRestoreJobPayload(payload.job || payload);
                     var fileSize = payload.file_size || 0;
 
                     if (payload.restore_token) {
@@ -5473,11 +5583,11 @@ function initRestoreCenter() {
                     }
 
                     if (payload.history) {
-                        // DISABLED: Restore History is now rendered server-side in PHP template
-                        // renderHistory(payload.history);
+                        renderHistory(payload.history);
                     }
 
                     if (job && job.id) {
+                        job = normalizeRestoreJobPayload(job);
                         // Check if job is already complete before starting monitor
                         var jobStatus = job.status || '';
                         var isJobComplete = jobStatus === 'success' || jobStatus === 'completed';

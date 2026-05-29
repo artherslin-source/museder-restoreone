@@ -4,7 +4,7 @@ Tags: backup, migration, restore, site-backup, database-backup
 Requires at least: 5.8
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 2.7.270
+Stable tag: 2.7.271
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -182,6 +182,12 @@ Most sites do not need any changes. For unusual server layouts where core admin 
 6. Settings page with general options and system diagnostics.
 
 == Changelog ==
+
+= 2.7.271 =
+* Restore Step 3: page bootstrap now uses `map_restore_service_status_to_job()` so reload during an active restore resumes monitoring instead of resetting to “Ready to start”.
+* Restore Step 3: polling/history fallbacks keep in-progress UI on transient AJAX errors; restore history table updates during same-page sessions.
+* Restore: files-only jobs force `wp_config_mode: keep` so `wp-config.php` is not overwritten when the database is skipped.
+* Restore: ZIP file-stage progress no longer jumps to 93% at the start of core extraction.
 
 = 2.7.270 =
 * Restore Step 1: separate **analysis** from **execute** preflight — populated-site overwrite requirement is a Step 2 warning, not a Step 1 failure (fixes “Analysis complete” + empty Summary + “Analysis failed” on chunk finalize).

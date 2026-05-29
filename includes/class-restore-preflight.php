@@ -61,6 +61,12 @@ class Museder_Restoreone_Restore_Preflight {
         $options['wp_config_mode'] = $mode;
         $options['skip_config']    = ( self::MODE_CONFIG_KEEP === $mode );
 
+        if ( ! empty( $options['files_only'] ) ) {
+            // Files-only restore does not import the database; never overwrite wp-config.php.
+            $options['wp_config_mode'] = self::MODE_CONFIG_KEEP;
+            $options['skip_config']    = true;
+        }
+
         if ( ! isset( $options['pause_other_plugins'] ) ) {
             $options['pause_other_plugins'] = true;
         } else {
@@ -344,6 +350,9 @@ class Museder_Restoreone_Restore_Preflight {
      * @return bool
      */
     public static function should_skip_wp_config_in_zip( array $options ) {
+        if ( ! empty( $options['files_only'] ) ) {
+            return true;
+        }
         $mode = isset( $options['wp_config_mode'] ) ? (string) $options['wp_config_mode'] : self::MODE_CONFIG_BACKUP;
         return self::MODE_CONFIG_KEEP === $mode;
     }
