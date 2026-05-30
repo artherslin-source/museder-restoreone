@@ -1195,6 +1195,8 @@ var musederRestoreOneTimer = {
 
         if (job.auto_applied && job.large_site_detected && 'fast' === mode) {
             parts.push(strings.backupModeAutoSwitched || 'Auto enabled Fast mode for a large site.');
+        } else if (job.auto_applied && !job.large_site_detected && 'balanced' === mode) {
+            parts.push(strings.backupModeAutoStandard || 'Auto: standard mode (site below Auto thresholds).');
         }
 
         statusEl.textContent = parts.join(' · ');

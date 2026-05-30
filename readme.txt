@@ -4,7 +4,7 @@ Tags: backup, migration, restore, site-backup, database-backup
 Requires at least: 5.8
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 2.7.271
+Stable tag: 2.7.272
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -198,6 +198,10 @@ Contributors and release maintainers should follow the **Modification & Release 
 Checklists: `docs/RELEASE_CHECKLIST.md`, `docs/PACKAGING.md`, `docs/WORDPRESS_ORG_DEVELOPMENT_GUIDE.md`, `AGENTS.md`.
 
 == Changelog ==
+
+= 2.7.272 =
+* Backup Auto mode: align “large site” detection with the Backups page estimate warning (>1 GB total) — Auto now enables Fast mode and Smart Exclude when size or cached estimate exceeds threshold, not only when file count exceeds 50,000.
+* Backup UI: clarify Auto status when standard (Balanced) mode applies on sites below Auto thresholds.
 
 = 2.7.271 =
 * Restore Step 3: page bootstrap now uses `map_restore_service_status_to_job()` so reload during an active restore resumes monitoring instead of resetting to “Ready to start”.
@@ -506,6 +510,9 @@ Checklists: `docs/RELEASE_CHECKLIST.md`, `docs/PACKAGING.md`, `docs/WORDPRESS_OR
 (Older changelog entries are maintained in the project repository.)
 
 == Upgrade Notice ==
+
+= 2.7.272 =
+Fixes Backup Auto mode staying on Balanced with Smart Exclude Off when the site shows “Large site detected” (>1 GB). Recommended if Auto backup does not switch to Fast on large sites.
 
 = 2.7.271 =
 Fixes Restore Step 3 UI resetting during active jobs; recommended if you reload the restore page mid-restore. Also keeps wp-config unchanged on files-only restores and improves large-backup file-stage progress accuracy.

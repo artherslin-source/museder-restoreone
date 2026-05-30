@@ -17,6 +17,8 @@ class Museder_Restoreone_Estimate_Size {
     const CACHE_SIZE_KEY = 'museder_restoreone_last_file_scan_size';
     const CACHE_TIME_KEY = 'museder_restoreone_last_file_scan_time';
     const CACHE_TTL = 48 * HOUR_IN_SECONDS; // 48 hours
+    /** Matches Backups page estimate warning (> 1 GB total). */
+    const LARGE_SITE_TOTAL_BYTES = 1073741824;
     const FILES_PER_BATCH = 3000; // Files to scan per batch
     const MAX_EXECUTION_TIME = 1.5; // Maximum seconds per batch
 
@@ -248,6 +250,23 @@ class Museder_Restoreone_Estimate_Size {
         ];
 
         wp_send_json_success( $response );
+    }
+
+    /**
+     * Cached DB + files total bytes from the last size scan (0 when cache expired/missing).
+     *
+     * @return int
+     */
+    public static function get_cached_total_bytes() {
+        $file_scan_time = (int) get_option( self::CACHE_TIME_KEY, 0 );
+        if ( ! $file_scan_time || ( time() - $file_scan_time ) >= self::CACHE_TTL ) {
+            return 0;
+        }
+
+        $file_bytes = (int) get_option( self::CACHE_SIZE_KEY, 0 );
+        $db_size    = self::get_database_size();
+
+        return $file_bytes + (int) ( $db_size['bytes'] ?? 0 );
     }
 
     /**

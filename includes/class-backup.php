@@ -1932,7 +1932,9 @@ class Museder_Restoreone_Backup {
     /**
      * Resolve effective backup options for Auto mode, including Smart Exclude.
      *
-     * - Auto mode switches to Fast + Smart Exclude when file count is above threshold.
+     * - Auto mode switches to Fast + Smart Exclude when the site is "large":
+     *   file count above threshold, manifest scan bytes above threshold, or cached
+     *   estimate total (DB + files) above threshold — aligned with the Backups page warning.
      * - Auto mode stays Balanced and keeps Smart Exclude off for smaller sites.
      *
      * @param array<string,mixed> $options     Incoming options.
@@ -1988,18 +1990,41 @@ class Museder_Restoreone_Backup {
         $threshold = (int) apply_filters( 'museder_restoreone_backup_auto_threshold_files', $threshold );
         $threshold = max( 1000, min( 500000, $threshold ) );
 
+        $byte_threshold = Museder_Restoreone_Estimate_Size::LARGE_SITE_TOTAL_BYTES;
+        if ( class_exists( 'Museder_Restoreone_Settings' ) ) {
+            $settings = Museder_Restoreone_Settings::get_settings();
+            if ( isset( $settings['backup_auto_threshold_bytes'] ) ) {
+                $byte_threshold = (int) $settings['backup_auto_threshold_bytes'];
+            }
+        }
+        /**
+         * Filter byte threshold for Auto mode (default 1 GB, matches estimate UI warning).
+         *
+         * @param int $byte_threshold Bytes threshold.
+         */
+        $byte_threshold = (int) apply_filters( 'museder_restoreone_backup_auto_threshold_bytes', $byte_threshold );
+        $byte_threshold = max( 104857600, min( 53687091200, $byte_threshold ) ); // 100 MB – 50 GB.
+
         // Decide large site based on a lightweight count-only scan (stops once threshold is reached).
         $decision_options = $options;
         $decision_options['backup_smart_exclude'] = 'off';
 
         $stats = self::with_runtime_exclusions(
             $decision_options,
-            function () use ( $directories, $threshold ) {
-                return self::scan_manifest_stats( $directories, $threshold );
+            function () use ( $directories, $threshold, $byte_threshold ) {
+                return self::scan_manifest_stats( $directories, $threshold, $byte_threshold );
             }
         );
 
-        $is_large = ! empty( $stats['reached_threshold'] );
+        $estimate_total_bytes = class_exists( 'Museder_Restoreone_Estimate_Size' )
+            ? Museder_Restoreone_Estimate_Size::get_cached_total_bytes()
+            : 0;
+
+        $is_large_by_files = ! empty( $stats['reached_file_threshold'] );
+        $is_large_by_scan_bytes = ! empty( $stats['reached_byte_threshold'] )
+            || ( isset( $stats['bytes'] ) && (int) $stats['bytes'] >= $byte_threshold );
+        $is_large_by_estimate = $estimate_total_bytes >= $byte_threshold;
+        $is_large = $is_large_by_files || $is_large_by_scan_bytes || $is_large_by_estimate;
 
         $effective_mode = $requested_mode;
         if ( 'auto' === $requested_mode ) {
@@ -2023,7 +2048,11 @@ class Museder_Restoreone_Backup {
 
         museder_restoreone_log( 'info', 'Backup Auto mode decision.', [
             'threshold_files' => $threshold,
-            'reached_threshold' => $is_large,
+            'threshold_bytes' => $byte_threshold,
+            'reached_threshold' => $is_large_by_files,
+            'large_by_scan_bytes' => $is_large_by_scan_bytes,
+            'large_by_estimate' => $is_large_by_estimate,
+            'estimate_total_bytes' => $estimate_total_bytes,
             'scanned_files' => isset( $stats['count'] ) ? (int) $stats['count'] : 0,
             'scanned_bytes' => isset( $stats['bytes'] ) ? (int) $stats['bytes'] : 0,
             'backup_mode_effective' => $effective_mode,
@@ -2038,14 +2067,18 @@ class Museder_Restoreone_Backup {
      *
      * @param array<string,string> $directories Directory map.
      * @param int                 $stop_after_files Stop after reaching this file count.
-     * @return array{count:int,bytes:int,reached_threshold:bool}
+     * @param int                 $stop_after_bytes Stop when scanned bytes reach this total (0 = disabled).
+     * @return array{count:int,bytes:int,reached_threshold:bool,reached_file_threshold:bool,reached_byte_threshold:bool}
      */
-    private static function scan_manifest_stats( array $directories, int $stop_after_files ): array {
+    private static function scan_manifest_stats( array $directories, int $stop_after_files, int $stop_after_bytes = 0 ): array {
         $count = 0;
         $bytes = 0;
         $reached = false;
+        $reached_files = false;
+        $reached_bytes = false;
 
         $stop_after_files = max( 1, $stop_after_files );
+        $stop_after_bytes = max( 0, $stop_after_bytes );
 
         foreach ( $directories as $target => $source ) {
             if ( ! is_dir( $source ) ) {
@@ -2118,8 +2151,14 @@ class Museder_Restoreone_Backup {
                     }
 
                     $count++;
+                    if ( $stop_after_bytes > 0 && $bytes >= $stop_after_bytes ) {
+                        $reached = true;
+                        $reached_bytes = true;
+                        break 2;
+                    }
                     if ( $count >= $stop_after_files ) {
                         $reached = true;
+                        $reached_files = true;
                         break 2;
                     }
                 }
@@ -2133,6 +2172,8 @@ class Museder_Restoreone_Backup {
             'count' => $count,
             'bytes' => $bytes,
             'reached_threshold' => $reached,
+            'reached_file_threshold' => $reached_files,
+            'reached_byte_threshold' => $reached_bytes,
         ];
     }
 
