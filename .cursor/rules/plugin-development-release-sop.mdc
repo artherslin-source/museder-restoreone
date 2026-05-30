@@ -1,0 +1,37 @@
+---
+description: Museder RestoreOne 外掛修改與 WP.org 發佈完整 SOP — 每次改碼、審查、封裝、發佈必依循。
+alwaysApply: true
+---
+
+# 外掛修改與發佈 SOP（強制）
+
+完整流程：**`docs/SOP-PLUGIN-DEVELOPMENT-AND-RELEASE.md`**
+
+## 每次修改程式 / readme 前
+
+1. 從最新 `main` 開 `fix/`、`feature/` 或 `agent/` branch（預設不直接改 `main`）。
+2. 套用 `.cursor/skills/museder-wporg-compliance/SKILL.md` 與 `docs/WORDPRESS_ORG_DEVELOPMENT_GUIDE.md`。
+3. Lite 不得含 PRO 鎖、license gate、`museder-restoreone-pro/`；敏感 AJAX/REST 須 capability + nonce + sanitize/validate/escape。
+
+## 每次正式發佈前（六處同版號，缺一不可）
+
+| 檔案 | 欄位 |
+|------|------|
+| `museder-restoreone.php` | `Version`、`MUSEDER_RESTOREONE_VERSION`、`MUSEDER_RESTOREONE_BUILD_ID` |
+| `readme.txt` | `Stable tag`、`Changelog`（新 `= X.Y.Z =` 置頂）、**`Upgrade Notice`（新 `= X.Y.Z =` 置頂）** |
+
+封裝：僅 `tools/package-lite-windows.ps1` 或 `create-package.sh`；須 `BOUNDARY_CHECK=PASS`。禁止 `Compress-Archive`。
+
+發佈順序：驗證 → 五/六點版號 → 封裝 → **人工授權** → commit → `git tag vX.Y.Z` → push → GitHub Release CI → SVN（不上傳 zip）→ 填 `docs/RELEASE-<version>-SVN-HANDOFF.md`（模板見 `docs/templates/`）。
+
+勾選：`docs/RELEASE_CHECKLIST.md`。
+
+## Agent 禁止（除非使用者明確授權）
+
+- push `v*` tag、SVN commit、force push `main`
+- 提交 `dist/*.zip`、`logs/`、secrets
+- 宣稱可發佈但未更新 **Upgrade Notice**
+
+## 觸及主檔時
+
+若編輯 `museder-restoreone.php` 且 `Author:` 仍為 `Jerry Lin`，須提醒改為 `Author: Adrian Lin`（見 `plugin-author-display-name.mdc`）。

@@ -1,6 +1,6 @@
 # GitHub / Local / Cloud Agent Development Workflow
 
-本文件定義 Museder RestoreOne 的長期開發分工。GitHub 是唯一可信來源；本機電腦與 Cursor Cloud Agent 都只是從 GitHub 同步出來的工作環境。若本機更換、增加第二台電腦，或偶爾交給 Cloud Agent 寫碼測試，都必須依此流程運作。
+本文件定義 Museder RestoreOne 的長期開發分工。**修改與發佈完整 SOP（必讀）：** [`docs/SOP-PLUGIN-DEVELOPMENT-AND-RELEASE.md`](SOP-PLUGIN-DEVELOPMENT-AND-RELEASE.md)。GitHub 是唯一可信來源；本機電腦與 Cursor Cloud Agent 都只是從 GitHub 同步出來的工作環境。若本機更換、增加第二台電腦，或偶爾交給 Cloud Agent 寫碼測試，都必須依此流程運作。
 
 ## 角色分工
 
@@ -153,7 +153,7 @@ git push -u origin HEAD
 
 ## Release Workflow
 
-正式發佈前請使用 `docs/RELEASE_CHECKLIST.md` 逐項確認。本節只描述流程角色與順序。
+正式發佈前請使用 `docs/RELEASE_CHECKLIST.md` 逐項確認，並依 **`docs/SOP-PLUGIN-DEVELOPMENT-AND-RELEASE.md`** §5–§8 執行 readme 六點同步與 SVN 手續。本節只描述流程角色與順序。
 
 ### GitHub Test Package
 

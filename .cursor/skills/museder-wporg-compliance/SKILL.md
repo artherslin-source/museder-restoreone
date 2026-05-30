@@ -7,9 +7,10 @@ description: Enforce Museder RestoreOne WordPress.org compliance for PHP, JS, re
 
 ## Always Start Here
 
-Before writing, refactoring, or reviewing Museder RestoreOne code:
+Before writing, refactoring, reviewing, packaging, or releasing Museder RestoreOne code:
 
-1. Decide whether the change belongs to Lite or Add-on.
+1. Read **`docs/SOP-PLUGIN-DEVELOPMENT-AND-RELEASE.md`** (branch → develop → verify → release six-point readme sync).
+2. Decide whether the change belongs to Lite or Add-on.
 2. Read [REFERENCE.md](REFERENCE.md) for the relevant checklist.
 3. Read `docs/DEVELOPMENT_WORKFLOW.md` before branch, release, Cloud Agent, or machine-handoff work.
 4. Keep Lite WordPress.org package fully functional, GPL-compatible, and free of locked local PRO functionality.
@@ -38,7 +39,7 @@ Before writing, refactoring, or reviewing Museder RestoreOne code:
 ## Release Checklist
 
 - Before packaging Lite ZIP, read `docs/PACKAGING.md`. Use `bash create-package.sh` or `tools/package-lite-windows.ps1` only; **never** PowerShell `Compress-Archive` (breaks Linux unzip / WP plugin paths).
-- Main plugin `Version`, `readme.txt` `Stable tag`, Git tag, package name, and SVN tag agree.
+- Main plugin `Version`, `readme.txt` `Stable tag`, **Changelog**, **Upgrade Notice**, Git tag, package name, and SVN tag agree.
 - Lite package excludes Add-on and dev-only paths.
 - ZIP must contain `museder-restoreone/museder-restoreone.php` with forward slashes; verify no `\` in entry names.
 - `readme.txt` has one changelog, accurate external-service/privacy notes, reachable Plugin URI / Author URI, and no marketplace-style locked-feature copy.
@@ -49,6 +50,7 @@ Before writing, refactoring, or reviewing Museder RestoreOne code:
 ## Reference
 
 - Full guide: `docs/WORDPRESS_ORG_DEVELOPMENT_GUIDE.md`
+- **SOP (modify + release):** `docs/SOP-PLUGIN-DEVELOPMENT-AND-RELEASE.md`
 - Workflow guide: `docs/DEVELOPMENT_WORKFLOW.md`
 - Release checklist: `docs/RELEASE_CHECKLIST.md`
 - Packaging rules: `docs/PACKAGING.md`

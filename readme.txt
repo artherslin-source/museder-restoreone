@@ -491,6 +491,21 @@ Most sites do not need any changes. For unusual server layouts where core admin 
 
 == Upgrade Notice ==
 
+= 2.7.271 =
+Fixes Restore Step 3 UI resetting during active jobs; recommended if you reload the restore page mid-restore. Also keeps wp-config unchanged on files-only restores and improves large-backup file-stage progress accuracy.
+
+= 2.7.270 =
+Fixes Restore Step 1 showing “Analysis failed” after a successful chunk upload on sites that need “Overwrite existing data” in Step 2. Recommended if large backup analysis completes but the wizard stays failed with an empty summary.
+
+= 2.7.269 =
+Fixes Restore Step 1 on large server backups (Load Info timeout and stale summary after analysis). Recommended if 500MB+ backups fail at Step 1 or require a page reload to unlock Step 2.
+
+= 2.7.268 =
+Improves large-site restore reliability: progress polling survives session loss via restore token, nopriv progress handlers, and post-complete read grant. Recommended for long restores on production sites.
+
+= 2.7.267 =
+Adds restore site profile detection, preflight warnings, restore order/scope/wp-config options, and bootstrap support for empty document roots. Recommended before full-site restores on existing or fresh installs.
+
 = 2.7.262 =
 Fixes large-site backup jobs that could appear **stuck near 95%** after a failed post-close verification (PclZip repack conflicting with an open ZipArchive handle). Recommended if you run **large full-site backups** on production.
 

@@ -6,6 +6,7 @@ This repository is a WordPress.org-approved plugin project. All AI agents, inclu
 
 Before making changes, read and apply:
 
+- **`docs/SOP-PLUGIN-DEVELOPMENT-AND-RELEASE.md`** — modification & release SOP (mandatory)
 - `.cursor/skills/museder-wporg-compliance/SKILL.md`
 - `.cursor/skills/museder-wporg-compliance/REFERENCE.md`
 - `docs/DEVELOPMENT_WORKFLOW.md`

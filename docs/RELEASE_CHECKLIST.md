@@ -1,6 +1,6 @@
 # Release Checklist
 
-本清單用於 Museder RestoreOne GitHub Release 與 WordPress.org SVN 發佈前檢查。GitHub 是開發可信來源；WordPress.org SVN 只作 Lite 正式發佈。
+本清單用於 Museder RestoreOne GitHub Release 與 WordPress.org SVN 發佈前檢查。**完整 SOP：** [`docs/SOP-PLUGIN-DEVELOPMENT-AND-RELEASE.md`](SOP-PLUGIN-DEVELOPMENT-AND-RELEASE.md)。GitHub 是開發可信來源；WordPress.org SVN 只作 Lite 正式發佈。
 
 ## 1. Release Readiness
 
@@ -11,9 +11,11 @@
   - [ ] `MUSEDER_RESTOREONE_VERSION`
   - [ ] `MUSEDER_RESTOREONE_BUILD_ID`（若本次需要）
   - [ ] `readme.txt` `Stable tag`
-  - [ ] `readme.txt` changelog
+  - [ ] `readme.txt` changelog（`== Changelog ==` 新 `= X.Y.Z =` 置頂）
+  - [ ] `readme.txt` **Upgrade Notice**（`== Upgrade Notice ==` 新 `= X.Y.Z =` 置頂）
 - [ ] 若 Add-on 有變更，Add-on 版本號同步更新。
 - [ ] `readme.txt` 只有一個清楚的 changelog 區塊。
+- [ ] `readme.txt` Upgrade Notice 與 `Stable tag` 同版（WP.org 後台升級說明）。
 - [ ] Plugin URI / Author URI 可公開連線。
 
 ## 2. WordPress.org Compliance
@@ -127,7 +129,8 @@ git push origin v2.7.263
 - [ ] 不上傳 zip 到 SVN。
 - [ ] 不上傳 `.cursor/`、`.github/`、`AGENTS.md`、`docs/`、`tools/`、`dist/`。
 - [ ] 從 `trunk` 複製到 `tags/<version>/`。
-- [ ] `readme.txt` `Stable tag` 指向 `<version>`。
+- [ ] `readme.txt` `Stable tag`、`Changelog`、`Upgrade Notice` 皆指向 `<version>`。
+- [ ] 已建立 `docs/RELEASE-<version>-SVN-HANDOFF.md`（模板：`docs/templates/RELEASE-SVN-HANDOFF-TEMPLATE.md`）。
 - [ ] SVN commit message 清楚，例如 `Release 2.7.263`。
 - [ ] WordPress.org plugin page 顯示版本與 changelog 正確。
 
