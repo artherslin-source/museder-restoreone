@@ -4,7 +4,7 @@ Tags: backup, migration, restore, site-backup, database-backup
 Requires at least: 5.8
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 2.7.272
+Stable tag: 2.7.273
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -198,6 +198,11 @@ Contributors and release maintainers should follow the **Modification & Release 
 Checklists: `docs/RELEASE_CHECKLIST.md`, `docs/PACKAGING.md`, `docs/WORDPRESS_ORG_DEVELOPMENT_GUIDE.md`, `AGENTS.md`.
 
 == Changelog ==
+
+= 2.7.273 =
+* Backup: fix post-close archive verification false failures on large ZipArchive backups (entry-index lookup + core-path prefix fallback) so shared hosts no longer trigger a destructive full PclZip repack.
+* Backup: remove automatic full-archive PclZip repack after verify failure; accept structurally sound archives and fail fast when the archive is truly incomplete.
+* Backup: defer finalize/verify to the tick after `ZipArchive::close()` so the closed archive is readable before verification runs.
 
 = 2.7.272 =
 * Backup Auto mode: align “large site” detection with the Backups page estimate warning (>1 GB total) — Auto now enables Fast mode and Smart Exclude when size or cached estimate exceeds threshold, not only when file count exceeds 50,000.
@@ -510,6 +515,9 @@ Checklists: `docs/RELEASE_CHECKLIST.md`, `docs/PACKAGING.md`, `docs/WORDPRESS_OR
 (Older changelog entries are maintained in the project repository.)
 
 == Upgrade Notice ==
+
+= 2.7.273 =
+Fixes large-site backups that never finish after ZipArchive packing completes (false verify failure → hours-long PclZip repack). Recommended if backups stall near 100% on shared hosting.
 
 = 2.7.272 =
 Fixes Backup Auto mode staying on Balanced with Smart Exclude Off when the site shows “Large site detected” (>1 GB). Recommended if Auto backup does not switch to Fast on large sites.

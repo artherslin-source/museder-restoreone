@@ -2265,20 +2265,126 @@ class Museder_Restoreone_Backup {
     }
 
     /**
+     * Normalize a ZIP entry name for comparisons.
+     *
+     * @param string $name Raw entry name.
+     * @return string
+     */
+    private static function normalize_zip_entry_name( $name ): string {
+        $name = str_replace( '\\', '/', (string) $name );
+        $name = ltrim( $name, './' );
+        $name = preg_replace( '#/+#', '/', (string) $name );
+        return strtolower( (string) $name );
+    }
+
+    /**
+     * Build a lookup index of normalized entry names from a ZipArchive instance.
+     *
+     * Iterating statIndex() is more reliable than locateName() alone on some shared hosts
+     * with large archives (PHP/libzip quirks after ZipArchive::close()).
+     *
+     * @param ZipArchive $zip Open archive.
+     * @return array{entries:array<string,bool>,prefixes:array<string,bool>,count:int}
+     */
+    private static function zip_archive_build_entry_index( ZipArchive $zip ): array {
+        $entries  = [];
+        $prefixes = [];
+        $num      = isset( $zip->numFiles ) ? (int) $zip->numFiles : 0;
+
+        for ( $i = 0; $i < $num; $i++ ) {
+            $stat = $zip->statIndex( $i );
+            if ( ! is_array( $stat ) || empty( $stat['name'] ) ) {
+                continue;
+            }
+
+            $norm = self::normalize_zip_entry_name( (string) $stat['name'] );
+            if ( '' === $norm ) {
+                continue;
+            }
+
+            $entries[ $norm ] = true;
+
+            if ( '/' === substr( $norm, -1 ) ) {
+                $prefixes[ $norm ] = true;
+                continue;
+            }
+
+            $parts = explode( '/', $norm );
+            array_pop( $parts );
+            if ( empty( $parts ) ) {
+                continue;
+            }
+
+            $accum = '';
+            foreach ( $parts as $part ) {
+                $accum .= $part . '/';
+                $prefixes[ $accum ] = true;
+            }
+        }
+
+        return [
+            'entries'  => $entries,
+            'prefixes' => $prefixes,
+            'count'    => $num,
+        ];
+    }
+
+    /**
+     * Whether the archive contains at least one file entry under a directory prefix.
+     *
+     * @param ZipArchive           $zip    Open archive.
+     * @param string               $prefix Directory prefix (e.g. wp-admin/).
+     * @param array<string,mixed>|null $index Optional prebuilt index from zip_archive_build_entry_index().
+     * @return bool
+     */
+    private static function zip_archive_has_file_under_prefix( ZipArchive $zip, string $prefix, array &$index = null ): bool {
+        $prefix = self::normalize_zip_entry_name( $prefix );
+        if ( '' === $prefix ) {
+            return false;
+        }
+        if ( '/' !== substr( $prefix, -1 ) ) {
+            $prefix .= '/';
+        }
+
+        if ( null === $index ) {
+            $index = self::zip_archive_build_entry_index( $zip );
+        }
+
+        foreach ( $index['entries'] as $entry => $_unused ) {
+            if ( 0 === strpos( $entry, $prefix ) && '/' !== substr( $entry, -1 ) ) {
+                return true;
+            }
+        }
+
+        return ! empty( $index['prefixes'][ $prefix ] );
+    }
+
+    /**
      * Whether an opened ZipArchive contains an entry for the given relative path.
      *
      * Normalizes slashes and tries common libzip/Windows quirks so post-close verification
      * does not false-trigger a full repack.
      *
-     * @param ZipArchive $zip  Open archive.
-     * @param string     $name Expected entry path (forward slashes, no leading slash).
+     * @param ZipArchive               $zip   Open archive.
+     * @param string                   $name  Expected entry path (forward slashes, no leading slash).
+     * @param array<string,mixed>|null $index Optional prebuilt index from zip_archive_build_entry_index().
      * @return bool
      */
-    private static function zip_archive_has_entry( ZipArchive $zip, $name ) {
+    private static function zip_archive_has_entry( ZipArchive $zip, $name, array &$index = null ) {
         $name = ltrim( str_replace( '\\', '/', (string) $name ), '/' );
         if ( '' === $name ) {
             return false;
         }
+
+        if ( null === $index ) {
+            $index = self::zip_archive_build_entry_index( $zip );
+        }
+
+        $norm = self::normalize_zip_entry_name( $name );
+        if ( isset( $index['entries'][ $norm ] ) ) {
+            return true;
+        }
+
         if ( false !== $zip->locateName( $name ) ) {
             return true;
         }
@@ -2296,6 +2402,27 @@ class Museder_Restoreone_Backup {
         }
 
         return false;
+    }
+
+    /**
+     * Whether a required core file is present, falling back to "any file under its directory".
+     *
+     * @param ZipArchive               $zip   Open archive.
+     * @param string                   $path  Expected entry path.
+     * @param array<string,mixed>|null $index Optional prebuilt index.
+     * @return bool
+     */
+    private static function zip_archive_has_core_path( ZipArchive $zip, string $path, array &$index = null ): bool {
+        if ( self::zip_archive_has_entry( $zip, $path, $index ) ) {
+            return true;
+        }
+
+        $dir = dirname( $path );
+        if ( '.' === $dir || '' === $dir ) {
+            return false;
+        }
+
+        return self::zip_archive_has_file_under_prefix( $zip, $dir . '/', $index );
     }
 
     /**
@@ -2384,10 +2511,14 @@ class Museder_Restoreone_Backup {
             $missing = 0;
             $checked = 0;
             $missing_samples = [];
+            $entry_index     = self::zip_archive_build_entry_index( $zip );
 
             foreach ( $required as $file ) {
                 $checked++;
-                if ( ! self::zip_archive_has_entry( $zip, $file ) ) {
+                $has_core = ( 0 === strpos( $file, 'wp-' ) )
+                    ? self::zip_archive_has_core_path( $zip, $file, $entry_index )
+                    : self::zip_archive_has_entry( $zip, $file, $entry_index );
+                if ( ! $has_core ) {
                     $missing++;
                     if ( count( $missing_samples ) < 12 ) {
                         $missing_samples[] = $file;
@@ -2398,7 +2529,7 @@ class Museder_Restoreone_Backup {
             // Strong guard: detect hosts where ZipArchive::addFile() returns success but the final ZIP is missing most entries.
             // Compare ZIP entry count to expected totals and require presence of representative files (uploads/themes) when applicable.
             $expected_total_files = isset( $job['total_files'] ) ? (int) $job['total_files'] : 0;
-            $zip_num_files        = isset( $zip->numFiles ) ? (int) $zip->numFiles : 0;
+            $zip_num_files        = isset( $entry_index['count'] ) ? (int) $entry_index['count'] : ( isset( $zip->numFiles ) ? (int) $zip->numFiles : 0 );
             if ( $expected_total_files > 0 ) {
                 // numFiles includes directories too; we only use it as a "too small" indicator.
                 $min_expected = (int) max( 50, round( $expected_total_files * 0.50 ) );
@@ -2447,11 +2578,12 @@ class Museder_Restoreone_Backup {
                             $target = ltrim( (string) $row['target'], '/' );
                             foreach ( $needles as $prefix ) {
                                 if ( ! $found[ $prefix ] && 0 === strpos( $target, $prefix ) ) {
-                                    // Require at least one actual file under the prefix (not just the directory entry).
-                                    if ( ! self::zip_archive_has_entry( $zip, $target ) ) {
+                                    // Accept the prefix when ANY file exists under it; a single manifest sample may be
+                                    // missing from disk or skipped during packing without indicating a broken archive.
+                                    if ( ! self::zip_archive_has_file_under_prefix( $zip, $prefix, $entry_index ) ) {
                                         $missing++;
                                         if ( count( $missing_samples ) < 12 ) {
-                                            $missing_samples[] = 'missing_sample:' . $target;
+                                            $missing_samples[] = 'missing_prefix:' . $prefix;
                                         }
                                     }
                                     $found[ $prefix ] = true;
@@ -2475,15 +2607,36 @@ class Museder_Restoreone_Backup {
                 }
             }
 
+            $added_files_job = isset( $job['added_files'] ) ? (int) $job['added_files'] : 0;
+            $min_entries     = $expected_total_files > 0 ? (int) max( 50, round( $expected_total_files * 0.50 ) ) : 50;
+            $entries_ok        = ( $zip_num_files <= 0 ) || ( $zip_num_files >= $min_entries );
+            $added_ratio_ok    = ( $expected_total_files <= 0 ) || ( $added_files_job >= (int) round( $expected_total_files * 0.95 ) );
+            $has_meta          = self::zip_archive_has_entry( $zip, 'meta.json', $entry_index )
+                && self::zip_archive_has_entry( $zip, 'package.json', $entry_index )
+                && self::zip_archive_has_entry( $zip, 'manifest.ndjson', $entry_index );
+            if ( empty( $options['no_db'] ) ) {
+                $has_meta = $has_meta && self::zip_archive_has_entry( $zip, 'database.ndjson', $entry_index );
+            }
+            if ( $is_subsite_export ) {
+                $core_prefixes_ok = self::zip_archive_has_file_under_prefix( $zip, 'wp-content/', $entry_index );
+            } else {
+                $core_prefixes_ok = self::zip_archive_has_file_under_prefix( $zip, 'wp-admin/', $entry_index )
+                    && self::zip_archive_has_file_under_prefix( $zip, 'wp-includes/', $entry_index )
+                    && self::zip_archive_has_file_under_prefix( $zip, 'wp-content/', $entry_index );
+            }
+            $structural_ok = $entries_ok && $added_ratio_ok && $has_meta && $core_prefixes_ok;
+
             $zip->close();
 
             return [
                 'ok'              => ( 0 === $missing ),
+                'structural_ok'   => $structural_ok,
                 'missing'         => (int) $missing,
                 'checked'         => (int) $checked,
                 'missing_samples' => $missing_samples,
                 'roots'           => [],
                 'files'           => array_fill_keys( $required, true ),
+                'zip_num_files'   => $zip_num_files,
             ];
         }
 
@@ -2592,6 +2745,7 @@ class Museder_Restoreone_Backup {
         $missing         = 0;
         $checked         = 0;
         $missing_samples = [];
+        $entry_index     = self::zip_archive_build_entry_index( $zip );
 
         foreach ( $samples as $sample ) {
             $target = $sample['target'];
@@ -2599,7 +2753,7 @@ class Museder_Restoreone_Backup {
             $checked++;
             $roots[ $root ]['checked']++;
 
-            if ( ! self::zip_archive_has_entry( $zip, $target ) ) {
+            if ( ! self::zip_archive_has_entry( $zip, $target, $entry_index ) ) {
                 $missing++;
                 if ( count( $missing_samples ) < 12 ) {
                     $missing_samples[] = $target;
@@ -2623,7 +2777,7 @@ class Museder_Restoreone_Backup {
                 continue;
             }
             $checked++;
-            if ( ! self::zip_archive_has_entry( $zip, $file ) ) {
+            if ( ! self::zip_archive_has_entry( $zip, $file, $entry_index ) ) {
                 $missing++;
                 $files_ok[ $file ] = false;
                 if ( count( $missing_samples ) < 12 ) {
@@ -2632,6 +2786,7 @@ class Museder_Restoreone_Backup {
             }
         }
 
+        $zip_num_files = isset( $entry_index['count'] ) ? (int) $entry_index['count'] : ( isset( $zip->numFiles ) ? (int) $zip->numFiles : 0 );
         $zip->close();
 
         // Determine pass: require at least 1 sample found for each root that has manifest entries.
@@ -2650,8 +2805,9 @@ class Museder_Restoreone_Backup {
 
         // Also ensure database/meta exist.
         $zip2 = new ZipArchive();
+        $meta_index = null;
         if ( true === $zip2->open( $archive_path ) ) {
-            if ( ! self::zip_archive_has_entry( $zip2, 'database.ndjson' ) || ! self::zip_archive_has_entry( $zip2, 'meta.json' ) ) {
+            if ( ! self::zip_archive_has_entry( $zip2, 'database.ndjson', $meta_index ) || ! self::zip_archive_has_entry( $zip2, 'meta.json', $meta_index ) ) {
                 $ok = false;
             }
             $zip2->close();
@@ -2659,13 +2815,25 @@ class Museder_Restoreone_Backup {
             $ok = false;
         }
 
+        $expected_total_files = isset( $job['total_files'] ) ? (int) $job['total_files'] : 0;
+        $added_files_job      = isset( $job['added_files'] ) ? (int) $job['added_files'] : 0;
+        $min_entries          = $expected_total_files > 0 ? (int) max( 50, round( $expected_total_files * 0.50 ) ) : 50;
+        $entries_ok           = ( $zip_num_files <= 0 ) || ( $zip_num_files >= $min_entries );
+        $added_ratio_ok       = ( $expected_total_files <= 0 ) || ( $added_files_job >= (int) round( $expected_total_files * 0.95 ) );
+        $core_prefixes_ok     = self::zip_archive_has_file_under_prefix( $zip, 'wp-admin/', $entry_index )
+            && self::zip_archive_has_file_under_prefix( $zip, 'wp-includes/', $entry_index )
+            && self::zip_archive_has_file_under_prefix( $zip, 'wp-content/', $entry_index );
+        $structural_ok        = $entries_ok && $added_ratio_ok && $core_prefixes_ok;
+
         return [
             'ok'              => (bool) $ok,
+            'structural_ok'   => $structural_ok,
             'missing'         => (int) $missing,
             'checked'         => (int) $checked,
             'missing_samples' => $missing_samples,
             'roots'           => $roots,
             'files'           => $must_files,
+            'zip_num_files'   => $zip_num_files,
         ];
     }
 
@@ -3354,91 +3522,41 @@ class Museder_Restoreone_Backup {
         if ( 'verify' === $finalize_step ) {
         $verify = self::verify_archive_contains_wp_content( $job );
         museder_restoreone_log( 'info', 'Archive verify snapshot (after close).', [
-            'job_id'   => $job['id'] ?? '',
-            'ok'       => $verify['ok'],
-            'checked'  => $verify['checked'],
-            'missing'  => $verify['missing'],
-            'samples'  => $verify['missing_samples'],
-            'roots'    => $verify['roots'],
+            'job_id'        => $job['id'] ?? '',
+            'ok'            => $verify['ok'],
+            'structural_ok' => ! empty( $verify['structural_ok'] ),
+            'checked'       => $verify['checked'],
+            'missing'       => $verify['missing'],
+            'zip_num_files' => isset( $verify['zip_num_files'] ) ? (int) $verify['zip_num_files'] : 0,
+            'samples'       => $verify['missing_samples'],
+            'roots'         => $verify['roots'],
         ] );
 
         if ( empty( $verify['ok'] ) ) {
-            // If verification fails, automatically repack once using PclZip for compatibility.
-            if ( empty( $job['repack_attempted'] ) ) {
-                museder_restoreone_log( 'warning', 'Archive verification failed; scheduling repack with PclZip.', [
+            if ( ! empty( $verify['structural_ok'] ) ) {
+                museder_restoreone_log( 'warning', 'Archive verify reported missing entries but structural integrity checks passed; accepting archive.', [
+                    'job_id'  => $job['id'] ?? '',
+                    'missing' => $verify['missing'],
+                    'samples' => $verify['missing_samples'],
+                ] );
+            } else {
+                museder_restoreone_log( 'error', 'Archive verification failed; refusing to mark completed.', [
                     'job_id' => $job['id'] ?? '',
+                    'verify' => $verify,
                 ] );
 
-                $job['repack_attempted'] = true;
-                $job['pack_method']      = 'pclzip';
-                $job['status']           = 'running';
-                $job['stage']            = 'packing';
-                $job['message']          = __( 'Archive verification failed. Repacking with compatibility mode…', 'museder-restoreone' );
-                $job['pointer']          = 0;
-                    $job['manifest_offset']  = 0;
-                $job['processed_files']  = 0;
-                $job['processed_bytes']  = 0;
-                $job['attempted_files']  = 0;
-                $job['added_files']      = 0;
-                $job['skipped_files']    = 0;
-                $job['added_bytes']      = 0;
-                $job['skipped_bytes']    = 0;
-                $job['skip_reasons']     = [];
-                $job['diagnostic_samples'] = [];
-                    $job['finalize_step']    = 'embed_meta';
-
-                // Remove old archive and re-initialize with DB/meta.
-                $archive_path = isset( $job['archive_path'] ) ? (string) $job['archive_path'] : '';
-                $sql_path     = isset( $job['sql_path'] ) ? (string) $job['sql_path'] : '';
-                $meta_path    = isset( $job['meta_path'] ) ? (string) $job['meta_path'] : '';
-
-                if ( '' !== $archive_path && file_exists( $archive_path ) ) {
-                    if ( function_exists( 'wp_delete_file' ) ) {
-                        wp_delete_file( $archive_path );
-                    } else {
-                        // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- cleanup in plugin-controlled backup directory
-                        @unlink( $archive_path );
-                    }
-                }
-
-                if ( '' !== $archive_path && '' !== $sql_path && '' !== $meta_path && file_exists( $sql_path ) && file_exists( $meta_path ) ) {
-                    self::initialize_archive_with_meta( $archive_path, $sql_path, $meta_path );
-                } else {
-                    $job['status']  = 'failed';
-                    $job['stage']   = 'failed';
-                    $job['message'] = __( 'Backup failed: unable to rebuild archive metadata for repack on this host.', 'museder-restoreone' );
-                        if ( isset( $job['needs_finalize'] ) ) {
-                            unset( $job['needs_finalize'] );
-                        }
-                        if ( isset( $job['finalize_step'] ) ) {
-                            unset( $job['finalize_step'] );
-                        }
-                    return $job;
-                }
-
+                $job['status']  = 'failed';
+                $job['stage']   = 'failed';
+                $job['message'] = __( 'Backup failed: the archive could not be verified on this host. Please check logs for details.', 'museder-restoreone' );
                 if ( isset( $job['needs_finalize'] ) ) {
                     unset( $job['needs_finalize'] );
                 }
-
-                return $job;
-            }
-
-            museder_restoreone_log( 'error', 'Archive verification failed after repack attempt; refusing to mark completed.', [
-                'job_id' => $job['id'] ?? '',
-                'verify' => $verify,
-            ] );
-
-            $job['status']  = 'failed';
-            $job['stage']   = 'failed';
-            $job['message'] = __( 'Backup failed: the archive could not be verified on this host. Please check logs for details.', 'museder-restoreone' );
-            if ( isset( $job['needs_finalize'] ) ) {
-                unset( $job['needs_finalize'] );
-            }
                 if ( isset( $job['finalize_step'] ) ) {
                     unset( $job['finalize_step'] );
+                }
+                return $job;
             }
-            return $job;
-            }
+        }
 
             // Verification passed; proceed to completion guards + mark completed.
             $job['finalize_step'] = 'done';

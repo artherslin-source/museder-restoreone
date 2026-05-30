@@ -375,11 +375,16 @@ class Museder_Restoreone_Backup_Jobs {
                     }
                 }
 
-                // Finalizing stage: skip packing and run finalize steps (sliced) after ZipArchive close.
-                // Without this, we keep re-entering packing, re-opening ZipArchive, and never make forward progress
-                // when finalize work is heavy (metadata embed/verify).
+                // Finalizing stage: run finalize steps (sliced) after ZipArchive close.
                 if ( isset( $job['stage'] ) && 'finalizing' === $job['stage'] ) {
-                    $job_needs_finalize = true;
+                    $job = Museder_Restoreone_Backup::finalize_async_job_after_close( $job );
+                    $batch_count++;
+                    $job_completed_in_loop = isset( $job['status'] ) && in_array( $job['status'], [ 'completed', 'failed', 'cancelled' ], true );
+                    $job['processing']    = true;
+                    $job['last_activity'] = time();
+                    $job['updated_at']    = current_time( 'mysql' );
+                    self::save_job( $job );
+                    $last_save_time = microtime( true );
                     break;
                 }
 
@@ -485,6 +490,11 @@ class Museder_Restoreone_Backup_Jobs {
                         'batches_processed' => $batch_count,
                         'completed' => $job_completed_in_loop,
                     ] );
+                    if ( $job_needs_finalize && isset( $job['status'] ) && 'running' === $job['status'] ) {
+                        // Defer verify/finalize to the next tick so the closed archive is fully flushed on disk.
+                        $job['archive_close_defer_finalize'] = true;
+                        $job['stage']                        = 'finalizing';
+                    }
                 } catch ( Throwable $throwable ) {
                     // Prevent fatal "Invalid or uninitialized Zip object" from breaking AJAX polling (500).
                     museder_restoreone_log( 'warning', 'Failed to close ZipArchive after time budget loop.', [
@@ -533,12 +543,17 @@ class Museder_Restoreone_Backup_Jobs {
                     $job['stage']   = 'packing';
                     $job['message'] = __( 'Backup running…', 'museder-restoreone' );
                     $job_needs_finalize = false;
+                } elseif ( ! empty( $job['archive_close_defer_finalize'] ) ) {
+                    unset( $job['archive_close_defer_finalize'] );
+                    $job['stage']   = 'finalizing';
+                    $job['status']  = 'running';
+                    $job['message'] = __( 'Finalising backup archive…', 'museder-restoreone' );
                 } else {
                     $job = Museder_Restoreone_Backup::finalize_async_job_after_close( $job );
                     // Finalize may be sliced (still "running"); only treat as completed if the job is terminal.
                     $job_completed_in_loop = isset( $job['status'] ) && in_array( $job['status'], [ 'completed', 'failed', 'cancelled' ], true );
-                    $job_needs_finalize = false;
                 }
+                $job_needs_finalize = false;
             }
 
             // If job completed inside the loop, persist final state AFTER close to avoid exposing completed status early.
