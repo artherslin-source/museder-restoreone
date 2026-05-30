@@ -4,7 +4,7 @@ Tags: backup, migration, restore, site-backup, database-backup
 Requires at least: 5.8
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 2.7.273
+Stable tag: 2.7.274
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -198,6 +198,11 @@ Contributors and release maintainers should follow the **Modification & Release 
 Checklists: `docs/RELEASE_CHECKLIST.md`, `docs/PACKAGING.md`, `docs/WORDPRESS_ORG_DEVELOPMENT_GUIDE.md`, `AGENTS.md`.
 
 == Changelog ==
+
+= 2.7.274 =
+* Restore: sliced ZIP extraction now writes to a sidecar `*.museder-restoreone-partial` file and atomically renames on completion so WordPress core files are never left half-written when a time slice ends (fixes admin critical errors mid-restore on shared hosting).
+* Restore: phase-aware file-stage progress (wp-content vs core) uses filtered entry counts instead of whole-archive index ratios (fixes misleading ~85% at start of core extraction).
+* Restore: stale-tick watchdog re-schedules WP-Cron when a running job has not progressed recently.
 
 = 2.7.273 =
 * Backup: fix post-close archive verification false failures on large ZipArchive backups (entry-index lookup + core-path prefix fallback) so shared hosts no longer trigger a destructive full PclZip repack.
@@ -515,6 +520,9 @@ Checklists: `docs/RELEASE_CHECKLIST.md`, `docs/PACKAGING.md`, `docs/WORDPRESS_OR
 (Older changelog entries are maintained in the project repository.)
 
 == Upgrade Notice ==
+
+= 2.7.274 =
+Fixes full-site restores that could break wp-admin with a critical error when core file extraction was interrupted mid-slice. Strongly recommended before restoring over live WordPress core on shared hosting.
 
 = 2.7.273 =
 Fixes large-site backups that never finish after ZipArchive packing completes (false verify failure → hours-long PclZip repack). Recommended if backups stall near 100% on shared hosting.

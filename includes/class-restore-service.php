@@ -17,6 +17,10 @@ class Museder_Restoreone_Restore_Service {
     const MU_ISOLATION_GUARD_FILE            = 'museder-restoreone-restore-isolation.php';
     const ZIP_WP_CONTENT_PREFIX = 'wp-content/';
     const ZIP_SELF_PLUGIN_PREFIX = 'wp-content/plugins/museder-restoreone/';
+    /** Sidecar suffix for in-progress ZIP entry extraction (atomic rename on completion). */
+    const RESTORE_PARTIAL_SUFFIX = '.museder-restoreone-partial';
+    /** Re-schedule restore cron when last_tick is older than this (seconds). */
+    const RESTORE_STALE_TICK_SECONDS = 90;
     const ZIP_METADATA_BASENAMES = [ 'database.ndjson', 'meta.json', 'package.json', 'manifest.ndjson', 'multisite.json', 'blogs.json' ];
     const WPRESS_DB_FILES = [ 'database.ndjson' ];
     const WPRESS_FILES_EXCLUDE = [ 'database.ndjson', 'package.json', 'multisite.json', 'blogs.json' ];
@@ -519,6 +523,8 @@ class Museder_Restoreone_Restore_Service {
             }
 
             $meta = self::get_job_meta( $job_id );
+
+            self::maybe_reschedule_stale_restore_job( $job_id, $meta );
 
             if ( ! empty( $meta['completed'] ) ) {
                 // Clear active job pointer when job is finished.
@@ -2411,9 +2417,43 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
             $site_root   = '' !== $content_dir ? wp_normalize_path( (string) dirname( $content_dir ) ) : '';
 
             if ( 0 === $zip_phase ) {
+                if ( empty( $cp['zip_phase0_entry_total'] ) ) {
+                    $cp['zip_phase0_entry_total'] = self::count_zip_filtered_entries(
+                        $file_path,
+                        function ( $name ) {
+                            if ( 0 !== strpos( $name, self::ZIP_WP_CONTENT_PREFIX ) ) {
+                                return false;
+                            }
+                            if ( (bool) apply_filters( 'museder_restoreone_restore_protect_self', true ) && 0 === strpos( $name, self::ZIP_SELF_PLUGIN_PREFIX ) ) {
+                                return false;
+                            }
+                            return substr( $name, -1 ) !== '/';
+                        }
+                    );
+                    $meta['checkpoints']['zip_phase0_entry_total'] = (int) $cp['zip_phase0_entry_total'];
+                    if ( ! isset( $meta['checkpoints']['zip_phase0_entry_done'] ) ) {
+                        $meta['checkpoints']['zip_phase0_entry_done'] = 0;
+                    }
+                }
                 $result = self::extract_zip_prefix_sliced( $file_path, self::ZIP_WP_CONTENT_PREFIX, $site_root, $zip_index, $zip_offset, (int) $slice_seconds );
                 $meta['message'] = __( 'Restoring wp-content…', 'museder-restoreone' );
             } else {
+                if ( empty( $cp['zip_phase1_entry_total'] ) ) {
+                    $cp['zip_phase1_entry_total'] = self::count_zip_filtered_entries(
+                        $file_path,
+                        function ( $name ) use ( $restore_options ) {
+                            if ( self::zip_entry_should_skip_restore( $name, $restore_options ) ) {
+                                return false;
+                            }
+                            if ( ! self::zip_entry_is_site_root_restore_target( $name ) ) {
+                                return false;
+                            }
+                            return substr( $name, -1 ) !== '/';
+                        }
+                    );
+                    $meta['checkpoints']['zip_phase1_entry_total'] = (int) $cp['zip_phase1_entry_total'];
+                    $meta['checkpoints']['zip_phase1_entry_done']  = 0;
+                }
                 $result = self::extract_zip_site_root_sliced( $file_path, $site_root, $restore_options, $zip_index, $zip_offset, (int) $slice_seconds );
                 $meta['message'] = __( 'Restoring WordPress core and site root files…', 'museder-restoreone' );
             }
@@ -2433,9 +2473,23 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
                 }
             }
 
+            if ( is_array( $result ) && isset( $result['entries_completed'] ) ) {
+                $done_key = ( 0 === $zip_phase ) ? 'zip_phase0_entry_done' : 'zip_phase1_entry_done';
+                $prev_done = isset( $meta['checkpoints'][ $done_key ] ) ? (int) $meta['checkpoints'][ $done_key ] : 0;
+                $meta['checkpoints'][ $done_key ] = $prev_done + (int) $result['entries_completed'];
+            }
+
             $phase_floor   = ( 0 === $zip_phase ) ? 75 : 85;
             $phase_ceiling = ( 0 === $zip_phase ) ? 85 : 96;
-            $pct           = ( $zip_total > 0 ) ? min( 1.0, max( 0.0, $zip_index / $zip_total ) ) : 0.0;
+            $total_key     = ( 0 === $zip_phase ) ? 'zip_phase0_entry_total' : 'zip_phase1_entry_total';
+            $done_key      = ( 0 === $zip_phase ) ? 'zip_phase0_entry_done' : 'zip_phase1_entry_done';
+            $phase_total   = isset( $meta['checkpoints'][ $total_key ] ) ? (int) $meta['checkpoints'][ $total_key ] : 0;
+            $phase_done    = isset( $meta['checkpoints'][ $done_key ] ) ? (int) $meta['checkpoints'][ $done_key ] : 0;
+            if ( $phase_total > 0 ) {
+                $pct = min( 1.0, max( 0.0, $phase_done / $phase_total ) );
+            } else {
+                $pct = ( $zip_total > 0 ) ? min( 1.0, max( 0.0, $zip_index / $zip_total ) ) : 0.0;
+            }
             $phase_span    = max( 1, $phase_ceiling - $phase_floor );
             $meta['progress']   = min( $phase_ceiling, $phase_floor + (int) floor( $pct * $phase_span ) );
             $meta['updated_at'] = current_time( 'mysql' );
@@ -2455,6 +2509,7 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
                         $meta['checkpoints']['zip_files_phase'] = 1;
                         $meta['checkpoints']['zip_index']        = 0;
                         $meta['checkpoints']['zip_entry_offset'] = 0;
+                        unset( $meta['checkpoints']['zip_phase1_entry_total'], $meta['checkpoints']['zip_phase1_entry_done'] );
                         self::write_job_meta( $job_id, $meta );
                         return;
                     }
@@ -3460,6 +3515,172 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
     }
 
     /**
+     * Sidecar path for an in-progress restore file write.
+     *
+     * @param string $target Final destination path.
+     * @return string
+     */
+    protected static function restore_partial_path( $target ) {
+        return (string) $target . self::RESTORE_PARTIAL_SUFFIX;
+    }
+
+    /**
+     * Open (or resume) a partial output stream for sliced ZIP extraction.
+     *
+     * Live destination files are not modified until the ZIP entry completes and is renamed into place.
+     *
+     * @param string $target       Final destination path.
+     * @param int    $entry_offset Bytes already written for the current ZIP entry.
+     * @return resource|false
+     */
+    protected static function open_restore_slice_output( $target, &$entry_offset ) {
+        $partial = self::restore_partial_path( $target );
+        $dir     = dirname( $target );
+        if ( '' !== $dir && ! is_dir( $dir ) ) {
+            museder_restoreone_ensure_directory( $dir );
+        }
+
+        if ( $entry_offset > 0 ) {
+            if ( ! file_exists( $partial ) && file_exists( $target ) ) {
+                $target_size = @filesize( $target );
+                if ( is_int( $target_size ) && $target_size === (int) $entry_offset ) {
+                    // Legacy jobs wrote slices directly to the destination; migrate to sidecar partial.
+                    // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- atomic move within same directory
+                    @rename( $target, $partial );
+                } else {
+                    if ( function_exists( 'wp_delete_file' ) ) {
+                        wp_delete_file( $target );
+                    } else {
+                        // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- cleanup corrupted partial destination
+                        @unlink( $target );
+                    }
+                    $entry_offset = 0;
+                }
+            } elseif ( file_exists( $partial ) ) {
+                $partial_size = @filesize( $partial );
+                if ( ! is_int( $partial_size ) || $partial_size !== (int) $entry_offset ) {
+                    if ( function_exists( 'wp_delete_file' ) ) {
+                        wp_delete_file( $partial );
+                    } else {
+                        // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- reset mismatched partial
+                        @unlink( $partial );
+                    }
+                    $entry_offset = 0;
+                }
+            } else {
+                $entry_offset = 0;
+            }
+        }
+
+        if ( 0 === (int) $entry_offset && file_exists( $partial ) ) {
+            if ( function_exists( 'wp_delete_file' ) ) {
+                wp_delete_file( $partial );
+            } else {
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- remove stale partial before rewrite
+                @unlink( $partial );
+            }
+        }
+
+        $mode = ( $entry_offset > 0 ) ? 'ab' : 'wb';
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- stream extraction to disk
+        return fopen( $partial, $mode );
+    }
+
+    /**
+     * Atomically promote a completed partial extract to its destination path.
+     *
+     * @param string $target Final destination path.
+     * @return bool
+     */
+    protected static function finalize_restore_slice_output( $target ) {
+        $partial = self::restore_partial_path( $target );
+        if ( ! file_exists( $partial ) ) {
+            return false;
+        }
+        if ( file_exists( $target ) ) {
+            if ( function_exists( 'wp_delete_file' ) ) {
+                wp_delete_file( $target );
+            } else {
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- replace destination after extract
+                @unlink( $target );
+            }
+        }
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- atomic promote partial to destination
+        return @rename( $partial, $target );
+    }
+
+    /**
+     * Count file entries in a ZIP matching a filter (directories excluded).
+     *
+     * @param string   $zip_path
+     * @param callable $entry_filter
+     * @return int
+     */
+    protected static function count_zip_filtered_entries( $zip_path, $entry_filter ) {
+        if ( ! class_exists( 'ZipArchive' ) || ! is_callable( $entry_filter ) ) {
+            return 0;
+        }
+
+        $zip = new ZipArchive();
+        if ( true !== $zip->open( $zip_path ) ) {
+            return 0;
+        }
+
+        $count = 0;
+        $total = (int) $zip->numFiles;
+        for ( $i = 0; $i < $total; $i++ ) {
+            $raw_name = $zip->getNameIndex( $i );
+            if ( false === $raw_name ) {
+                continue;
+            }
+            $name = wp_normalize_path( (string) $raw_name );
+            if ( substr( $name, -1 ) === '/' ) {
+                continue;
+            }
+            if ( call_user_func( $entry_filter, $name ) ) {
+                $count++;
+            }
+        }
+        $zip->close();
+        return $count;
+    }
+
+    /**
+     * Re-schedule WP-Cron when a running restore job has not ticked recently.
+     *
+     * @param string              $job_id Job ID.
+     * @param array<string,mixed> $meta   Job meta snapshot.
+     * @return void
+     */
+    protected static function maybe_reschedule_stale_restore_job( $job_id, array $meta ) {
+        if ( ! empty( $meta['completed'] ) ) {
+            return;
+        }
+        $stage = isset( $meta['stage'] ) ? (string) $meta['stage'] : '';
+        if ( ! in_array( $stage, [ 'restore-files', 'search-replace', 'cleanup', 'restore-db', 'restore-extract-db', 'prefix-migrate' ], true ) ) {
+            return;
+        }
+
+        $last_tick = isset( $meta['last_tick'] ) ? (int) $meta['last_tick'] : 0;
+        if ( $last_tick <= 0 || ( time() - $last_tick ) < self::RESTORE_STALE_TICK_SECONDS ) {
+            return;
+        }
+
+        if ( ! wp_next_scheduled( self::CRON_HOOK_PROCESS, [ $job_id ] ) ) {
+            wp_schedule_single_event( time() + 1, self::CRON_HOOK_PROCESS, [ $job_id ] );
+            if ( function_exists( 'museder_restoreone_log' ) ) {
+                museder_restoreone_log( 'warning', 'Restore job stale tick detected; re-scheduling cron.', [
+                    'job_id'    => $job_id,
+                    'stage'     => $stage,
+                    'last_tick' => $last_tick,
+                    'age'       => time() - $last_tick,
+                ] );
+            }
+            self::spawn_cron();
+        }
+    }
+
+    /**
      * Stream ZIP entries matching $entry_filter into dest_base (sliced).
      *
      * @param string   $zip_path
@@ -3469,7 +3690,7 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
      * @param int      $entry_offset
      * @param int      $slice_seconds
      * @param bool     $count_self_skips When true, count skipped self-plugin paths in skipped_self.
-     * @return array{completed:bool,skipped_self:int}
+     * @return array{completed:bool,skipped_self:int,entries_completed:int}
      */
     protected static function extract_zip_filtered_sliced( $zip_path, $dest_base, $entry_filter, &$entry_index, &$entry_offset, $slice_seconds, $count_self_skips = false ) {
         if ( ! class_exists( 'ZipArchive' ) ) {
@@ -3486,8 +3707,9 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
             throw new RuntimeException( esc_html__( 'Unable to open ZIP archive.', 'museder-restoreone' ) );
         }
 
-        $count        = $zip->numFiles;
-        $skipped_self = 0;
+        $count             = $zip->numFiles;
+        $skipped_self      = 0;
+        $entries_completed = 0;
 
         for ( $i = $entry_index; $i < $count; $i++ ) {
             $raw_name = $zip->getNameIndex( $i );
@@ -3518,8 +3740,8 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
 
             museder_restoreone_ensure_directory( dirname( $target ) );
 
-            // Large ZIP streaming requires direct file operations for performance and compatibility.
-            $out = fopen( $target, ( $entry_offset > 0 ? 'ab' : 'wb' ) ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- Stream extraction to disk.
+            // Write to a sidecar partial; promote with rename only when the ZIP entry completes.
+            $out = self::open_restore_slice_output( $target, $entry_offset );
             if ( $out ) {
                 $to_skip = (int) $entry_offset;
                 while ( $to_skip > 0 && ! feof( $in ) ) {
@@ -3550,24 +3772,50 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
                         fclose( $in ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Stream from ZipArchive.
                         $zip->close();
                         $entry_index = $i;
-                        return [ 'completed' => false, 'skipped_self' => $skipped_self ];
+                        return [
+                            'completed'         => false,
+                            'skipped_self'      => $skipped_self,
+                            'entries_completed' => $entries_completed,
+                        ];
                     }
                 }
                 fclose( $out ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Stream extraction to disk.
-            }
-            fclose( $in ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Stream from ZipArchive.
 
-            $entry_offset = 0;
-            $entry_index  = $i + 1;
+                if ( feof( $in ) && self::finalize_restore_slice_output( $target ) ) {
+                    $entries_completed++;
+                    $entry_offset = 0;
+                    $entry_index  = $i + 1;
+                } else {
+                    fclose( $in ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Stream from ZipArchive.
+                    $zip->close();
+                    $entry_index = $i;
+                    return [
+                        'completed'         => false,
+                        'skipped_self'      => $skipped_self,
+                        'entries_completed' => $entries_completed,
+                    ];
+                }
+            }
+            if ( is_resource( $in ) ) {
+                fclose( $in ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Stream from ZipArchive.
+            }
 
             if ( $slice_seconds > 0 && ( microtime( true ) - $start ) > $slice_seconds ) {
                 $zip->close();
-                return [ 'completed' => false, 'skipped_self' => $skipped_self ];
+                return [
+                    'completed'         => false,
+                    'skipped_self'      => $skipped_self,
+                    'entries_completed' => $entries_completed,
+                ];
             }
         }
 
         $zip->close();
-        return [ 'completed' => true, 'skipped_self' => $skipped_self ];
+        return [
+            'completed'         => true,
+            'skipped_self'      => $skipped_self,
+            'entries_completed' => $entries_completed,
+        ];
     }
 
     /**
