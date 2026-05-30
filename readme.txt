@@ -181,6 +181,22 @@ Most sites do not need any changes. For unusual server layouts where core admin 
 5. Logs page with log file list and preview panel.
 6. Settings page with general options and system diagnostics.
 
+== Developer ==
+
+Development source of truth is the public GitHub repository: https://github.com/artherslin-source/museder-restoreone
+
+Contributors and release maintainers should follow the **Modification & Release SOP** (`docs/SOP-PLUGIN-DEVELOPMENT-AND-RELEASE.md` in the repo). Summary:
+
+* **Branching:** work on `fix/`, `feature/`, or `agent/` branches from current `main`; avoid long-lived dirty `main`.
+* **WordPress.org Lite:** fully functional, GPL, no license gates, trialware, or bundled Add-on/PRO code in the Lite package or SVN.
+* **Security:** every sensitive AJAX/REST/form handler needs capability checks, nonces, sanitize/validate input, and escaped output.
+* **Release version sync (six fields, same version):** `museder-restoreone.php` `Version`, `MUSEDER_RESTOREONE_VERSION`, `MUSEDER_RESTOREONE_BUILD_ID`, `readme.txt` `Stable tag`, new `Changelog` block, and new **`Upgrade Notice`** block (easy to forget — WP.org shows the notice to updaters).
+* **Package Lite ZIP:** use `create-package.sh` or `tools/package-lite-windows.ps1` only; require `BOUNDARY_CHECK=PASS`. Do not use PowerShell `Compress-Archive`. Lite ZIP must not include `docs/`, `tools/`, `.cursor/`, `.github/`, `logs/`, or `museder-restoreone-pro/`.
+* **GitHub release:** after explicit approval, tag `vX.Y.Z` on `main`; GitHub Actions builds release artifacts.
+* **WordPress.org SVN:** commit Lite source files only (no zip); copy `trunk` to `tags/X.Y.Z`; fill `docs/RELEASE-X.Y.Z-SVN-HANDOFF.md` from the template before SVN commit.
+
+Checklists: `docs/RELEASE_CHECKLIST.md`, `docs/PACKAGING.md`, `docs/WORDPRESS_ORG_DEVELOPMENT_GUIDE.md`, `AGENTS.md`.
+
 == Changelog ==
 
 = 2.7.271 =
