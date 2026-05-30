@@ -203,6 +203,7 @@ Checklists: `docs/RELEASE_CHECKLIST.md`, `docs/PACKAGING.md`, `docs/WORDPRESS_OR
 * Restore: sliced ZIP extraction now writes to a sidecar `*.museder-restoreone-partial` file and atomically renames on completion so WordPress core files are never left half-written when a time slice ends (fixes admin critical errors mid-restore on shared hosting).
 * Restore: phase-aware file-stage progress (wp-content vs core) uses filtered entry counts instead of whole-archive index ratios (fixes misleading ~85% at start of core extraction).
 * Restore: stale-tick watchdog re-schedules WP-Cron when a running job has not progressed recently.
+* Restore: defer `wp-config.php` until the file stage completes; on populated hosts with `db_then_files`, backup mode now merges live DB credentials and table prefix instead of overwriting mid-restore (fixes database connection errors after reload).
 
 = 2.7.273 =
 * Backup: fix post-close archive verification false failures on large ZipArchive backups (entry-index lookup + core-path prefix fallback) so shared hosts no longer trigger a destructive full PclZip repack.

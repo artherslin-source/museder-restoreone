@@ -350,11 +350,28 @@ class Museder_Restoreone_Restore_Preflight {
      * @return bool
      */
     public static function should_skip_wp_config_in_zip( array $options ) {
+        // wp-config.php is applied once after the file stage via apply_wp_config_policy().
+        return true;
+    }
+
+    /**
+     * When DB import ran before the file stage, keep destination DB credentials in wp-config.php.
+     *
+     * @param array<string, mixed> $options Job options.
+     * @return bool
+     */
+    public static function should_preserve_destination_db_credentials( array $options ) {
         if ( ! empty( $options['files_only'] ) ) {
-            return true;
+            return false;
         }
-        $mode = isset( $options['wp_config_mode'] ) ? (string) $options['wp_config_mode'] : self::MODE_CONFIG_BACKUP;
-        return self::MODE_CONFIG_KEEP === $mode;
+
+        $scope = isset( $options['restore_scope'] ) ? (string) $options['restore_scope'] : self::SCOPE_FULL;
+        if ( self::SCOPE_DB_ONLY === $scope ) {
+            return false;
+        }
+
+        $order = isset( $options['restore_order'] ) ? (string) $options['restore_order'] : self::ORDER_DB_THEN_FILES;
+        return self::ORDER_DB_THEN_FILES === $order;
     }
 
     /**
@@ -388,12 +405,39 @@ class Museder_Restoreone_Restore_Preflight {
             if ( ! file_exists( $backup_tmp ) ) {
                 return false;
             }
-            $merged = self::merge_wp_config_files( $dest_config, $backup_tmp );
+            $merged = self::merge_wp_config_files( $dest_config, $backup_tmp, $options );
             if ( ! $merged ) {
                 return false;
             }
             // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
             return false !== file_put_contents( $dest_config, $merged );
+        }
+
+        if ( self::MODE_CONFIG_BACKUP === $mode ) {
+            if ( ! file_exists( $backup_tmp ) && '' !== $zip_path && class_exists( 'Museder_Restoreone_Restore_Service' ) ) {
+                Museder_Restoreone_Restore_Service::extract_zip_entry_to_path( $zip_path, 'wp-config.php', $backup_tmp );
+            }
+            if ( ! file_exists( $backup_tmp ) ) {
+                return file_exists( $dest_config );
+            }
+            if ( self::should_preserve_destination_db_credentials( $options ) && is_readable( $dest_config ) ) {
+                $merged = self::merge_wp_config_files( $dest_config, $backup_tmp, $options );
+                if ( false === $merged ) {
+                    return false;
+                }
+                // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+                return false !== file_put_contents( $dest_config, $merged );
+            }
+            if ( function_exists( 'copy' ) ) {
+                return copy( $backup_tmp, $dest_config );
+            }
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
+            $contents = file_get_contents( $backup_tmp );
+            if ( ! is_string( $contents ) ) {
+                return false;
+            }
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+            return false !== file_put_contents( $dest_config, $contents );
         }
 
         return file_exists( $dest_config );
@@ -402,11 +446,12 @@ class Museder_Restoreone_Restore_Preflight {
     /**
      * Merge: DB_* from destination, remainder from backup file.
      *
-     * @param string $dest_config Path to destination wp-config.php (may exist).
-     * @param string $backup_config Path to backup wp-config.php.
+     * @param string               $dest_config   Path to destination wp-config.php (may exist).
+     * @param string               $backup_config Path to backup wp-config.php.
+     * @param array<string, mixed> $options       Optional job options (db_target_prefix).
      * @return string|false Merged file contents or false.
      */
-    public static function merge_wp_config_files( $dest_config, $backup_config ) {
+    public static function merge_wp_config_files( $dest_config, $backup_config, array $options = [] ) {
         if ( ! is_readable( $backup_config ) ) {
             return false;
         }
@@ -430,6 +475,21 @@ class Museder_Restoreone_Restore_Preflight {
                         } else {
                             $merged = preg_replace( '/(<\?php)/i', "<?php\n" . $replacement . ';', $merged, 1 );
                         }
+                    }
+                }
+
+                $prefix = '';
+                if ( ! empty( $options['db_target_prefix'] ) && is_string( $options['db_target_prefix'] ) ) {
+                    $prefix = preg_replace( '/[^a-z0-9_]/', '', $options['db_target_prefix'] );
+                } elseif ( preg_match( '/\$table_prefix\s*=\s*[\'"]([^\'"]*)[\'"]\s*;/', $dest_body, $prefix_match ) ) {
+                    $prefix = $prefix_match[1];
+                }
+                if ( '' !== $prefix ) {
+                    $prefix_line = "\$table_prefix = '" . $prefix . "';";
+                    if ( preg_match( '/\$table_prefix\s*=\s*[\'"][^\'"]*[\'"]\s*;/', $merged ) ) {
+                        $merged = preg_replace( '/\$table_prefix\s*=\s*[\'"][^\'"]*[\'"]\s*;/', $prefix_line, $merged, 1 );
+                    } else {
+                        $merged = preg_replace( '/(<\?php)/i', "<?php\n" . $prefix_line, $merged, 1 );
                     }
                 }
             }
