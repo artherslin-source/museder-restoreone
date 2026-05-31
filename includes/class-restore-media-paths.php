@@ -72,6 +72,26 @@ class Museder_Restoreone_Restore_Media_Paths {
         if ( 'scan_meta' === $phase ) {
             $result = self::scan_attached_file_meta_sliced( $basedir, $cleanup, $timeout_seconds, $start_time, $job_id );
             if ( ! empty( $result['done'] ) ) {
+                $cleanup['media_paths_phase']               = 'expand_pairs';
+                $cleanup['media_paths_content_sub']         = 'postmeta';
+                $cleanup['media_paths_content_last_meta_id'] = 0;
+                $cleanup['media_paths_content_last_post_id'] = 0;
+                $cleanup['media_paths_content_scanned']     = 0;
+                $cleanup['media_paths_content_pairs']       = 0;
+            }
+            return self::progress_result( false );
+        }
+
+        if ( 'expand_pairs' === $phase ) {
+            $pairs = isset( $cleanup['media_paths_pairs'] ) && is_array( $cleanup['media_paths_pairs'] ) ? $cleanup['media_paths_pairs'] : [];
+            $cleanup['media_paths_pairs'] = self::expand_upload_path_pairs( $pairs, $basedir );
+            $cleanup['media_paths_phase'] = 'scan_content_refs';
+            return self::progress_result( false );
+        }
+
+        if ( 'scan_content_refs' === $phase ) {
+            $result = self::scan_content_refs_sliced( $basedir, $cleanup, $timeout_seconds, $start_time, $job_id );
+            if ( ! empty( $result['done'] ) ) {
                 $cleanup['media_paths_phase'] = 'apply_pairs';
             }
             return self::progress_result( false );
@@ -79,6 +99,7 @@ class Museder_Restoreone_Restore_Media_Paths {
 
         if ( 'apply_pairs' === $phase ) {
             $pairs = isset( $cleanup['media_paths_pairs'] ) && is_array( $cleanup['media_paths_pairs'] ) ? $cleanup['media_paths_pairs'] : [];
+            $pairs = self::sort_pairs_longest_first( $pairs );
             if ( ! empty( $pairs ) && class_exists( 'Museder_Restoreone_Restore_Service' ) ) {
                 Museder_Restoreone_Restore_Service::apply_path_replacements_for_restore( $pairs );
             }
@@ -142,6 +163,8 @@ class Museder_Restoreone_Restore_Media_Paths {
                 'unresolved' => isset( $cleanup['media_paths_unresolved'] ) ? (int) $cleanup['media_paths_unresolved'] : 0,
                 'scanned'    => isset( $cleanup['media_paths_scanned'] ) ? (int) $cleanup['media_paths_scanned'] : 0,
                 'pairs'      => count( $pairs ),
+                'content_scanned' => isset( $cleanup['media_paths_content_scanned'] ) ? (int) $cleanup['media_paths_content_scanned'] : 0,
+                'content_pairs'   => isset( $cleanup['media_paths_content_pairs'] ) ? (int) $cleanup['media_paths_content_pairs'] : 0,
             ]
         );
     }
@@ -283,19 +306,10 @@ class Museder_Restoreone_Restore_Media_Paths {
             );
             // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 
+            self::rewrite_attachment_metadata_paths( $post_id, $rel, $match, $basedir, $job_id );
+
             self::$rel_path_index[ $match ] = true;
-            $pairs[] = [
-                'search'  => $rel,
-                'replace' => $match,
-            ];
-            $uploads_fragment_old = 'wp-content/uploads/' . $rel;
-            $uploads_fragment_new = 'wp-content/uploads/' . $match;
-            if ( $uploads_fragment_old !== $uploads_fragment_new ) {
-                $pairs[] = [
-                    'search'  => $uploads_fragment_old,
-                    'replace' => $uploads_fragment_new,
-                ];
-            }
+            self::append_upload_path_pair( $pairs, $rel, $match );
 
             $cleanup['media_paths_fixed'] = isset( $cleanup['media_paths_fixed'] ) ? (int) $cleanup['media_paths_fixed'] + 1 : 1;
         }
@@ -598,6 +612,434 @@ class Museder_Restoreone_Restore_Media_Paths {
         $stem = preg_replace( '/_+/', '_', $stem );
         $stem = trim( (string) $stem, '_.' );
         return strtolower( $stem . strtolower( $ext ) );
+    }
+
+    /**
+     * @param array<int, array{search:string,replace:string}> $pairs Pairs (mutated).
+     * @param string                                           $old_rel Old uploads-relative path.
+     * @param string                                           $new_rel New uploads-relative path.
+     * @return void
+     */
+    private static function append_upload_path_pair( array &$pairs, $old_rel, $new_rel ) {
+        $old_rel = wp_normalize_path( (string) $old_rel );
+        $new_rel = wp_normalize_path( (string) $new_rel );
+        if ( '' === $old_rel || '' === $new_rel || $old_rel === $new_rel ) {
+            return;
+        }
+
+        $pairs[] = [
+            'search'  => $old_rel,
+            'replace' => $new_rel,
+        ];
+
+        $uploads_fragment_old = 'wp-content/uploads/' . $old_rel;
+        $uploads_fragment_new = 'wp-content/uploads/' . $new_rel;
+        if ( $uploads_fragment_old !== $uploads_fragment_new ) {
+            $pairs[] = [
+                'search'  => $uploads_fragment_old,
+                'replace' => $uploads_fragment_new,
+            ];
+        }
+    }
+
+    /**
+     * Expand base attachment pairs to include on-disk size variants (-WxH) and metadata paths.
+     *
+     * @param array<int, array{search:string,replace:string}> $pairs   Base pairs.
+     * @param string                                          $basedir Uploads basedir.
+     * @return array<int, array{search:string,replace:string}>
+     */
+    public static function expand_upload_path_pairs( array $pairs, $basedir ) {
+        if ( null === self::$rel_path_index ) {
+            self::build_uploads_index( $basedir );
+        }
+
+        $out = $pairs;
+        foreach ( $pairs as $pair ) {
+            if ( ! is_array( $pair ) || empty( $pair['search'] ) || empty( $pair['replace'] ) ) {
+                continue;
+            }
+            $search  = wp_normalize_path( (string) $pair['search'] );
+            $replace = wp_normalize_path( (string) $pair['replace'] );
+            if ( 0 === strpos( $search, 'wp-content/uploads/' ) ) {
+                $search = ltrim( substr( $search, strlen( 'wp-content/uploads/' ) ), '/' );
+            }
+            if ( 0 === strpos( $replace, 'wp-content/uploads/' ) ) {
+                $replace = ltrim( substr( $replace, strlen( 'wp-content/uploads/' ) ), '/' );
+            }
+            if ( '' === $search || '' === $replace || $search === $replace ) {
+                continue;
+            }
+
+            $variant_pairs = self::build_size_variant_pairs( $search, $replace );
+            foreach ( $variant_pairs as $variant_pair ) {
+                self::append_upload_path_pair( $out, $variant_pair['search'], $variant_pair['replace'] );
+            }
+        }
+
+        return self::dedupe_pairs( $out );
+    }
+
+    /**
+     * @param string $old_rel Old uploads-relative path (original file).
+     * @param string $new_rel Matched uploads-relative path on disk.
+     * @return array<int, array{search:string,replace:string}>
+     */
+    private static function build_size_variant_pairs( $old_rel, $new_rel ) {
+        $old_rel = wp_normalize_path( (string) $old_rel );
+        $new_rel = wp_normalize_path( (string) $new_rel );
+        $pairs   = [];
+
+        $old_dir  = dirname( $old_rel );
+        $new_dir  = dirname( $new_rel );
+        if ( '.' === $old_dir ) {
+            $old_dir = '';
+        }
+        if ( '.' === $new_dir ) {
+            $new_dir = '';
+        }
+
+        $old_base = basename( $old_rel );
+        $new_base = basename( $new_rel );
+        $old_stem = pathinfo( $old_base, PATHINFO_FILENAME );
+        $new_stem = pathinfo( $new_base, PATHINFO_FILENAME );
+        $ext      = pathinfo( $old_base, PATHINFO_EXTENSION );
+        if ( '' === $new_stem || '' === $ext ) {
+            return $pairs;
+        }
+
+        $prefix = ( '' !== $new_dir ? $new_dir . '/' : '' );
+        $pattern = '/^' . preg_quote( $new_stem, '/' ) . '-(\d+x\d+)\.' . preg_quote( $ext, '/' ) . '$/i';
+
+        foreach ( array_keys( self::$rel_path_index ?? [] ) as $candidate ) {
+            $candidate = (string) $candidate;
+            if ( '' !== $new_dir && 0 !== strpos( $candidate, $prefix ) ) {
+                continue;
+            }
+            $file = basename( $candidate );
+            if ( ! preg_match( $pattern, $file, $match ) ) {
+                continue;
+            }
+            $dims        = $match[1];
+            $old_variant = ( '' !== $old_dir ? $old_dir . '/' : '' ) . $old_stem . '-' . $dims . '.' . $ext;
+            if ( $old_variant === $candidate ) {
+                continue;
+            }
+            $pairs[] = [
+                'search'  => $old_variant,
+                'replace' => $candidate,
+            ];
+        }
+
+        return $pairs;
+    }
+
+    /**
+     * Rewrite _wp_attachment_metadata size paths after fixing the primary attached file.
+     *
+     * @param int    $post_id Attachment post ID.
+     * @param string $old_rel Old uploads-relative path.
+     * @param string $new_rel New uploads-relative path.
+     * @param string $basedir Uploads basedir.
+     * @param string $job_id  Restore job id.
+     * @return void
+     */
+    private static function rewrite_attachment_metadata_paths( $post_id, $old_rel, $new_rel, $basedir, $job_id = '' ) {
+        if ( $post_id <= 0 || ! function_exists( 'get_post_meta' ) || ! function_exists( 'update_post_meta' ) ) {
+            return;
+        }
+
+        $meta = get_post_meta( $post_id, '_wp_attachment_metadata', true );
+        if ( ! is_array( $meta ) ) {
+            return;
+        }
+
+        $old_rel = wp_normalize_path( (string) $old_rel );
+        $new_rel = wp_normalize_path( (string) $new_rel );
+        $old_dir = dirname( $old_rel );
+        if ( '.' === $old_dir ) {
+            $old_dir = '';
+        }
+        $old_base = basename( $old_rel );
+        $new_base = basename( $new_rel );
+        $old_stem = pathinfo( $old_base, PATHINFO_FILENAME );
+        $new_stem = pathinfo( $new_base, PATHINFO_FILENAME );
+
+        if ( ! empty( $meta['file'] ) ) {
+            $meta['file'] = str_replace( $old_rel, $new_rel, wp_normalize_path( (string) $meta['file'] ) );
+            $meta['file'] = str_replace( $old_base, $new_base, (string) $meta['file'] );
+        }
+
+        if ( isset( $meta['sizes'] ) && is_array( $meta['sizes'] ) ) {
+            foreach ( $meta['sizes'] as &$size_data ) {
+                if ( ! is_array( $size_data ) || empty( $size_data['file'] ) ) {
+                    continue;
+                }
+                $size_file = (string) $size_data['file'];
+                if ( false !== strpos( $size_file, $old_stem ) ) {
+                    $size_data['file'] = str_replace( $old_stem, $new_stem, $size_file );
+                    continue;
+                }
+                $old_size_rel = ( '' !== $old_dir && false === strpos( $size_file, '/' ) )
+                    ? ( '' !== $old_dir ? $old_dir . '/' : '' ) . $size_file
+                    : wp_normalize_path( $size_file );
+                $match = self::resolve_disk_relative_path( $old_size_rel, $post_id, $basedir, $job_id );
+                if ( '' !== $match ) {
+                    $size_data['file'] = basename( $match );
+                }
+            }
+            unset( $size_data );
+        }
+
+        update_post_meta( $post_id, '_wp_attachment_metadata', $meta );
+    }
+
+    /**
+     * Scan post_content and postmeta for uploads URLs that still reference missing paths.
+     *
+     * @param string               $basedir         Uploads basedir.
+     * @param array<string, mixed> $cleanup         Cleanup checkpoint (mutated).
+     * @param int                  $timeout_seconds Slice budget.
+     * @param float                $start_time      microtime( true ).
+     * @param string               $job_id          Restore job id.
+     * @return array{done:bool}
+     */
+    private static function scan_content_refs_sliced( $basedir, array &$cleanup, $timeout_seconds, $start_time, $job_id = '' ) {
+        global $wpdb;
+
+        if ( null === self::$rel_path_index ) {
+            self::build_uploads_index( $basedir );
+        }
+
+        $sub = isset( $cleanup['media_paths_content_sub'] ) ? (string) $cleanup['media_paths_content_sub'] : 'postmeta';
+        if ( 'postmeta' === $sub ) {
+            $result = self::scan_content_refs_postmeta_sliced( $basedir, $cleanup, $timeout_seconds, $start_time, $job_id );
+            if ( empty( $result['done'] ) ) {
+                return $result;
+            }
+            $cleanup['media_paths_content_sub']          = 'posts';
+            $cleanup['media_paths_content_last_post_id'] = 0;
+        }
+
+        return self::scan_content_refs_posts_sliced( $basedir, $cleanup, $timeout_seconds, $start_time, $job_id );
+    }
+
+    /**
+     * @param string               $basedir         Uploads basedir.
+     * @param array<string, mixed> $cleanup         Cleanup checkpoint (mutated).
+     * @param int                  $timeout_seconds Slice budget.
+     * @param float                $start_time      microtime( true ).
+     * @param string               $job_id          Restore job id.
+     * @return array{done:bool}
+     */
+    private static function scan_content_refs_postmeta_sliced( $basedir, array &$cleanup, $timeout_seconds, $start_time, $job_id = '' ) {
+        global $wpdb;
+
+        $last_id = isset( $cleanup['media_paths_content_last_meta_id'] ) ? (int) $cleanup['media_paths_content_last_meta_id'] : 0;
+        $batch   = 40;
+
+        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+        $rows = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT meta_id, meta_value FROM {$wpdb->postmeta} WHERE meta_id > %d AND meta_key <> %s AND meta_value LIKE %s ORDER BY meta_id ASC LIMIT %d",
+                $last_id,
+                '_wp_attached_file',
+                '%uploads/%',
+                $batch
+            ),
+            ARRAY_A
+        );
+        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+        if ( empty( $rows ) ) {
+            return [ 'done' => true ];
+        }
+
+        $pairs = isset( $cleanup['media_paths_pairs'] ) && is_array( $cleanup['media_paths_pairs'] ) ? $cleanup['media_paths_pairs'] : [];
+        $seen  = isset( $cleanup['media_paths_content_seen'] ) && is_array( $cleanup['media_paths_content_seen'] ) ? $cleanup['media_paths_content_seen'] : [];
+
+        foreach ( $rows as $row ) {
+            if ( ( microtime( true ) - $start_time ) >= $timeout_seconds ) {
+                break;
+            }
+
+            $meta_id = isset( $row['meta_id'] ) ? (int) $row['meta_id'] : 0;
+            $text    = isset( $row['meta_value'] ) ? (string) $row['meta_value'] : '';
+            $last_id = max( $last_id, $meta_id );
+
+            self::collect_content_ref_pairs( $text, $basedir, $pairs, $seen, $cleanup, $job_id );
+        }
+
+        $cleanup['media_paths_content_last_meta_id'] = $last_id;
+        $cleanup['media_paths_pairs']                = self::dedupe_pairs( $pairs );
+        $cleanup['media_paths_content_seen']         = $seen;
+
+        return [ 'done' => false ];
+    }
+
+    /**
+     * @param string               $basedir         Uploads basedir.
+     * @param array<string, mixed> $cleanup         Cleanup checkpoint (mutated).
+     * @param int                  $timeout_seconds Slice budget.
+     * @param float                $start_time      microtime( true ).
+     * @param string               $job_id          Restore job id.
+     * @return array{done:bool}
+     */
+    private static function scan_content_refs_posts_sliced( $basedir, array &$cleanup, $timeout_seconds, $start_time, $job_id = '' ) {
+        global $wpdb;
+
+        $last_id = isset( $cleanup['media_paths_content_last_post_id'] ) ? (int) $cleanup['media_paths_content_last_post_id'] : 0;
+        $batch   = 40;
+
+        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+        $rows = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT ID, post_content FROM {$wpdb->posts} WHERE ID > %d AND post_content LIKE %s ORDER BY ID ASC LIMIT %d",
+                $last_id,
+                '%uploads/%',
+                $batch
+            ),
+            ARRAY_A
+        );
+        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+        if ( empty( $rows ) ) {
+            return [ 'done' => true ];
+        }
+
+        $pairs = isset( $cleanup['media_paths_pairs'] ) && is_array( $cleanup['media_paths_pairs'] ) ? $cleanup['media_paths_pairs'] : [];
+        $seen  = isset( $cleanup['media_paths_content_seen'] ) && is_array( $cleanup['media_paths_content_seen'] ) ? $cleanup['media_paths_content_seen'] : [];
+
+        foreach ( $rows as $row ) {
+            if ( ( microtime( true ) - $start_time ) >= $timeout_seconds ) {
+                break;
+            }
+
+            $post_id = isset( $row['ID'] ) ? (int) $row['ID'] : 0;
+            $text    = isset( $row['post_content'] ) ? (string) $row['post_content'] : '';
+            $last_id = max( $last_id, $post_id );
+
+            self::collect_content_ref_pairs( $text, $basedir, $pairs, $seen, $cleanup, $job_id );
+        }
+
+        $cleanup['media_paths_content_last_post_id'] = $last_id;
+        $cleanup['media_paths_pairs']              = self::dedupe_pairs( $pairs );
+        $cleanup['media_paths_content_seen']       = $seen;
+
+        return [ 'done' => false ];
+    }
+
+    /**
+     * @param string               $text    Row text to scan.
+     * @param string               $basedir Uploads basedir.
+     * @param array<int, array{search:string,replace:string}> $pairs   Pairs (mutated).
+     * @param array<string, true>  $seen    Seen old paths (mutated).
+     * @param array<string, mixed> $cleanup Cleanup checkpoint (mutated).
+     * @param string               $job_id  Restore job id.
+     * @return void
+     */
+    private static function collect_content_ref_pairs( $text, $basedir, array &$pairs, array &$seen, array &$cleanup, $job_id = '' ) {
+        $paths = self::extract_upload_relative_paths( $text );
+        foreach ( $paths as $rel ) {
+            $cleanup['media_paths_content_scanned'] = isset( $cleanup['media_paths_content_scanned'] ) ? (int) $cleanup['media_paths_content_scanned'] + 1 : 1;
+            if ( isset( $seen[ $rel ] ) ) {
+                continue;
+            }
+            $seen[ $rel ] = true;
+
+            if ( self::upload_relative_path_exists( $basedir, $rel ) ) {
+                continue;
+            }
+
+            $match = self::resolve_disk_relative_path( $rel, 0, $basedir, $job_id );
+            if ( '' === $match || $match === $rel ) {
+                continue;
+            }
+
+            self::append_upload_path_pair( $pairs, $rel, $match );
+            $cleanup['media_paths_content_pairs'] = isset( $cleanup['media_paths_content_pairs'] ) ? (int) $cleanup['media_paths_content_pairs'] + 1 : 1;
+        }
+    }
+
+    /**
+     * @param string $text Content or meta value.
+     * @return array<int, string> Uploads-relative paths.
+     */
+    public static function extract_upload_relative_paths( $text ) {
+        $text = self::decode_json_unicode_escapes( (string) $text );
+        $paths = [];
+
+        if ( preg_match_all( '#(?:wp-content/uploads/|uploads/)([0-9]{4}/[0-9]{2}/[^"\'\s<>\\\\]+\\.(?:jpe?g|png|gif|webp|svg|pdf|ico))#iu', $text, $matches ) ) {
+            foreach ( $matches[1] as $rel ) {
+                $rel = wp_normalize_path( rawurldecode( (string) $rel ) );
+                if ( '' !== $rel ) {
+                    $paths[] = $rel;
+                }
+            }
+        }
+
+        return array_values( array_unique( $paths ) );
+    }
+
+    /**
+     * @param string $text Text that may contain JSON-style \uXXXX escapes.
+     * @return string
+     */
+    private static function decode_json_unicode_escapes( $text ) {
+        if ( false === strpos( $text, '\\u' ) ) {
+            return (string) $text;
+        }
+
+        return (string) preg_replace_callback(
+            '/\\\\u([0-9a-fA-F]{4})/',
+            static function ( $match ) {
+                if ( function_exists( 'mb_convert_encoding' ) ) {
+                    $packed = pack( 'H*', $match[1] );
+                    if ( is_string( $packed ) ) {
+                        $decoded = mb_convert_encoding( $packed, 'UTF-8', 'UCS-2BE' );
+                        if ( is_string( $decoded ) && '' !== $decoded ) {
+                            return $decoded;
+                        }
+                    }
+                }
+                $entity = html_entity_decode( '&#x' . $match[1] . ';', ENT_QUOTES, 'UTF-8' );
+                return is_string( $entity ) ? $entity : $match[0];
+            },
+            (string) $text
+        );
+    }
+
+    /**
+     * @param string $basedir Uploads basedir.
+     * @param string $rel     Uploads-relative path.
+     * @return bool
+     */
+    private static function upload_relative_path_exists( $basedir, $rel ) {
+        $rel = wp_normalize_path( (string) $rel );
+        if ( '' === $rel ) {
+            return false;
+        }
+        if ( isset( self::$rel_path_index[ $rel ] ) ) {
+            return true;
+        }
+        $abs = museder_restoreone_safe_path_join( $basedir, $rel );
+        return '' !== $abs && is_file( $abs );
+    }
+
+    /**
+     * @param array<int, array{search:string,replace:string}> $pairs Pairs.
+     * @return array<int, array{search:string,replace:string}>
+     */
+    private static function sort_pairs_longest_first( array $pairs ) {
+        usort(
+            $pairs,
+            static function ( $a, $b ) {
+                $len_a = isset( $a['search'] ) ? strlen( (string) $a['search'] ) : 0;
+                $len_b = isset( $b['search'] ) ? strlen( (string) $b['search'] ) : 0;
+                return $len_b <=> $len_a;
+            }
+        );
+        return $pairs;
     }
 
     /**

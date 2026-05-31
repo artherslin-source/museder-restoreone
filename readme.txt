@@ -207,6 +207,8 @@ Checklists: `docs/RELEASE_CHECKLIST.md`, `docs/PACKAGING.md`, `docs/WORDPRESS_OR
 * Restore: wp-config merge uses parenthesis-aware parsing so `define()` values with nested calls (e.g. Docker `getenv_docker()`) are preserved without PHP parse errors.
 * Restore: media path reconciliation now advances past index building and repairs UTF-8 database attachment paths that map to ASCII filenames on disk, preventing restored pages from showing missing images.
 * Backup: detects and logs attachment DB-to-disk media path drift before packaging so future archives surface filename mismatches instead of silently preserving them.
+* Restore: media path reconciliation now expands attachment pairs to thumbnail size variants (-WxH), scans post content and post meta for stale uploads URLs, and rewrites attachment metadata so Elementor and inline images resolve after restore.
+* Restore UI: reload the Restore page after a completed job to show the success state when host polling was blocked mid-run.
 * Restore UI: completed jobs now show a success notification from status polling, and repeated 401/403 polling blocks show a clearer host-blocking message.
 
 = 2.7.273 =

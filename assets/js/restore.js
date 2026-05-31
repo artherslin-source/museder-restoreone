@@ -44,14 +44,47 @@
             this.bindEvents();
             this.renderBackupList();
             this.setAutoScroll(true);
-            this.log('尚未開始還原作業，請先選擇備份檔並建立還原作業。', 'info');
+            this.bootstrapActiveJob();
+            if (!this.state.jobId) {
+                this.log('尚未開始還原作業，請先選擇備份檔並建立還原作業。', 'info');
+            }
             this.updateHeader();
             this.updateStepIndicator();
             this.updateSafetyPanel();
             this.updateDryRunPanel();
             this.updateExecutePanel();
             this.updateRollbackPanel();
-            this.updateProgress({ progress: 0, message: '等待流程開始…' });
+            if (!this.state.completionNotified) {
+                this.updateProgress({ progress: 0, message: '等待流程開始…' });
+            }
+        },
+        bootstrapActiveJob: function () {
+            var job = config.job;
+            if (!job || !job.id) {
+                return;
+            }
+            this.state.jobId = job.id;
+            this.state.status = job;
+            if (this.refs.jobId) {
+                this.refs.jobId.textContent = job.id;
+            }
+            var status = job.status || '';
+            var completed = job.completed === true || status === 'success' || status === 'completed' || job.stage === 'done';
+            if (completed) {
+                this.state.completionNotified = true;
+                var doneMessage = job.message || 'Restore completed successfully.';
+                this.updateProgress({ progress: job.progress || 100, stage: 'done', message: doneMessage, completed: true });
+                this.setJobStatus(doneMessage);
+                this.toast(doneMessage, 'success');
+                this.log(doneMessage, 'success', 'activity');
+                this.updateStepIndicator('activity');
+                return;
+            }
+            if (status === 'running' || status === 'pending' || status === 'cancelling') {
+                this.log('偵測到進行中的還原作業，恢復監控…', 'info', 'restore');
+                this.updateProgress(job);
+                this.pollStatus(true);
+            }
         },
         cacheDOM: function () {
             this.refs.backupRows = document.querySelector('#bl-restore-backup-list');
