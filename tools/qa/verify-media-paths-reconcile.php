@@ -212,6 +212,30 @@ if ( 1 !== count( $variant_paths ) || '2024/04/LINE_ALBUM_案-清洗後_230402_5
 	mro_media_qa_fail( 'extract_upload_relative_paths should decode JSON unicode escapes for size variants' );
 }
 
+if ( '' !== Museder_Restoreone_Restore_Media_Paths::ascii_fold_filename( '元晶太陽能.png' ) ) {
+	mro_media_qa_fail( 'ascii_fold should return empty fingerprint for all-non-ascii filenames' );
+}
+
+if ( Museder_Restoreone_Restore_Media_Paths::is_valid_upload_path_pair( '2020/01/元晶太陽能.png', '2020/01/.png' ) ) {
+	mro_media_qa_fail( 'invalid media path pairs with empty replace stems must be rejected' );
+}
+
+$filtered = Museder_Restoreone_Restore_Media_Paths::filter_valid_path_pairs(
+	[
+		[
+			'search'  => '2020/01/元晶太陽能.png',
+			'replace' => '2020/01/.png',
+		],
+		[
+			'search'  => '2024/04/LINE_ALBUM_新莊國小跑道清洗前_240409_7.jpg',
+			'replace' => '2024/04/LINE_ALBUM__240409_7.jpg',
+		],
+	]
+);
+if ( 1 !== count( $filtered ) ) {
+	mro_media_qa_fail( 'filter_valid_path_pairs should keep only safe replacement pairs' );
+}
+
 $tmp = sys_get_temp_dir() . '/mro-media-paths-qa-' . getmypid();
 $GLOBALS['mro_media_qa_uploads'] = $tmp . '/uploads';
 $GLOBALS['mro_media_qa_logs']    = [];

@@ -788,7 +788,51 @@ class Museder_Restoreone_Restore_Service {
      * @return string
      */
     public static function get_active_job_id() {
-        return (string) get_option( self::ACTIVE_JOB_OPTION, '' );
+        $active = (string) get_option( self::ACTIVE_JOB_OPTION, '' );
+        if ( '' !== $active ) {
+            try {
+                $meta = self::get_job_meta( $active );
+                if ( ! empty( $meta ) && empty( $meta['completed'] ) ) {
+                    return $active;
+                }
+                if ( ! empty( $meta['completed'] ) ) {
+                    delete_option( self::ACTIVE_JOB_OPTION );
+                }
+            } catch ( Exception $e ) {
+                delete_option( self::ACTIVE_JOB_OPTION );
+            }
+        }
+
+        if ( ! class_exists( 'Museder_Restoreone_Restore_Lock' ) ) {
+            return '';
+        }
+
+        $lock = Museder_Restoreone_Restore_Lock::current_lock();
+        if ( ! is_array( $lock ) || empty( $lock['job_id'] ) ) {
+            return '';
+        }
+
+        $job_id = sanitize_text_field( (string) $lock['job_id'] );
+        if ( '' === $job_id ) {
+            return '';
+        }
+
+        try {
+            $meta = self::get_job_meta( $job_id );
+            if ( empty( $meta ) || ! empty( $meta['completed'] ) ) {
+                return '';
+            }
+        } catch ( Exception $e ) {
+            return '';
+        }
+
+        update_option( self::ACTIVE_JOB_OPTION, $job_id, false );
+        if ( function_exists( 'wp_schedule_single_event' ) && ! wp_next_scheduled( self::CRON_HOOK_PROCESS, [ $job_id ] ) ) {
+            wp_schedule_single_event( time() + 1, self::CRON_HOOK_PROCESS, [ $job_id ] );
+            self::spawn_cron();
+        }
+
+        return $job_id;
     }
 
     protected static function spawn_cron() {
@@ -4886,7 +4930,240 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
         if ( empty( $pairs ) ) {
             return;
         }
-        self::run_search_replace( $pairs );
+        $checkpoint = [];
+        while ( true ) {
+            $result = self::apply_path_replacements_for_restore_sliced( $pairs, $checkpoint, 86400, microtime( true ) );
+            if ( ! empty( $result['done'] ) ) {
+                break;
+            }
+        }
+    }
+
+    /**
+     * Time-sliced upload path search-replace for post-restore media reconciliation.
+     *
+     * @param array<int, array{search:string,replace:string}> $pairs             Search/replace pairs.
+     * @param array<string, mixed>                            $checkpoint        Resume checkpoint (mutated).
+     * @param int                                             $timeout_seconds   Slice budget.
+     * @param float                                           $start_time        microtime( true ) at slice start.
+     * @return array{done:bool}
+     */
+    public static function apply_path_replacements_for_restore_sliced( array $pairs, array &$checkpoint, $timeout_seconds, $start_time ) {
+        global $wpdb;
+
+        if ( empty( $pairs ) ) {
+            return [ 'done' => true ];
+        }
+
+        if ( class_exists( 'Museder_Restoreone_Restore_Media_Paths' ) ) {
+            $pairs = Museder_Restoreone_Restore_Media_Paths::filter_valid_path_pairs( $pairs );
+        }
+        if ( empty( $pairs ) ) {
+            return [ 'done' => true ];
+        }
+
+        if ( empty( $checkpoint['media_paths_apply_plan'] ) || ! is_array( $checkpoint['media_paths_apply_plan'] ) ) {
+            $checkpoint['media_paths_apply_plan']    = self::build_media_replace_table_plan();
+            $checkpoint['media_paths_apply_table_i'] = 0;
+            $checkpoint['media_paths_apply_last_pk'] = 0;
+        }
+
+        $plan     = $checkpoint['media_paths_apply_plan'];
+        $table_i  = isset( $checkpoint['media_paths_apply_table_i'] ) ? (int) $checkpoint['media_paths_apply_table_i'] : 0;
+        $last_pk  = isset( $checkpoint['media_paths_apply_last_pk'] ) ? (int) $checkpoint['media_paths_apply_last_pk'] : 0;
+        $batch    = 20;
+
+        while ( $table_i < count( $plan ) ) {
+            if ( ( microtime( true ) - $start_time ) >= $timeout_seconds ) {
+                $checkpoint['media_paths_apply_table_i'] = $table_i;
+                $checkpoint['media_paths_apply_last_pk'] = $last_pk;
+                return [ 'done' => false ];
+            }
+
+            $entry = $plan[ $table_i ];
+            if ( empty( $entry['table'] ) || empty( $entry['pk'] ) || empty( $entry['fields'] ) ) {
+                ++$table_i;
+                $last_pk = 0;
+                continue;
+            }
+
+            $table  = (string) $entry['table'];
+            $pk     = (string) $entry['pk'];
+            $fields = (array) $entry['fields'];
+
+            $select_fields = array_merge( [ $pk ], $fields );
+            $select_sql    = '`' . implode( '`, `', array_map( 'esc_sql', $select_fields ) ) . '`';
+
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+            // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- identifiers escaped above; values prepared below
+            $rows = $wpdb->get_results(
+                $wpdb->prepare(
+                    "SELECT {$select_sql} FROM `" . esc_sql( $table ) . "` WHERE `" . esc_sql( $pk ) . "` > %d ORDER BY `" . esc_sql( $pk ) . "` ASC LIMIT %d",
+                    $last_pk,
+                    $batch
+                ),
+                ARRAY_A
+            );
+            // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+            if ( empty( $rows ) ) {
+                ++$table_i;
+                $last_pk = 0;
+                continue;
+            }
+
+            foreach ( $rows as $row ) {
+                if ( ( microtime( true ) - $start_time ) >= $timeout_seconds ) {
+                    $checkpoint['media_paths_apply_table_i'] = $table_i;
+                    $checkpoint['media_paths_apply_last_pk'] = $last_pk;
+                    return [ 'done' => false ];
+                }
+
+                $row_pk = isset( $row[ $pk ] ) ? (int) $row[ $pk ] : 0;
+                $last_pk = max( $last_pk, $row_pk );
+                $update  = [];
+
+                foreach ( $fields as $field ) {
+                    if ( ! array_key_exists( $field, $row ) ) {
+                        continue;
+                    }
+                    $original = $row[ $field ];
+                    if ( ! is_string( $original ) || '' === $original ) {
+                        continue;
+                    }
+                    if ( false === stripos( $original, 'uploads/' ) ) {
+                        continue;
+                    }
+
+                    $replaced = self::serialized_replace_recursive( $pairs, maybe_unserialize( $original ) );
+                    $maybe    = is_array( $replaced ) || is_object( $replaced ) ? serialize( $replaced ) : $replaced;
+                    if ( $maybe !== $original ) {
+                        $update[ $field ] = $maybe;
+                    }
+                }
+
+                if ( ! empty( $update ) ) {
+                    // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+                    $wpdb->update( $table, $update, [ $pk => $row_pk ] );
+                    // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+                }
+            }
+
+            $checkpoint['media_paths_apply_table_i'] = $table_i;
+            $checkpoint['media_paths_apply_last_pk'] = $last_pk;
+        }
+
+        unset( $checkpoint['media_paths_apply_plan'], $checkpoint['media_paths_apply_table_i'], $checkpoint['media_paths_apply_last_pk'] );
+        return [ 'done' => true ];
+    }
+
+    /**
+     * Build a prioritized table plan for media upload path search-replace.
+     *
+     * @return array<int, array{table:string,pk:string,fields:array<int,string>}>
+     */
+    protected static function build_media_replace_table_plan() {
+        global $wpdb;
+
+        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+        $tables = $wpdb->get_col( 'SHOW TABLES' );
+        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+        if ( empty( $tables ) ) {
+            return [];
+        }
+
+        $priority = [];
+        if ( isset( $wpdb->posts ) ) {
+            $priority[] = (string) $wpdb->posts;
+        }
+        if ( isset( $wpdb->postmeta ) ) {
+            $priority[] = (string) $wpdb->postmeta;
+        }
+        if ( isset( $wpdb->options ) ) {
+            $priority[] = (string) $wpdb->options;
+        }
+        if ( isset( $wpdb->comments ) ) {
+            $priority[] = (string) $wpdb->comments;
+        }
+        if ( isset( $wpdb->termmeta ) ) {
+            $priority[] = (string) $wpdb->termmeta;
+        }
+
+        $ordered = [];
+        foreach ( $priority as $table ) {
+            if ( in_array( $table, $tables, true ) ) {
+                $ordered[] = $table;
+            }
+        }
+        foreach ( $tables as $table ) {
+            if ( ! in_array( $table, $ordered, true ) ) {
+                $ordered[] = (string) $table;
+            }
+        }
+
+        $plan = [];
+        foreach ( $ordered as $table ) {
+            $safe_table = preg_replace( '/[^a-zA-Z0-9_]/', '', (string) $table );
+            if ( '' === $safe_table ) {
+                continue;
+            }
+
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+            // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- identifier escaped
+            $columns = $wpdb->get_results( 'SHOW COLUMNS FROM `' . esc_sql( $safe_table ) . '`', ARRAY_A );
+            // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+            if ( empty( $columns ) ) {
+                continue;
+            }
+
+            $pk_field = '';
+            $fields   = [];
+            foreach ( $columns as $column ) {
+                $field = isset( $column['Field'] ) ? (string) $column['Field'] : '';
+                $type  = isset( $column['Type'] ) ? (string) $column['Type'] : '';
+                if ( '' === $field ) {
+                    continue;
+                }
+                if ( 'PRI' === ( $column['Key'] ?? '' ) ) {
+                    $pk_field = $field;
+                }
+                if ( self::is_media_replace_column_type( $type ) ) {
+                    $fields[] = $field;
+                }
+            }
+
+            if ( '' === $pk_field ) {
+                foreach ( [ 'ID', 'id', 'meta_id', 'option_id', 'comment_ID', 'term_id' ] as $candidate ) {
+                    foreach ( $columns as $column ) {
+                        if ( $candidate === ( $column['Field'] ?? '' ) ) {
+                            $pk_field = $candidate;
+                            break 2;
+                        }
+                    }
+                }
+            }
+
+            if ( '' === $pk_field || empty( $fields ) ) {
+                continue;
+            }
+
+            $plan[] = [
+                'table'  => $safe_table,
+                'pk'     => $pk_field,
+                'fields' => $fields,
+            ];
+        }
+
+        return $plan;
+    }
+
+    /**
+     * @param string $type Column type from SHOW COLUMNS.
+     * @return bool
+     */
+    protected static function is_media_replace_column_type( $type ) {
+        $type = strtolower( (string) $type );
+        return (bool) preg_match( '/^(tinytext|text|mediumtext|longtext|varchar|char)\b/', $type );
     }
 
     /**
@@ -5019,6 +5296,9 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
                     continue;
                 }
                 $replace = isset( $pair['replace'] ) ? $pair['replace'] : '';
+                if ( false === strpos( $value, (string) $pair['search'] ) ) {
+                    continue;
+                }
                 $value   = str_replace( $pair['search'], $replace, $value );
             }
         }

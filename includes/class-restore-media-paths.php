@@ -99,9 +99,18 @@ class Museder_Restoreone_Restore_Media_Paths {
 
         if ( 'apply_pairs' === $phase ) {
             $pairs = isset( $cleanup['media_paths_pairs'] ) && is_array( $cleanup['media_paths_pairs'] ) ? $cleanup['media_paths_pairs'] : [];
-            $pairs = self::sort_pairs_longest_first( $pairs );
+            $pairs = self::sort_pairs_longest_first( self::filter_valid_path_pairs( $pairs ) );
+            $cleanup['media_paths_pairs'] = $pairs;
             if ( ! empty( $pairs ) && class_exists( 'Museder_Restoreone_Restore_Service' ) ) {
-                Museder_Restoreone_Restore_Service::apply_path_replacements_for_restore( $pairs );
+                $apply_result = Museder_Restoreone_Restore_Service::apply_path_replacements_for_restore_sliced(
+                    $pairs,
+                    $cleanup,
+                    $timeout_seconds,
+                    $start_time
+                );
+                if ( empty( $apply_result['done'] ) ) {
+                    return self::progress_result( false );
+                }
             }
             self::log_reconcile_done( $job_id, $cleanup, 'apply_pairs' );
             $cleanup['media_paths_phase'] = 'verify';
@@ -291,6 +300,14 @@ class Museder_Restoreone_Restore_Media_Paths {
 
             $match = self::resolve_disk_relative_path( $rel, $post_id, $basedir, $job_id );
             if ( '' === $match || $match === $rel ) {
+                $match = self::resolve_menu_icon_disk_path( $rel, $post_id, $basedir );
+            }
+            if ( '' === $match || $match === $rel ) {
+                $cleanup['media_paths_unresolved'] = isset( $cleanup['media_paths_unresolved'] ) ? (int) $cleanup['media_paths_unresolved'] + 1 : 1;
+                self::record_unresolved_sample( $cleanup, $rel );
+                continue;
+            }
+            if ( ! self::is_valid_upload_path_pair( $rel, $match ) ) {
                 $cleanup['media_paths_unresolved'] = isset( $cleanup['media_paths_unresolved'] ) ? (int) $cleanup['media_paths_unresolved'] + 1 : 1;
                 self::record_unresolved_sample( $cleanup, $rel );
                 continue;
@@ -528,11 +545,14 @@ class Museder_Restoreone_Restore_Media_Paths {
         }
         $ext = strtolower( pathinfo( $rel_path, PATHINFO_EXTENSION ) );
 
-        $fp_key = ( '' !== $dir ? $dir . '/' : '' ) . self::ascii_fold_filename( basename( $rel_path ) );
-        if ( isset( self::$dir_fingerprint_index[ $fp_key ] ) ) {
-            $candidates = self::$dir_fingerprint_index[ $fp_key ];
-            if ( 1 === count( $candidates ) ) {
-                return (string) $candidates[0];
+        $fold = self::ascii_fold_filename( basename( $rel_path ) );
+        if ( '' !== $fold ) {
+            $fp_key = ( '' !== $dir ? $dir . '/' : '' ) . $fold;
+            if ( isset( self::$dir_fingerprint_index[ $fp_key ] ) ) {
+                $candidates = self::$dir_fingerprint_index[ $fp_key ];
+                if ( 1 === count( $candidates ) ) {
+                    return (string) $candidates[0];
+                }
             }
         }
 
@@ -577,6 +597,103 @@ class Museder_Restoreone_Restore_Media_Paths {
     }
 
     /**
+     * Match menu-icon attachments when ASCII-fold heuristics cannot pick a unique file.
+     *
+     * @param string $rel_path DB _wp_attached_file value.
+     * @param int    $post_id  Attachment post ID.
+     * @param string $basedir  Uploads basedir.
+     * @return string Matched relative path or empty.
+     */
+    private static function resolve_menu_icon_disk_path( $rel_path, $post_id, $basedir ) {
+        $rel_path = wp_normalize_path( (string) $rel_path );
+        $basename = basename( $rel_path );
+        if ( false === strpos( $basename, '主選單圖示' ) && false === strpos( $basename, '圖示_' ) ) {
+            return '';
+        }
+
+        $dir = dirname( $rel_path );
+        if ( '.' === $dir ) {
+            $dir = '';
+        }
+        $prefix = ( '' !== $dir ? $dir . '/' : '' );
+
+        $candidates = [];
+        foreach ( array_keys( self::$rel_path_index ?? [] ) as $candidate ) {
+            $candidate = (string) $candidate;
+            if ( '' !== $dir && 0 !== strpos( $candidate, $prefix ) ) {
+                continue;
+            }
+            $file = basename( $candidate );
+            if ( preg_match( '/ICON/i', $file ) ) {
+                $candidates[] = $candidate;
+            }
+        }
+
+        if ( empty( $candidates ) ) {
+            return '';
+        }
+
+        usort(
+            $candidates,
+            static function ( $a, $b ) {
+                return strnatcasecmp( (string) $a, (string) $b );
+            }
+        );
+
+        $index = self::get_menu_icon_attachment_index( $dir, (int) $post_id );
+        if ( $index < 0 || ! isset( $candidates[ $index ] ) ) {
+            return '';
+        }
+
+        $match = (string) $candidates[ $index ];
+        $abs   = museder_restoreone_safe_path_join( $basedir, $match );
+        if ( '' === $abs || ! is_file( $abs ) ) {
+            return '';
+        }
+
+        return $match;
+    }
+
+    /**
+     * @param string $dir     Uploads-relative directory (YYYY/MM).
+     * @param int    $post_id Attachment post ID.
+     * @return int Zero-based index among menu-icon attachments in the directory, or -1.
+     */
+    private static function get_menu_icon_attachment_index( $dir, $post_id ) {
+        if ( $post_id <= 0 ) {
+            return -1;
+        }
+
+        static $cache = [];
+        $dir = wp_normalize_path( (string) $dir );
+        if ( ! isset( $cache[ $dir ] ) ) {
+            global $wpdb;
+            $cache[ $dir ] = [];
+            if ( isset( $wpdb->postmeta ) ) {
+                $like = ( '' !== $dir ? $dir . '/%' : '%' ) . '主選單圖示%';
+                // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+                $rows = $wpdb->get_results(
+                    $wpdb->prepare(
+                        "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key = %s AND meta_value LIKE %s ORDER BY post_id ASC",
+                        '_wp_attached_file',
+                        $like
+                    ),
+                    ARRAY_A
+                );
+                // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+                if ( is_array( $rows ) ) {
+                    foreach ( $rows as $row ) {
+                        $cache[ $dir ][] = isset( $row['post_id'] ) ? (int) $row['post_id'] : 0;
+                    }
+                }
+            }
+        }
+
+        $index = array_search( (int) $post_id, $cache[ $dir ], true );
+        return false === $index ? -1 : (int) $index;
+    }
+
+    /**
      * @param int $post_id Attachment post ID.
      * @return int Filesize bytes or 0.
      */
@@ -611,6 +728,9 @@ class Museder_Restoreone_Restore_Media_Paths {
         }
         $stem = preg_replace( '/_+/', '_', $stem );
         $stem = trim( (string) $stem, '_.' );
+        if ( '' === $stem ) {
+            return '';
+        }
         return strtolower( $stem . strtolower( $ext ) );
     }
 
@@ -624,6 +744,9 @@ class Museder_Restoreone_Restore_Media_Paths {
         $old_rel = wp_normalize_path( (string) $old_rel );
         $new_rel = wp_normalize_path( (string) $new_rel );
         if ( '' === $old_rel || '' === $new_rel || $old_rel === $new_rel ) {
+            return;
+        }
+        if ( ! self::is_valid_upload_path_pair( $old_rel, $new_rel ) ) {
             return;
         }
 
@@ -955,6 +1078,9 @@ class Museder_Restoreone_Restore_Media_Paths {
             if ( '' === $match || $match === $rel ) {
                 continue;
             }
+            if ( ! self::is_valid_upload_path_pair( $rel, $match ) ) {
+                continue;
+            }
 
             self::append_upload_path_pair( $pairs, $rel, $match );
             $cleanup['media_paths_content_pairs'] = isset( $cleanup['media_paths_content_pairs'] ) ? (int) $cleanup['media_paths_content_pairs'] + 1 : 1;
@@ -1043,6 +1169,54 @@ class Museder_Restoreone_Restore_Media_Paths {
     }
 
     /**
+     * @param string $search  Search path.
+     * @param string $replace Replace path.
+     * @return bool
+     */
+    public static function is_valid_upload_path_pair( $search, $replace ) {
+        $search  = wp_normalize_path( (string) $search );
+        $replace = wp_normalize_path( (string) $replace );
+        if ( '' === $search || '' === $replace || $search === $replace ) {
+            return false;
+        }
+
+        foreach ( [ $search, $replace ] as $path ) {
+            $rel = $path;
+            if ( 0 === strpos( $rel, 'wp-content/uploads/' ) ) {
+                $rel = ltrim( substr( $rel, strlen( 'wp-content/uploads/' ) ), '/' );
+            }
+            $base = basename( $rel );
+            $stem = pathinfo( $base, PATHINFO_FILENAME );
+            if ( ! is_string( $stem ) || '' === $stem || '.' === $stem ) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * @param array<int, array{search:string,replace:string}> $pairs Pairs.
+     * @return array<int, array{search:string,replace:string}>
+     */
+    public static function filter_valid_path_pairs( array $pairs ) {
+        $out = [];
+        foreach ( $pairs as $pair ) {
+            if ( ! is_array( $pair ) || empty( $pair['search'] ) || ! isset( $pair['replace'] ) ) {
+                continue;
+            }
+            if ( ! self::is_valid_upload_path_pair( $pair['search'], $pair['replace'] ) ) {
+                continue;
+            }
+            $out[] = [
+                'search'  => (string) $pair['search'],
+                'replace' => (string) $pair['replace'],
+            ];
+        }
+        return $out;
+    }
+
+    /**
      * @param array<int, array{search:string,replace:string}> $pairs Pairs.
      * @return array<int, array{search:string,replace:string}>
      */
@@ -1056,6 +1230,9 @@ class Museder_Restoreone_Restore_Media_Paths {
             $search  = (string) $pair['search'];
             $replace = (string) $pair['replace'];
             if ( $search === $replace || isset( $seen[ $search ] ) ) {
+                continue;
+            }
+            if ( ! self::is_valid_upload_path_pair( $search, $replace ) ) {
                 continue;
             }
             $seen[ $search ] = true;

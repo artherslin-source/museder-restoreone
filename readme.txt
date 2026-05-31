@@ -208,6 +208,9 @@ Checklists: `docs/RELEASE_CHECKLIST.md`, `docs/PACKAGING.md`, `docs/WORDPRESS_OR
 * Restore: media path reconciliation now advances past index building and repairs UTF-8 database attachment paths that map to ASCII filenames on disk, preventing restored pages from showing missing images.
 * Backup: detects and logs attachment DB-to-disk media path drift before packaging so future archives surface filename mismatches instead of silently preserving them.
 * Restore: media path reconciliation now expands attachment pairs to thumbnail size variants (-WxH), scans post content and post meta for stale uploads URLs, and rewrites attachment metadata so Elementor and inline images resolve after restore.
+* Restore: media path apply_pairs now runs as a time-sliced database search-replace with row checkpoints so large pair sets no longer hit PHP max_execution_time during cleanup on shared hosting.
+* Restore: reject unsafe media path pairs (empty filename stems) and map menu-icon attachments to on-disk ICON filenames when ASCII-fold matching is ambiguous.
+* Restore: rehydrate active restore jobs from the restore lock after fatal timeouts so cron and the admin UI can resume cleanup instead of leaving Restore History stuck on Running.
 * Restore UI: reload the Restore page after a completed job to show the success state when host polling was blocked mid-run.
 * Restore UI: completed jobs now show a success notification from status polling, and repeated 401/403 polling blocks show a clearer host-blocking message.
 
