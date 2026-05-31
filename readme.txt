@@ -205,6 +205,9 @@ Checklists: `docs/RELEASE_CHECKLIST.md`, `docs/PACKAGING.md`, `docs/WORDPRESS_OR
 * Restore: stale-tick watchdog re-schedules WP-Cron when a running job has not progressed recently.
 * Restore: defer `wp-config.php` until the file stage completes; on populated hosts with `db_then_files`, backup mode now merges live DB credentials and table prefix instead of overwriting mid-restore (fixes database connection errors after reload).
 * Restore: wp-config merge uses parenthesis-aware parsing so `define()` values with nested calls (e.g. Docker `getenv_docker()`) are preserved without PHP parse errors.
+* Restore: media path reconciliation now advances past index building and repairs UTF-8 database attachment paths that map to ASCII filenames on disk, preventing restored pages from showing missing images.
+* Backup: detects and logs attachment DB-to-disk media path drift before packaging so future archives surface filename mismatches instead of silently preserving them.
+* Restore UI: completed jobs now show a success notification from status polling, and repeated 401/403 polling blocks show a clearer host-blocking message.
 
 = 2.7.273 =
 * Backup: fix post-close archive verification false failures on large ZipArchive backups (entry-index lookup + core-path prefix fallback) so shared hosts no longer trigger a destructive full PclZip repack.

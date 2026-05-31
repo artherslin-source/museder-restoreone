@@ -23,6 +23,7 @@
             polling: null,
             lastStage: null,
             lastMessage: null,
+            completionNotified: false,
 
             // Progress smoothing (UX): if server progress stalls, gently advance the bar.
             // Parameters: stallAfterMs=8000, stepEveryMs=2000, stepDelta=0.2
@@ -242,6 +243,7 @@
             this.state.status = null;
             this.state.lastStage = null;
             this.state.lastMessage = null;
+            this.state.completionNotified = false;
             this.setJobStatus('建立還原作業中…');
             this.log('Creating restore job for ' + this.state.selectedBackup + '...', 'info', 'source');
             this.buildRequest('restore/prepare', {
@@ -345,6 +347,7 @@
             this.log('Restore execution started…', 'info', 'restore');
             this.updateStepIndicator('restore');
             this.setJobStatus('執行還原中…');
+            this.state.completionNotified = false;
             this.pollStatus();
             var decryptionPassword = '';
             if (this.refs.restoreDecryptionPassword) {
@@ -450,6 +453,9 @@
                 fetch(url, { method: 'GET', headers: headers, credentials: 'same-origin' }).then(function (res) {
                     if (!res.ok && (res.status === 401 || res.status === 403)) {
                         authFailCount++;
+                        if (authFailCount === 3) {
+                            _this5.log('Status polling is being blocked by the host. The restore may still finish in the background; refresh this page or check Restore History after a minute.', 'warning');
+                        }
                         if (authFailCount <= 30) {
                             return null;
                         }
@@ -483,10 +489,20 @@
                     _this5.updateRollbackPanel();
                     _this5.updateHeader();
                     if (data.completed) {
+                        if (!_this5.state.completionNotified) {
+                            var doneMessage = data.message || 'Restore completed successfully.';
+                            _this5.state.completionNotified = true;
+                            _this5.toast(doneMessage, 'success');
+                            _this5.log(doneMessage, 'success', 'activity');
+                            _this5.setJobStatus(doneMessage);
+                        }
                         _this5.stopPolling();
                     }
                 }).catch(function () {
                     authFailCount++;
+                    if (authFailCount === 3) {
+                        _this5.log('Status polling is being blocked by the host. The restore may still finish in the background; refresh this page or check Restore History after a minute.', 'warning');
+                    }
                     if (authFailCount > 30) {
                         _this5.stopPolling();
                     }

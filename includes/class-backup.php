@@ -139,6 +139,8 @@ class Museder_Restoreone_Backup {
             ];
         }
 
+        $media_path_drift = self::detect_media_path_drift_for_backup( 'sync' );
+
         if ( file_exists( $archive_path ) ) {
             // @plugin-check: allowed - controlled backup/restore file operation, path sanitized
             // $archive_path is from plugin-controlled backup directory
@@ -202,6 +204,9 @@ class Museder_Restoreone_Backup {
         if ( museder_is_pro_active() ) {
             $backup_metadata['encrypted'] = ! empty( $options['encrypt'] );
             $backup_metadata['cloud_destinations'] = $options['cloud_destinations'] ?? [];
+        }
+        if ( ! empty( $media_path_drift ) ) {
+            $backup_metadata['media_path_drift'] = $media_path_drift;
         }
         self::store_backup_metadata( basename( $archive_path ), $backup_metadata );
 
@@ -955,6 +960,7 @@ class Museder_Restoreone_Backup {
                 : self::get_directory_map( $options );
             $selfcheck   = self::selfcheck_backup_roots( $archive_path, $directories );
             $job['selfcheck'] = $selfcheck;
+            $job['media_path_drift'] = self::detect_media_path_drift_for_backup( (string) ( $job['id'] ?? '' ) );
 
             if ( ! empty( $selfcheck['failed'] ) ) {
                 $job['status']  = 'failed';
@@ -973,6 +979,47 @@ class Museder_Restoreone_Backup {
         // done
         $job['prep_step'] = 'done';
         return $job;
+    }
+
+    /**
+     * Detect and log DB-to-disk media path drift before packaging a backup.
+     *
+     * @param string $context Job id or sync context.
+     * @return array<string, mixed>
+     */
+    private static function detect_media_path_drift_for_backup( $context = '' ) {
+        if ( ! class_exists( 'Museder_Restoreone_Restore_Media_Paths' ) ) {
+            return [];
+        }
+
+        $limit = 1000;
+        if ( function_exists( 'apply_filters' ) ) {
+            $limit = (int) apply_filters( 'museder_restoreone_backup_media_drift_scan_limit', $limit, $context );
+        }
+
+        $summary = Museder_Restoreone_Restore_Media_Paths::detect_upload_path_drift( $limit, (string) $context );
+        if ( ! is_array( $summary ) ) {
+            return [];
+        }
+
+        $drift   = isset( $summary['drift'] ) ? (int) $summary['drift'] : 0;
+        $missing = isset( $summary['missing'] ) ? (int) $summary['missing'] : 0;
+        if ( ( $drift > 0 || $missing > 0 ) && function_exists( 'museder_restoreone_log' ) ) {
+            museder_restoreone_log(
+                'warning',
+                'BACKUP_MEDIA_PATH_DRIFT_DETECTED',
+                [
+                    'context'   => (string) $context,
+                    'scanned'   => isset( $summary['scanned'] ) ? (int) $summary['scanned'] : 0,
+                    'drift'     => $drift,
+                    'missing'   => $missing,
+                    'truncated' => ! empty( $summary['truncated'] ),
+                    'samples'   => isset( $summary['samples'] ) && is_array( $summary['samples'] ) ? array_slice( $summary['samples'], 0, 5 ) : [],
+                ]
+            );
+        }
+
+        return $summary;
     }
 
     /**

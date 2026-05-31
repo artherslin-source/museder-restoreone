@@ -66,6 +66,7 @@ class Museder_Restoreone_Restore_Media_Paths {
             $cleanup['media_paths_verify_last_meta_id']   = 0;
             $cleanup['media_paths_verify_missing']        = 0;
             $cleanup['media_paths_verify_checked']        = 0;
+            return self::progress_result( false );
         }
 
         if ( 'scan_meta' === $phase ) {
@@ -324,6 +325,103 @@ class Museder_Restoreone_Restore_Media_Paths {
             'verify_missing'       => isset( $cleanup['media_paths_verify_missing'] ) ? (int) $cleanup['media_paths_verify_missing'] : 0,
             'samples_unresolved'   => $samples,
         ];
+    }
+
+    /**
+     * Detect attachment DB paths that do not exist on disk but have a likely ASCII-folded match.
+     *
+     * @param int    $limit  Maximum attachment rows to scan.
+     * @param string $job_id Optional job id for filters.
+     * @return array<string, mixed>
+     */
+    public static function detect_upload_path_drift( $limit = 1000, $job_id = '' ) {
+        global $wpdb;
+
+        $limit = max( 1, min( 10000, (int) $limit ) );
+        if ( ! isset( $wpdb->postmeta ) ) {
+            return [
+                'scanned'    => 0,
+                'drift'      => 0,
+                'missing'    => 0,
+                'samples'    => [],
+                'reason'     => 'wpdb_unavailable',
+                'truncated'  => false,
+            ];
+        }
+
+        $uploads = wp_upload_dir();
+        $basedir = isset( $uploads['basedir'] ) ? wp_normalize_path( (string) $uploads['basedir'] ) : '';
+        if ( '' === $basedir || ! is_dir( $basedir ) ) {
+            return [
+                'scanned'    => 0,
+                'drift'      => 0,
+                'missing'    => 0,
+                'samples'    => [],
+                'reason'     => 'uploads_missing',
+                'truncated'  => false,
+            ];
+        }
+
+        self::build_uploads_index( $basedir );
+
+        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+        $rows = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT meta_id, post_id, meta_value FROM {$wpdb->postmeta} WHERE meta_key = %s ORDER BY meta_id ASC LIMIT %d",
+                '_wp_attached_file',
+                $limit
+            ),
+            ARRAY_A
+        );
+        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+        $summary = [
+            'scanned'    => 0,
+            'drift'      => 0,
+            'missing'    => 0,
+            'samples'    => [],
+            'reason'     => 'ok',
+            'truncated'  => is_array( $rows ) && count( $rows ) >= $limit,
+        ];
+
+        if ( empty( $rows ) || ! is_array( $rows ) ) {
+            return $summary;
+        }
+
+        foreach ( $rows as $row ) {
+            $post_id = isset( $row['post_id'] ) ? (int) $row['post_id'] : 0;
+            $rel     = isset( $row['meta_value'] ) ? wp_normalize_path( (string) $row['meta_value'] ) : '';
+            if ( '' === $rel ) {
+                continue;
+            }
+
+            $summary['scanned']++;
+            if ( isset( self::$rel_path_index[ $rel ] ) ) {
+                continue;
+            }
+
+            $abs = museder_restoreone_safe_path_join( $basedir, $rel );
+            if ( '' !== $abs && is_file( $abs ) ) {
+                self::$rel_path_index[ $rel ] = true;
+                continue;
+            }
+
+            $match = self::resolve_disk_relative_path( $rel, $post_id, $basedir, $job_id );
+            if ( '' !== $match && $match !== $rel ) {
+                $summary['drift']++;
+                if ( count( $summary['samples'] ) < 10 ) {
+                    $summary['samples'][] = [
+                        'db'   => $rel,
+                        'disk' => $match,
+                    ];
+                }
+                continue;
+            }
+
+            $summary['missing']++;
+        }
+
+        return $summary;
     }
 
     /**
