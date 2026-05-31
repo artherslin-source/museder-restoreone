@@ -211,6 +211,8 @@ Checklists: `docs/RELEASE_CHECKLIST.md`, `docs/PACKAGING.md`, `docs/WORDPRESS_OR
 * Restore: media path apply_pairs now runs as a time-sliced database search-replace with row checkpoints so large pair sets no longer hit PHP max_execution_time during cleanup on shared hosting.
 * Restore: reject unsafe media path pairs (empty filename stems) and map menu-icon attachments to on-disk ICON filenames when ASCII-fold matching is ambiguous.
 * Restore: rehydrate active restore jobs from the restore lock after fatal timeouts so cron and the admin UI can resume cleanup instead of leaving Restore History stuck on Running.
+* Restore: Image Widget / Max Mega Menu media URLs are synchronized from fixed attachment paths after restore so serialized widget raw URLs no longer keep stale uploads filenames.
+* Restore UI: auth-check, session, or admin-ajax 403/500 interruptions during Step 3 keep monitoring the background job and reconcile to success when history/status shows completion.
 * Restore UI: reload the Restore page after a completed job to show the success state when host polling was blocked mid-run.
 * Restore UI: completed jobs now show a success notification from status polling, and repeated 401/403 polling blocks show a clearer host-blocking message.
 

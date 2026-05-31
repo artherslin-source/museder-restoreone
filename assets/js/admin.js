@@ -2041,6 +2041,7 @@ function initRestoreCenter() {
         var restoreAutoResumeInterval = null;
         var restoreAutoResumeToastShown = false;
         var activeRestoreToken = null;
+        installRestoreAuthCheckGuard();
 
         function appendRestoreProgressAuth(formData, jobId) {
             if (jobId) {
@@ -2681,6 +2682,16 @@ function initRestoreCenter() {
                     scheduleRestoreAutoResume(jobId);
                     return;
                 }
+                if (jobId && (restoreInProgress || activeRestoreJobId === jobId || (restoreMonitor && restoreMonitor.jobId === jobId)) &&
+                    error && (error.status === 401 || error.status === 403 || error.status === 500 || error.code === 'wp_ajax_zero')) {
+                    pauseRestoreJobMonitor();
+                    scheduleRestoreAutoResume(jobId);
+                    if (!restoreAutoResumeToastShown) {
+                        restoreAutoResumeToastShown = true;
+                        showToast('⚠️ ' + (strings.sessionExpired || 'Your login/session check was blocked. Restore continues in the background and this page will keep checking for completion.'), 'warning');
+                    }
+                    return;
+                }
                 console.warn('[Backup Lite] History fallback check also failed:', error);
                 // If history check also fails, and we've been polling for a while, don't assume failure
                 // Instead, just reset state and show a message
@@ -3143,6 +3154,78 @@ function initRestoreCenter() {
                     resumeRestoreJobMonitor(jobId);
                 }).catch(function () {});
             }, 10000);
+        }
+
+        function handleRestoreTransportInterruption(jobId, error, silent) {
+            if (!jobId || !(restoreInProgress || activeRestoreJobId === jobId || (restoreMonitor && restoreMonitor.jobId === jobId))) {
+                return false;
+            }
+            var status = error && error.status ? parseInt(error.status, 10) : 0;
+            var text = error && error.responseText ? String(error.responseText).toLowerCase() : '';
+            var message = error && error.message ? String(error.message).toLowerCase() : '';
+            var interrupted = status === 401 || status === 403 || status === 500 ||
+                text.indexOf('forbidden') !== -1 ||
+                text.indexOf('interim-login') !== -1 ||
+                message.indexOf('failed to fetch') !== -1 ||
+                message.indexOf('network') !== -1 ||
+                message.indexOf('timeout') !== -1;
+            if (!interrupted) {
+                return false;
+            }
+
+            if (!silent) {
+                console.warn('[Backup Lite] Restore monitor transport/auth interrupted; keeping background job monitor alive.', { jobId: jobId, status: status, error: error });
+            }
+            activeRestoreJobId = jobId;
+            restoreInProgress = true;
+            pauseRestoreJobMonitor();
+            syncWizard();
+            updateRestoreCancelState();
+            if (!restoreAutoResumeToastShown) {
+                restoreAutoResumeToastShown = true;
+                showToast('⚠️ ' + (strings.sessionExpired || 'Your login/session check was blocked. Restore continues in the background and this page will keep checking for completion.'), 'warning');
+            }
+            checkRestoreCompletionFromHistory(jobId);
+            scheduleRestoreAutoResume(jobId);
+            window.setTimeout(function () {
+                if (!restoreMonitor.hasFinalResult && (activeRestoreJobId === jobId || restoreMonitor.jobId === jobId)) {
+                    checkRestoreCompletionFromHistory(jobId);
+                }
+            }, 30000);
+            return true;
+        }
+
+        function installRestoreAuthCheckGuard() {
+            var attempts = 0;
+            var timer = window.setInterval(function () {
+                attempts++;
+                if (!window.wp || !window.wp.authCheck || window.wp.authCheck._musederRestoreOneGuarded) {
+                    if (attempts > 40 || (window.wp && window.wp.authCheck && window.wp.authCheck._musederRestoreOneGuarded)) {
+                        window.clearInterval(timer);
+                    }
+                    return;
+                }
+                var originalShow = window.wp.authCheck.show;
+                if (typeof originalShow !== 'function') {
+                    window.clearInterval(timer);
+                    return;
+                }
+                window.wp.authCheck.show = function () {
+                    if (restoreInProgress || activeRestoreJobId) {
+                        if (activeRestoreJobId) {
+                            handleRestoreTransportInterruption(activeRestoreJobId, { status: 403, responseText: 'interim-login' }, true);
+                        }
+                        var wrap = document.getElementById('wp-auth-check-wrap');
+                        if (wrap) {
+                            wrap.style.display = 'none';
+                        }
+                        return;
+                    }
+                    return originalShow.apply(this, arguments);
+                };
+                window.wp.authCheck._musederRestoreOneGuarded = true;
+                window.clearInterval(timer);
+            }, 500);
         }
         function pollRestoreJob(jobId, silent) {
             if (!jobId) {
@@ -3837,6 +3920,9 @@ function initRestoreCenter() {
                     });
                     return;
                 }
+                if (handleRestoreTransportInterruption(jobId, error, silent)) {
+                    return;
+                }
                 
                 // For other errors (including 404), distinguish between network errors and actual failures
                 if (activeRestoreJobId === jobId) {
@@ -3856,12 +3942,13 @@ function initRestoreCenter() {
                     }
                     
                     if (isNetworkError) {
-                        // For network/technical errors, stop polling and check history
+                        // For network/technical errors, keep the job alive and check history.
                         if (!silent) {
-                            console.warn('[Backup Lite] Restore job status network error, stopping polling and checking history:', error);
+                            console.warn('[Backup Lite] Restore job status network error; pausing monitor and checking history:', error);
                         }
-                        stopRestoreJobMonitor();
+                        pauseRestoreJobMonitor();
                         checkRestoreCompletionFromHistory(jobId);
+                        scheduleRestoreAutoResume(jobId);
                     } else {
                         // For other errors, log but don't assume failure
                         if (!silent) {
@@ -3926,17 +4013,12 @@ function initRestoreCenter() {
                                 }).catch(function(historyError) {
                                     // If history check also fails, don't assume failure - just show message
                                     console.warn('[Backup Lite] History check failed after timeout, could not confirm final status:', historyError);
-                                    stopRestoreJobMonitor();
-                                    restoreInProgress = false;
-                                    restoreCompleted = false;
-                                    if (startButton) {
-                                        startButton.disabled = false;
-                                    }
-                                    setProgress(100, strings.errorGeneric || 'Could not confirm restore status. Please check logs manually.', true);
+                                    pauseRestoreJobMonitor();
+                                    setProgress(Math.max(currentProgress || 85, 85), strings.restoreFinalizing || 'Finalizing restore...', false);
                                     syncWizard();
                                     updateRestoreCancelState();
                                     showToast('⚠️ ' + (strings.errorGeneric || 'Could not confirm restore status. Please check logs manually.'), 'warning');
-                                    // Don't show failure modal - just show toast message
+                                    scheduleRestoreAutoResume(jobId);
                                 });
                             }
                         }, 1000);

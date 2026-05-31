@@ -112,6 +112,7 @@ class Museder_Restoreone_Restore_Media_Paths {
                     return self::progress_result( false );
                 }
             }
+            $cleanup['media_paths_widget_urls_fixed'] = self::sync_widget_media_image_urls( $basedir );
             self::log_reconcile_done( $job_id, $cleanup, 'apply_pairs' );
             $cleanup['media_paths_phase'] = 'verify';
             return self::progress_result( false );
@@ -174,6 +175,7 @@ class Museder_Restoreone_Restore_Media_Paths {
                 'pairs'      => count( $pairs ),
                 'content_scanned' => isset( $cleanup['media_paths_content_scanned'] ) ? (int) $cleanup['media_paths_content_scanned'] : 0,
                 'content_pairs'   => isset( $cleanup['media_paths_content_pairs'] ) ? (int) $cleanup['media_paths_content_pairs'] : 0,
+                'widget_urls_fixed' => isset( $cleanup['media_paths_widget_urls_fixed'] ) ? (int) $cleanup['media_paths_widget_urls_fixed'] : 0,
             ]
         );
     }
@@ -354,6 +356,7 @@ class Museder_Restoreone_Restore_Media_Paths {
             'scanned'              => isset( $cleanup['media_paths_scanned'] ) ? (int) $cleanup['media_paths_scanned'] : 0,
             'verify_checked'       => isset( $cleanup['media_paths_verify_checked'] ) ? (int) $cleanup['media_paths_verify_checked'] : 0,
             'verify_missing'       => isset( $cleanup['media_paths_verify_missing'] ) ? (int) $cleanup['media_paths_verify_missing'] : 0,
+            'widget_urls_fixed'    => isset( $cleanup['media_paths_widget_urls_fixed'] ) ? (int) $cleanup['media_paths_widget_urls_fixed'] : 0,
             'samples_unresolved'   => $samples,
         ];
     }
@@ -1150,6 +1153,94 @@ class Museder_Restoreone_Restore_Media_Paths {
         }
         $abs = museder_restoreone_safe_path_join( $basedir, $rel );
         return '' !== $abs && is_file( $abs );
+    }
+
+    /**
+     * Sync media widget raw URLs from their attachment IDs after attachment paths were reconciled.
+     *
+     * Max Mega Menu commonly stores Image Widget instances in widget_media_image with both
+     * attachment_id and a raw URL; the raw URL must follow the fixed attachment path.
+     *
+     * @param string $basedir Uploads basedir.
+     * @return int Updated widget instance count.
+     */
+    public static function sync_widget_media_image_urls( $basedir ) {
+        if ( ! function_exists( 'get_option' ) || ! function_exists( 'update_option' ) || ! function_exists( 'get_post_meta' ) ) {
+            return 0;
+        }
+
+        $widgets = get_option( 'widget_media_image', [] );
+        if ( ! is_array( $widgets ) ) {
+            return 0;
+        }
+
+        $uploads = wp_upload_dir();
+        $baseurl = isset( $uploads['baseurl'] ) ? rtrim( (string) $uploads['baseurl'], '/' ) : '';
+        if ( '' === $baseurl ) {
+            return 0;
+        }
+
+        $changed = 0;
+        foreach ( $widgets as $key => $widget ) {
+            if ( '_multiwidget' === $key || ! is_array( $widget ) ) {
+                continue;
+            }
+
+            $attachment_id = isset( $widget['attachment_id'] ) ? (int) $widget['attachment_id'] : 0;
+            if ( $attachment_id <= 0 ) {
+                continue;
+            }
+
+            $rel = self::get_attachment_file_from_db( $attachment_id );
+            if ( '' === $rel ) {
+                $rel = get_post_meta( $attachment_id, '_wp_attached_file', true );
+            }
+            $rel = wp_normalize_path( (string) $rel );
+            if ( '' === $rel || ! self::upload_relative_path_exists( $basedir, $rel ) ) {
+                continue;
+            }
+
+            $new_url = $baseurl . '/' . ltrim( $rel, '/' );
+            if ( isset( $widget['url'] ) && (string) $widget['url'] === $new_url ) {
+                continue;
+            }
+
+            $widgets[ $key ]['url'] = $new_url;
+            ++$changed;
+        }
+
+        if ( $changed > 0 ) {
+            update_option( 'widget_media_image', $widgets, false );
+        }
+
+        return $changed;
+    }
+
+    /**
+     * Read the latest _wp_attached_file value directly because reconcile updates it with $wpdb.
+     *
+     * @param int $attachment_id Attachment post ID.
+     * @return string
+     */
+    private static function get_attachment_file_from_db( $attachment_id ) {
+        global $wpdb;
+
+        $attachment_id = (int) $attachment_id;
+        if ( $attachment_id <= 0 || ! isset( $wpdb->postmeta ) ) {
+            return '';
+        }
+
+        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+        $value = $wpdb->get_var(
+            $wpdb->prepare(
+                "SELECT meta_value FROM {$wpdb->postmeta} WHERE post_id = %d AND meta_key = %s LIMIT 1",
+                $attachment_id,
+                '_wp_attached_file'
+            )
+        );
+        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+        return is_string( $value ) ? $value : '';
     }
 
     /**

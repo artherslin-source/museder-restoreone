@@ -55,7 +55,10 @@ if ( ! function_exists( 'trailingslashit' ) ) {
 
 if ( ! function_exists( 'wp_upload_dir' ) ) {
 	function wp_upload_dir() {
-		return [ 'basedir' => $GLOBALS['mro_media_qa_uploads'] ];
+		return [
+			'basedir' => $GLOBALS['mro_media_qa_uploads'],
+			'baseurl' => 'https://example.com/wp-content/uploads',
+		];
 	}
 }
 
@@ -68,6 +71,7 @@ if ( ! function_exists( 'museder_restoreone_safe_path_join' ) ) {
 }
 
 $GLOBALS['mro_media_qa_postmeta_store'] = [];
+$GLOBALS['mro_media_qa_options_store']  = [];
 
 if ( ! function_exists( 'get_post_meta' ) ) {
 	function get_post_meta( $post_id, $key, $single = false ) {
@@ -86,6 +90,22 @@ if ( ! function_exists( 'update_post_meta' ) ) {
 			$GLOBALS['mro_media_qa_postmeta_store'][ $post_id ] = [];
 		}
 		$GLOBALS['mro_media_qa_postmeta_store'][ $post_id ][ $key ] = $value;
+		return true;
+	}
+}
+
+if ( ! function_exists( 'get_option' ) ) {
+	function get_option( $option, $default = false ) {
+		return array_key_exists( $option, $GLOBALS['mro_media_qa_options_store'] )
+			? $GLOBALS['mro_media_qa_options_store'][ $option ]
+			: $default;
+	}
+}
+
+if ( ! function_exists( 'update_option' ) ) {
+	function update_option( $option, $value, $autoload = null ) {
+		unset( $autoload );
+		$GLOBALS['mro_media_qa_options_store'][ $option ] = $value;
 		return true;
 	}
 }
@@ -123,6 +143,15 @@ class Mro_Media_Qa_Wpdb {
 		}
 
 		return $this->filter_postmeta_rows( $query );
+	}
+
+	public function get_var( $query ) {
+		$rows = $this->filter_postmeta_rows( (string) $query );
+		if ( empty( $rows ) ) {
+			return null;
+		}
+		$row = $rows[0];
+		return $row['meta_value'] ?? null;
 	}
 
 	private function filter_postmeta_rows( $query ) {
@@ -284,6 +313,14 @@ if ( ! is_dir( $media_dir ) && ! mkdir( $media_dir, 0700, true ) ) {
 			],
 		],
 	];
+	$GLOBALS['mro_media_qa_postmeta_store'][3600]['_wp_attached_file'] = '2024/04/LINE_ALBUM__240409_7.jpg';
+	$GLOBALS['mro_media_qa_options_store']['widget_media_image'] = [
+		'_multiwidget' => 1,
+		2 => [
+			'attachment_id' => 3600,
+			'url'           => 'https://example.com/wp-content/uploads/2024/04/LINE_ALBUM_新莊國小跑道清洗前_240409_7.jpg',
+		],
+	];
 
 	$drift_before = Museder_Restoreone_Restore_Media_Paths::detect_upload_path_drift( 10, 'qa_media_paths' );
 	if ( ! is_array( $drift_before ) || 1 !== (int) ( $drift_before['drift'] ?? 0 ) ) {
@@ -341,6 +378,12 @@ if ( ! is_dir( $media_dir ) && ! mkdir( $media_dir, 0700, true ) ) {
 
 	if ( empty( $cleanup['media_paths_content_pairs'] ) ) {
 		mro_media_qa_fail( 'content scan should add pairs for stale uploads URLs in postmeta/post_content' );
+	}
+	if ( empty( $cleanup['media_paths_widget_urls_fixed'] ) ) {
+		mro_media_qa_fail( 'widget media image raw URLs should be synced from attachment IDs' );
+	}
+	if ( 'https://example.com/wp-content/uploads/2024/04/LINE_ALBUM__240409_7.jpg' !== ( $GLOBALS['mro_media_qa_options_store']['widget_media_image'][2]['url'] ?? '' ) ) {
+		mro_media_qa_fail( 'widget media image URL should point to fixed attachment path' );
 	}
 
 	$pair_searches = [];
