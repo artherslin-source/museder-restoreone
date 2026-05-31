@@ -1926,9 +1926,16 @@ function initRestoreCenter() {
         var nonce = restoreData.ajaxNonce 
             || settings.nonce 
             || '';
+        var restUrlV2 = restoreData.restUrlV2
+            || settings.restUrlV2
+            || (window.MusederRestoreOneV2 && window.MusederRestoreOneV2.restUrl)
+            || '';
         var refreshingNonce = null;
         if (!ajaxUrl) {
             console.error('Backup Lite: ajaxUrl not found (REST v2 upload may still work; some AJAX restore actions disabled).');
+        }
+        if (restUrlV2 && restUrlV2.slice(-1) !== '/') {
+            restUrlV2 += '/';
         }
 
         var methodButtons = document.querySelectorAll('.restore-methods .method-tabs button');
@@ -2442,6 +2449,159 @@ function initRestoreCenter() {
             });
         }
 
+        function fetchRestoreFinalStatus(jobId) {
+            if (!jobId || !activeRestoreToken || !restUrlV2) {
+                return Promise.reject(new Error('restore_final_status_unavailable'));
+            }
+
+            var url = restUrlV2 + 'restore/final-status/' + encodeURIComponent(jobId) +
+                '?_restore_token=' + encodeURIComponent(activeRestoreToken);
+
+            return fetch(url, {
+                method: 'GET',
+                credentials: 'same-origin',
+                headers: {
+                    'Accept': 'application/json',
+                    'X-Restore-Token': activeRestoreToken
+                }
+            }).then(function (res) {
+                return res.text().then(function (text) {
+                    var json = {};
+                    if (text) {
+                        try {
+                            json = JSON.parse(text);
+                        } catch (error) {
+                            var parseError = new Error(strings.errorGeneric || 'Unable to confirm restore status.');
+                            parseError.status = res.status;
+                            parseError.responseText = text;
+                            throw parseError;
+                        }
+                    }
+                    if (!res.ok) {
+                        var message = json && json.message ? json.message : (strings.errorGeneric || 'Unable to confirm restore status.');
+                        var requestError = new Error(message);
+                        requestError.status = res.status;
+                        requestError.payload = json;
+                        requestError.responseText = text;
+                        throw requestError;
+                    }
+                    return json;
+                });
+            });
+        }
+
+        function findMatchingRestoreHistory(history, jobId, job) {
+            if (!Array.isArray(history) || history.length === 0) {
+                return null;
+            }
+
+            var storedJobInfo = window.musederRestoreOneRestoreJobInfo || {};
+            var jobStartRaw = (job && (job.started_at_raw || job.created_at_raw)) || storedJobInfo.started_at_raw || storedJobInfo.created_at_raw || 0;
+            var archiveMatch = storedJobInfo.archive || restoreMonitor.archive;
+            var matches = history.filter(function (item) {
+                var matchesJobId = item.job_id === (restoreMonitor.jobId || jobId);
+                var matchesArchive = archiveMatch && item.file === archiveMatch;
+                var matchesTimestamp = !jobStartRaw || (item.timestamp_raw && item.timestamp_raw >= jobStartRaw && (item.timestamp_raw - jobStartRaw) < 600);
+                return matchesJobId || (matchesArchive && matchesTimestamp);
+            });
+
+            if (matches.length === 0) {
+                return null;
+            }
+
+            return matches.reduce(function (a, b) {
+                var aTime = a.timestamp_utc || a.timestamp_raw || 0;
+                var bTime = b.timestamp_utc || b.timestamp_raw || 0;
+                return aTime > bTime ? a : b;
+            });
+        }
+
+        function applyRestoreFinalStatusPayload(payload, jobId, source) {
+            payload = getJsonPayload(payload) || payload || {};
+            var job = normalizeRestoreJobPayload(payload.job || payload);
+            var history = Array.isArray(payload.history) ? payload.history : [];
+            var completionMeta = {
+                safe_mode_active: !!payload.safe_mode_active,
+                prev_plugins_count: (typeof payload.prev_plugins_count !== 'undefined') ? payload.prev_plugins_count : 0
+            };
+
+            if (history.length) {
+                renderHistory(history);
+            }
+
+            if (job && (job.status === 'success' || job.status === 'completed' || (job.stage === 'done' && parseFloat(job.progress || 0) >= 100))) {
+                restoreMonitor.hasFinalResult = true;
+                restoreMonitor.lastStatus = 'success';
+                console.log('[Backup Lite] Restore completion confirmed via ' + source, { jobId: jobId, job: job });
+                markRestoreCompleted(job.message || (strings.restoreCompleted || 'Restore Completed.'), completionMeta);
+                return true;
+            }
+
+            if (job && job.status === 'failed') {
+                restoreMonitor.hasFinalResult = true;
+                restoreMonitor.lastStatus = 'failed';
+                stopRestoreJobMonitor();
+                restoreInProgress = false;
+                restoreCompleted = false;
+                if (startButton) {
+                    startButton.disabled = false;
+                }
+                setProgress(100, job.message || (strings.errorGeneric || 'Restore failed.'), true);
+                syncWizard();
+                updateRestoreCancelState();
+                showToast('❌ ' + (job.message || strings.errorGeneric || 'Restore failed.'), 'error');
+                if (!restoreCompletionShown && !backupLiteRestoreFailureShown) {
+                    restoreCompletionShown = true;
+                    backupLiteRestoreFailureShown = true;
+                    showCompletionOverlay({
+                        icon: '❌',
+                        title: strings.restoreFailed || 'Restore Failed',
+                        message: job.message || strings.errorGeneric || 'Restore failed. Please review the error log and try again.',
+                        confirmText: strings.restoreOverlayConfirm || strings.close || 'Got it',
+                        type: 'error'
+                    });
+                }
+                return true;
+            }
+
+            var latestHistory = findMatchingRestoreHistory(history, jobId, job);
+            if (latestHistory && latestHistory.result === 'success') {
+                restoreMonitor.hasFinalResult = true;
+                restoreMonitor.lastStatus = 'success';
+                console.log('[Backup Lite] Restore history success confirmed via ' + source, { jobId: jobId, latestHistory: latestHistory });
+                markRestoreCompleted(job && job.message || (strings.restoreCompleted || 'Restore Completed.'), completionMeta);
+                return true;
+            }
+
+            if (latestHistory && latestHistory.result === 'failed') {
+                restoreMonitor.hasFinalResult = true;
+                restoreMonitor.lastStatus = 'failed';
+                stopRestoreJobMonitor();
+                restoreInProgress = false;
+                restoreCompleted = false;
+                if (startButton) {
+                    startButton.disabled = false;
+                }
+                setProgress(100, latestHistory.message || (strings.errorGeneric || 'Restore failed.'), true);
+                syncWizard();
+                updateRestoreCancelState();
+                showToast('❌ ' + (latestHistory.message || strings.errorGeneric || 'Restore failed.'), 'error');
+                return true;
+            }
+
+            if (job && (job.status === 'running' || job.status === 'pending' || job.status === 'cancelling')) {
+                activeRestoreJobId = jobId;
+                restoreInProgress = true;
+                if (activeRestoreJobId !== jobId || !restoreJobPollTimer) {
+                    var resumeFileSize = (restoreData.summary && restoreData.summary.size) ? restoreData.summary.size : 0;
+                    startRestoreJobMonitor(job, resumeFileSize);
+                }
+                return true;
+            }
+
+            return false;
+        }
+
         function refreshAjaxNonce() {
             if (refreshingNonce) {
                 return refreshingNonce;
@@ -2500,13 +2660,22 @@ function initRestoreCenter() {
             }
             
             console.log('[Backup Lite] Checking completion from history as fallback', { jobId });
-            
-            // Try to get history directly via a simple fetch (without nonce if possible)
-            // Or use the job status endpoint with fresh nonce
-            var formData = prepareFormData('museder_restoreone_restore_job_status');
-            appendRestoreProgressAuth(formData, jobId);
-            
-            ajaxRequest(formData).then(function (json) {
+
+            fetchRestoreFinalStatus(jobId).then(function (payload) {
+                return applyRestoreFinalStatusPayload(payload, jobId, 'REST final-status');
+            }).catch(function (error) {
+                console.warn('[Backup Lite] REST final-status check failed; falling back to admin-ajax status.', error);
+                return false;
+            }).then(function (handledByRest) {
+                if (handledByRest || restoreMonitor.hasFinalResult) {
+                    return;
+                }
+
+                // Try to get history via the original admin-ajax endpoint as a secondary path.
+                var formData = prepareFormData('museder_restoreone_restore_job_status');
+                appendRestoreProgressAuth(formData, jobId);
+
+                return ajaxRequest(formData).then(function (json) {
                 // Check if we already have a final result before processing
                 if (restoreMonitor.hasFinalResult) {
                     console.log('[Backup Lite] Already have final result, skipping history processing', { 
@@ -2665,6 +2834,7 @@ function initRestoreCenter() {
                         return;
                     }
                 }
+                });
             }).catch(function (error) {
                 // WordPress AJAX "0" indicates session lost or not authorised (often due to expired login).
                 // Do not mark restore as failed; the server-side job may still be running via cron.
@@ -4468,23 +4638,25 @@ function initRestoreCenter() {
                     }
                 }
                 
-                // Still reset the UI state even if cancel request failed
                 restoreCancelBtn.disabled = false;
-                stopRestoreJobMonitor();
-                restoreInProgress = false;
-                restoreCompleted = false;
-                backupLiteRestoreFailureShown = false; // Reset failure flag when restarting
-                if (startButton) {
-                    startButton.disabled = false;
+                if (activeRestoreJobId) {
+                    restoreInProgress = true;
+                    showToast('⚠️ ' + (strings.restoreCancelUnconfirmed || 'Cancel request could not be confirmed. Restore may still be running; checking the final status now.'), 'warning');
+                    checkRestoreCompletionFromHistory(activeRestoreJobId);
+                    scheduleRestoreAutoResume(activeRestoreJobId);
+                } else {
+                    restoreInProgress = false;
+                    restoreCompleted = false;
+                    backupLiteRestoreFailureShown = false;
+                    if (startButton) {
+                        startButton.disabled = false;
+                    }
                 }
                 syncWizard();
                 updateRestoreCancelState();
-                
-                // Show error message
-                showToast(errorMessage, 'error');
-                
+
                 // Log error for debugging
-                console.error('Cancel restore error:', error);
+                console.error('Cancel restore error:', errorMessage, error);
             });
         }
         var startButton = document.getElementById('startRestore');

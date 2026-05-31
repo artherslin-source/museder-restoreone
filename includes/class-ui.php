@@ -500,6 +500,7 @@ class Museder_Restoreone_UI {
                 'restoreOverlayMessage' => __( 'Museder RestoreOne has finished restoring your site.', 'museder-restoreone' ),
                 'restoreOverlayConfirm' => __( 'Got it', 'museder-restoreone' ),
                 'restoreTickFallbackActive' => __( 'Cron appears unreliable. Using your browser to push restore progress…', 'museder-restoreone' ),
+                'restoreCancelUnconfirmed' => __( 'Cancel request could not be confirmed. Restore may still be running; checking the final status now.', 'museder-restoreone' ),
                 'selectAtLeastOneBackup' => __( 'Please select at least one backup.', 'museder-restoreone' ),
                 /* translators: %s: Number of backups selected. */
                 'downloadingBackups'     => __( 'Downloading %s backup(s)...', 'museder-restoreone' ),

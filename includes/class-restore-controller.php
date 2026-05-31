@@ -52,6 +52,16 @@ class Museder_Restoreone_Restore_Controller {
 
         register_rest_route(
             'museder-restoreone/v2',
+            '/restore/final-status/(?P<job_id>[a-zA-Z0-9_\-]+)',
+            [
+                'methods'             => WP_REST_Server::READABLE,
+                'callback'            => [ __CLASS__, 'final_status' ],
+                'permission_callback' => [ __CLASS__, 'check_final_status_permissions' ],
+            ]
+        );
+
+        register_rest_route(
+            'museder-restoreone/v2',
             '/restore/execute/(?P<job_id>[a-zA-Z0-9_\-]+)',
             [
                 'methods'             => WP_REST_Server::CREATABLE,
@@ -152,6 +162,37 @@ class Museder_Restoreone_Restore_Controller {
         }
     }
 
+    public static function final_status( WP_REST_Request $request ) {
+        $job_id = sanitize_text_field( (string) $request->get_param( 'job_id' ) );
+
+        $job = null;
+        $status = [];
+        try {
+            $status = Museder_Restoreone_Restore_Service::status( $job_id );
+            $job    = Museder_Restoreone_Restore_Handler::map_restore_service_status_to_job( $job_id, $status );
+        } catch ( Exception $e ) {
+            unset( $e );
+        }
+
+        $safe_mode_active = ( get_option( 'museder_restoreone_safe_mode', '' ) === '1' );
+        $prev_plugins_count = 0;
+        if ( $safe_mode_active ) {
+            $prev_plugins = get_option( 'museder_restoreone_prev_active_plugins', [] );
+            $prev_plugins_count = is_array( $prev_plugins ) ? count( $prev_plugins ) : 0;
+        }
+
+        return rest_ensure_response(
+            [
+                'ok'                 => true,
+                'job'                => $job,
+                'status'             => $status,
+                'history'            => Museder_Restoreone_Restore_Handler::history_for_js( 10 ),
+                'safe_mode_active'   => (bool) $safe_mode_active,
+                'prev_plugins_count' => (int) $prev_plugins_count,
+            ]
+        );
+    }
+
     public static function execute( WP_REST_Request $request ) {
         try {
             $job_id = $request->get_param( 'job_id' );
@@ -242,6 +283,32 @@ class Museder_Restoreone_Restore_Controller {
         }
 
         return true;
+    }
+
+    public static function check_final_status_permissions( WP_REST_Request $request ) {
+        if ( ! class_exists( 'Museder_Restoreone_Restore_Token' ) ) {
+            return new WP_Error( 'museder_restoreone_token_unavailable', __( 'Restore authorization is unavailable.', 'museder-restoreone' ), [ 'status' => 403 ] );
+        }
+
+        $job_id = sanitize_text_field( (string) $request->get_param( 'job_id' ) );
+        $token  = (string) $request->get_header( 'X-Restore-Token' );
+        if ( '' === $token ) {
+            $token = (string) $request->get_param( '_restore_token' );
+        }
+        if ( '' === $token ) {
+            $token = (string) $request->get_param( 'restore_token' );
+        }
+        $token = sanitize_text_field( wp_unslash( $token ) );
+
+        if ( '' === $job_id || '' === $token ) {
+            return new WP_Error( 'museder_restoreone_invalid_restore_token', __( 'Restore authorization expired or invalid.', 'museder-restoreone' ), [ 'status' => 403 ] );
+        }
+
+        if ( Museder_Restoreone_Restore_Token::verify( $token, $job_id ) || Museder_Restoreone_Restore_Token::verify_post_complete_read( $token, $job_id ) ) {
+            return true;
+        }
+
+        return new WP_Error( 'museder_restoreone_invalid_restore_token', __( 'Restore authorization expired or invalid.', 'museder-restoreone' ), [ 'status' => 403 ] );
     }
 
     protected static function error_response( Exception $e ) {

@@ -217,6 +217,8 @@ Checklists: `docs/RELEASE_CHECKLIST.md`, `docs/PACKAGING.md`, `docs/WORDPRESS_OR
 * Restore UI: completed jobs now show a success notification from status polling, and repeated 401/403 polling blocks show a clearer host-blocking message.
 * Restore UI: admin-ajax 400/403 host interruptions during Step 3 now stay in background monitoring mode instead of resetting the wizard before the backend job can report success.
 * Restore: excludes RestoreOne runtime locks, active-job pointers, restore tokens, and transients from backup export/import, then clears stale imported runtime options after restore completion.
+* Restore UI: adds a token-based REST final-status confirmation path so Step 3 can show success even when admin-ajax/auth-check is blocked after the backend job completes.
+* Restore UI: failed cancel requests no longer reset the wizard while cron may still be restoring; the UI now keeps the active job and rechecks final status.
 
 = 2.7.273 =
 * Backup: fix post-close archive verification false failures on large ZipArchive backups (entry-index lookup + core-path prefix fallback) so shared hosts no longer trigger a destructive full PclZip repack.
@@ -536,7 +538,7 @@ Checklists: `docs/RELEASE_CHECKLIST.md`, `docs/PACKAGING.md`, `docs/WORDPRESS_OR
 == Upgrade Notice ==
 
 = 2.7.274 =
-Fixes full-site restores that could break wp-admin with a critical error when core file extraction was interrupted mid-slice, and improves Step 3 success recovery when shared hosts block admin-ajax/auth-check polling. Strongly recommended before restoring over live WordPress core on shared hosting.
+Fixes full-site restores that could break wp-admin with a critical error when core file extraction was interrupted mid-slice, and improves Step 3 success recovery when shared hosts block admin-ajax/auth-check polling or cancel confirmation. Strongly recommended before restoring over live WordPress core on shared hosting.
 
 = 2.7.273 =
 Fixes large-site backups that never finish after ZipArchive packing completes (false verify failure → hours-long PclZip repack). Recommended if backups stall near 100% on shared hosting.
