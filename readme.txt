@@ -204,6 +204,7 @@ Checklists: `docs/RELEASE_CHECKLIST.md`, `docs/PACKAGING.md`, `docs/WORDPRESS_OR
 * Restore: phase-aware file-stage progress (wp-content vs core) uses filtered entry counts instead of whole-archive index ratios (fixes misleading ~85% at start of core extraction).
 * Restore: stale-tick watchdog re-schedules WP-Cron when a running job has not progressed recently.
 * Restore: defer `wp-config.php` until the file stage completes; on populated hosts with `db_then_files`, backup mode now merges live DB credentials and table prefix instead of overwriting mid-restore (fixes database connection errors after reload).
+* Restore: wp-config merge uses parenthesis-aware parsing so `define()` values with nested calls (e.g. Docker `getenv_docker()`) are preserved without PHP parse errors.
 
 = 2.7.273 =
 * Backup: fix post-close archive verification false failures on large ZipArchive backups (entry-index lookup + core-path prefix fallback) so shared hosts no longer trigger a destructive full PclZip repack.

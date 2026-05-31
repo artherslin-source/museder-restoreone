@@ -124,8 +124,51 @@ PHP;
 		}
 	}
 
+	$dest_docker = $tmpdir . '/dest-docker-wp-config.php';
+	$arch_docker = $tmpdir . '/arch-docker-wp-config.php';
+
+	$dest_docker_body = <<<'PHP'
+<?php
+define( 'DB_NAME', getenv_docker('WORDPRESS_DB_NAME', 'wordpress') );
+define( 'DB_USER', getenv_docker('WORDPRESS_DB_USER', 'wordpress') );
+define( 'DB_PASSWORD', getenv_docker('WORDPRESS_DB_PASSWORD', 'wordpress') );
+define( 'DB_HOST', getenv_docker('WORDPRESS_DB_HOST', 'db') );
+$table_prefix = 'wp_';
+PHP;
+
+	$arch_docker_body = <<<'PHP'
+<?php
+define( 'DB_NAME', 'i10269493_ipic1' );
+define( 'DB_USER', 'ipic1_user' );
+define( 'DB_PASSWORD', 'archive_secret' );
+define( 'DB_HOST', 'localhost' );
+$table_prefix = 'pa7a_';
+define( 'AUTH_KEY', 'archive-auth-key' );
+PHP;
+
+	file_put_contents( $dest_docker, $dest_docker_body );
+	file_put_contents( $arch_docker, $arch_docker_body );
+
+	$merged_docker = Museder_Restoreone_Restore_Preflight::merge_wp_config_files( $dest_docker, $arch_docker );
+
+	if ( ! is_string( $merged_docker ) ) {
+		wp_config_policy_fail( 'docker-style merge should return string' );
+	} elseif ( false === strpos( $merged_docker, "getenv_docker('WORDPRESS_DB_NAME', 'wordpress')" ) ) {
+		wp_config_policy_fail( 'docker-style merge should preserve nested getenv_docker DB_NAME' );
+	} elseif ( false !== strpos( $merged_docker, 'i10269493_ipic1' ) ) {
+		wp_config_policy_fail( 'docker-style merge should not keep archive DB_NAME literal' );
+	} else {
+		$merged_docker_path = $tmpdir . '/merged-docker-wp-config.php';
+		file_put_contents( $merged_docker_path, $merged_docker );
+		$lint = shell_exec( 'php -l ' . escapeshellarg( $merged_docker_path ) . ' 2>&1' );
+		if ( ! is_string( $lint ) || false === strpos( $lint, 'No syntax errors' ) ) {
+			wp_config_policy_fail( 'docker-style merged wp-config should pass php -l' );
+		}
+		unlink( $merged_docker_path );
+	}
+
 	// Cleanup.
-	foreach ( [ $dest, $arch ] as $path ) {
+	foreach ( [ $dest, $arch, $dest_docker, $arch_docker ] as $path ) {
 		if ( is_file( $path ) ) {
 			unlink( $path );
 		}

@@ -468,13 +468,15 @@ class Museder_Restoreone_Restore_Preflight {
             $dest_body = file_get_contents( $dest_config );
             if ( is_string( $dest_body ) ) {
                 foreach ( $db_keys as $key ) {
-                    if ( preg_match( "/define\\s*\\(\\s*['\"]" . preg_quote( $key, '/' ) . "['\"]\\s*,\\s*([^)]+)\\)/i", $dest_body, $m ) ) {
-                        $replacement = "define( '" . $key . "', " . trim( $m[1] ) . " )";
-                        if ( preg_match( "/define\\s*\\(\\s*['\"]" . preg_quote( $key, '/' ) . "['\"]/i", $merged ) ) {
-                            $merged = preg_replace( "/define\\s*\\(\\s*['\"]" . preg_quote( $key, '/' ) . "['\"]\\s*,\\s*[^)]+\\)/i", $replacement, $merged, 1 );
-                        } else {
-                            $merged = preg_replace( '/(<\?php)/i', "<?php\n" . $replacement . ';', $merged, 1 );
-                        }
+                    $value_expr = self::extract_define_second_argument( $dest_body, $key );
+                    if ( '' === $value_expr ) {
+                        continue;
+                    }
+                    $replaced = self::replace_define_in_config_body( $merged, $key, $value_expr );
+                    if ( false === $replaced ) {
+                        $merged = preg_replace( '/(<\?php)/i', "<?php\n" . "define( '" . $key . "', " . $value_expr . " );", $merged, 1 );
+                    } else {
+                        $merged = $replaced;
                     }
                 }
 
@@ -496,6 +498,107 @@ class Museder_Restoreone_Restore_Preflight {
         }
 
         return $merged;
+    }
+
+    /**
+     * Find the closing parenthesis of a define() call starting at the value position.
+     *
+     * @param string $body Config file contents.
+     * @param int    $value_start Index of the first character of define()'s second argument.
+     * @return int|false Index of the closing ')', or false when unbalanced.
+     */
+    protected static function find_define_closing_paren( $body, $value_start ) {
+        $len       = strlen( $body );
+        $depth     = 1;
+        $in_string = false;
+        $string_ch = '';
+        $escaped   = false;
+
+        for ( $i = $value_start; $i < $len; $i++ ) {
+            $ch = $body[ $i ];
+
+            if ( $in_string ) {
+                if ( $escaped ) {
+                    $escaped = false;
+                    continue;
+                }
+                if ( '\\' === $ch ) {
+                    $escaped = true;
+                    continue;
+                }
+                if ( $ch === $string_ch ) {
+                    $in_string = false;
+                }
+                continue;
+            }
+
+            if ( "'" === $ch || '"' === $ch ) {
+                $in_string = true;
+                $string_ch = $ch;
+                continue;
+            }
+
+            if ( '(' === $ch ) {
+                ++$depth;
+                continue;
+            }
+
+            if ( ')' === $ch ) {
+                --$depth;
+                if ( 0 === $depth ) {
+                    return $i;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Extract the second argument expression from a define( 'KEY', ... ) in wp-config.php.
+     *
+     * @param string $body Config file contents.
+     * @param string $key  Define constant name (e.g. DB_NAME).
+     * @return string Value expression or empty string when not found.
+     */
+    protected static function extract_define_second_argument( $body, $key ) {
+        $pattern = "/define\\s*\\(\\s*['\"]" . preg_quote( $key, '/' ) . "['\"]\\s*,\\s*/i";
+        if ( ! preg_match( $pattern, $body, $matches, PREG_OFFSET_CAPTURE ) ) {
+            return '';
+        }
+
+        $value_start = $matches[0][1] + strlen( $matches[0][0] );
+        $close_paren = self::find_define_closing_paren( $body, $value_start );
+        if ( false === $close_paren ) {
+            return '';
+        }
+
+        return trim( substr( $body, $value_start, $close_paren - $value_start ) );
+    }
+
+    /**
+     * Replace define( 'KEY', ... ) in wp-config body, preserving nested parentheses in values.
+     *
+     * @param string $body       Config file contents.
+     * @param string $key        Define constant name.
+     * @param string $value_expr Replacement value expression (without trailing semicolon).
+     * @return string|false Updated body, or false when the define is missing.
+     */
+    protected static function replace_define_in_config_body( $body, $key, $value_expr ) {
+        $pattern = "/define\\s*\\(\\s*['\"]" . preg_quote( $key, '/' ) . "['\"]\\s*,\\s*/i";
+        if ( ! preg_match( $pattern, $body, $matches, PREG_OFFSET_CAPTURE ) ) {
+            return false;
+        }
+
+        $define_start = $matches[0][1];
+        $value_start  = $define_start + strlen( $matches[0][0] );
+        $close_paren  = self::find_define_closing_paren( $body, $value_start );
+        if ( false === $close_paren ) {
+            return false;
+        }
+
+        $replacement = "define( '" . $key . "', " . $value_expr . ' )';
+        return substr( $body, 0, $define_start ) . $replacement . substr( $body, $close_paren + 1 );
     }
 
     /**
