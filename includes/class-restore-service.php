@@ -3157,6 +3157,7 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
                     if ( $active === $job_id ) {
                         delete_option( self::ACTIVE_JOB_OPTION );
                     }
+                    self::cleanup_stale_restoreone_runtime_options( $job_id );
                     return;
 
                 default:
@@ -3721,6 +3722,72 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
                 ] );
             }
             self::spawn_cron();
+        }
+    }
+
+    /**
+     * Remove RestoreOne runtime options imported from the source backup after this restore finishes.
+     *
+     * @param string $job_id Current restore job ID.
+     * @return void
+     */
+    protected static function cleanup_stale_restoreone_runtime_options( $job_id ) {
+        global $wpdb;
+
+        if ( ! isset( $wpdb->options ) ) {
+            return;
+        }
+
+        $current_post_complete = '';
+        if ( class_exists( 'Museder_Restoreone_Restore_Token' ) ) {
+            $current_post_complete = Museder_Restoreone_Restore_Token::POST_COMPLETE_OPTION;
+        }
+
+        $patterns = [
+            'museder_restoreone_active_job',
+            'museder_restoreone_job_lock_%',
+            'museder_restoreone_restore_lock',
+            'museder_restoreone_restore_service_active_job_id',
+            'museder_restoreone_restore_token',
+            'museder_restoreone_mid_restore_isolation',
+            'museder_restoreone_restored_active_plugins',
+            'museder_restoreone_restored_active_sitewide_plugins',
+            'museder_restoreone_skipped_plugins_after_restore',
+            '_site_transient_museder_restoreone_%',
+            '_site_transient_timeout_museder_restoreone_%',
+            '_transient_museder_restoreone_%',
+            '_transient_timeout_museder_restoreone_%',
+        ];
+
+        $deleted = 0;
+        foreach ( $patterns as $pattern ) {
+            if ( '' !== $current_post_complete && $pattern === $current_post_complete ) {
+                continue;
+            }
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+            if ( false !== strpos( $pattern, '%' ) ) {
+                // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- core options table; LIKE value is prepared.
+                $deleted += (int) $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name LIKE %s", $pattern ) );
+            } else {
+                // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- core options table; option_name value is prepared.
+                $deleted += (int) $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name = %s", $pattern ) );
+            }
+            // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+        }
+
+        if ( function_exists( 'wp_cache_delete' ) ) {
+            wp_cache_delete( 'alloptions', 'options' );
+        }
+
+        if ( $deleted > 0 && function_exists( 'museder_restoreone_log' ) ) {
+            museder_restoreone_log(
+                'info',
+                'RESTORE_RUNTIME_OPTIONS_CLEANED',
+                [
+                    'job_id'  => sanitize_text_field( (string) $job_id ),
+                    'deleted' => $deleted,
+                ]
+            );
         }
     }
 

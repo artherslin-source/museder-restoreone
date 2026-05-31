@@ -2591,7 +2591,7 @@ function initRestoreCenter() {
                     // Filter history entries matching this job
                     var matches = payload.history.filter(function(item) {
                         // Match by job_id or archive filename
-                        var matchesJobId = item.job_id === restoreMonitor.jobId;
+                        var matchesJobId = item.job_id === (restoreMonitor.jobId || jobId);
                         var matchesArchive = archiveMatch && item.file === archiveMatch;
                         var matchesTimestamp = !jobStartRaw || (item.timestamp_raw && item.timestamp_raw >= jobStartRaw && (item.timestamp_raw - jobStartRaw) < 600);
                         return (matchesJobId || matchesArchive) && matchesTimestamp;
@@ -2683,7 +2683,7 @@ function initRestoreCenter() {
                     return;
                 }
                 if (jobId && (restoreInProgress || activeRestoreJobId === jobId || (restoreMonitor && restoreMonitor.jobId === jobId)) &&
-                    error && (error.status === 401 || error.status === 403 || error.status === 500 || error.code === 'wp_ajax_zero')) {
+                    error && (error.status === 400 || error.status === 401 || error.status === 403 || error.status === 500 || error.code === 'wp_ajax_zero')) {
                     pauseRestoreJobMonitor();
                     scheduleRestoreAutoResume(jobId);
                     if (!restoreAutoResumeToastShown) {
@@ -2692,23 +2692,14 @@ function initRestoreCenter() {
                     }
                     return;
                 }
-                console.warn('[Backup Lite] History fallback check also failed:', error);
-                // If history check also fails, and we've been polling for a while, don't assume failure
-                // Instead, just reset state and show a message
-                if (restoreJobPollStartTime && (Date.now() - restoreJobPollStartTime) > 120000) {
-                    // If we've been polling for more than 2 minutes and all requests fail, reset state
-                    console.warn('[Backup Lite] All status checks failed for 2+ minutes, resetting state to prevent stuck progress');
-                    stopRestoreJobMonitor();
-                    restoreInProgress = false;
-                    restoreCompleted = false;
-                    if (startButton) {
-                        startButton.disabled = false;
+                console.warn('[Backup Lite] History fallback check also failed; keeping restore monitor in background mode:', error);
+                if (jobId && (restoreInProgress || activeRestoreJobId === jobId || (restoreMonitor && restoreMonitor.jobId === jobId))) {
+                    pauseRestoreJobMonitor();
+                    scheduleRestoreAutoResume(jobId);
+                    if (!restoreAutoResumeToastShown) {
+                        restoreAutoResumeToastShown = true;
+                        showToast('⚠️ ' + (strings.sessionExpired || 'Could not confirm restore status yet. Restore continues in the background and this page will keep checking.'), 'warning');
                     }
-                    setProgress(0, '', false);
-                    syncWizard();
-                    updateRestoreCancelState();
-                    // Show a warning toast instead of failure modal
-                    showToast('⚠️ ' + (strings.errorGeneric || 'Could not confirm restore status. Please check logs manually.'), 'warning');
                 }
             });
         }
@@ -3152,7 +3143,13 @@ function initRestoreCenter() {
                         restoreAutoResumeInterval = null;
                     }
                     resumeRestoreJobMonitor(jobId);
-                }).catch(function () {});
+                }).catch(function () {
+                    if (restoreAutoResumeInterval) {
+                        clearInterval(restoreAutoResumeInterval);
+                        restoreAutoResumeInterval = null;
+                    }
+                    resumeRestoreJobMonitor(jobId);
+                });
             }, 10000);
         }
 
@@ -3163,7 +3160,9 @@ function initRestoreCenter() {
             var status = error && error.status ? parseInt(error.status, 10) : 0;
             var text = error && error.responseText ? String(error.responseText).toLowerCase() : '';
             var message = error && error.message ? String(error.message).toLowerCase() : '';
-            var interrupted = status === 401 || status === 403 || status === 500 ||
+            var interrupted = status === 400 || status === 401 || status === 403 || status === 500 ||
+                (error && error.code === 'wp_ajax_zero') ||
+                text === '0' ||
                 text.indexOf('forbidden') !== -1 ||
                 text.indexOf('interim-login') !== -1 ||
                 message.indexOf('failed to fetch') !== -1 ||

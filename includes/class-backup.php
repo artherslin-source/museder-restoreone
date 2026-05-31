@@ -323,6 +323,53 @@ class Museder_Restoreone_Backup {
         return false !== file_put_contents( $path, $encoded );
     }
 
+    /**
+     * Runtime options are local operational state and must not be exported.
+     *
+     * @param string $option_name WordPress option_name.
+     * @return bool
+     */
+    private static function is_restoreone_runtime_option_name( $option_name ) {
+        if ( class_exists( 'Museder_Restoreone_Restore' ) && method_exists( 'Museder_Restoreone_Restore', 'is_restoreone_runtime_option_name' ) ) {
+            return Museder_Restoreone_Restore::is_restoreone_runtime_option_name( $option_name );
+        }
+
+        $option_name = (string) $option_name;
+        if ( '' === $option_name ) {
+            return false;
+        }
+
+        $exact = [
+            'museder_restoreone_active_job',
+            'museder_restoreone_restore_lock',
+            'museder_restoreone_restore_service_active_job_id',
+            'museder_restoreone_restore_token',
+            'museder_restoreone_restore_post_complete_access',
+            'museder_restoreone_mid_restore_isolation',
+            'museder_restoreone_restored_active_plugins',
+            'museder_restoreone_restored_active_sitewide_plugins',
+            'museder_restoreone_skipped_plugins_after_restore',
+        ];
+        if ( in_array( $option_name, $exact, true ) ) {
+            return true;
+        }
+
+        $prefixes = [
+            'museder_restoreone_job_lock_',
+            '_site_transient_museder_restoreone_',
+            '_site_transient_timeout_museder_restoreone_',
+            '_transient_museder_restoreone_',
+            '_transient_timeout_museder_restoreone_',
+        ];
+        foreach ( $prefixes as $prefix ) {
+            if ( 0 === strpos( $option_name, $prefix ) ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static function ensure_writable_directory( $dir ) {
         if ( ! file_exists( $dir ) ) {
             museder_restoreone_ensure_directory( $dir );
@@ -1172,8 +1219,11 @@ class Museder_Restoreone_Backup {
             ];
 
             foreach ( $rows as $row ) {
-                if ( $is_options_table && isset( $row['option_name'] ) && in_array( (string) $row['option_name'], $exclude_option_names, true ) ) {
-                    continue;
+                if ( $is_options_table && isset( $row['option_name'] ) ) {
+                    $option_name = (string) $row['option_name'];
+                    if ( in_array( $option_name, $exclude_option_names, true ) || self::is_restoreone_runtime_option_name( $option_name ) ) {
+                        continue;
+                    }
                 }
                 $line = [
                     'type'  => 'row',

@@ -215,6 +215,8 @@ Checklists: `docs/RELEASE_CHECKLIST.md`, `docs/PACKAGING.md`, `docs/WORDPRESS_OR
 * Restore UI: auth-check, session, or admin-ajax 403/500 interruptions during Step 3 keep monitoring the background job and reconcile to success when history/status shows completion.
 * Restore UI: reload the Restore page after a completed job to show the success state when host polling was blocked mid-run.
 * Restore UI: completed jobs now show a success notification from status polling, and repeated 401/403 polling blocks show a clearer host-blocking message.
+* Restore UI: admin-ajax 400/403 host interruptions during Step 3 now stay in background monitoring mode instead of resetting the wizard before the backend job can report success.
+* Restore: excludes RestoreOne runtime locks, active-job pointers, restore tokens, and transients from backup export/import, then clears stale imported runtime options after restore completion.
 
 = 2.7.273 =
 * Backup: fix post-close archive verification false failures on large ZipArchive backups (entry-index lookup + core-path prefix fallback) so shared hosts no longer trigger a destructive full PclZip repack.
@@ -534,7 +536,7 @@ Checklists: `docs/RELEASE_CHECKLIST.md`, `docs/PACKAGING.md`, `docs/WORDPRESS_OR
 == Upgrade Notice ==
 
 = 2.7.274 =
-Fixes full-site restores that could break wp-admin with a critical error when core file extraction was interrupted mid-slice. Strongly recommended before restoring over live WordPress core on shared hosting.
+Fixes full-site restores that could break wp-admin with a critical error when core file extraction was interrupted mid-slice, and improves Step 3 success recovery when shared hosts block admin-ajax/auth-check polling. Strongly recommended before restoring over live WordPress core on shared hosting.
 
 = 2.7.273 =
 Fixes large-site backups that never finish after ZipArchive packing completes (false verify failure → hours-long PclZip repack). Recommended if backups stall near 100% on shared hosting.

@@ -423,6 +423,13 @@ class Museder_Restoreone_Restore {
                         continue;
                     }
 
+                    if ( '' !== $options_table_safe && $table === $options_table_safe ) {
+                        $opt_name_for_skip = isset( $row['option_name'] ) ? (string) $row['option_name'] : '';
+                        if ( self::is_restoreone_runtime_option_name( $opt_name_for_skip ) ) {
+                            continue;
+                        }
+                    }
+
                     // Restore: write rows into the target table (direct DB required for bulk import; no caching applicable).
                     // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
                     $wpdb->replace( $table, $row );
@@ -492,6 +499,49 @@ class Museder_Restoreone_Restore {
             $result['active_plugins'] = $active_plugins;
         }
         return $result;
+    }
+
+    /**
+     * Runtime options are local operational state and must not move across sites.
+     *
+     * @param string $option_name WordPress option_name.
+     * @return bool
+     */
+    public static function is_restoreone_runtime_option_name( $option_name ) {
+        $option_name = (string) $option_name;
+        if ( '' === $option_name ) {
+            return false;
+        }
+
+        $exact = [
+            'museder_restoreone_active_job',
+            'museder_restoreone_restore_lock',
+            'museder_restoreone_restore_service_active_job_id',
+            'museder_restoreone_restore_token',
+            'museder_restoreone_restore_post_complete_access',
+            'museder_restoreone_mid_restore_isolation',
+            'museder_restoreone_restored_active_plugins',
+            'museder_restoreone_restored_active_sitewide_plugins',
+            'museder_restoreone_skipped_plugins_after_restore',
+        ];
+        if ( in_array( $option_name, $exact, true ) ) {
+            return true;
+        }
+
+        $prefixes = [
+            'museder_restoreone_job_lock_',
+            '_site_transient_museder_restoreone_',
+            '_site_transient_timeout_museder_restoreone_',
+            '_transient_museder_restoreone_',
+            '_transient_timeout_museder_restoreone_',
+        ];
+        foreach ( $prefixes as $prefix ) {
+            if ( 0 === strpos( $option_name, $prefix ) ) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
