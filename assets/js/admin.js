@@ -450,7 +450,29 @@ var musederRestoreOneTimer = {
         observer.observe(wpbody, { childList: true, subtree: true });
     }
 
+    function dismissWordPressAuthCheckModal() {
+        var wrap = document.getElementById('wp-auth-check-wrap');
+        if (wrap) {
+            wrap.style.display = 'none';
+            if (wrap.parentNode) {
+                wrap.parentNode.removeChild(wrap);
+            }
+        }
+        var tbOverlay = document.getElementById('TB_overlay');
+        if (tbOverlay && tbOverlay.parentNode) {
+            tbOverlay.parentNode.removeChild(tbOverlay);
+        }
+        var tbWindow = document.getElementById('TB_window');
+        if (tbWindow && tbWindow.parentNode) {
+            tbWindow.parentNode.removeChild(tbWindow);
+        }
+        if (document.body) {
+            document.body.classList.remove('modal-open');
+        }
+    }
+
     function showCompletionOverlay(options) {
+        dismissWordPressAuthCheckModal();
         var config = options || {};
         var icon = config.icon || '✅';
         var title = config.title || strings.successTitle || 'Operation completed';
@@ -484,6 +506,7 @@ var musederRestoreOneTimer = {
 
         var overlay = document.createElement('div');
         overlay.className = 'bl-completion-overlay';
+        overlay.style.zIndex = '100050';
         overlay.setAttribute('role', 'alertdialog');
         overlay.setAttribute('aria-live', 'assertive');
 
@@ -2046,9 +2069,49 @@ function initRestoreCenter() {
         var RESTORE_JOB_100_POLL_LIMIT = 60000; // 1 minute after reaching 100%
         var restoreMonitorPaused = false;
         var restoreAutoResumeInterval = null;
+        var restoreRestOnlyCompletionInterval = null;
+        var restoreTransportDegraded = false;
         var restoreAutoResumeToastShown = false;
         var activeRestoreToken = null;
         installRestoreAuthCheckGuard();
+
+        function isRestoreUiSuccessLocked() {
+            return !!(restoreMonitor.hasFinalResult && restoreMonitor.lastStatus === 'success');
+        }
+
+        function stopRestoreRestOnlyCompletionLoop() {
+            if (restoreRestOnlyCompletionInterval) {
+                clearInterval(restoreRestOnlyCompletionInterval);
+                restoreRestOnlyCompletionInterval = null;
+            }
+        }
+
+        function startRestoreRestOnlyCompletionLoop(jobId) {
+            if (!jobId) {
+                return;
+            }
+            if (isRestoreUiSuccessLocked()) {
+                stopRestoreRestOnlyCompletionLoop();
+                return;
+            }
+            restoreTransportDegraded = true;
+            if (restoreRestOnlyCompletionInterval) {
+                return;
+            }
+            var pollRestCompletion = function () {
+                if (isRestoreUiSuccessLocked()) {
+                    stopRestoreRestOnlyCompletionLoop();
+                    return;
+                }
+                fetchRestoreFinalStatus(jobId).then(function (payload) {
+                    applyRestoreFinalStatusPayload(payload, jobId, 'REST-only completion loop');
+                }).catch(function (err) {
+                    console.warn('[Backup Lite] REST-only completion loop check failed:', err);
+                });
+            };
+            pollRestCompletion();
+            restoreRestOnlyCompletionInterval = setInterval(pollRestCompletion, 5000);
+        }
 
         function appendRestoreProgressAuth(formData, jobId) {
             if (jobId) {
@@ -2517,6 +2580,9 @@ function initRestoreCenter() {
         }
 
         function applyRestoreFinalStatusPayload(payload, jobId, source) {
+            if (isRestoreUiSuccessLocked()) {
+                return true;
+            }
             payload = getJsonPayload(payload) || payload || {};
             var job = normalizeRestoreJobPayload(payload.job || payload);
             var history = Array.isArray(payload.history) ? payload.history : [];
@@ -2592,6 +2658,10 @@ function initRestoreCenter() {
             if (job && (job.status === 'running' || job.status === 'pending' || job.status === 'cancelling')) {
                 activeRestoreJobId = jobId;
                 restoreInProgress = true;
+                if (restoreTransportDegraded || isRestoreUiSuccessLocked()) {
+                    startRestoreRestOnlyCompletionLoop(jobId);
+                    return true;
+                }
                 if (activeRestoreJobId !== jobId || !restoreJobPollTimer) {
                     var resumeFileSize = (restoreData.summary && restoreData.summary.size) ? restoreData.summary.size : 0;
                     startRestoreJobMonitor(job, resumeFileSize);
@@ -2875,17 +2945,30 @@ function initRestoreCenter() {
         }
         
         function markRestoreCompleted(message, meta) {
-            // Check if we already have a final result (prevent duplicate modals)
             if (restoreMonitor.hasFinalResult && restoreMonitor.lastStatus !== 'success') {
-                console.log('[Backup Lite] Already have final result, skipping completion display', { 
-                    lastStatus: restoreMonitor.lastStatus 
+                console.log('[Backup Lite] Already have final result, skipping completion display', {
+                    lastStatus: restoreMonitor.lastStatus
                 });
                 return;
             }
-            
-            // Mark as final result before showing modal
+
+            if (isRestoreUiSuccessLocked()) {
+                dismissWordPressAuthCheckModal();
+                var lockedOverlay = document.querySelector('.bl-completion-overlay.is-visible');
+                if (lockedOverlay && lockedOverlay.parentNode) {
+                    return;
+                }
+            }
+
             restoreMonitor.hasFinalResult = true;
             restoreMonitor.lastStatus = 'success';
+            stopRestoreRestOnlyCompletionLoop();
+            restoreTransportDegraded = false;
+            if (restoreAutoResumeInterval) {
+                clearInterval(restoreAutoResumeInterval);
+                restoreAutoResumeInterval = null;
+            }
+            dismissWordPressAuthCheckModal();
             
             // Check if overlay is actually visible in the DOM
             var existingOverlay = document.querySelector('.bl-completion-overlay.is-visible');
@@ -2996,28 +3079,50 @@ function initRestoreCenter() {
                 });
                 console.log('[Backup Lite] Completion overlay shown');
                 
-                // Verify overlay was actually added to DOM
-                setTimeout(function() {
+                setTimeout(function () {
                     var verifyOverlay = document.querySelector('.bl-completion-overlay.is-visible');
-                    if (!verifyOverlay) {
-                        console.warn('[Backup Lite] Completion overlay not found in DOM after show, retrying...');
-                        restoreCompletionShown = false;
-                        // Retry once
+                    if (!verifyOverlay && isRestoreUiSuccessLocked()) {
+                        console.warn('[Backup Lite] Completion overlay not visible after success lock; forcing re-render.');
+                        dismissWordPressAuthCheckModal();
                         try {
                             showCompletionOverlay({
                                 icon: '✅',
                                 title: strings.restoreCompleted || 'Restore Completed',
                                 message: overlayMessage,
+                                actionText: safeMode ? (strings.exitSafeMode || 'Exit Safe Mode') : '',
+                                actionCallback: safeMode ? function () {
+                                    var ajaxUrl = localizedSettings.ajaxUrl || '/wp-admin/admin-ajax.php';
+                                    var nonce = localizedSettings.nonce || '';
+                                    jQuery.ajax({
+                                        url: ajaxUrl,
+                                        type: 'POST',
+                                        data: {
+                                            action: 'museder_restoreone_exit_safe_mode',
+                                            nonce: nonce
+                                        },
+                                        success: function (response) {
+                                            if (response && response.success) {
+                                                showToast('✅ ' + ((response.data && response.data.message) ? response.data.message : 'Safe mode exited.'), 'success');
+                                                setTimeout(function () {
+                                                    window.location.reload();
+                                                }, 800);
+                                            } else {
+                                                showToast('❌ ' + ((response && response.data && response.data.message) ? response.data.message : 'Failed to exit safe mode.'), 'error');
+                                            }
+                                        },
+                                        error: function () {
+                                            showToast('❌ ' + (strings.errorGeneric || 'An error occurred. Please try again.'), 'error');
+                                        }
+                                    });
+                                } : null,
                                 confirmText: strings.restoreOverlayConfirm || strings.close || 'Got it'
                             });
                             restoreCompletionShown = true;
-                            console.log('[Backup Lite] Completion overlay shown on retry');
                         } catch (retryError) {
-                            console.error('[Backup Lite] Failed to show completion overlay on retry:', retryError);
-                            restoreCompletionShown = false;
+                            console.error('[Backup Lite] Failed to force completion overlay:', retryError);
                         }
                     }
-                }, 100);
+                }, 500);
             } catch (error) {
                 console.error('[Backup Lite] Failed to show completion overlay:', error);
                 // Reset flag so we can try again
@@ -3030,6 +3135,21 @@ function initRestoreCenter() {
                 return;
             }
             job = normalizeRestoreJobPayload(job);
+
+            if (isRestoreUiSuccessLocked()) {
+                console.log('[Backup Lite] Restore already succeeded; ignoring monitor restart.', { jobId: job.id });
+                return;
+            }
+            if (restoreTransportDegraded) {
+                console.log('[Backup Lite] Transport degraded; using REST-only completion loop.', { jobId: job.id });
+                activeRestoreJobId = job.id;
+                restoreInProgress = true;
+                startRestoreRestOnlyCompletionLoop(job.id);
+                return;
+            }
+
+            stopRestoreRestOnlyCompletionLoop();
+            restoreTransportDegraded = false;
             
             // Prevent auto-resuming failed, cancelled, or completed jobs
             var jobStatus = job.status || '';
@@ -3217,6 +3337,7 @@ function initRestoreCenter() {
                 clearInterval(restoreJobProgressTimer);
                 restoreJobProgressTimer = null;
             }
+            stopRestoreRestOnlyCompletionLoop();
             // Stop heartbeat interval if running
             if (window.musederRestoreOneHeartbeatInterval) {
                 clearInterval(window.musederRestoreOneHeartbeatInterval);
@@ -3285,6 +3406,13 @@ function initRestoreCenter() {
             if (!jobId) {
                 return;
             }
+            if (isRestoreUiSuccessLocked()) {
+                return;
+            }
+            if (restoreTransportDegraded) {
+                startRestoreRestOnlyCompletionLoop(jobId);
+                return;
+            }
             restoreMonitorPaused = false;
             restoreAutoResumeToastShown = false;
             // Restart polling and keep-alive using existing job id.
@@ -3303,24 +3431,30 @@ function initRestoreCenter() {
             if (!jobId) {
                 return;
             }
+            startRestoreRestOnlyCompletionLoop(jobId);
+            if (restoreTransportDegraded) {
+                return;
+            }
             if (restoreAutoResumeInterval) {
                 return;
             }
             restoreAutoResumeInterval = setInterval(function () {
+                if (isRestoreUiSuccessLocked()) {
+                    clearInterval(restoreAutoResumeInterval);
+                    restoreAutoResumeInterval = null;
+                    return;
+                }
                 refreshAjaxNonce().then(function () {
-                    if (restoreAutoResumeInterval) {
-                        clearInterval(restoreAutoResumeInterval);
-                        restoreAutoResumeInterval = null;
+                    if (isRestoreUiSuccessLocked() || restoreTransportDegraded) {
+                        return;
                     }
+                    clearInterval(restoreAutoResumeInterval);
+                    restoreAutoResumeInterval = null;
                     resumeRestoreJobMonitor(jobId);
                 }).catch(function () {
-                    if (restoreAutoResumeInterval) {
-                        clearInterval(restoreAutoResumeInterval);
-                        restoreAutoResumeInterval = null;
-                    }
-                    resumeRestoreJobMonitor(jobId);
+                    restoreTransportDegraded = true;
                 });
-            }, 10000);
+            }, 30000);
         }
 
         function handleRestoreTransportInterruption(jobId, error, silent) {
@@ -3345,6 +3479,8 @@ function initRestoreCenter() {
             if (!silent) {
                 console.warn('[Backup Lite] Restore monitor transport/auth interrupted; keeping background job monitor alive.', { jobId: jobId, status: status, error: error });
             }
+            restoreTransportDegraded = true;
+            dismissWordPressAuthCheckModal();
             activeRestoreJobId = jobId;
             restoreInProgress = true;
             pauseRestoreJobMonitor();
@@ -3355,7 +3491,7 @@ function initRestoreCenter() {
                 showToast('⚠️ ' + (strings.sessionExpired || 'Your login/session check was blocked. Restore continues in the background and this page will keep checking for completion.'), 'warning');
             }
             checkRestoreCompletionFromHistory(jobId);
-            scheduleRestoreAutoResume(jobId);
+            startRestoreRestOnlyCompletionLoop(jobId);
             window.setTimeout(function () {
                 if (!restoreMonitor.hasFinalResult && (activeRestoreJobId === jobId || restoreMonitor.jobId === jobId)) {
                     checkRestoreCompletionFromHistory(jobId);
@@ -3368,6 +3504,19 @@ function initRestoreCenter() {
             var attempts = 0;
             var timer = window.setInterval(function () {
                 attempts++;
+                if (window.wp && window.wp.heartbeat && !window.wp.heartbeat._musederRestoreOneAuthGuarded) {
+                    var originalHeartbeatSend = window.wp.heartbeat.send;
+                    if (typeof originalHeartbeatSend === 'function') {
+                        window.wp.heartbeat.send = function () {
+                            if (restoreInProgress || activeRestoreJobId || restoreTransportDegraded) {
+                                dismissWordPressAuthCheckModal();
+                                return;
+                            }
+                            return originalHeartbeatSend.apply(this, arguments);
+                        };
+                    }
+                    window.wp.heartbeat._musederRestoreOneAuthGuarded = true;
+                }
                 if (!window.wp || !window.wp.authCheck || window.wp.authCheck._musederRestoreOneGuarded) {
                     if (attempts > 40 || (window.wp && window.wp.authCheck && window.wp.authCheck._musederRestoreOneGuarded)) {
                         window.clearInterval(timer);
@@ -3380,14 +3529,11 @@ function initRestoreCenter() {
                     return;
                 }
                 window.wp.authCheck.show = function () {
-                    if (restoreInProgress || activeRestoreJobId) {
+                    if (restoreInProgress || activeRestoreJobId || restoreTransportDegraded) {
                         if (activeRestoreJobId) {
                             handleRestoreTransportInterruption(activeRestoreJobId, { status: 403, responseText: 'interim-login' }, true);
                         }
-                        var wrap = document.getElementById('wp-auth-check-wrap');
-                        if (wrap) {
-                            wrap.style.display = 'none';
-                        }
+                        dismissWordPressAuthCheckModal();
                         return;
                     }
                     return originalShow.apply(this, arguments);
@@ -3398,6 +3544,11 @@ function initRestoreCenter() {
         }
         function pollRestoreJob(jobId, silent) {
             if (!jobId) {
+                return;
+            }
+
+            if (restoreTransportDegraded) {
+                startRestoreRestOnlyCompletionLoop(jobId);
                 return;
             }
             

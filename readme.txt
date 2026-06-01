@@ -4,7 +4,7 @@ Tags: backup, migration, restore, site-backup, database-backup
 Requires at least: 5.8
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 2.7.274
+Stable tag: 2.7.275
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -198,6 +198,11 @@ Contributors and release maintainers should follow the **Modification & Release 
 Checklists: `docs/RELEASE_CHECKLIST.md`, `docs/PACKAGING.md`, `docs/WORDPRESS_ORG_DEVELOPMENT_GUIDE.md`, `AGENTS.md`.
 
 == Changelog ==
+
+= 2.7.275 =
+* Restore UI: Step 3 success is now a one-way state — once REST final-status confirms completion, the UI no longer re-enters admin-ajax polling or resets progress when a stale “running” payload arrives.
+* Restore UI: when admin-ajax or wp-login interim-login is blocked (403/400), Step 3 switches to a REST-only completion loop instead of retrying nonce refresh and tight admin-ajax polling.
+* Restore UI: suppresses WordPress auth-check / Heartbeat interim-login modals during restore and raises the completion overlay above auth-check layers so “Restore Completed” is visible on hostile shared hosts.
 
 = 2.7.274 =
 * Restore: sliced ZIP extraction now writes to a sidecar `*.museder-restoreone-partial` file and atomically renames on completion so WordPress core files are never left half-written when a time slice ends (fixes admin critical errors mid-restore on shared hosting).
@@ -536,6 +541,9 @@ Checklists: `docs/RELEASE_CHECKLIST.md`, `docs/PACKAGING.md`, `docs/WORDPRESS_OR
 (Older changelog entries are maintained in the project repository.)
 
 == Upgrade Notice ==
+
+= 2.7.275 =
+Fixes Restore Step 3 on shared hosts where admin-ajax and wp-login interim-login return 403 after DB import: the UI now converges to “Restore Completed” via REST-only polling and no longer gets stuck at ~89% behind auth-check modals. Strongly recommended if Step 3 shows 403 errors while the backend restore actually succeeds.
 
 = 2.7.274 =
 Fixes full-site restores that could break wp-admin with a critical error when core file extraction was interrupted mid-slice, and improves Step 3 success recovery when shared hosts block admin-ajax/auth-check polling or cancel confirmation. Strongly recommended before restoring over live WordPress core on shared hosting.

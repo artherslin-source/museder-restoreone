@@ -889,7 +889,7 @@ body.bl-restore-v2-off .restore-stepper {
     opacity: 0;
     pointer-events: none;
     transition: opacity 0.2s ease;
-    z-index: 12000;
+    z-index: 100050;
 }
 
 .bl-completion-overlay.is-visible {
@@ -2028,7 +2028,7 @@ body.bl-modal-open {
     opacity: 0;
     pointer-events: none;
     transition: opacity 0.25s ease;
-    z-index: 100000;
+    z-index: 100050;
 }
 
 .bl-completion-overlay.is-visible {
