@@ -17,7 +17,7 @@ if ( ! defined( 'ABSPATH' ) ) {
  *
  * Security model (mirrors AI1WM secret_key pattern, WP.org approved):
  * - Token is generated with wp_generate_password(64, false) — cryptographic.
- * - Stored as wp_hash() digest (not plaintext).
+ * - Stored as HMAC-SHA256 digest using plugin-controlled restore secret (not plaintext).
  * - Has a 2-hour TTL.
  * - Automatically revoked when restore completes or is cancelled.
  * - Post-complete: a short-lived grant allows read-only job_status/tick with the same token.
@@ -26,6 +26,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 class Museder_Restoreone_Restore_Token {
 
 	const TOKEN_FILENAME       = '.restore-auth-token';
+	const SECRET_FILENAME      = '.restore-auth-secret';
 	const TOKEN_TTL            = 2 * HOUR_IN_SECONDS;
 	const POST_COMPLETE_OPTION = 'museder_restoreone_restore_post_complete_access';
 
@@ -37,8 +38,11 @@ class Museder_Restoreone_Restore_Token {
 	 */
 	public static function generate( $job_id ) {
 		$raw_token = wp_generate_password( 64, false );
+		$token_hash = self::stable_token_hash( $raw_token );
 		$payload   = [
-			'token'      => wp_hash( $raw_token ),
+			'token'      => $token_hash, // legacy key kept for compatibility with re-injection flow.
+			'token_hash' => $token_hash,
+			'hash_alg'   => 'hmac_sha256_restore_secret_v1',
 			'job_id'     => sanitize_text_field( $job_id ),
 			'user_id'    => get_current_user_id(),
 			'created_at' => time(),
@@ -77,7 +81,7 @@ class Museder_Restoreone_Restore_Token {
 		$raw     = file_get_contents( $file );
 		$payload = json_decode( $raw, true );
 
-		if ( ! is_array( $payload ) || empty( $payload['token'] ) ) {
+		if ( ! is_array( $payload ) || ( empty( $payload['token'] ) && empty( $payload['token_hash'] ) ) ) {
 			return false;
 		}
 
@@ -87,8 +91,19 @@ class Museder_Restoreone_Restore_Token {
 			return false;
 		}
 
-		// Constant-time hash comparison.
-		if ( ! hash_equals( (string) $payload['token'], wp_hash( $raw_token ) ) ) {
+		$stored_hash = '';
+		if ( ! empty( $payload['token_hash'] ) ) {
+			$stored_hash = (string) $payload['token_hash'];
+		} elseif ( ! empty( $payload['token'] ) ) {
+			$stored_hash = (string) $payload['token'];
+		}
+		if ( '' === $stored_hash ) {
+			return false;
+		}
+		$expected_hash = self::stable_token_hash( $raw_token );
+		$legacy_hash   = wp_hash( $raw_token );
+		$hash_ok       = hash_equals( $stored_hash, $expected_hash ) || hash_equals( $stored_hash, $legacy_hash );
+		if ( ! $hash_ok ) {
 			return false;
 		}
 
@@ -127,7 +142,11 @@ class Museder_Restoreone_Restore_Token {
 			return false;
 		}
 
-		if ( ! hash_equals( (string) $grant['token_hash'], wp_hash( $raw_token ) ) ) {
+		$expected_hash = self::stable_token_hash( $raw_token );
+		$legacy_hash   = wp_hash( $raw_token );
+		$grant_hash    = (string) $grant['token_hash'];
+		$grant_ok      = hash_equals( $grant_hash, $expected_hash ) || hash_equals( $grant_hash, $legacy_hash );
+		if ( ! $grant_ok ) {
 			return false;
 		}
 
@@ -154,13 +173,17 @@ class Museder_Restoreone_Restore_Token {
 			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_get_contents -- reading plugin-controlled token file
 			$raw     = file_get_contents( $file );
 			$payload = json_decode( $raw, true );
-			if ( is_array( $payload ) && ! empty( $payload['token'] ) && ! empty( $payload['job_id'] ) ) {
+			if ( is_array( $payload ) && ( ! empty( $payload['token_hash'] ) || ! empty( $payload['token'] ) ) && ! empty( $payload['job_id'] ) ) {
 				$expires = isset( $payload['expires_at'] ) ? (int) $payload['expires_at'] : ( time() + self::TOKEN_TTL );
+				$grant_hash = ! empty( $payload['token_hash'] )
+					? (string) $payload['token_hash']
+					: (string) $payload['token'];
 				update_option(
 					self::POST_COMPLETE_OPTION,
 					[
 						'job_id'     => sanitize_text_field( (string) $payload['job_id'] ),
-						'token_hash' => (string) $payload['token'],
+						'token_hash' => $grant_hash,
+						'hash_alg'   => isset( $payload['hash_alg'] ) ? (string) $payload['hash_alg'] : 'legacy_wp_hash',
 						'expires_at' => $expires,
 					],
 					false
@@ -225,5 +248,52 @@ class Museder_Restoreone_Restore_Token {
 		}
 
 		return trailingslashit( wp_normalize_path( $base ) ) . self::TOKEN_FILENAME;
+	}
+
+	/**
+	 * Stable token digest that survives wp-config salt changes during restore.
+	 *
+	 * @param string $raw_token
+	 * @return string
+	 */
+	private static function stable_token_hash( $raw_token ) {
+		$secret = self::token_secret();
+		return hash_hmac( 'sha256', (string) $raw_token, $secret );
+	}
+
+	/**
+	 * Get or create restore token secret in plugin-controlled storage.
+	 *
+	 * @return string
+	 */
+	private static function token_secret() {
+		$file = self::secret_file_path();
+		$dir  = dirname( $file );
+		if ( ! is_dir( $dir ) ) {
+			wp_mkdir_p( $dir );
+		}
+
+		if ( file_exists( $file ) ) {
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_get_contents -- plugin-controlled secret file
+			$current = trim( (string) file_get_contents( $file ) );
+			if ( '' !== $current ) {
+				return $current;
+			}
+		}
+
+		$secret = wp_generate_password( 96, true, true );
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- plugin-controlled secret file
+		file_put_contents( $file, $secret );
+		return $secret;
+	}
+
+	/**
+	 * Absolute path to the token secret file.
+	 *
+	 * @return string
+	 */
+	private static function secret_file_path() {
+		$token_path = self::token_file_path();
+		return trailingslashit( dirname( $token_path ) ) . self::SECRET_FILENAME;
 	}
 }

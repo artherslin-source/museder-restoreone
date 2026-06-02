@@ -1953,12 +1953,31 @@ function initRestoreCenter() {
             || settings.restUrlV2
             || (window.MusederRestoreOneV2 && window.MusederRestoreOneV2.restUrl)
             || '';
+        var restRouteV2 = restoreData.restRouteV2
+            || settings.restRouteV2
+            || '/museder-restoreone/v2/';
+        var restQueryBase = restoreData.restQueryBase
+            || settings.restQueryBase
+            || '';
+        var finalStatusAjaxAction = restoreData.finalStatusAjaxAction
+            || settings.finalStatusAjaxAction
+            || 'museder_restoreone_restore_final_status';
         var refreshingNonce = null;
         if (!ajaxUrl) {
             console.error('Backup Lite: ajaxUrl not found (REST v2 upload may still work; some AJAX restore actions disabled).');
         }
         if (restUrlV2 && restUrlV2.slice(-1) !== '/') {
             restUrlV2 += '/';
+        }
+        if (restRouteV2 && restRouteV2.charAt(0) !== '/') {
+            restRouteV2 = '/' + restRouteV2;
+        }
+        if (restRouteV2 && restRouteV2.slice(-1) !== '/') {
+            restRouteV2 += '/';
+        }
+        if (!restQueryBase) {
+            var origin = window.location && window.location.origin ? window.location.origin : '';
+            restQueryBase = origin ? (origin + '/?rest_route=') : '';
         }
 
         var methodButtons = document.querySelectorAll('.restore-methods .method-tabs button');
@@ -2558,43 +2577,103 @@ function initRestoreCenter() {
         }
 
         function fetchRestoreFinalStatus(jobId) {
-            if (!jobId || !activeRestoreToken || !restUrlV2) {
+            if (!jobId || !activeRestoreToken) {
                 return Promise.reject(new Error('restore_final_status_unavailable'));
             }
 
-            var url = restUrlV2 + 'restore/final-status/' + encodeURIComponent(jobId) +
-                '?_restore_token=' + encodeURIComponent(activeRestoreToken);
+            var endpointPath = 'restore/final-status/' + encodeURIComponent(jobId) + '/';
+            var candidates = [];
+            if (restUrlV2) {
+                candidates.push(restUrlV2 + endpointPath + '?_restore_token=' + encodeURIComponent(activeRestoreToken));
+            }
+            if (restQueryBase && restRouteV2) {
+                var restRoute = restRouteV2 + endpointPath;
+                candidates.push(restQueryBase + encodeURIComponent(restRoute) + '&_restore_token=' + encodeURIComponent(activeRestoreToken));
+            }
+            if (!candidates.length) {
+                return Promise.reject(new Error('restore_final_status_unavailable'));
+            }
 
-            return fetch(url, {
-                method: 'GET',
-                credentials: 'same-origin',
-                headers: {
-                    'Accept': 'application/json',
-                    'X-Restore-Token': activeRestoreToken
+            var tryCandidate = function (idx, lastError) {
+                if (idx >= candidates.length) {
+                    throw lastError || new Error('restore_final_status_failed');
                 }
-            }).then(function (res) {
-                return res.text().then(function (text) {
-                    var json = {};
-                    if (text) {
-                        try {
-                            json = JSON.parse(text);
-                        } catch (error) {
-                            var parseError = new Error(strings.errorGeneric || 'Unable to confirm restore status.');
-                            parseError.status = res.status;
-                            parseError.responseText = text;
-                            throw parseError;
+
+                var url = candidates[idx];
+                return fetch(url, {
+                    method: 'GET',
+                    credentials: 'same-origin',
+                    headers: {
+                        'Accept': 'application/json',
+                        'X-Restore-Token': activeRestoreToken
+                    }
+                }).then(function (res) {
+                    return res.text().then(function (text) {
+                        var contentType = (res.headers && typeof res.headers.get === 'function')
+                            ? String(res.headers.get('content-type') || '').toLowerCase()
+                            : '';
+                        var bodyText = String(text || '');
+                        var trimmedText = bodyText.trim();
+                        var looksHtml = contentType.indexOf('text/html') !== -1 ||
+                            trimmedText.indexOf('<!DOCTYPE html') === 0 ||
+                            trimmedText.indexOf('<html') === 0;
+
+                        if (res.ok && looksHtml) {
+                            var htmlError = new Error('restore_final_status_html_response');
+                            htmlError.status = res.status;
+                            htmlError.responseText = bodyText;
+                            htmlError.url = url;
+                            throw htmlError;
                         }
+
+                        var json = {};
+                        if (bodyText) {
+                            try {
+                                json = JSON.parse(bodyText);
+                            } catch (error) {
+                                var parseError = new Error(strings.errorGeneric || 'Unable to confirm restore status.');
+                                parseError.status = res.status;
+                                parseError.responseText = bodyText;
+                                parseError.url = url;
+                                throw parseError;
+                            }
+                        }
+
+                        if (!res.ok) {
+                            var message = json && json.message ? json.message : (strings.errorGeneric || 'Unable to confirm restore status.');
+                            var requestError = new Error(message);
+                            requestError.status = res.status;
+                            requestError.payload = json;
+                            requestError.responseText = bodyText;
+                            requestError.url = url;
+                            throw requestError;
+                        }
+
+                        return json;
+                    });
+                }).catch(function (error) {
+                    var status = error && typeof error.status !== 'undefined' ? parseInt(error.status, 10) : 0;
+                    var shouldTryNext = !status || (status >= 400 && status <= 599) || status === 301 || status === 302;
+                    if (shouldTryNext) {
+                        return tryCandidate(idx + 1, error);
                     }
-                    if (!res.ok) {
-                        var message = json && json.message ? json.message : (strings.errorGeneric || 'Unable to confirm restore status.');
-                        var requestError = new Error(message);
-                        requestError.status = res.status;
-                        requestError.payload = json;
-                        requestError.responseText = text;
-                        throw requestError;
-                    }
-                    return json;
+                    throw error;
                 });
+            };
+
+            return tryCandidate(0);
+        }
+
+        function fetchRestoreFinalStatusViaAjax(jobId) {
+            if (!jobId) {
+                return Promise.reject(new Error('restore_final_status_ajax_unavailable'));
+            }
+            var formData = prepareFormData();
+            formData.append('action', finalStatusAjaxAction);
+            formData.append('job_id', jobId);
+            appendRestoreAuth(formData);
+            return ajaxRequest(formData).then(function (json) {
+                return json && json.data ? json.data : json;
             });
         }
 
@@ -2779,14 +2858,25 @@ function initRestoreCenter() {
             fetchRestoreFinalStatus(jobId).then(function (payload) {
                 return applyRestoreFinalStatusPayload(payload, jobId, 'REST final-status');
             }).catch(function (error) {
-                console.warn('[Backup Lite] REST final-status check failed; falling back to admin-ajax status.', error);
+                console.warn('[Backup Lite] REST final-status check failed; falling back to admin-ajax final status.', error);
                 return false;
             }).then(function (handledByRest) {
                 if (handledByRest || restoreMonitor.hasFinalResult) {
                     return;
                 }
 
-                // Try to get history via the original admin-ajax endpoint as a secondary path.
+                return fetchRestoreFinalStatusViaAjax(jobId).then(function (payload) {
+                    return applyRestoreFinalStatusPayload(payload, jobId, 'AJAX final-status');
+                }).catch(function (error) {
+                    console.warn('[Backup Lite] AJAX final-status check failed; falling back to admin-ajax status.', error);
+                    return false;
+                });
+            }).then(function (handledByAjaxFinalStatus) {
+                if (handledByAjaxFinalStatus || restoreMonitor.hasFinalResult) {
+                    return;
+                }
+
+                // Try to get history via the original admin-ajax endpoint as a tertiary path.
                 var formData = prepareFormData('museder_restoreone_restore_job_status');
                 appendRestoreProgressAuth(formData, jobId);
 

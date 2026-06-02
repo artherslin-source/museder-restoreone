@@ -204,6 +204,8 @@ Checklists: `docs/RELEASE_CHECKLIST.md`, `docs/PACKAGING.md`, `docs/WORDPRESS_OR
 * Restore UI: when admin-ajax or wp-login interim-login is blocked (403/400), Step 3 switches to a REST-only completion loop instead of retrying nonce refresh and tight admin-ajax polling.
 * Restore UI: suppresses WordPress auth-check / Heartbeat interim-login modals during restore and raises the completion overlay above auth-check layers so “Restore Completed” is visible on hostile shared hosts.
 * Restore UI: long-running restores now use a wider history match window and strict `payload.job` parsing so Step 3 no longer gets stuck at “100% / Waiting for action” after the backend has already completed and cleaned active jobs.
+* Restore UI: final-status polling now falls back from stale `/wp-json` routes to query-style `?rest_route=` URLs, detects “HTTP 200 HTML” non-JSON responses, and adds a read-only admin-ajax `restore_final_status` endpoint as a final completion source.
+* Restore auth: restore token verification now uses a plugin-controlled stable HMAC secret so token checks survive `wp-config.php` salt replacement during restore (including post-complete read grants).
 * Restore: prefix migration now performs collision-safe targeted key migration for WordPress role/capability keys (`*_user_roles`, `*_capabilities`, `*_user_level`) instead of broad prefix key renames that could fail with duplicate `option_name` entries on populated targets.
 
 = 2.7.274 =
@@ -545,7 +547,7 @@ Checklists: `docs/RELEASE_CHECKLIST.md`, `docs/PACKAGING.md`, `docs/WORDPRESS_OR
 == Upgrade Notice ==
 
 = 2.7.275 =
-Fixes Restore Step 3 on shared hosts where admin-ajax and wp-login interim-login return 403 after DB import: the UI now converges to “Restore Completed” via REST-only polling and no longer gets stuck at ~89% behind auth-check modals. Also fixes long-running restores that could show 100% while still stuck on “Waiting for action,” and hardens prefix migration against duplicate-key failures. Strongly recommended if Step 3 shows 403 errors while the backend restore actually succeeds.
+Fixes Restore Step 3 on shared hosts where admin-ajax and wp-login interim-login return 403 after DB import: the UI now converges to “Restore Completed” via REST-only polling, query-style REST fallback, and read-only AJAX final-status fallback even when `/wp-json` becomes stale or returns HTML. Also stabilizes restore-token verification across `wp-config.php` salt changes, fixes long-running restores that could show 100% while still stuck on “Waiting for action,” and hardens prefix migration against duplicate-key failures. Strongly recommended if Step 3 shows 403 errors while the backend restore actually succeeds.
 
 = 2.7.274 =
 Fixes full-site restores that could break wp-admin with a critical error when core file extraction was interrupted mid-slice, and improves Step 3 success recovery when shared hosts block admin-ajax/auth-check polling or cancel confirmation. Strongly recommended before restoring over live WordPress core on shared hosting.

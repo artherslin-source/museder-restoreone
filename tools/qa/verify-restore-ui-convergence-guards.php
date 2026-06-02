@@ -33,6 +33,11 @@ $required = array(
 	'RESTORE_RECENT_HISTORY_WINDOW_SEC',
 	'extractRestoreJobPayload',
 	'isHistoryTimestampMatch',
+	'restore_final_status_html_response',
+	'fetchRestoreFinalStatusViaAjax',
+	'museder_restoreone_restore_final_status',
+	'restQueryBase',
+	'restRouteV2',
 );
 
 $failures = array();

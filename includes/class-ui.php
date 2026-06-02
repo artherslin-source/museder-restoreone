@@ -411,6 +411,9 @@ class Museder_Restoreone_UI {
             'nonce'          => wp_create_nonce( self::NONCE ),
             'nonceV2'        => $nonce_v2,
             'restUrlV2'      => $rest_url_v2,
+            'restRouteV2'    => '/museder-restoreone/v2/',
+            'restQueryBase'  => esc_url_raw( site_url( '/?rest_route=' ) ),
+            'finalStatusAjaxAction' => 'museder_restoreone_restore_final_status',
             'page'           => $current_page,
             'activeJob'      => $active_job,
             'jobPollingInterval' => 2.0, // Default 2 seconds, will be adjusted dynamically based on progress
