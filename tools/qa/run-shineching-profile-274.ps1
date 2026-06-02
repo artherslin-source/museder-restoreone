@@ -106,6 +106,14 @@ $uiConvergence = & php (Join-Path $RepoRoot 'tools\qa\verify-restore-ui-converge
 $uiConvergence | Set-Content (Join-Path $Evidence 'l0-restore-ui-convergence-guards.txt') -Encoding utf8
 Record 'L0_restore_ui_convergence_guards' ($uiConvergence -match 'PASS\s+restore_ui_convergence_guards') $uiConvergence.Trim()
 
+$tokenStability = & php (Join-Path $RepoRoot 'tools\qa\verify-restore-token-stability-guards.php') 2>&1 | Out-String
+$tokenStability | Set-Content (Join-Path $Evidence 'l0-restore-token-stability-guards.txt') -Encoding utf8
+Record 'L0_restore_token_stability_guards' ($tokenStability -match 'PASS\s+restore_token_stability_guards') $tokenStability.Trim()
+
+$rerunContinuity = & php (Join-Path $RepoRoot 'tools\qa\verify-restore-rerun-continuity-guards.php') 2>&1 | Out-String
+$rerunContinuity | Set-Content (Join-Path $Evidence 'l0-restore-rerun-continuity-guards.txt') -Encoding utf8
+Record 'L0_restore_rerun_continuity_guards' ($rerunContinuity -match 'PASS\s+restore_rerun_continuity_guards') $rerunContinuity.Trim()
+
 $preflightLint = & php -l (Join-Path $RepoRoot 'includes\class-restore-preflight.php') 2>&1 | Out-String
 Record 'L0_php_lint_preflight' ($preflightLint -match 'No syntax errors') $preflightLint.Trim()
 

@@ -2193,7 +2193,23 @@ class Museder_Restoreone_Restore_Handler {
             return null;
         }
 
-        return self::map_restore_service_status_to_job( $job_id, $status );
+        $job = self::map_restore_service_status_to_job( $job_id, $status );
+        if ( ! is_array( $job ) ) {
+            return null;
+        }
+
+        $job_status = isset( $job['status'] ) ? sanitize_text_field( (string) $job['status'] ) : '';
+        if (
+            class_exists( 'Museder_Restoreone_Restore_Token' )
+            && in_array( $job_status, [ 'running', 'pending', 'cancelling' ], true )
+        ) {
+            $resume_token = Museder_Restoreone_Restore_Token::get_raw_token_for_job( $job_id );
+            if ( '' !== $resume_token ) {
+                $job['restore_token'] = $resume_token;
+            }
+        }
+
+        return $job;
     }
 
     private static function ensure_permission() {
@@ -2720,10 +2736,21 @@ class Museder_Restoreone_Restore_Handler {
      * AJAX handler to exit safe mode (clear marker and stored snapshot).
      */
     public static function exit_safe_mode() {
-        self::ensure_permission();
-        Museder_Restoreone_UI::verify_ajax_request();
-        // WordPress.org review: explicit nonce check in this handler body.
-        check_ajax_referer( Museder_Restoreone_UI::NONCE, 'nonce' );
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- validated by nonce or restore token fallback below.
+        $job_id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
+        // phpcs:enable WordPress.Security.NonceVerification.Missing
+
+        $authorized_via_restore_token = false;
+        if ( '' !== $job_id ) {
+            $authorized_via_restore_token = Museder_Restoreone_UI::restore_post_complete_read_is_valid( $job_id );
+        }
+
+        if ( ! $authorized_via_restore_token ) {
+            self::ensure_permission();
+            Museder_Restoreone_UI::verify_ajax_request();
+            // WordPress.org review: explicit nonce check in this handler body.
+            check_ajax_referer( Museder_Restoreone_UI::NONCE, 'nonce' );
+        }
 
         try {
             $result = Museder_Restoreone_Restore::exit_safe_mode();

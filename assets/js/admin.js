@@ -3188,12 +3188,15 @@ function initRestoreCenter() {
                     actionCallback: safeMode ? function () {
                         var ajaxUrl = localizedSettings.ajaxUrl || '/wp-admin/admin-ajax.php';
                         var nonce = localizedSettings.nonce || '';
+                        var safeModeJobId = restoreMonitor.jobId || activeRestoreJobId || (meta && meta.jobId) || '';
                         jQuery.ajax({
                             url: ajaxUrl,
                             type: 'POST',
                             data: {
                                 action: 'museder_restoreone_exit_safe_mode',
-                                nonce: nonce
+                                nonce: nonce,
+                                job_id: safeModeJobId,
+                                restore_token: activeRestoreToken || ''
                             },
                             success: function (response) {
                                 if (response && response.success) {
@@ -3205,8 +3208,12 @@ function initRestoreCenter() {
                                     showToast('❌ ' + ((response && response.data && response.data.message) ? response.data.message : 'Failed to exit safe mode.'), 'error');
                                 }
                             },
-                            error: function () {
-                                showToast('❌ ' + (strings.errorGeneric || 'An error occurred. Please try again.'), 'error');
+                            error: function (xhr) {
+                                var message = strings.errorGeneric || 'An error occurred. Please try again.';
+                                if (xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message) {
+                                    message = xhr.responseJSON.data.message;
+                                }
+                                showToast('❌ ' + message, 'error');
                             }
                         });
                     } : null,
@@ -3228,12 +3235,15 @@ function initRestoreCenter() {
                                 actionCallback: safeMode ? function () {
                                     var ajaxUrl = localizedSettings.ajaxUrl || '/wp-admin/admin-ajax.php';
                                     var nonce = localizedSettings.nonce || '';
+                                    var safeModeJobId = restoreMonitor.jobId || activeRestoreJobId || (meta && meta.jobId) || '';
                                     jQuery.ajax({
                                         url: ajaxUrl,
                                         type: 'POST',
                                         data: {
                                             action: 'museder_restoreone_exit_safe_mode',
-                                            nonce: nonce
+                                            nonce: nonce,
+                                            job_id: safeModeJobId,
+                                            restore_token: activeRestoreToken || ''
                                         },
                                         success: function (response) {
                                             if (response && response.success) {
@@ -3245,8 +3255,12 @@ function initRestoreCenter() {
                                                 showToast('❌ ' + ((response && response.data && response.data.message) ? response.data.message : 'Failed to exit safe mode.'), 'error');
                                             }
                                         },
-                                        error: function () {
-                                            showToast('❌ ' + (strings.errorGeneric || 'An error occurred. Please try again.'), 'error');
+                                        error: function (xhr) {
+                                            var message = strings.errorGeneric || 'An error occurred. Please try again.';
+                                            if (xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message) {
+                                                message = xhr.responseJSON.data.message;
+                                            }
+                                            showToast('❌ ' + message, 'error');
                                         }
                                     });
                                 } : null,
@@ -5740,6 +5754,9 @@ function initRestoreCenter() {
         // Check for active or completed restore job
         if (restoreData.job && restoreData.job.id) {
             restoreData.job = normalizeRestoreJobPayload(restoreData.job);
+            if (restoreData.job.restore_token) {
+                setActiveRestoreToken(restoreData.job.restore_token);
+            }
             var fileSize = (restoreData.summary && restoreData.summary.size) ? restoreData.summary.size : 0;
             var jobStatus = restoreData.job.status || resolveRestoreJobStatus(restoreData.job);
             

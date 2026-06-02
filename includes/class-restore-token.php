@@ -27,6 +27,7 @@ class Museder_Restoreone_Restore_Token {
 
 	const TOKEN_FILENAME       = '.restore-auth-token';
 	const SECRET_FILENAME      = '.restore-auth-secret';
+	const RAW_TOKEN_KEY        = 'raw_token';
 	const TOKEN_TTL            = 2 * HOUR_IN_SECONDS;
 	const POST_COMPLETE_OPTION = 'museder_restoreone_restore_post_complete_access';
 
@@ -42,6 +43,7 @@ class Museder_Restoreone_Restore_Token {
 		$payload   = [
 			'token'      => $token_hash, // legacy key kept for compatibility with re-injection flow.
 			'token_hash' => $token_hash,
+			self::RAW_TOKEN_KEY => $raw_token,
 			'hash_alg'   => 'hmac_sha256_restore_secret_v1',
 			'job_id'     => sanitize_text_field( $job_id ),
 			'user_id'    => get_current_user_id(),
@@ -58,8 +60,9 @@ class Museder_Restoreone_Restore_Token {
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- plugin-controlled temp directory
 		file_put_contents( $file, wp_json_encode( $payload ) );
 
-		// Mirror to wp_options (will be re-injected after DB import by restore_session_after_import).
-		update_option( 'museder_restoreone_restore_token', $payload, false );
+		// Mirror a redacted payload to wp_options (will be re-injected after DB import by restore_session_after_import).
+		$option_payload = self::redact_raw_token( $payload );
+		update_option( 'museder_restoreone_restore_token', $option_payload, false );
 
 		return $raw_token;
 	}
@@ -196,6 +199,46 @@ class Museder_Restoreone_Restore_Token {
 	}
 
 	/**
+	 * Return current raw token for active job continuity on restore page reload.
+	 *
+	 * @param string $job_id Restore job id.
+	 * @return string
+	 */
+	public static function get_raw_token_for_job( $job_id ) {
+		$job_id = sanitize_text_field( (string) $job_id );
+		if ( '' === $job_id ) {
+			return '';
+		}
+
+		$payload = self::read_token_payload();
+		if ( ! is_array( $payload ) ) {
+			return '';
+		}
+		if ( isset( $payload['expires_at'] ) && time() > (int) $payload['expires_at'] ) {
+			self::revoke();
+			return '';
+		}
+		if ( empty( $payload['job_id'] ) || ! hash_equals( (string) $payload['job_id'], $job_id ) ) {
+			return '';
+		}
+		if ( empty( $payload[ self::RAW_TOKEN_KEY ] ) ) {
+			return '';
+		}
+		$raw = (string) $payload[ self::RAW_TOKEN_KEY ];
+		return '' !== $raw ? $raw : '';
+	}
+
+	/**
+	 * Return payload safe for options persistence (no raw token).
+	 *
+	 * @param array<string,mixed> $payload
+	 * @return array<string,mixed>
+	 */
+	public static function payload_for_option( array $payload ) {
+		return self::redact_raw_token( $payload );
+	}
+
+	/**
 	 * Clear post-complete read grant (QA / manual reset).
 	 */
 	public static function clear_post_complete_access() {
@@ -248,6 +291,35 @@ class Museder_Restoreone_Restore_Token {
 		}
 
 		return trailingslashit( wp_normalize_path( $base ) ) . self::TOKEN_FILENAME;
+	}
+
+	/**
+	 * Load token payload from file.
+	 *
+	 * @return array<string,mixed>|null
+	 */
+	private static function read_token_payload() {
+		$file = self::token_file_path();
+		if ( ! file_exists( $file ) ) {
+			return null;
+		}
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_get_contents -- plugin-controlled token file
+		$raw = file_get_contents( $file );
+		$payload = json_decode( (string) $raw, true );
+		return is_array( $payload ) ? $payload : null;
+	}
+
+	/**
+	 * Remove raw token before persisting to options table.
+	 *
+	 * @param array<string,mixed> $payload
+	 * @return array<string,mixed>
+	 */
+	private static function redact_raw_token( array $payload ) {
+		if ( isset( $payload[ self::RAW_TOKEN_KEY ] ) ) {
+			unset( $payload[ self::RAW_TOKEN_KEY ] );
+		}
+		return $payload;
 	}
 
 	/**

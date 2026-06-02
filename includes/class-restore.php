@@ -1881,6 +1881,8 @@ class Museder_Restoreone_Restore {
             'cron'           => get_option( 'cron' ),
             'restore_lock'   => get_option( 'museder_restoreone_restore_lock' ),
             'active_job'     => get_option( 'museder_restoreone_restore_service_active_job_id' ),
+            'permalink_structure' => get_option( 'permalink_structure', '' ),
+            'rewrite_rules'       => get_option( 'rewrite_rules', '' ),
         ];
 
         if ( $state['user_id'] > 0 && class_exists( 'WP_Session_Tokens' ) ) {
@@ -1961,12 +1963,22 @@ class Museder_Restoreone_Restore {
             update_option( 'museder_restoreone_restore_service_active_job_id', $state['active_job'], false );
         }
 
+        // 5.5 Preserve destination permalink policy so REST pretty routes remain consistent.
+        update_option( 'permalink_structure', isset( $state['permalink_structure'] ) ? $state['permalink_structure'] : '' );
+        update_option( 'rewrite_rules', isset( $state['rewrite_rules'] ) ? $state['rewrite_rules'] : '' );
+        if ( function_exists( 'flush_rewrite_rules' ) ) {
+            flush_rewrite_rules( false );
+        }
+
         // 6. Restore the file-based restore token (Fix 2 integration point).
         $token_file = WP_CONTENT_DIR . '/uploads/museder-restoreone/temp/.restore-auth-token';
         if ( file_exists( $token_file ) ) {
             // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_get_contents
             $token_data = json_decode( file_get_contents( $token_file ), true );
             if ( is_array( $token_data ) ) {
+                if ( class_exists( 'Museder_Restoreone_Restore_Token' ) ) {
+                    $token_data = Museder_Restoreone_Restore_Token::payload_for_option( $token_data );
+                }
                 update_option( 'museder_restoreone_restore_token', $token_data, false );
             }
         }

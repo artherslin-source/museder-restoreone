@@ -37,12 +37,15 @@ $required_token_needles = array(
 	'token_secret',
 	'SECRET_FILENAME',
 	'hmac_sha256_restore_secret_v1',
+	'get_raw_token_for_job',
+	'payload_for_option',
 );
 $required_handler_needles = array(
 	'museder_restoreone_restore_final_status',
 	'public static function final_status()',
 	'verify_restore_progress_request',
 	'history_for_js',
+	'restore_post_complete_read_is_valid',
 );
 
 $failed = array();
