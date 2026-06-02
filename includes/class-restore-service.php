@@ -2264,53 +2264,155 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
         $options_table  = isset( $wpdb->options ) ? (string) $wpdb->options : ( $wpdb->prefix . 'options' );
         $usermeta_table = isset( $wpdb->usermeta ) ? (string) $wpdb->usermeta : ( $wpdb->prefix . 'usermeta' );
 
-        $from_len = strlen( $from );
         $safe_value_replace = ( strlen( $from ) === strlen( $to ) );
-
-        $limit_keys   = 500;
         $limit_values = 200;
+        $source_roles_key = $from . 'user_roles';
+        $target_roles_key = $to . 'user_roles';
+        $source_cap_key   = $from . 'capabilities';
+        $source_level_key = $from . 'user_level';
+        $target_cap_key   = $to . 'capabilities';
+        $target_level_key = $to . 'user_level';
 
         while ( ( microtime( true ) - $start ) < $slice_seconds ) {
             if ( 'options_keys' === $phase ) {
-                $like = $wpdb->esc_like( $from ) . '%';
-                $start_pos = (int) $from_len + 1; // MySQL SUBSTRING is 1-based.
+                // Only migrate the strict WP capability-role option key. Avoid full prefix renames
+                // that can collide with existing target keys on populated hosts.
                 // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-                // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- core table name; values are prepared
-                $affected = (int) $wpdb->query(
+                $source_roles_row = $wpdb->get_row(
                     $wpdb->prepare(
-                        'UPDATE ' . $options_table . ' SET option_name = CONCAT(%s, SUBSTRING(option_name, %d)) WHERE option_name LIKE %s LIMIT %d', // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- table identifier is core ($wpdb->options), cannot be a placeholder
-                        $to,
-                        $start_pos,
-                        $like,
-                        $limit_keys
+                        "SELECT option_id, option_value, autoload FROM {$options_table} WHERE option_name = %s LIMIT 1", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- core table identifier
+                        $source_roles_key
+                    ),
+                    ARRAY_A
+                );
+                $target_roles_exists = (bool) $wpdb->get_var(
+                    $wpdb->prepare(
+                        "SELECT 1 FROM {$options_table} WHERE option_name = %s LIMIT 1", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- core table identifier
+                        $target_roles_key
                     )
                 );
                 // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 
-                $stats['options_keys'] = isset( $stats['options_keys'] ) ? (int) $stats['options_keys'] + max( 0, $affected ) : max( 0, $affected );
-                if ( $affected <= 0 ) {
-                    $phase = 'usermeta_keys';
+                $migrated = 0;
+                if ( is_array( $source_roles_row ) && ! empty( $source_roles_row['option_id'] ) ) {
+                    $source_value    = isset( $source_roles_row['option_value'] ) ? (string) $source_roles_row['option_value'] : '';
+                    $source_autoload = isset( $source_roles_row['autoload'] ) ? (string) $source_roles_row['autoload'] : 'yes';
+
+                    // Copy source roles into runtime key (overwrite if already exists), then remove stale source key.
+                    if ( $target_roles_exists ) {
+                        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+                        $update_ok = $wpdb->query(
+                            $wpdb->prepare(
+                                "UPDATE {$options_table} SET option_value = %s, autoload = %s WHERE option_name = %s", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- core table identifier
+                                $source_value,
+                                $source_autoload,
+                                $target_roles_key
+                            )
+                        );
+                        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+                        if ( false === $update_ok ) {
+                            throw new RuntimeException(
+                                sprintf(
+                                    'Prefix migration failed updating roles key %1$s: %2$s',
+                                    $target_roles_key,
+                                    (string) $wpdb->last_error
+                                )
+                            );
+                        }
+                        $stats['options_collisions'] = isset( $stats['options_collisions'] ) ? (int) $stats['options_collisions'] + 1 : 1;
+                    } else {
+                        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+                        $insert_ok = $wpdb->insert(
+                            $options_table,
+                            [
+                                'option_name'  => $target_roles_key,
+                                'option_value' => $source_value,
+                                'autoload'     => $source_autoload,
+                            ],
+                            [ '%s', '%s', '%s' ]
+                        );
+                        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+                        if ( false === $insert_ok ) {
+                            throw new RuntimeException(
+                                sprintf(
+                                    'Prefix migration failed inserting roles key %1$s: %2$s',
+                                    $target_roles_key,
+                                    (string) $wpdb->last_error
+                                )
+                            );
+                        }
+                    }
+
+                    // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+                    $deleted = $wpdb->query(
+                        $wpdb->prepare(
+                            "DELETE FROM {$options_table} WHERE option_name = %s", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- core table identifier
+                            $source_roles_key
+                        )
+                    );
+                    // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+                    if ( false === $deleted ) {
+                        throw new RuntimeException(
+                            sprintf(
+                                'Prefix migration failed deleting stale roles key %1$s: %2$s',
+                                $source_roles_key,
+                                (string) $wpdb->last_error
+                            )
+                        );
+                    }
+                    $migrated = 1;
                 }
+
+                $stats['options_keys'] = isset( $stats['options_keys'] ) ? (int) $stats['options_keys'] + $migrated : $migrated;
+                $phase = 'usermeta_keys';
             } elseif ( 'usermeta_keys' === $phase ) {
-                $like = $wpdb->esc_like( $from ) . '%';
-                $start_pos = (int) $from_len + 1;
+                // Keep this migration precise to capability keys only.
                 // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-                // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- core table name; values are prepared
-                $affected = (int) $wpdb->query(
+                $deleted_cap_collisions = $wpdb->query(
                     $wpdb->prepare(
-                        'UPDATE ' . $usermeta_table . ' SET meta_key = CONCAT(%s, SUBSTRING(meta_key, %d)) WHERE meta_key LIKE %s LIMIT %d', // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- table identifier is core ($wpdb->usermeta), cannot be a placeholder
-                        $to,
-                        $start_pos,
-                        $like,
-                        $limit_keys
+                        "DELETE target FROM {$usermeta_table} target INNER JOIN {$usermeta_table} source ON source.user_id = target.user_id WHERE source.meta_key = %s AND target.meta_key = %s", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- core table identifier
+                        $source_cap_key,
+                        $target_cap_key
+                    )
+                );
+                $deleted_level_collisions = $wpdb->query(
+                    $wpdb->prepare(
+                        "DELETE target FROM {$usermeta_table} target INNER JOIN {$usermeta_table} source ON source.user_id = target.user_id WHERE source.meta_key = %s AND target.meta_key = %s", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- core table identifier
+                        $source_level_key,
+                        $target_level_key
+                    )
+                );
+                $migrated_cap = $wpdb->query(
+                    $wpdb->prepare(
+                        "UPDATE {$usermeta_table} SET meta_key = %s WHERE meta_key = %s", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- core table identifier
+                        $target_cap_key,
+                        $source_cap_key
+                    )
+                );
+                $migrated_level = $wpdb->query(
+                    $wpdb->prepare(
+                        "UPDATE {$usermeta_table} SET meta_key = %s WHERE meta_key = %s", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- core table identifier
+                        $target_level_key,
+                        $source_level_key
                     )
                 );
                 // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 
-                $stats['usermeta_keys'] = isset( $stats['usermeta_keys'] ) ? (int) $stats['usermeta_keys'] + max( 0, $affected ) : max( 0, $affected );
-                if ( $affected <= 0 ) {
-                    $phase = $safe_value_replace ? 'options_values' : 'finish';
+                if ( false === $deleted_cap_collisions || false === $deleted_level_collisions || false === $migrated_cap || false === $migrated_level ) {
+                    throw new RuntimeException(
+                        sprintf(
+                            'Prefix migration failed migrating usermeta capability keys: %s',
+                            (string) $wpdb->last_error
+                        )
+                    );
                 }
+                $stats['usermeta_collisions'] = isset( $stats['usermeta_collisions'] )
+                    ? (int) $stats['usermeta_collisions'] + max( 0, (int) $deleted_cap_collisions ) + max( 0, (int) $deleted_level_collisions )
+                    : max( 0, (int) $deleted_cap_collisions ) + max( 0, (int) $deleted_level_collisions );
+                $stats['usermeta_keys'] = isset( $stats['usermeta_keys'] )
+                    ? (int) $stats['usermeta_keys'] + max( 0, (int) $migrated_cap ) + max( 0, (int) $migrated_level )
+                    : max( 0, (int) $migrated_cap ) + max( 0, (int) $migrated_level );
+                $phase = $safe_value_replace ? 'options_values' : 'finish';
             } elseif ( 'options_values' === $phase ) {
                 $like = '%' . $wpdb->esc_like( $from ) . '%';
                 // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching

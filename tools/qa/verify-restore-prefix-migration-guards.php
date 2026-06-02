@@ -31,6 +31,12 @@ $required_service_tokens = array(
 	"if ( \$rewrite_from && \$rewrite_to && \$rewrite_from !== \$rewrite_to )",
 	"if ( empty( \$result['success'] ) )",
 	"Database prefix migration verification failed",
+	'$from . \'user_roles\'',
+	'$from . \'capabilities\'',
+	'$from . \'user_level\'',
+	'$to . \'user_roles\'',
+	'$to . \'capabilities\'',
+	'$to . \'user_level\'',
 );
 
 foreach ( $required_service_tokens as $token ) {
@@ -42,6 +48,16 @@ foreach ( $required_service_tokens as $token ) {
 
 if ( preg_match( '/stage_import_database[\s\S]*?self::write_job_meta\( \$job_id, \$meta \);\s*return;\s*if \( ! empty\( \$result\[\'success\'\] \) \)/', $service_source ) ) {
 	fwrite( STDERR, "FAIL\tunreachable_success_block_detected\n" );
+	exit( 1 );
+}
+
+if ( false !== strpos( $service_source, "SET option_name = CONCAT(%s, SUBSTRING(option_name, %d)) WHERE option_name LIKE %s" ) ) {
+	fwrite( STDERR, "FAIL\tbroad_options_prefix_rename_detected\n" );
+	exit( 1 );
+}
+
+if ( false !== strpos( $service_source, "SET meta_key = CONCAT(%s, SUBSTRING(meta_key, %d)) WHERE meta_key LIKE %s" ) ) {
+	fwrite( STDERR, "FAIL\tbroad_usermeta_prefix_rename_detected\n" );
 	exit( 1 );
 }
 
