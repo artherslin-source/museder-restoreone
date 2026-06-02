@@ -2067,6 +2067,8 @@ function initRestoreCenter() {
         var RESTORE_JOB_TICK_PUSH_COOLDOWN = 15 * 1000; // min interval between pushes
         var restoreJobLastStatusAtMs = 0;
         var RESTORE_JOB_100_POLL_LIMIT = 60000; // 1 minute after reaching 100%
+        var RESTORE_HISTORY_MATCH_WINDOW_SEC = 2 * 60 * 60; // 2 hours
+        var RESTORE_RECENT_HISTORY_WINDOW_SEC = 2 * 60 * 60; // 2 hours
         var restoreMonitorPaused = false;
         var restoreAutoResumeInterval = null;
         var restoreRestOnlyCompletionInterval = null;
@@ -2077,6 +2079,49 @@ function initRestoreCenter() {
 
         function isRestoreUiSuccessLocked() {
             return !!(restoreMonitor.hasFinalResult && restoreMonitor.lastStatus === 'success');
+        }
+
+        function extractRestoreJobPayload(payload) {
+            if (!payload || typeof payload !== 'object') {
+                return null;
+            }
+
+            if (payload.job && typeof payload.job === 'object') {
+                return normalizeRestoreJobPayload(payload.job);
+            }
+
+            // Important: `{ job: null, history: [...] }` is a valid "history-only" payload.
+            if (Object.prototype.hasOwnProperty.call(payload, 'job')) {
+                return null;
+            }
+
+            // Legacy endpoints may return the job at root.
+            var hasJobShape = (
+                typeof payload.id !== 'undefined' ||
+                typeof payload.stage !== 'undefined' ||
+                typeof payload.progress !== 'undefined' ||
+                typeof payload.status !== 'undefined' ||
+                typeof payload.completed !== 'undefined'
+            );
+
+            return hasJobShape ? normalizeRestoreJobPayload(payload) : null;
+        }
+
+        function isHistoryTimestampMatch(historyTimestampRaw, jobStartRaw, windowSec) {
+            var historyTimestamp = parseInt(historyTimestampRaw || 0, 10);
+            var startTimestamp = parseInt(jobStartRaw || 0, 10);
+            var maxWindowSec = parseInt(windowSec || RESTORE_HISTORY_MATCH_WINDOW_SEC, 10);
+            if (isNaN(maxWindowSec) || maxWindowSec <= 0) {
+                maxWindowSec = RESTORE_HISTORY_MATCH_WINDOW_SEC;
+            }
+
+            if (!startTimestamp || isNaN(startTimestamp)) {
+                return !!historyTimestamp;
+            }
+            if (!historyTimestamp || isNaN(historyTimestamp) || historyTimestamp < startTimestamp) {
+                return false;
+            }
+            return (historyTimestamp - startTimestamp) <= maxWindowSec;
         }
 
         function stopRestoreRestOnlyCompletionLoop() {
@@ -2564,7 +2609,7 @@ function initRestoreCenter() {
             var matches = history.filter(function (item) {
                 var matchesJobId = item.job_id === (restoreMonitor.jobId || jobId);
                 var matchesArchive = archiveMatch && item.file === archiveMatch;
-                var matchesTimestamp = !jobStartRaw || (item.timestamp_raw && item.timestamp_raw >= jobStartRaw && (item.timestamp_raw - jobStartRaw) < 600);
+                var matchesTimestamp = !jobStartRaw || isHistoryTimestampMatch(item.timestamp_raw, jobStartRaw, RESTORE_HISTORY_MATCH_WINDOW_SEC);
                 return matchesJobId || (matchesArchive && matchesTimestamp);
             });
 
@@ -2584,7 +2629,7 @@ function initRestoreCenter() {
                 return true;
             }
             payload = getJsonPayload(payload) || payload || {};
-            var job = normalizeRestoreJobPayload(payload.job || payload);
+            var job = extractRestoreJobPayload(payload);
             var history = Array.isArray(payload.history) ? payload.history : [];
             var completionMeta = {
                 safe_mode_active: !!payload.safe_mode_active,
@@ -2756,7 +2801,7 @@ function initRestoreCenter() {
                 }
                 
                 var payload = getJsonPayload(json) || {};
-                var job = normalizeRestoreJobPayload(payload.job || payload);
+                var job = extractRestoreJobPayload(payload);
                 
                 // Check if job is complete
                 if (job && (job.status === 'success' || job.status === 'completed')) {
@@ -2832,7 +2877,7 @@ function initRestoreCenter() {
                         // Match by job_id or archive filename
                         var matchesJobId = item.job_id === (restoreMonitor.jobId || jobId);
                         var matchesArchive = archiveMatch && item.file === archiveMatch;
-                        var matchesTimestamp = !jobStartRaw || (item.timestamp_raw && item.timestamp_raw >= jobStartRaw && (item.timestamp_raw - jobStartRaw) < 600);
+                        var matchesTimestamp = !jobStartRaw || isHistoryTimestampMatch(item.timestamp_raw, jobStartRaw, RESTORE_HISTORY_MATCH_WINDOW_SEC);
                         return (matchesJobId || matchesArchive) && matchesTimestamp;
                     });
                     
@@ -3588,7 +3633,7 @@ function initRestoreCenter() {
                 }
                 
                 var payload = getJsonPayload(json) || {};
-                var job = normalizeRestoreJobPayload(payload.job || payload);
+                var job = extractRestoreJobPayload(payload);
                 restoreJobLastStatusAtMs = Date.now();
                 
                 // Check if nonce expired flag is set
@@ -3617,7 +3662,7 @@ function initRestoreCenter() {
                         var historyTimestamp = latestHistory.timestamp_raw || 0;
                         
                         // Match history entry with job using timestamp (within 10 minutes window)
-                        var isHistoryMatch = !jobStartRaw || (historyTimestamp && historyTimestamp >= jobStartRaw && (historyTimestamp - jobStartRaw) < 600);
+                        var isHistoryMatch = !jobStartRaw || isHistoryTimestampMatch(historyTimestamp, jobStartRaw, RESTORE_HISTORY_MATCH_WINDOW_SEC);
                         
                         if (isHistoryMatch) {
                             if (latestHistory.result === 'success') {
@@ -4171,7 +4216,7 @@ function initRestoreCenter() {
                                     // Check if the timestamp matches (within 5 minutes)
                                     var historyTime = latestHistory.timestamp_raw || 0;
                                     var now = Math.floor(Date.now() / 1000);
-                                    if (historyTime && (now - historyTime) < 300) {
+                                    if (historyTime && (now - historyTime) < RESTORE_RECENT_HISTORY_WINDOW_SEC) {
                                         console.log('[Backup Lite] Found recent successful restore in history (404 fallback), marking as completed');
                                         markRestoreCompleted(strings.restoreCompleted || 'Restore Completed.');
                                         return;
@@ -4295,7 +4340,7 @@ function initRestoreCenter() {
                                         // Check if the timestamp matches (within 10 minutes to be safe)
                                         var historyTime = latestHistory.timestamp_raw || 0;
                                         var now = Math.floor(Date.now() / 1000);
-                                        if (historyTime && (now - historyTime) < 600) {
+                                        if (historyTime && (now - historyTime) < RESTORE_RECENT_HISTORY_WINDOW_SEC) {
                                             if (latestHistory && latestHistory.result === 'success') {
                                                 // Restore completed successfully
                                                 console.log('[Backup Lite] Timeout check: Found successful restore in history');
@@ -5694,7 +5739,7 @@ function initRestoreCenter() {
                 var now = Math.floor(Date.now() / 1000);
                 
                 // Check if the latest history entry shows a successful restore within the last 5 minutes
-                if (latestHistory && latestHistory.result === 'success' && historyTime && (now - historyTime) < 300) {
+                if (latestHistory && latestHistory.result === 'success' && historyTime && (now - historyTime) < RESTORE_RECENT_HISTORY_WINDOW_SEC) {
                     // Use sessionStorage to track if we've already shown completion for this restore
                     var storageKey = 'museder_restoreone_restore_shown_' + (latestHistory.file || '') + '_' + historyTime;
                     var alreadyShown = sessionStorage.getItem(storageKey);
@@ -5712,7 +5757,7 @@ function initRestoreCenter() {
                     }
                 } 
                 // Check if the latest history entry shows a failed restore within the last 5 minutes
-                else if (latestHistory && latestHistory.result === 'failed' && historyTime && (now - historyTime) < 300) {
+                else if (latestHistory && latestHistory.result === 'failed' && historyTime && (now - historyTime) < RESTORE_RECENT_HISTORY_WINDOW_SEC) {
                     // Use sessionStorage to track if we've already shown failure for this restore
                     var storageKey = 'museder_restoreone_restore_shown_' + (latestHistory.file || '') + '_' + historyTime;
                     var alreadyShown = sessionStorage.getItem(storageKey);
@@ -5979,7 +6024,7 @@ function initRestoreCenter() {
 
                 ajaxRequest(formData).then(function (json) {
                     var payload = getJsonPayload(json) || {};
-                    var job = normalizeRestoreJobPayload(payload.job || payload);
+                    var job = extractRestoreJobPayload(payload);
                     var fileSize = payload.file_size || 0;
 
                     if (payload.restore_token) {

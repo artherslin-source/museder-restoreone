@@ -11,6 +11,13 @@
         return;
     }
 
+    // Restore page now uses the admin.js Step 1/2/3 wizard state machine.
+    // If that wizard is present, skip this legacy RestoreCenter controller to
+    // avoid duplicate polling/state convergence races.
+    if (document.getElementById('restore-stepper') && document.getElementById('startRestore')) {
+        return;
+    }
+
     var RestoreCenter = {
         state: {
             selectedBackup: null,

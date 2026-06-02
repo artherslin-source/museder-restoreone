@@ -29,6 +29,10 @@ $required = array(
 	'restoreRestOnlyCompletionInterval',
 	'dismissWordPressAuthCheckModal',
 	'REST-only completion loop',
+	'RESTORE_HISTORY_MATCH_WINDOW_SEC',
+	'RESTORE_RECENT_HISTORY_WINDOW_SEC',
+	'extractRestoreJobPayload',
+	'isHistoryTimestampMatch',
 );
 
 $failures = array();
@@ -53,6 +57,11 @@ if ( ! preg_match( '/function startRestoreJobMonitor[\s\S]*?isRestoreUiSuccessLo
 
 if ( ! preg_match( '/function applyRestoreFinalStatusPayload[\s\S]*?isRestoreUiSuccessLocked\(\)/', $source ) ) {
 	fwrite( STDERR, "FAIL\tapplyRestoreFinalStatusPayload_missing_success_lock\n" );
+	exit( 1 );
+}
+
+if ( false !== strpos( $source, 'payload.job || payload' ) ) {
+	fwrite( STDERR, "FAIL\tunsafe_payload_job_fallback_detected\n" );
 	exit( 1 );
 }
 
