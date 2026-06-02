@@ -1905,105 +1905,104 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
             return;
         }
 
-        if ( ! empty( $result['success'] ) ) {
-            $order = isset( $restore_options['restore_order'] )
-                ? (string) $restore_options['restore_order']
-                : Museder_Restoreone_Restore_Preflight::ORDER_DB_THEN_FILES;
-            if ( Museder_Restoreone_Restore_Preflight::ORDER_FILES_THEN_DB === $order ) {
-                // Files were restored before DB (empty-shell bootstrap). Do not re-enter restore-files
-                // or complete_files_stage_and_advance() will loop back to restore-extract-db.
-                $meta['stage']    = 'search-replace';
-                $meta['progress'] = 96;
-                $meta['message']  = __( 'Database import completed. Preparing URL replacement…', 'museder-restoreone' );
-            } else {
-                $meta['progress'] = 90;
-                $meta['message']  = __( 'Database import completed.', 'museder-restoreone' );
-                $meta['stage']    = 'restore-files';
-            }
-        } else {
+        if ( empty( $result['success'] ) ) {
             $meta['progress'] = 80;
             $meta['message']  = isset( $result['message'] ) ? (string) $result['message'] : __( 'Database import failed.', 'museder-restoreone' );
             $meta['stage']    = 'failed';
             self::exit_mid_restore_plugin_isolation( $job_id );
+            $meta['updated_at'] = current_time( 'mysql' );
+            self::write_job_meta( $job_id, $meta );
+            return;
         }
-        $meta['updated_at'] = current_time( 'mysql' );
-            self::write_job_meta( $job_id, $meta );
 
-        return;
+        $cp = isset( $meta['checkpoints'] ) && is_array( $meta['checkpoints'] ) ? $meta['checkpoints'] : [];
+        global $wpdb;
+        $rewrite_from = '';
+        if ( isset( $result['source_prefix'] ) && is_string( $result['source_prefix'] ) ) {
+            $rewrite_from = preg_replace( '/[^A-Za-z0-9_]/', '', (string) $result['source_prefix'] );
+        }
+        if ( '' === $rewrite_from && ! empty( $restore_options['db_source_prefix'] ) && is_string( $restore_options['db_source_prefix'] ) ) {
+            $rewrite_from = preg_replace( '/[^A-Za-z0-9_]/', '', (string) $restore_options['db_source_prefix'] );
+        }
+        if ( '' === $rewrite_from && ! empty( $cp['db_source_prefix'] ) && is_string( $cp['db_source_prefix'] ) ) {
+            $rewrite_from = preg_replace( '/[^A-Za-z0-9_]/', '', (string) $cp['db_source_prefix'] );
+        }
 
-        if ( ! empty( $result['success'] ) ) {
-            // Guard against "restore success but empty content" caused by prefix mis-detection.
-            // If we imported SQL without rewriting to the active prefix, the site will appear blank even though the SQL import ran.
-            $verify_prefix = '';
-            if ( is_string( $rewrite_to ) && '' !== $rewrite_to ) {
-                $verify_prefix = $rewrite_to;
-            } else {
-                global $wpdb;
-                $verify_prefix = isset( $wpdb->prefix ) ? (string) $wpdb->prefix : '';
-            }
+        $rewrite_to = '';
+        if ( isset( $result['target_prefix'] ) && is_string( $result['target_prefix'] ) ) {
+            $rewrite_to = preg_replace( '/[^A-Za-z0-9_]/', '', (string) $result['target_prefix'] );
+        }
+        if ( '' === $rewrite_to && ! empty( $restore_options['db_target_prefix'] ) && is_string( $restore_options['db_target_prefix'] ) ) {
+            $rewrite_to = preg_replace( '/[^A-Za-z0-9_]/', '', (string) $restore_options['db_target_prefix'] );
+        }
+        if ( '' === $rewrite_to ) {
+            $rewrite_to = isset( $wpdb->prefix ) ? preg_replace( '/[^A-Za-z0-9_]/', '', (string) $wpdb->prefix ) : '';
+        }
 
-            $verify = self::verify_restored_database_core_tables( $verify_prefix );
-            $meta['checkpoints']['db_verify'] = $verify;
-            self::write_job_meta( $job_id, $meta );
+        $cp['db_source_prefix'] = $rewrite_from;
+        $cp['db_target_prefix'] = $rewrite_to;
+        $meta['checkpoints']    = $cp;
 
-            if ( empty( $verify['ok'] ) ) {
-                $src = ( is_string( $rewrite_from ) && '' !== $rewrite_from ) ? $rewrite_from : ( ! empty( $cp['db_source_prefix'] ) ? (string) $cp['db_source_prefix'] : '' );
-                $dst = $verify_prefix;
-                $reason = isset( $verify['reason'] ) ? (string) $verify['reason'] : 'unknown';
+        $verify = self::verify_restored_database_core_tables( $rewrite_to );
+        $meta['checkpoints']['db_verify'] = $verify;
+        self::write_job_meta( $job_id, $meta );
 
-                if ( function_exists( 'museder_restoreone_log' ) ) {
-                    museder_restoreone_log( 'error', 'DB verify failed after import; refusing to mark restore success.', [
-                        'job_id'        => $job_id,
-                        'source_prefix' => $src,
-                        'target_prefix' => $dst,
-                        'reason'        => $reason,
-                        'missing'       => isset( $verify['missing'] ) ? $verify['missing'] : [],
-                    ] );
-                }
+        if ( empty( $verify['ok'] ) ) {
+            $src = $rewrite_from;
+            $dst = $rewrite_to;
+            $reason = isset( $verify['reason'] ) ? (string) $verify['reason'] : 'unknown';
 
-                throw new RuntimeException(
-                    sprintf(
-                        /* translators: 1: source prefix, 2: target prefix */
-                        esc_html__( 'Database import verification failed (source prefix: %1$s, target prefix: %2$s).', 'museder-restoreone' ),
-                        esc_html( $src ? $src : 'unknown' ),
-                        esc_html( $dst ? $dst : 'unknown' )
-                    )
-                );
-            } elseif ( function_exists( 'museder_restoreone_log' ) ) {
-                museder_restoreone_log( 'info', 'DB verify ok after import.', [
+            if ( function_exists( 'museder_restoreone_log' ) ) {
+                museder_restoreone_log( 'error', 'DB verify failed after import; refusing to mark restore success.', [
                     'job_id'        => $job_id,
-                    'target_prefix' => $verify_prefix,
-                    'tables'        => isset( $verify['tables'] ) ? $verify['tables'] : [],
+                    'source_prefix' => $src,
+                    'target_prefix' => $dst,
+                    'reason'        => $reason,
+                    'missing'       => isset( $verify['missing'] ) ? $verify['missing'] : [],
                 ] );
             }
 
-            // If we rewrote table prefixes during import, we must also migrate prefix-dependent keys/values
-            // inside options/usermeta (e.g., qvj4_user_roles, qvj4_capabilities).
-            if ( $rewrite_from && $rewrite_to && $rewrite_from !== $rewrite_to ) {
-                $meta['checkpoints']['prefix_migrate'] = [
-                    'from'  => (string) $rewrite_from,
-                    'to'    => (string) $rewrite_to,
-                    'phase' => 'options_keys',
-                    'stats' => [
-                        'options_keys'   => 0,
-                        'usermeta_keys'  => 0,
-                        'options_values' => 0,
-                        'usermeta_values'=> 0,
-                    ],
-                ];
-                $meta['stage']      = 'prefix-migrate';
-                $meta['progress']   = 90;
-                $meta['message']    = __( 'Fixing database prefix references…', 'museder-restoreone' );
-                $meta['updated_at'] = current_time( 'mysql' );
-                self::write_job_meta( $job_id, $meta );
-            } else {
-                $meta['stage']      = 'restore-files';
-                $meta['progress']   = 90;
-                $meta['message']    = __( 'Restoring files…', 'museder-restoreone' );
-                $meta['updated_at'] = current_time( 'mysql' );
-                self::write_job_meta( $job_id, $meta );
-            }
+            throw new RuntimeException(
+                sprintf(
+                    /* translators: 1: source prefix, 2: target prefix */
+                    esc_html__( 'Database import verification failed (source prefix: %1$s, target prefix: %2$s).', 'museder-restoreone' ),
+                    esc_html( $src ? $src : 'unknown' ),
+                    esc_html( $dst ? $dst : 'unknown' )
+                )
+            );
         }
+
+        if ( $rewrite_from && $rewrite_to && $rewrite_from !== $rewrite_to ) {
+            $meta['checkpoints']['prefix_migrate'] = [
+                'from'  => (string) $rewrite_from,
+                'to'    => (string) $rewrite_to,
+                'phase' => 'options_keys',
+                'stats' => [
+                    'options_keys'   => 0,
+                    'usermeta_keys'  => 0,
+                    'options_values' => 0,
+                    'usermeta_values'=> 0,
+                ],
+            ];
+            $meta['stage']      = 'prefix-migrate';
+            $meta['progress']   = 90;
+            $meta['message']    = __( 'Fixing database prefix references…', 'museder-restoreone' );
+            $meta['updated_at'] = current_time( 'mysql' );
+            self::write_job_meta( $job_id, $meta );
+            return;
+        }
+
+        $cap_verify = self::verify_restored_database_capability_keys( $rewrite_to, $rewrite_from );
+        $meta['checkpoints']['db_capabilities_verify'] = $cap_verify;
+        if ( empty( $cap_verify['ok'] ) ) {
+            throw new RuntimeException(
+                esc_html__( 'Database import verification failed: WordPress role/capability keys are missing for the active table prefix.', 'museder-restoreone' )
+            );
+        }
+
+        self::set_stage_after_database_import( $meta, __( 'Database import completed.', 'museder-restoreone' ) );
+        $meta['updated_at'] = current_time( 'mysql' );
+        self::write_job_meta( $job_id, $meta );
     }
 
     /**
@@ -2117,6 +2116,111 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
     }
 
     /**
+     * Verify that role and capability keys exist for the active runtime prefix.
+     *
+     * @param string $target_prefix Active runtime prefix (e.g. "wp_").
+     * @param string $source_prefix Optional source prefix from archive metadata.
+     * @return array{ok:bool,reason:string,roles_option:string,admin_capabilities:int,stale_roles_option:bool}
+     */
+    protected static function verify_restored_database_capability_keys( $target_prefix, $source_prefix = '' ) {
+        global $wpdb;
+
+        $target_prefix = preg_replace( '/[^A-Za-z0-9_]/', '', (string) $target_prefix );
+        $source_prefix = preg_replace( '/[^A-Za-z0-9_]/', '', (string) $source_prefix );
+        if ( '' === $target_prefix || ! preg_match( '/^[A-Za-z0-9_]+_$/', $target_prefix ) ) {
+            return [
+                'ok'                 => false,
+                'reason'             => 'invalid_target_prefix',
+                'roles_option'       => '',
+                'admin_capabilities' => 0,
+                'stale_roles_option' => false,
+            ];
+        }
+
+        $target_roles_option = $target_prefix . 'user_roles';
+        $source_roles_option = ( '' !== $source_prefix && $source_prefix !== $target_prefix )
+            ? $source_prefix . 'user_roles'
+            : '';
+
+        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+        $roles_value = $wpdb->get_var(
+            $wpdb->prepare(
+                "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s LIMIT 1", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- core table identifier
+                $target_roles_option
+            )
+        );
+        $admin_count = (int) $wpdb->get_var(
+            $wpdb->prepare(
+                "SELECT COUNT(*) FROM {$wpdb->usermeta} WHERE meta_key = %s AND meta_value LIKE %s", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- core table identifier
+                $target_prefix . 'capabilities',
+                '%administrator%'
+            )
+        );
+        $stale_roles = false;
+        if ( '' !== $source_roles_option ) {
+            $stale_roles = (bool) $wpdb->get_var(
+                $wpdb->prepare(
+                    "SELECT 1 FROM {$wpdb->options} WHERE option_name = %s LIMIT 1", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- core table identifier
+                    $source_roles_option
+                )
+            );
+        }
+        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+        if ( null === $roles_value || '' === (string) $roles_value ) {
+            return [
+                'ok'                 => false,
+                'reason'             => 'missing_target_roles_option',
+                'roles_option'       => $target_roles_option,
+                'admin_capabilities' => $admin_count,
+                'stale_roles_option' => $stale_roles,
+            ];
+        }
+        if ( $admin_count <= 0 ) {
+            return [
+                'ok'                 => false,
+                'reason'             => 'missing_target_admin_capabilities',
+                'roles_option'       => $target_roles_option,
+                'admin_capabilities' => $admin_count,
+                'stale_roles_option' => $stale_roles,
+            ];
+        }
+
+        return [
+            'ok'                 => true,
+            'reason'             => 'ok',
+            'roles_option'       => $target_roles_option,
+            'admin_capabilities' => $admin_count,
+            'stale_roles_option' => $stale_roles,
+        ];
+    }
+
+    /**
+     * Advance to the next stage after database import flow is complete.
+     *
+     * @param array<string,mixed> $meta
+     * @param string              $message
+     * @return void
+     */
+    protected static function set_stage_after_database_import( array &$meta, $message = '' ) {
+        $options = isset( $meta['options'] ) && is_array( $meta['options'] ) ? $meta['options'] : [];
+        $order = isset( $options['restore_order'] )
+            ? (string) $options['restore_order']
+            : Museder_Restoreone_Restore_Preflight::ORDER_DB_THEN_FILES;
+
+        if ( Museder_Restoreone_Restore_Preflight::ORDER_FILES_THEN_DB === $order ) {
+            $meta['stage']    = 'search-replace';
+            $meta['progress'] = 96;
+            $meta['message']  = __( 'Database import completed. Preparing URL replacement…', 'museder-restoreone' );
+            return;
+        }
+
+        $meta['stage']    = 'restore-files';
+        $meta['progress'] = 90;
+        $meta['message']  = '' !== (string) $message ? (string) $message : __( 'Restoring files…', 'museder-restoreone' );
+    }
+
+    /**
      * After importing SQL with table-prefix rewrite, migrate prefix-dependent keys/values inside the restored DB.
      *
      * This fixes common WP fields like:
@@ -2140,9 +2244,14 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
 
         if ( '' === $from || '' === $to || $from === $to ) {
             // Nothing to migrate.
-            $meta['stage']      = 'restore-files';
-            $meta['progress']   = 90;
-            $meta['message']    = __( 'Restoring files…', 'museder-restoreone' );
+            $cap_verify = self::verify_restored_database_capability_keys( $to, $from );
+            $meta['checkpoints']['db_capabilities_verify'] = $cap_verify;
+            if ( empty( $cap_verify['ok'] ) ) {
+                throw new RuntimeException(
+                    esc_html__( 'Database prefix migration verification failed: WordPress role/capability keys are missing for the active table prefix.', 'museder-restoreone' )
+                );
+            }
+            self::set_stage_after_database_import( $meta, __( 'Restoring files…', 'museder-restoreone' ) );
             $meta['updated_at'] = current_time( 'mysql' );
             self::write_job_meta( $job_id, $meta );
             return;
@@ -2264,6 +2373,13 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
         }
 
         if ( 'finish' === $phase ) {
+            $cap_verify = self::verify_restored_database_capability_keys( $to, $from );
+            $meta['checkpoints']['db_capabilities_verify'] = $cap_verify;
+            if ( empty( $cap_verify['ok'] ) ) {
+                throw new RuntimeException(
+                    esc_html__( 'Database prefix migration verification failed: WordPress role/capability keys are missing for the active table prefix.', 'museder-restoreone' )
+                );
+            }
             museder_restoreone_log( 'info', 'DB prefix migration completed.', [
                 'job_id' => $job_id,
                 'from'   => $from,
@@ -2272,9 +2388,7 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
                 'value_replace' => (bool) $safe_value_replace,
             ] );
 
-            $meta['stage']      = 'restore-files';
-            $meta['progress']   = 90;
-            $meta['message']    = __( 'Restoring files…', 'museder-restoreone' );
+            self::set_stage_after_database_import( $meta, __( 'Restoring files…', 'museder-restoreone' ) );
             $meta['updated_at'] = current_time( 'mysql' );
             $meta['checkpoints'] = $cp;
             self::write_job_meta( $job_id, $meta );

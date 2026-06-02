@@ -266,7 +266,16 @@ class Museder_Restoreone_Restore {
      *
      * @param string        $path
      * @param callable|null $progress_cb
-     * @return array{success:bool,message:string,code?:string,log?:string,active_plugins?:array}
+     * @return array{
+     *   success:bool,
+     *   message:string,
+     *   code?:string,
+     *   log?:string,
+     *   active_plugins?:array,
+     *   source_prefix?:string,
+     *   target_prefix?:string,
+     *   prefix_rewrite_applied?:bool
+     * }
      */
     private static function import_database_from_ndjson( $path, $progress_cb = null ) {
         global $wpdb;
@@ -495,6 +504,15 @@ class Museder_Restoreone_Restore {
         $result['success'] = true;
         $result['message'] = __( 'Database restore completed successfully.', 'museder-restoreone' );
         $result['code']    = 'database_restored';
+        if ( '' !== $source_prefix ) {
+            $result['source_prefix'] = (string) $source_prefix;
+        }
+        if ( '' !== $target_prefix ) {
+            $result['target_prefix'] = (string) $target_prefix;
+        }
+        if ( '' !== $source_prefix && '' !== $target_prefix && $source_prefix !== $target_prefix ) {
+            $result['prefix_rewrite_applied'] = true;
+        }
         if ( ! empty( $active_plugins ) ) {
             $result['active_plugins'] = $active_plugins;
         }
