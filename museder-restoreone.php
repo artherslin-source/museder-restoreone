@@ -396,6 +396,8 @@ function museder_restoreone_render_restore_page() {
     $museder_restoreone_history  = Museder_Restoreone_Restore_Handler::history_for_js( 10 );
     $museder_restoreone_active_job_id = class_exists( 'Museder_Restoreone_Restore_Service' ) ? Museder_Restoreone_Restore_Service::get_active_job_id() : '';
     $museder_restoreone_active_job    = Museder_Restoreone_Restore_Handler::active_job_for_page();
+    $museder_restoreone_restore_page_url = admin_url( 'admin.php?page=museder-restoreone-restore' );
+    $museder_restoreone_restore_login_url = wp_login_url( $museder_restoreone_restore_page_url );
 
     $museder_restoreone_backups = array_map(
         function ( $item ) {
@@ -434,6 +436,8 @@ function museder_restoreone_render_restore_page() {
             'ajaxUrl' => admin_url( 'admin-ajax.php' ),
             'ajaxNonce' => wp_create_nonce( Museder_Restoreone_UI::NONCE ),
             'siteURL' => home_url(),
+            'restorePageUrl' => esc_url_raw( $museder_restoreone_restore_page_url ),
+            'restoreLoginUrl' => esc_url_raw( $museder_restoreone_restore_login_url ),
             'uploads' => trailingslashit( museder_restoreone_get_storage_root()['path'] ),
             'cap'     => current_user_can( 'manage_options' ),
             'backups' => $museder_restoreone_backups,

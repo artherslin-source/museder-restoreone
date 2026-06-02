@@ -1962,6 +1962,12 @@ function initRestoreCenter() {
         var finalStatusAjaxAction = restoreData.finalStatusAjaxAction
             || settings.finalStatusAjaxAction
             || 'museder_restoreone_restore_final_status';
+        var restorePageUrl = restoreData.restorePageUrl
+            || settings.restorePageUrl
+            || '';
+        var restoreLoginUrl = restoreData.restoreLoginUrl
+            || settings.restoreLoginUrl
+            || '';
         var refreshingNonce = null;
         if (!ajaxUrl) {
             console.error('Backup Lite: ajaxUrl not found (REST v2 upload may still work; some AJAX restore actions disabled).');
@@ -1978,6 +1984,13 @@ function initRestoreCenter() {
         if (!restQueryBase) {
             var origin = window.location && window.location.origin ? window.location.origin : '';
             restQueryBase = origin ? (origin + '/?rest_route=') : '';
+        }
+        if (!restorePageUrl && window.location && window.location.origin) {
+            restorePageUrl = window.location.origin + '/wp-admin/admin.php?page=museder-restoreone-restore';
+        }
+        if (!restoreLoginUrl && restorePageUrl) {
+            restoreLoginUrl = (window.location && window.location.origin ? window.location.origin : '') +
+                '/wp-login.php?redirect_to=' + encodeURIComponent(restorePageUrl) + '&reauth=1';
         }
 
         var methodButtons = document.querySelectorAll('.restore-methods .method-tabs button');
@@ -2094,6 +2107,7 @@ function initRestoreCenter() {
         var restoreTransportDegraded = false;
         var restoreAutoResumeToastShown = false;
         var activeRestoreToken = null;
+        var restoreReauthRedirectPending = false;
         installRestoreAuthCheckGuard();
 
         function isRestoreUiSuccessLocked() {
@@ -2141,6 +2155,50 @@ function initRestoreCenter() {
                 return false;
             }
             return (historyTimestamp - startTimestamp) <= maxWindowSec;
+        }
+
+        function getRestoreStartBlockReason() {
+            var summary = restoreData && restoreData.summary ? restoreData.summary : null;
+            if (!summary || !summary.requires_overwrite) {
+                return '';
+            }
+
+            var restoreScopeEl = document.querySelector('input[name="restoreScope"]:checked');
+            var restoreScope = restoreScopeEl ? String(restoreScopeEl.value || 'full') : 'full';
+            var filesOnly = !!(filesOnlyToggle && filesOnlyToggle.checked);
+            if (restoreScope !== 'full' || filesOnly) {
+                return '';
+            }
+            if (overwriteToggle && overwriteToggle.checked) {
+                return '';
+            }
+            return strings.restoreRequiresOverwrite || 'Enable “Overwrite existing data” in Step 2 before starting restore.';
+        }
+
+        function normalizeRestoreLoginUrl() {
+            if (restoreLoginUrl) {
+                return restoreLoginUrl;
+            }
+            if (!restorePageUrl) {
+                return '';
+            }
+            var origin = window.location && window.location.origin ? window.location.origin : '';
+            return origin + '/wp-login.php?redirect_to=' + encodeURIComponent(restorePageUrl) + '&reauth=1';
+        }
+
+        function redirectToRestoreReauth(source) {
+            if (restoreReauthRedirectPending) {
+                return;
+            }
+            var target = normalizeRestoreLoginUrl();
+            if (!target) {
+                return;
+            }
+            restoreReauthRedirectPending = true;
+            console.warn('[Backup Lite] Redirecting to restore reauth route.', { source: source, target: target });
+            window.setTimeout(function () {
+                window.location.assign(target);
+            }, 800);
         }
 
         function stopRestoreRestOnlyCompletionLoop() {
@@ -3639,6 +3697,9 @@ function initRestoreCenter() {
                 restoreAutoResumeToastShown = true;
                 showToast('⚠️ ' + (strings.sessionExpired || 'Your login/session check was blocked. Restore continues in the background and this page will keep checking for completion.'), 'warning');
             }
+            if (status === 401 || status === 403 || text.indexOf('interim-login') !== -1) {
+                redirectToRestoreReauth('transport-interruption');
+            }
             checkRestoreCompletionFromHistory(jobId);
             startRestoreRestOnlyCompletionLoop(jobId);
             window.setTimeout(function () {
@@ -3683,6 +3744,7 @@ function initRestoreCenter() {
                             handleRestoreTransportInterruption(activeRestoreJobId, { status: 403, responseText: 'interim-login' }, true);
                         }
                         dismissWordPressAuthCheckModal();
+                        redirectToRestoreReauth('wp-auth-check');
                         return;
                     }
                     return originalShow.apply(this, arguments);
@@ -5059,6 +5121,7 @@ function initRestoreCenter() {
             var executeState = 'locked';
             var executeText = stepStrings.executeLocked;
             var executeLocked = true;
+            var startBlockReason = getRestoreStartBlockReason();
             if (restoreInProgress) {
                 executeState = 'processing';
                 executeText = stepStrings.executeProcessing;
@@ -5067,6 +5130,10 @@ function initRestoreCenter() {
                 executeState = 'done';
                 executeText = stepStrings.executeDone;
                 executeLocked = false;
+            } else if (reviewCompleted && startBlockReason) {
+                executeState = 'locked';
+                executeText = startBlockReason;
+                executeLocked = true;
             } else if (reviewCompleted) {
                 // Only unlock step 3 if step 2 (review) is completed
                 executeState = 'ready';
@@ -5116,6 +5183,22 @@ function initRestoreCenter() {
 
         syncWizard();
         updateRestoreCancelState();
+        if (overwriteToggle) {
+            overwriteToggle.addEventListener('change', function () {
+                syncWizard();
+            });
+        }
+        if (filesOnlyToggle) {
+            filesOnlyToggle.addEventListener('change', function () {
+                syncWizard();
+            });
+        }
+        var restoreScopeInputs = document.querySelectorAll('input[name="restoreScope"]');
+        restoreScopeInputs.forEach(function (input) {
+            input.addEventListener('change', function () {
+                syncWizard();
+            });
+        });
 
         methodButtons.forEach(function (btn) {
             btn.addEventListener('click', function () {
@@ -6076,11 +6159,11 @@ function initRestoreCenter() {
                     return;
                 }
                 
-                if (!overwriteToggle.checked) {
-                    var overwriteConfirm = getString('confirmOverwriteData', 'This will overwrite your site data. Continue?');
-                    if (!window.confirm('⚠️ ' + overwriteConfirm)) {
-                        return;
-                    }
+                var startBlockReason = getRestoreStartBlockReason();
+                if (startBlockReason) {
+                    showToast('⚠️ ' + startBlockReason, 'warning');
+                    syncWizard();
+                    return;
                 }
                 markReviewCompleted();
 

@@ -414,6 +414,8 @@ class Museder_Restoreone_UI {
             'restRouteV2'    => '/museder-restoreone/v2/',
             'restQueryBase'  => esc_url_raw( site_url( '/?rest_route=' ) ),
             'finalStatusAjaxAction' => 'museder_restoreone_restore_final_status',
+            'restorePageUrl' => esc_url_raw( admin_url( 'admin.php?page=museder-restoreone-restore' ) ),
+            'restoreLoginUrl' => esc_url_raw( wp_login_url( admin_url( 'admin.php?page=museder-restoreone-restore' ) ) ),
             'page'           => $current_page,
             'activeJob'      => $active_job,
             'jobPollingInterval' => 2.0, // Default 2 seconds, will be adjusted dynamically based on progress
