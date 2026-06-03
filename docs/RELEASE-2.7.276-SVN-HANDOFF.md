@@ -1,8 +1,8 @@
 # Release 2.7.276 — SVN 發佈手續
 
-**Git：** tag **`v2.7.276`**
+**Git：** `agent/fix-shineching-r4-content-media-paths-274` @ `ff59c09`，tag **`v2.7.276`**
 
-**封裝：** `dist/museder-restoreone-2.7.276.zip`（`BOUNDARY_CHECK=PASS`）
+**封裝：** `dist/museder-restoreone-2.7.276.zip`（616,056 bytes，`BOUNDARY_CHECK=PASS`）
 
 **摘要：** 修復全站還原完成後 **Exit Safe Mode** 因 session 失效、HMAC secret 被 uploads 覆寫、或 completion overlay 未綁定 job/token 而顯示 generic error（shineching.com 2.7.275 現場根因）。
 
