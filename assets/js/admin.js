@@ -3245,6 +3245,15 @@ function initRestoreCenter() {
             // If overlay is already visible, only update state if needed
             if (restoreCompletionShown && overlayExists) {
                 // Overlay is already shown and visible - only update state if needed
+                if (!completedRestoreJobId) {
+                    completedRestoreJobId = (meta && meta.jobId) || (restoreMonitor && restoreMonitor.jobId) || activeRestoreJobId || completedRestoreJobId;
+                }
+                if (!completedRestoreToken) {
+                    completedRestoreToken = activeRestoreToken || getRememberedRestoreToken(completedRestoreJobId) || completedRestoreToken;
+                    if (completedRestoreJobId && completedRestoreToken) {
+                        rememberRestoreToken(completedRestoreJobId, completedRestoreToken);
+                    }
+                }
                 if (!restoreCompleted || restoreInProgress) {
                     restoreInProgress = false;
                     restoreCompleted = true;
@@ -3324,7 +3333,7 @@ function initRestoreCenter() {
                     actionText: safeMode ? (strings.exitSafeMode || 'Exit Safe Mode') : '',
                     actionCallback: safeMode ? function () {
                         var ajaxUrl = localizedSettings.ajaxUrl || '/wp-admin/admin-ajax.php';
-                        var safeModeJobId = restoreMonitor.jobId || activeRestoreJobId || (meta && meta.jobId) || '';
+                        var safeModeJobId = completedRestoreJobId || restoreMonitor.jobId || activeRestoreJobId || (meta && meta.jobId) || '';
                         jQuery.ajax({
                             url: ajaxUrl,
                             type: 'POST',
@@ -3367,7 +3376,7 @@ function initRestoreCenter() {
                                 actionText: safeMode ? (strings.exitSafeMode || 'Exit Safe Mode') : '',
                                 actionCallback: safeMode ? function () {
                                     var ajaxUrl = localizedSettings.ajaxUrl || '/wp-admin/admin-ajax.php';
-                                    var safeModeJobId = restoreMonitor.jobId || activeRestoreJobId || (meta && meta.jobId) || '';
+                                    var safeModeJobId = completedRestoreJobId || restoreMonitor.jobId || activeRestoreJobId || (meta && meta.jobId) || '';
                                     jQuery.ajax({
                                         url: ajaxUrl,
                                         type: 'POST',
@@ -4036,9 +4045,10 @@ function initRestoreCenter() {
                 
                 setProgress(displayProgress, job.message || (strings.runningMessage || ''), isComplete || isFailed);
 
-                var completionMeta = {
+                completionMeta = {
                     safe_mode_active: !!payload.safe_mode_active,
-                    prev_plugins_count: (typeof payload.prev_plugins_count !== 'undefined') ? payload.prev_plugins_count : 0
+                    prev_plugins_count: (typeof payload.prev_plugins_count !== 'undefined') ? payload.prev_plugins_count : 0,
+                    jobId: jobId
                 };
                 
                 if (payload.history) {

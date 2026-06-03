@@ -2538,6 +2538,15 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
     protected static function complete_files_stage_and_advance( $job_id, array &$meta ) {
         $file_path = isset( $meta['file'] ) ? (string) $meta['file'] : '';
         $options   = isset( $meta['options'] ) && is_array( $meta['options'] ) ? $meta['options'] : [];
+        $cp        = isset( $meta['checkpoints'] ) && is_array( $meta['checkpoints'] ) ? $meta['checkpoints'] : [];
+
+        if (
+            ! empty( $cp['restore_auth_backup'] )
+            && is_array( $cp['restore_auth_backup'] )
+            && class_exists( 'Museder_Restoreone_Restore_Token' )
+        ) {
+            Museder_Restoreone_Restore_Token::restore_runtime_auth_files( $cp['restore_auth_backup'] );
+        }
 
         if ( function_exists( 'is_multisite' ) && is_multisite() && ! empty( $meta['options']['target_blog_id'] ) ) {
             self::remap_multisite_uploads_to_target_blog_if_present( $meta['options']['target_blog_id'] );
@@ -2583,6 +2592,14 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
         $file_path = isset( $meta['file'] ) ? $meta['file'] : '';
         if ( empty( $file_path ) || ! file_exists( $file_path ) ) {
             throw new RuntimeException( esc_html__( 'Restore source file missing.', 'museder-restoreone' ) );
+        }
+
+        if (
+            class_exists( 'Museder_Restoreone_Restore_Token' )
+            && empty( $meta['checkpoints']['restore_auth_backup'] )
+        ) {
+            $meta['checkpoints']['restore_auth_backup'] = Museder_Restoreone_Restore_Token::backup_runtime_auth_files();
+            self::write_job_meta( $job_id, $meta );
         }
 
         self::maybe_enter_plugin_isolation_at_files_stage( $job_id, $meta );
@@ -3666,6 +3683,13 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
     protected static function zip_entry_should_skip_restore( $entry_name, array $options ) {
         $name = wp_normalize_path( (string) $entry_name );
         if ( self::zip_entry_is_restore_metadata( $name ) ) {
+            return true;
+        }
+
+        if (
+            class_exists( 'Museder_Restoreone_Restore_Token' )
+            && Museder_Restoreone_Restore_Token::archive_entry_is_runtime_auth_file( $name )
+        ) {
             return true;
         }
 

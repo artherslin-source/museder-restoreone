@@ -368,4 +368,74 @@ class Museder_Restoreone_Restore_Token {
 		$token_path = self::token_file_path();
 		return trailingslashit( dirname( $token_path ) ) . self::SECRET_FILENAME;
 	}
+
+	/**
+	 * Snapshot runtime auth files before file-restore can overwrite them from backup.
+	 *
+	 * @return array{secret:string,token:string}
+	 */
+	public static function backup_runtime_auth_files() {
+		$backup = [
+			'secret' => '',
+			'token'  => '',
+		];
+
+		$secret_file = self::secret_file_path();
+		if ( file_exists( $secret_file ) ) {
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_get_contents -- plugin-controlled secret file
+			$backup['secret'] = (string) file_get_contents( $secret_file );
+		}
+
+		$token_file = self::token_file_path();
+		if ( file_exists( $token_file ) ) {
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_get_contents -- plugin-controlled token file
+			$backup['token'] = (string) file_get_contents( $token_file );
+		}
+
+		return $backup;
+	}
+
+	/**
+	 * Restore runtime auth files captured before file-restore.
+	 *
+	 * @param array<string, string> $backup Return value from backup_runtime_auth_files().
+	 * @return void
+	 */
+	public static function restore_runtime_auth_files( array $backup ) {
+		if ( empty( $backup ) ) {
+			return;
+		}
+
+		$dir = dirname( self::token_file_path() );
+		if ( ! is_dir( $dir ) ) {
+			wp_mkdir_p( $dir );
+		}
+
+		if ( ! empty( $backup['secret'] ) ) {
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- plugin-controlled secret file
+			file_put_contents( self::secret_file_path(), (string) $backup['secret'] );
+		}
+
+		if ( ! empty( $backup['token'] ) ) {
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- plugin-controlled token file
+			file_put_contents( self::token_file_path(), (string) $backup['token'] );
+		}
+	}
+
+	/**
+	 * Whether a backup archive entry targets live restore auth files.
+	 *
+	 * @param string $entry_name Archive entry path.
+	 * @return bool
+	 */
+	public static function archive_entry_is_runtime_auth_file( $entry_name ) {
+		$name     = wp_normalize_path( (string) $entry_name );
+		$basename = basename( $name );
+		if ( ! in_array( $basename, [ self::SECRET_FILENAME, self::TOKEN_FILENAME ], true ) ) {
+			return false;
+		}
+
+		return false !== strpos( $name, 'uploads/museder-restoreone/temp/' )
+			|| false !== strpos( $name, 'museder-restoreone/temp/' );
+	}
 }

@@ -30,6 +30,7 @@ class Museder_Restoreone_Restore_Handler {
         add_action( 'wp_ajax_museder_restoreone_restore_chunk_status', [ __CLASS__, 'chunk_status' ] );
         add_action( 'wp_ajax_museder_restoreone_restore_env_caps', [ __CLASS__, 'env_caps' ] );
         add_action( 'wp_ajax_museder_restoreone_exit_safe_mode', [ __CLASS__, 'exit_safe_mode' ] );
+        add_action( 'wp_ajax_nopriv_museder_restoreone_exit_safe_mode', [ __CLASS__, 'exit_safe_mode' ] );
         add_action( 'wp_ajax_museder_restoreone_reapply_safe_plugins', [ __CLASS__, 'reapply_safe_plugins' ] );
         add_action( 'wp_ajax_museder_restoreone_restore_force_unlock', [ __CLASS__, 'force_unlock' ] );
     }
@@ -2736,21 +2737,11 @@ class Museder_Restoreone_Restore_Handler {
      * AJAX handler to exit safe mode (clear marker and stored snapshot).
      */
     public static function exit_safe_mode() {
-        // phpcs:disable WordPress.Security.NonceVerification.Missing -- validated by nonce or restore token fallback below.
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- validated by verify_restore_progress_request().
         $job_id = isset( $_POST['job_id'] ) ? sanitize_text_field( wp_unslash( $_POST['job_id'] ) ) : '';
         // phpcs:enable WordPress.Security.NonceVerification.Missing
 
-        $authorized_via_restore_token = false;
-        if ( '' !== $job_id ) {
-            $authorized_via_restore_token = Museder_Restoreone_UI::restore_post_complete_read_is_valid( $job_id );
-        }
-
-        if ( ! $authorized_via_restore_token ) {
-            self::ensure_permission();
-            Museder_Restoreone_UI::verify_ajax_request();
-            // WordPress.org review: explicit nonce check in this handler body.
-            check_ajax_referer( Museder_Restoreone_UI::NONCE, 'nonce' );
-        }
+        Museder_Restoreone_UI::verify_restore_progress_request( $job_id );
 
         try {
             $result = Museder_Restoreone_Restore::exit_safe_mode();
