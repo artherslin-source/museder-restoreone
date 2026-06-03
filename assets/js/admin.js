@@ -2107,6 +2107,8 @@ function initRestoreCenter() {
         var restoreTransportDegraded = false;
         var restoreAutoResumeToastShown = false;
         var activeRestoreToken = null;
+        var completedRestoreJobId = null;
+        var completedRestoreToken = null;
         var restoreReauthRedirectPending = false;
         installRestoreAuthCheckGuard();
 
@@ -2239,17 +2241,89 @@ function initRestoreCenter() {
             if (jobId) {
                 formData.append('job_id', jobId);
             }
-            if (activeRestoreToken) {
-                formData.append('restore_token', activeRestoreToken);
+            var token = activeRestoreToken || getRememberedRestoreToken(jobId);
+            if (token) {
+                formData.append('restore_token', token);
             }
             return formData;
         }
 
-        function setActiveRestoreToken(token) {
-            if (token && typeof token === 'string' && token.length > 20) {
-                activeRestoreToken = token;
+        function restoreTokenStorageKey(jobId) {
+            return 'museder_restoreone_restore_token_' + String(jobId || '');
+        }
+
+        function rememberRestoreToken(jobId, token) {
+            if (!jobId || !token || typeof token !== 'string' || token.length <= 20) {
+                return;
+            }
+            window.MusederRestoreOneRestorePostComplete = {
+                jobId: String(jobId),
+                token: token
+            };
+            try {
+                window.sessionStorage.setItem(restoreTokenStorageKey(jobId), token);
+            } catch (error) {}
+        }
+
+        function getRememberedRestoreToken(jobId) {
+            var keyJobId = jobId || completedRestoreJobId || (restoreMonitor && restoreMonitor.jobId) || activeRestoreJobId || '';
+            if (!keyJobId) {
+                return completedRestoreToken || activeRestoreToken || '';
+            }
+            if (
+                window.MusederRestoreOneRestorePostComplete &&
+                String(window.MusederRestoreOneRestorePostComplete.jobId || '') === String(keyJobId) &&
+                window.MusederRestoreOneRestorePostComplete.token
+            ) {
+                return String(window.MusederRestoreOneRestorePostComplete.token);
+            }
+            try {
+                return window.sessionStorage.getItem(restoreTokenStorageKey(keyJobId)) || completedRestoreToken || activeRestoreToken || '';
+            } catch (error) {
+                return completedRestoreToken || activeRestoreToken || '';
             }
         }
+
+        function clearRememberedRestoreToken(jobId) {
+            var keyJobId = jobId || completedRestoreJobId || (restoreMonitor && restoreMonitor.jobId) || '';
+            if (window.MusederRestoreOneRestorePostComplete && (!keyJobId || String(window.MusederRestoreOneRestorePostComplete.jobId || '') === String(keyJobId))) {
+                window.MusederRestoreOneRestorePostComplete = null;
+            }
+            if (keyJobId) {
+                try {
+                    window.sessionStorage.removeItem(restoreTokenStorageKey(keyJobId));
+                } catch (error) {}
+            }
+            if (!keyJobId || String(completedRestoreJobId || '') === String(keyJobId)) {
+                completedRestoreJobId = null;
+                completedRestoreToken = null;
+            }
+        }
+
+        window.MusederRestoreOneGetRememberedRestoreToken = getRememberedRestoreToken;
+        window.MusederRestoreOneClearRememberedRestoreToken = clearRememberedRestoreToken;
+
+        function setActiveRestoreToken(token, jobId) {
+            if (token && typeof token === 'string' && token.length > 20) {
+                activeRestoreToken = token;
+                rememberRestoreToken(jobId || activeRestoreJobId || (restoreMonitor && restoreMonitor.jobId), token);
+            }
+        }
+
+        function buildSafeModeExitData(jobId) {
+            var safeModeJobId = jobId || completedRestoreJobId || (restoreMonitor && restoreMonitor.jobId) || activeRestoreJobId || '';
+            var token = activeRestoreToken || completedRestoreToken || getRememberedRestoreToken(safeModeJobId);
+            var data = {
+                action: 'museder_restoreone_exit_safe_mode',
+                nonce: nonce,
+                job_id: safeModeJobId || '',
+                restore_token: token || ''
+            };
+            window.MusederRestoreOneSafeModeExitData = data;
+            return data;
+        }
+
+        window.MusederRestoreOneBuildSafeModeExitData = buildSafeModeExitData;
 
         function escapeRestoreHtml(text) {
             if (text === null || text === undefined) {
@@ -2770,7 +2844,8 @@ function initRestoreCenter() {
             var history = Array.isArray(payload.history) ? payload.history : [];
             var completionMeta = {
                 safe_mode_active: !!payload.safe_mode_active,
-                prev_plugins_count: (typeof payload.prev_plugins_count !== 'undefined') ? payload.prev_plugins_count : 0
+                prev_plugins_count: (typeof payload.prev_plugins_count !== 'undefined') ? payload.prev_plugins_count : 0,
+                jobId: jobId
             };
 
             if (history.length) {
@@ -3220,8 +3295,12 @@ function initRestoreCenter() {
                 clearStep3StartedAt(restoreMonitor.jobId);
             }
             updateStep3TimerDisplay(restoreMonitor ? restoreMonitor.jobId : null);
+            completedRestoreJobId = (meta && meta.jobId) || (restoreMonitor && restoreMonitor.jobId) || activeRestoreJobId || completedRestoreJobId;
+            completedRestoreToken = activeRestoreToken || getRememberedRestoreToken(completedRestoreJobId) || completedRestoreToken;
+            if (completedRestoreJobId && completedRestoreToken) {
+                rememberRestoreToken(completedRestoreJobId, completedRestoreToken);
+            }
             activeRestoreJobId = null; // Clear active job ID to allow new restore
-            activeRestoreToken = null;
             if (startButton) {
                 startButton.disabled = false;
             }
@@ -3245,20 +3324,16 @@ function initRestoreCenter() {
                     actionText: safeMode ? (strings.exitSafeMode || 'Exit Safe Mode') : '',
                     actionCallback: safeMode ? function () {
                         var ajaxUrl = localizedSettings.ajaxUrl || '/wp-admin/admin-ajax.php';
-                        var nonce = localizedSettings.nonce || '';
                         var safeModeJobId = restoreMonitor.jobId || activeRestoreJobId || (meta && meta.jobId) || '';
                         jQuery.ajax({
                             url: ajaxUrl,
                             type: 'POST',
-                            data: {
-                                action: 'museder_restoreone_exit_safe_mode',
-                                nonce: nonce,
-                                job_id: safeModeJobId,
-                                restore_token: activeRestoreToken || ''
-                            },
+                            data: buildSafeModeExitData(safeModeJobId),
                             success: function (response) {
                                 if (response && response.success) {
                                     showToast('✅ ' + ((response.data && response.data.message) ? response.data.message : 'Safe mode exited.'), 'success');
+                                    clearRememberedRestoreToken(safeModeJobId);
+                                    activeRestoreToken = null;
                                     setTimeout(function () {
                                         window.location.reload();
                                     }, 800);
@@ -3292,20 +3367,16 @@ function initRestoreCenter() {
                                 actionText: safeMode ? (strings.exitSafeMode || 'Exit Safe Mode') : '',
                                 actionCallback: safeMode ? function () {
                                     var ajaxUrl = localizedSettings.ajaxUrl || '/wp-admin/admin-ajax.php';
-                                    var nonce = localizedSettings.nonce || '';
                                     var safeModeJobId = restoreMonitor.jobId || activeRestoreJobId || (meta && meta.jobId) || '';
                                     jQuery.ajax({
                                         url: ajaxUrl,
                                         type: 'POST',
-                                        data: {
-                                            action: 'museder_restoreone_exit_safe_mode',
-                                            nonce: nonce,
-                                            job_id: safeModeJobId,
-                                            restore_token: activeRestoreToken || ''
-                                        },
+                                        data: buildSafeModeExitData(safeModeJobId),
                                         success: function (response) {
                                             if (response && response.success) {
                                                 showToast('✅ ' + ((response.data && response.data.message) ? response.data.message : 'Safe mode exited.'), 'success');
+                                                clearRememberedRestoreToken(safeModeJobId);
+                                                activeRestoreToken = null;
                                                 setTimeout(function () {
                                                     window.location.reload();
                                                 }, 800);
@@ -3711,6 +3782,17 @@ function initRestoreCenter() {
         }
 
         function installRestoreAuthCheckGuard() {
+            if (!window.MusederRestoreOneAuthModalObserver && window.MutationObserver && document.body) {
+                window.MusederRestoreOneAuthModalObserver = new MutationObserver(function () {
+                    if (restoreInProgress || activeRestoreJobId || restoreTransportDegraded || isRestoreUiSuccessLocked()) {
+                        dismissWordPressAuthCheckModal();
+                    }
+                });
+                window.MusederRestoreOneAuthModalObserver.observe(document.body, {
+                    childList: true,
+                    subtree: true
+                });
+            }
             var attempts = 0;
             var timer = window.setInterval(function () {
                 attempts++;
@@ -5838,7 +5920,7 @@ function initRestoreCenter() {
         if (restoreData.job && restoreData.job.id) {
             restoreData.job = normalizeRestoreJobPayload(restoreData.job);
             if (restoreData.job.restore_token) {
-                setActiveRestoreToken(restoreData.job.restore_token);
+                setActiveRestoreToken(restoreData.job.restore_token, restoreData.job.id);
             }
             var fileSize = (restoreData.summary && restoreData.summary.size) ? restoreData.summary.size : 0;
             var jobStatus = restoreData.job.status || resolveRestoreJobStatus(restoreData.job);
@@ -6217,18 +6299,17 @@ function initRestoreCenter() {
                     var job = extractRestoreJobPayload(payload);
                     var fileSize = payload.file_size || 0;
 
-                    if (payload.restore_token) {
-                        setActiveRestoreToken(payload.restore_token);
-                    } else if (payload.exec && payload.exec.restore_token) {
-                        setActiveRestoreToken(payload.exec.restore_token);
-                    }
-
                     if (payload.history) {
                         renderHistory(payload.history);
                     }
 
                     if (job && job.id) {
                         job = normalizeRestoreJobPayload(job);
+                        if (payload.restore_token) {
+                            setActiveRestoreToken(payload.restore_token, job.id);
+                        } else if (payload.exec && payload.exec.restore_token) {
+                            setActiveRestoreToken(payload.exec.restore_token, job.id);
+                        }
                         // Check if job is already complete before starting monitor
                         var jobStatus = job.status || '';
                         var isJobComplete = jobStatus === 'success' || jobStatus === 'completed';
@@ -8331,17 +8412,31 @@ function initRestoreCenter() {
 
             var ajaxUrl = localizedSettings.ajaxUrl || '/wp-admin/admin-ajax.php';
             var nonce = localizedSettings.nonce || '';
+            var restoreData = window.MusederRestoreOneRestore || {};
+            var noticeJobId = restoreData && restoreData.job && restoreData.job.id ? restoreData.job.id : '';
+            var noticeToken = '';
+            if (window.MusederRestoreOneGetRememberedRestoreToken) {
+                noticeToken = window.MusederRestoreOneGetRememberedRestoreToken(noticeJobId);
+            }
+            var requestData = window.MusederRestoreOneBuildSafeModeExitData
+                ? window.MusederRestoreOneBuildSafeModeExitData(noticeJobId)
+                : {
+                    action: 'museder_restoreone_exit_safe_mode',
+                    nonce: nonce,
+                    job_id: noticeJobId,
+                    restore_token: noticeToken || ''
+                };
 
             jQuery.ajax({
                 url: ajaxUrl,
                 type: 'POST',
-                data: {
-                    action: 'museder_restoreone_exit_safe_mode',
-                    nonce: nonce
-                },
+                data: requestData,
                 success: function (response) {
                     if (response.success) {
                         showToast('✅ ' + (response.data.message || 'Safe mode exited successfully.'), 'success');
+                        if (window.MusederRestoreOneClearRememberedRestoreToken) {
+                            window.MusederRestoreOneClearRememberedRestoreToken(requestData.job_id || noticeJobId);
+                        }
                         // Hide the notice
                         var notice = document.getElementById('museder-restoreone-safe-mode-notice');
                         if (notice) {
@@ -8361,8 +8456,12 @@ function initRestoreCenter() {
                         button.textContent = originalText;
                     }
                 },
-                error: function (xhr, status, error) {
-                    showToast('❌ ' + (strings.errorGeneric || 'An error occurred. Please try again.'), 'error');
+                error: function (xhr) {
+                    var message = strings.errorGeneric || 'An error occurred. Please try again.';
+                    if (xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message) {
+                        message = xhr.responseJSON.data.message;
+                    }
+                    showToast('❌ ' + message, 'error');
                     button.disabled = false;
                     button.textContent = originalText;
                 }
