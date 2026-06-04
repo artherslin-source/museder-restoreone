@@ -2009,6 +2009,7 @@ function initRestoreCenter() {
         var autoBackupToggle = document.getElementById('autoBackup');
         var pauseOtherPluginsToggle = document.getElementById('pauseOtherPlugins');
         var preflightHintsEl = document.getElementById('restore-preflight-hints');
+        var executionSummaryEl = document.getElementById('restore-execution-summary');
         var restoreOrderDbFirst = document.getElementById('restoreOrderDbFirst');
         var restoreOrderFilesFirst = document.getElementById('restoreOrderFilesFirst');
         var safeModeToggle = document.getElementById('safeMode');
@@ -2175,6 +2176,65 @@ function initRestoreCenter() {
                 return '';
             }
             return strings.restoreRequiresOverwrite || 'Enable “Overwrite existing data” in Step 2 before starting restore.';
+        }
+
+        function getRestoreExecutionSnapshot() {
+            var restoreScopeEl = document.querySelector('input[name="restoreScope"]:checked');
+            var wpConfigModeEl = document.querySelector('input[name="wpConfigMode"]:checked');
+            var restoreOrderEl = document.querySelector('input[name="restoreOrder"]:checked');
+            var summary = restoreData && restoreData.summary ? restoreData.summary : {};
+            var restoreScope = restoreScopeEl ? String(restoreScopeEl.value || 'full') : 'full';
+            var filesOnly = !!(filesOnlyToggle && filesOnlyToggle.checked);
+            var dbPresent = summary && typeof summary.db_present !== 'undefined' ? !!summary.db_present : true;
+            var importsDb = !filesOnly && restoreScope !== 'content_only' && dbPresent;
+
+            return {
+                checkedRestoreScopeId: restoreScopeEl ? restoreScopeEl.id : '',
+                restoreScope: restoreScope,
+                filesOnly: filesOnly,
+                overwrite: !!(overwriteToggle && overwriteToggle.checked),
+                autoBackup: !!(autoBackupToggle && autoBackupToggle.checked),
+                forceAutoBackup: !!(summary && summary.force_auto_backup),
+                pauseOtherPlugins: !!(pauseOtherPluginsToggle && pauseOtherPluginsToggle.checked),
+                safeMode: !!(safeModeToggle && safeModeToggle.checked),
+                wpConfigMode: wpConfigModeEl ? String(wpConfigModeEl.value || 'backup') : 'backup',
+                restoreOrder: restoreOrderEl ? String(restoreOrderEl.value || 'db_then_files') : 'db_then_files',
+                dbPresent: dbPresent,
+                importsDb: importsDb
+            };
+        }
+
+        function restoreScopeLabel(scope) {
+            if (scope === 'content_only') {
+                return strings.restoreScopeContentLabel || 'wp-content only (no database import)';
+            }
+            if (scope === 'db_only') {
+                return strings.restoreScopeDbLabel || 'Database only';
+            }
+            return strings.restoreScopeFullLabel || 'Full site (files + database)';
+        }
+
+        function renderRestoreExecutionSummary() {
+            if (!executionSummaryEl) {
+                return;
+            }
+            if (!hasAnalyzed) {
+                executionSummaryEl.style.display = 'none';
+                executionSummaryEl.innerHTML = '';
+                return;
+            }
+            var snapshot = getRestoreExecutionSnapshot();
+            var lines = [
+                '<strong>' + escapeRestoreHtml(strings.restoreExecutionSummaryTitle || 'Will execute') + ':</strong> ' + escapeRestoreHtml(restoreScopeLabel(snapshot.restoreScope)),
+                escapeRestoreHtml(snapshot.importsDb ? (strings.restoreWillImportDb || 'Database import: yes') : (strings.restoreWillSkipDb || 'Database import: no')),
+                escapeRestoreHtml(snapshot.forceAutoBackup ? (strings.restoreWillPreBackupForced || 'Pre-restore snapshot: required on populated sites and cannot be turned off.') : (snapshot.autoBackup ? (strings.restoreWillPreBackupOn || 'Pre-restore snapshot: enabled') : (strings.restoreWillPreBackupOff || 'Pre-restore snapshot: disabled'))),
+                escapeRestoreHtml((strings.pauseOtherPlugins || 'Pause other plugins') + ': ' + (snapshot.pauseOtherPlugins ? 'yes' : 'no'))
+            ];
+            if (!snapshot.importsDb) {
+                lines.push('⚠️ ' + escapeRestoreHtml(strings.restoreContentOnlyDbWarning || 'This mode does not restore posts, pages, settings, users, or trash state from the backup database.'));
+            }
+            executionSummaryEl.style.display = '';
+            executionSummaryEl.innerHTML = '<p style="margin:4px 0;">' + lines.join('</p><p style="margin:4px 0;">') + '</p>';
         }
 
         function normalizeRestoreLoginUrl() {
@@ -2887,6 +2947,32 @@ function initRestoreCenter() {
                 return true;
             }
 
+            if (job && job.status === 'cancelled') {
+                restoreMonitor.hasFinalResult = true;
+                restoreMonitor.lastStatus = 'cancelled';
+                stopRestoreJobMonitor();
+                restoreInProgress = false;
+                restoreCompleted = false;
+                if (startButton) {
+                    startButton.disabled = false;
+                }
+                setProgress(100, job.message || (strings.restoreCancelSuccess || 'Restore process cancelled.'), true);
+                syncWizard();
+                updateRestoreCancelState();
+                showToast('⚠️ ' + (job.message || strings.restoreCancelSuccess || 'Restore process cancelled.'), 'warning');
+                if (!restoreCompletionShown) {
+                    restoreCompletionShown = true;
+                    showCompletionOverlay({
+                        icon: '⚠️',
+                        title: strings.restoreCancelled || 'Restore Cancelled',
+                        message: job.message || strings.restoreCancelSuccess || 'Restore process cancelled.',
+                        confirmText: strings.restoreOverlayConfirm || strings.close || 'Got it',
+                        type: 'warning'
+                    });
+                }
+                return true;
+            }
+
             var latestHistory = findMatchingRestoreHistory(history, jobId, job);
             if (latestHistory && latestHistory.result === 'success') {
                 restoreMonitor.hasFinalResult = true;
@@ -2896,19 +2982,20 @@ function initRestoreCenter() {
                 return true;
             }
 
-            if (latestHistory && latestHistory.result === 'failed') {
+            if (latestHistory && (latestHistory.result === 'failed' || latestHistory.result === 'cancelled')) {
+                var historyCancelled = latestHistory.result === 'cancelled';
                 restoreMonitor.hasFinalResult = true;
-                restoreMonitor.lastStatus = 'failed';
+                restoreMonitor.lastStatus = historyCancelled ? 'cancelled' : 'failed';
                 stopRestoreJobMonitor();
                 restoreInProgress = false;
                 restoreCompleted = false;
                 if (startButton) {
                     startButton.disabled = false;
                 }
-                setProgress(100, latestHistory.message || (strings.errorGeneric || 'Restore failed.'), true);
+                setProgress(100, latestHistory.message || (historyCancelled ? (strings.restoreCancelSuccess || 'Restore process cancelled.') : (strings.errorGeneric || 'Restore failed.')), true);
                 syncWizard();
                 updateRestoreCancelState();
-                showToast('❌ ' + (latestHistory.message || strings.errorGeneric || 'Restore failed.'), 'error');
+                showToast((historyCancelled ? '⚠️ ' : '❌ ') + (latestHistory.message || (historyCancelled ? (strings.restoreCancelSuccess || 'Restore process cancelled.') : (strings.errorGeneric || 'Restore failed.'))), historyCancelled ? 'warning' : 'error');
                 return true;
             }
 
@@ -5235,6 +5322,7 @@ function initRestoreCenter() {
             setWizardNode('execute', executeState === 'done' ? 'done' : (executeState === 'locked' ? 'locked' : 'active'));
             setStepStatus('execute', executeState, executeText);
             toggleExecuteLock(executeLocked);
+            renderRestoreExecutionSummary();
         }
 
         function resetAnalysisState(options) {
@@ -5701,6 +5789,9 @@ function initRestoreCenter() {
                 }
                 if (summary.bootstrap_recommended) {
                     lines.push('ℹ️ ' + (strings.restoreBootstrapHint || 'Copy museder-restoreone-restore-bootstrap.php to the site root if wp-admin is unavailable during restore.'));
+                }
+                if (summary.force_auto_backup) {
+                    lines.push('ℹ️ ' + (strings.restoreWillPreBackupForced || 'This destination already has content, so RestoreOne will create a pre-restore snapshot and this cannot be turned off.'));
                 }
                 if (summary.preflight_warnings && summary.preflight_warnings.length) {
                     summary.preflight_warnings.forEach(function (w) {
@@ -6259,18 +6350,19 @@ function initRestoreCenter() {
                 }
                 markReviewCompleted();
 
+                var executionSnapshot = getRestoreExecutionSnapshot();
+                window.MusederRestoreOneLastRestorePayloadSnapshot = executionSnapshot;
+                console.info('[Museder RestoreOne] restore_enqueue_payload', executionSnapshot);
+
                 var formData = prepareFormData('museder_restoreone_restore_enqueue');
-                formData.append('overwrite', overwriteToggle.checked ? 'true' : 'false');
-                formData.append('autoBackup', autoBackupToggle && autoBackupToggle.checked ? 'true' : 'false');
-                var wpConfigModeEl = document.querySelector('input[name="wpConfigMode"]:checked');
-                formData.append('wpConfigMode', wpConfigModeEl ? wpConfigModeEl.value : 'backup');
-                var restoreOrderEl = document.querySelector('input[name="restoreOrder"]:checked');
-                formData.append('restoreOrder', restoreOrderEl ? restoreOrderEl.value : 'db_then_files');
-                var restoreScopeEl = document.querySelector('input[name="restoreScope"]:checked');
-                formData.append('restoreScope', restoreScopeEl ? restoreScopeEl.value : 'full');
-                formData.append('pauseOtherPlugins', pauseOtherPluginsToggle && pauseOtherPluginsToggle.checked ? 'true' : 'false');
-                formData.append('safeMode', safeModeToggle && safeModeToggle.checked ? 'true' : 'false');
-                formData.append('filesOnly', filesOnlyToggle && filesOnlyToggle.checked ? 'true' : 'false');
+                formData.append('overwrite', executionSnapshot.overwrite ? 'true' : 'false');
+                formData.append('autoBackup', executionSnapshot.autoBackup ? 'true' : 'false');
+                formData.append('wpConfigMode', executionSnapshot.wpConfigMode);
+                formData.append('restoreOrder', executionSnapshot.restoreOrder);
+                formData.append('restoreScope', executionSnapshot.restoreScope);
+                formData.append('pauseOtherPlugins', executionSnapshot.pauseOtherPlugins ? 'true' : 'false');
+                formData.append('safeMode', executionSnapshot.safeMode ? 'true' : 'false');
+                formData.append('filesOnly', executionSnapshot.filesOnly ? 'true' : 'false');
                 if (applyReplaceToggle && applyReplaceToggle.checked) {
                     formData.append('searchReplace', JSON.stringify([]));
                 }

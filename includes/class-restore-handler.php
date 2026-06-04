@@ -582,7 +582,8 @@ class Museder_Restoreone_Restore_Handler {
             wp_send_json_error( [ 'message' => esc_html__( 'No restore session is active.', 'museder-restoreone' ) ], 400 );
         }
 
-        $options = self::parse_options();
+        $options        = self::parse_options();
+        $parsed_options = $options;
 
         $file_path_preflight = isset( $state['file'] ) ? (string) $state['file'] : '';
         $abs_preflight       = $file_path_preflight ? museder_restoreone_get_backup_path( $file_path_preflight ) : '';
@@ -596,6 +597,15 @@ class Museder_Restoreone_Restore_Handler {
             }
             $options = $preflight['options'];
         }
+
+        museder_restoreone_log(
+            'info',
+            'restore_enqueue_options',
+            [
+                'parsed'     => self::restore_options_log_snapshot( $parsed_options ),
+                'normalized' => self::restore_options_log_snapshot( $options ),
+            ]
+        );
 
         // Pass along the detected DB prefix info (Step 1) so Restore_Service can avoid prefix mismatch restores.
         $extra = ( isset( $state['extra'] ) && is_array( $state['extra'] ) ) ? $state['extra'] : [];
@@ -646,6 +656,14 @@ class Museder_Restoreone_Restore_Handler {
             if ( '' === $job_id ) {
                 throw new RuntimeException( esc_html__( 'Unable to create restore job.', 'museder-restoreone' ) );
             }
+            museder_restoreone_log(
+                'info',
+                'restore_enqueue_job_created',
+                [
+                    'job_id'     => $job_id,
+                    'normalized' => self::restore_options_log_snapshot( $options ),
+                ]
+            );
 
             // Persist job id in state for polling recovery (nonce expiry / refresh).
             $state['restore_service_job_id'] = $job_id;
@@ -959,6 +977,9 @@ class Museder_Restoreone_Restore_Handler {
         try {
             $status = Museder_Restoreone_Restore_Service::status( $job_id );
             $job    = self::map_restore_service_status_to_job( $job_id, $status );
+            if ( ! empty( $job['status'] ) && in_array( (string) $job['status'], [ 'success', 'failed', 'cancelled' ], true ) && method_exists( 'Museder_Restoreone_Restore_Service', 'ensure_terminal_history' ) ) {
+                Museder_Restoreone_Restore_Service::ensure_terminal_history( $job_id );
+            }
         } catch ( Exception $e ) {
             unset( $e );
             // Read-only fallback: job may already be cleaned up after completion.
@@ -976,6 +997,10 @@ class Museder_Restoreone_Restore_Handler {
             [
                 'job'                => $job,
                 'history'            => self::history_for_js( 10 ),
+                'terminal_state'     => ( is_array( $job ) && ! empty( $job['status'] ) && in_array( (string) $job['status'], [ 'success', 'failed', 'cancelled' ], true ) ) ? sanitize_text_field( (string) $job['status'] ) : '',
+                'cancelled'          => ( is_array( $job ) && isset( $job['status'] ) && 'cancelled' === (string) $job['status'] ),
+                'failed'             => ( is_array( $job ) && isset( $job['status'] ) && 'failed' === (string) $job['status'] ),
+                'completed'          => ( is_array( $job ) && isset( $job['status'] ) && in_array( (string) $job['status'], [ 'success', 'failed', 'cancelled' ], true ) ),
                 'safe_mode_active'   => (bool) $safe_mode_active,
                 'prev_plugins_count' => (int) $prev_plugins_count,
             ]
@@ -1349,6 +1374,44 @@ class Museder_Restoreone_Restore_Handler {
         // phpcs:enable WordPress.Security.NonceVerification.Missing
 
         return $options;
+    }
+
+    /**
+     * Build a safe restore-options snapshot for diagnostics.
+     *
+     * @param array<string, mixed> $options Restore options.
+     * @return array<string, mixed>
+     */
+    private static function restore_options_log_snapshot( array $options ) {
+        $keys = [
+            'overwrite',
+            'auto_backup',
+            'wp_config_mode',
+            'skip_config',
+            'restore_order',
+            'pause_other_plugins',
+            'restore_scope',
+            'safe_mode',
+            'files_only',
+            'restore_profile',
+            'db_source_prefix',
+            'db_target_prefix',
+        ];
+
+        $snapshot = [];
+        foreach ( $keys as $key ) {
+            if ( ! array_key_exists( $key, $options ) ) {
+                continue;
+            }
+            $value = $options[ $key ];
+            if ( is_bool( $value ) ) {
+                $snapshot[ $key ] = $value;
+            } elseif ( is_scalar( $value ) ) {
+                $snapshot[ $key ] = sanitize_text_field( (string) $value );
+            }
+        }
+
+        return $snapshot;
     }
 
     /**
@@ -2632,6 +2695,9 @@ class Museder_Restoreone_Restore_Handler {
             'progress' => $progress,
             'message'  => $message,
             'stage'    => $stage,
+            'completed'=> $completed,
+            'cancelled'=> ( 'cancelled' === $job_status ),
+            'failed'   => ( 'failed' === $job_status ),
             'last_tick' => $last_tick,
             'started_at_raw' => $started_at,
             'updated_at' => $updated_at,

@@ -10,6 +10,7 @@
 $root = dirname( __DIR__, 2 );
 $token_file   = $root . '/includes/class-restore-token.php';
 $handler_file = $root . '/includes/class-restore-handler.php';
+$ui_file      = $root . '/includes/class-ui.php';
 
 if ( ! is_readable( $token_file ) ) {
 	fwrite( STDERR, "FAIL\trestore_token_file_missing\n" );
@@ -19,15 +20,24 @@ if ( ! is_readable( $handler_file ) ) {
 	fwrite( STDERR, "FAIL\trestore_handler_file_missing\n" );
 	exit( 1 );
 }
+if ( ! is_readable( $ui_file ) ) {
+	fwrite( STDERR, "FAIL\trestore_ui_file_missing\n" );
+	exit( 1 );
+}
 
 $token_source = file_get_contents( $token_file );
 $handler_source = file_get_contents( $handler_file );
+$ui_source = file_get_contents( $ui_file );
 if ( ! is_string( $token_source ) || '' === $token_source ) {
 	fwrite( STDERR, "FAIL\trestore_token_file_empty\n" );
 	exit( 1 );
 }
 if ( ! is_string( $handler_source ) || '' === $handler_source ) {
 	fwrite( STDERR, "FAIL\trestore_handler_file_empty\n" );
+	exit( 1 );
+}
+if ( ! is_string( $ui_source ) || '' === $ui_source ) {
+	fwrite( STDERR, "FAIL\trestore_ui_file_empty\n" );
 	exit( 1 );
 }
 
@@ -45,7 +55,10 @@ $required_handler_needles = array(
 	'public static function final_status()',
 	'verify_restore_progress_request',
 	'history_for_js',
+);
+$required_ui_needles = array(
 	'restore_post_complete_read_is_valid',
+	'verify_restore_progress_request',
 );
 
 $failed = array();
@@ -57,6 +70,11 @@ foreach ( $required_token_needles as $needle ) {
 foreach ( $required_handler_needles as $needle ) {
 	if ( false === strpos( $handler_source, $needle ) ) {
 		$failed[] = "handler_missing\t{$needle}";
+	}
+}
+foreach ( $required_ui_needles as $needle ) {
+	if ( false === strpos( $ui_source, $needle ) ) {
+		$failed[] = "ui_missing\t{$needle}";
 	}
 }
 

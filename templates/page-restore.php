@@ -218,6 +218,7 @@ if ( class_exists( 'Museder_Restoreone_Restore_Service' ) && method_exists( 'Mus
                 </div>
             </div>
             <div id="restore-preflight-hints" class="notice notice-info inline" style="display:none; margin: 0 0 12px 0; padding: 10px 12px;"></div>
+            <div id="restore-execution-summary" class="notice notice-info inline" style="display:none; margin: 0 0 12px 0; padding: 10px 12px;"></div>
             <label><input type="checkbox" id="overwriteData"> <?php esc_html_e( 'Overwrite existing data', 'museder-restoreone' ); ?></label><br>
             <label><input type="checkbox" id="applyReplace"> <?php esc_html_e( 'Apply URL Search & Replace', 'museder-restoreone' ); ?></label><br>
             <fieldset style="margin: 12px 0; border: 0; padding: 0;">

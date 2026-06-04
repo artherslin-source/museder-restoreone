@@ -204,6 +204,9 @@ Checklists: `docs/RELEASE_CHECKLIST.md`, `docs/PACKAGING.md`, `docs/WORDPRESS_OR
 * Restore: exclude `.restore-auth-*` runtime auth files from backup ZIP export so imported archives cannot overwrite destination auth state.
 * Restore Safe Mode: register `wp_ajax_nopriv_museder_restoreone_exit_safe_mode` and authorize exit via the same `verify_restore_progress_request` path as progress polling when admin session is lost after DB import.
 * Restore UI: bind completion overlay Exit Safe Mode to `completedRestoreJobId` and ensure poll `completionMeta` carries `jobId` for token grants.
+* Restore Step 2: show a live "Will execute" summary and log a structured restore enqueue snapshot so visible radio state, submitted FormData, backend parsed options, normalized options, and job meta can be compared.
+* Restore Step 2: populated destinations now explicitly explain that the pre-restore snapshot is required and cannot be disabled.
+* Restore Step 3: cancelled/failed terminal jobs now repair restore history and final-status payloads so UI polling stops on `cancelled` or `failed` instead of leaving a stale `running` history row.
 
 = 2.7.275 =
 * Restore UI: Step 3 success is now a one-way state — once REST final-status confirms completion, the UI no longer re-enters admin-ajax polling or resets progress when a stale “running” payload arrives.
@@ -560,7 +563,7 @@ Checklists: `docs/RELEASE_CHECKLIST.md`, `docs/PACKAGING.md`, `docs/WORDPRESS_OR
 == Upgrade Notice ==
 
 = 2.7.276 =
-Fixes Exit Safe Mode failing with a generic error after restore when DB import breaks admin-ajax session or overwrites the restore HMAC secret in uploads. This release preserves runtime auth files across the file stage, adds a nopriv Safe Mode exit path with post-complete token grants, and hardens completion overlay job/token binding. Strongly recommended if restore completes but Exit Safe Mode shows “An unexpected error occurred.”
+Fixes Exit Safe Mode failing with a generic error after restore when DB import breaks admin-ajax session or overwrites the restore HMAC secret in uploads. This release also makes Step 2 restore scope/pre-backup choices visible and traceable, and ensures cancelled/failed Step 3 jobs update restore history/final-status instead of staying as running. Strongly recommended if restore completes but Exit Safe Mode shows “An unexpected error occurred,” or if Step 3 appears stuck after cancellation.
 
 = 2.7.275 =
 Fixes Restore Step 3 on shared hosts where admin-ajax and wp-login interim-login return 403 after DB import: the UI now converges to “Restore Completed” via REST-only polling, query-style REST fallback, and read-only AJAX final-status fallback even when `/wp-json` becomes stale or returns HTML. This update also restores resume token continuity after page reload, keeps the completion token available until Safe Mode exit succeeds, aligns Step 3 button gating with overwrite preconditions, pins reauth redirects back to Restore page, adds post-restore safe-mode-exit auth fallback, suppresses late auth-check 403 modals, preserves destination permalink/rewrite policy across import, stabilizes restore-token verification across `wp-config.php` salt changes, fixes long-running restores that could show 100% while still stuck on “Waiting for action,” and hardens prefix migration against duplicate-key failures. Strongly recommended if Step 3 shows 403 errors while the backend restore actually succeeds.

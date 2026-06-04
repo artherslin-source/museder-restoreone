@@ -778,8 +778,80 @@ class Museder_Restoreone_Restore_Service {
         self::exit_mid_restore_plugin_isolation( $job_id );
 
         Museder_Restoreone_Restore_Lock::release();
+        self::ensure_terminal_history( $job_id, $meta );
 
         return [ 'ok' => true, 'message' => __( 'Restore cancelled.', 'museder-restoreone' ) ];
+    }
+
+    /**
+     * Ensure restore history reflects a terminal Restore_Service job state.
+     *
+     * @param string                    $job_id Restore job identifier.
+     * @param array<string, mixed>|null $meta   Optional job metadata.
+     * @return bool
+     */
+    public static function ensure_terminal_history( $job_id, $meta = null ) {
+        $job_id = sanitize_text_field( (string) $job_id );
+        if ( '' === $job_id || ! function_exists( 'museder_restoreone_upsert_restore_history' ) ) {
+            return false;
+        }
+
+        if ( null === $meta ) {
+            $meta = self::get_job_meta( $job_id );
+        }
+        if ( ! is_array( $meta ) ) {
+            return false;
+        }
+
+        $stage     = isset( $meta['stage'] ) ? sanitize_key( (string) $meta['stage'] ) : '';
+        $completed = ! empty( $meta['completed'] );
+        if ( ! $completed && ! in_array( $stage, [ 'done', 'rollback-done', 'failed', 'cancelled' ], true ) ) {
+            return false;
+        }
+
+        if ( 'done' === $stage || 'rollback-done' === $stage ) {
+            $result = 'success';
+        } elseif ( 'cancelled' === $stage ) {
+            $result = 'cancelled';
+        } else {
+            $result = 'failed';
+        }
+
+        if ( function_exists( 'museder_restoreone_get_restore_history' ) ) {
+            $history = museder_restoreone_get_restore_history();
+            foreach ( $history as $row ) {
+                $row_job    = isset( $row['job_id'] ) ? (string) $row['job_id'] : '';
+                $row_result = isset( $row['result'] ) ? (string) $row['result'] : '';
+                $row_done   = isset( $row['restore_completed_at'] ) ? (int) $row['restore_completed_at'] : 0;
+                if ( $row_job === $job_id && $row_result === $result && $row_done > 0 ) {
+                    return true;
+                }
+            }
+        }
+
+        $completed_at = time();
+        $started_at   = isset( $meta['started_at'] ) ? (int) $meta['started_at'] : 0;
+        $duration     = ( $started_at > 0 ) ? max( 0, $completed_at - $started_at ) : 0;
+        $entry        = [
+            'job_id'                   => $job_id,
+            'timestamp_utc'            => $completed_at,
+            'date'                     => gmdate( 'Y-m-d H:i:s', $completed_at ),
+            'file'                     => isset( $meta['file'] ) ? basename( (string) $meta['file'] ) : '',
+            'result'                   => $result,
+            'restore_started_at'       => $started_at,
+            'restore_completed_at'     => $completed_at,
+            'restore_duration_seconds' => $duration,
+        ];
+        if ( ! empty( $meta['message'] ) ) {
+            $entry['message'] = sanitize_text_field( (string) $meta['message'] );
+        }
+
+        $active = (string) get_option( self::ACTIVE_JOB_OPTION, '' );
+        if ( $active === $job_id ) {
+            delete_option( self::ACTIVE_JOB_OPTION );
+        }
+
+        return (bool) museder_restoreone_upsert_restore_history( $entry );
     }
 
     /**

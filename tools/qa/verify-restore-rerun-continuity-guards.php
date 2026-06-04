@@ -14,6 +14,7 @@ $files = array(
 	'restore' => $root . '/includes/class-restore.php',
 	'main'    => $root . '/museder-restoreone.php',
 	'admin'   => $root . '/assets/js/admin.js',
+	'ui'      => $root . '/includes/class-ui.php',
 	'e2e'     => $root . '/tools/qa/shineching-profile-e2e.php',
 );
 
@@ -35,7 +36,8 @@ $checks = array(
 	array( 'key' => 'token', 'needle' => 'get_raw_token_for_job' ),
 	array( 'key' => 'token', 'needle' => "RAW_TOKEN_KEY" ),
 	array( 'key' => 'handler', 'needle' => "restore_token'] = \$resume_token" ),
-	array( 'key' => 'handler', 'needle' => 'restore_post_complete_read_is_valid' ),
+	array( 'key' => 'handler', 'needle' => 'verify_restore_progress_request' ),
+	array( 'key' => 'ui', 'needle' => 'restore_post_complete_read_is_valid' ),
 	array( 'key' => 'admin', 'needle' => 'restoreData.job.restore_token' ),
 	array( 'key' => 'admin', 'needle' => 'job_id: safeModeJobId' ),
 	array( 'key' => 'admin', 'needle' => 'getRestoreStartBlockReason' ),
