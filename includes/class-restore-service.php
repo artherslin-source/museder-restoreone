@@ -589,6 +589,8 @@ class Museder_Restoreone_Restore_Service {
             self::write_job_meta( $job_id, $meta );
 
             $slice_start = microtime( true );
+            $stage_before = isset( $meta['stage'] ) ? (string) $meta['stage'] : '';
+            self::log_process_slice_telemetry( 'entry', $job_id, $source, $slice, $meta );
 
             switch ( $meta['stage'] ) {
                 case 'restore-extract-db':
@@ -630,6 +632,7 @@ class Museder_Restoreone_Restore_Service {
             if ( ! is_array( $meta_after ) ) {
                 $meta_after = self::get_job_meta( $job_id );
             }
+            self::log_process_slice_telemetry( 'exit', $job_id, $source, $slice, $meta_after, microtime( true ) - $slice_start, $stage_before );
             if ( empty( $meta_after['completed'] ) ) {
                 if ( ! wp_next_scheduled( self::CRON_HOOK_PROCESS, [ $job_id ] ) ) {
                     wp_schedule_single_event( time() + 1, self::CRON_HOOK_PROCESS, [ $job_id ] );
@@ -1929,10 +1932,66 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
         if ( '' === $db_file || ! file_exists( $db_file ) ) {
             throw new RuntimeException( esc_html__( 'Database file missing for import.', 'museder-restoreone' ) );
         }
+        $db_file_size = ( file_exists( $db_file ) ) ? (int) @filesize( $db_file ) : 0; // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+        $db_offset    = isset( $meta['checkpoints']['db_offset'] ) ? (int) $meta['checkpoints']['db_offset'] : 0;
+        $active_job_before = (string) get_option( self::ACTIVE_JOB_OPTION, '' );
+        $lock_owner_before = '';
+        if ( class_exists( 'Museder_Restoreone_Restore_Lock' ) ) {
+            $lock_before = Museder_Restoreone_Restore_Lock::current_lock();
+            if ( is_array( $lock_before ) && isset( $lock_before['job_id'] ) ) {
+                $lock_owner_before = sanitize_text_field( (string) $lock_before['job_id'] );
+            }
+        }
+        if ( function_exists( 'museder_restoreone_log' ) ) {
+            museder_restoreone_log( 'info', 'restore_db_stage_entry', [
+                'job_id'            => $job_id,
+                'db_file'           => sanitize_text_field( basename( $db_file ) ),
+                'db_file_exists'    => file_exists( $db_file ),
+                'db_file_readable'  => is_readable( $db_file ),
+                'db_file_size'      => $db_file_size,
+                'db_offset'         => $db_offset,
+                'slice_seconds'     => (int) $slice_seconds,
+                'active_job_option' => sanitize_text_field( $active_job_before ),
+                'lock_owner'        => $lock_owner_before,
+            ] );
+        }
+        $progress_last = -1;
+        $result_t0 = microtime( true );
+        $progress_cb = static function ( $pct, $msg ) use ( $job_id, &$meta, &$progress_last ) {
+            $pct = (int) round( (float) $pct );
+            if ( $pct < 0 ) {
+                $pct = 0;
+            } elseif ( $pct > 99 ) {
+                $pct = 99;
+            }
+            if ( $pct === $progress_last ) {
+                return;
+            }
+            $progress_last = $pct;
+            $meta['progress'] = max( 80, $pct );
+            $meta['message'] = (string) $msg;
+            $meta['updated_at'] = current_time( 'mysql' );
+            $meta['last_tick'] = time();
+            self::write_job_meta( $job_id, $meta );
+            update_option( self::ACTIVE_JOB_OPTION, $job_id, false );
+            if ( class_exists( 'Museder_Restoreone_Restore_Lock' ) ) {
+                Museder_Restoreone_Restore_Lock::refresh( $job_id );
+            }
+        };
 
         // New database format (database.ndjson) is imported directly by Museder_Restoreone_Restore.
         // Legacy SQL backups are manual-only (Museder_Restoreone_Restore::import_database returns manual_db_required).
-        $result = Museder_Restoreone_Restore::import_database( $db_file );
+        $result = Museder_Restoreone_Restore::import_database( $db_file, $progress_cb );
+        if ( function_exists( 'museder_restoreone_log' ) ) {
+            museder_restoreone_log( 'info', 'restore_db_stage_import_result', [
+                'job_id'         => $job_id,
+                'elapsed'        => round( microtime( true ) - $result_t0, 3 ),
+                'success'        => ! empty( $result['success'] ),
+                'code'           => isset( $result['code'] ) ? sanitize_text_field( (string) $result['code'] ) : '',
+                'message'        => isset( $result['message'] ) ? sanitize_text_field( (string) $result['message'] ) : '',
+                'active_plugins' => isset( $result['active_plugins'] ) && is_array( $result['active_plugins'] ) ? count( $result['active_plugins'] ) : 0,
+            ] );
+        }
 
         $restore_options = isset( $meta['options'] ) && is_array( $meta['options'] ) ? $meta['options'] : [];
         if ( self::should_enter_plugin_isolation_after_db_import( $restore_options ) ) {
@@ -1942,6 +2001,21 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
         // DB import replaces wp_options (cron schedule, lock, active job pointer).
         // Force-recover these runtime values so the restore pipeline continues.
         self::post_db_import_recovery( $job_id );
+        if ( function_exists( 'museder_restoreone_log' ) ) {
+            $active_job_after = (string) get_option( self::ACTIVE_JOB_OPTION, '' );
+            $lock_owner_after = '';
+            if ( class_exists( 'Museder_Restoreone_Restore_Lock' ) ) {
+                $lock_after = Museder_Restoreone_Restore_Lock::current_lock();
+                if ( is_array( $lock_after ) && isset( $lock_after['job_id'] ) ) {
+                    $lock_owner_after = sanitize_text_field( (string) $lock_after['job_id'] );
+                }
+            }
+            museder_restoreone_log( 'info', 'restore_db_stage_recovery', [
+                'job_id'            => $job_id,
+                'active_job_option' => sanitize_text_field( $active_job_after ),
+                'lock_owner'        => $lock_owner_after,
+            ] );
+        }
 
         // Manual DB fallback: allow file restore to proceed when backup format is SQL.
         if ( empty( $result['success'] ) && isset( $result['code'] ) && 'manual_db_required' === (string) $result['code'] ) {
@@ -4026,15 +4100,97 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
         if ( ! wp_next_scheduled( self::CRON_HOOK_PROCESS, [ $job_id ] ) ) {
             wp_schedule_single_event( time() + 1, self::CRON_HOOK_PROCESS, [ $job_id ] );
             if ( function_exists( 'museder_restoreone_log' ) ) {
+                $db_offset = 0;
+                if ( isset( $meta['checkpoints']['db_offset'] ) ) {
+                    $db_offset = (int) $meta['checkpoints']['db_offset'];
+                }
+                $active_job = (string) get_option( self::ACTIVE_JOB_OPTION, '' );
+                $lock_owner = '';
+                if ( class_exists( 'Museder_Restoreone_Restore_Lock' ) ) {
+                    $lock = Museder_Restoreone_Restore_Lock::current_lock();
+                    if ( is_array( $lock ) && isset( $lock['job_id'] ) ) {
+                        $lock_owner = sanitize_text_field( (string) $lock['job_id'] );
+                    }
+                }
                 museder_restoreone_log( 'warning', 'Restore job stale tick detected; re-scheduling cron.', [
                     'job_id'    => $job_id,
                     'stage'     => $stage,
                     'last_tick' => $last_tick,
                     'age'       => time() - $last_tick,
+                    'db_offset' => $db_offset,
+                    'active_job_option' => $active_job,
+                    'lock_owner' => $lock_owner,
                 ] );
+                if ( 'restore-db' === $stage && $db_offset <= 0 ) {
+                    museder_restoreone_log( 'error', 'Restore DB stage is stale with db_offset=0.', [
+                        'job_id'            => $job_id,
+                        'age'               => time() - $last_tick,
+                        'active_job_option' => $active_job,
+                        'lock_owner'        => $lock_owner,
+                        'db_file'           => isset( $meta['db_file'] ) ? sanitize_text_field( basename( (string) $meta['db_file'] ) ) : '',
+                    ] );
+                }
             }
             self::spawn_cron();
         }
+    }
+
+    /**
+     * Emit structured telemetry for restore slice stage transitions.
+     *
+     * @param string                   $event entry|exit.
+     * @param string                   $job_id Job identifier.
+     * @param string                   $source cron|ajax|bootstrap|cli.
+     * @param int                      $slice Slice seconds.
+     * @param array<string,mixed>      $meta Current meta snapshot.
+     * @param float                    $elapsed Optional elapsed seconds.
+     * @param string                   $stage_before Stage before running switch.
+     * @return void
+     */
+    protected static function log_process_slice_telemetry( $event, $job_id, $source, $slice, array $meta, $elapsed = 0.0, $stage_before = '' ) {
+        if ( ! function_exists( 'museder_restoreone_log' ) ) {
+            return;
+        }
+
+        $stage = isset( $meta['stage'] ) ? (string) $meta['stage'] : '';
+        if ( ! in_array( $stage, [ 'restore-extract-db', 'restore-db', 'prefix-migrate', 'restore-files', 'search-replace', 'cleanup' ], true ) ) {
+            return;
+        }
+
+        $active_job = (string) get_option( self::ACTIVE_JOB_OPTION, '' );
+        $lock_owner = '';
+        if ( class_exists( 'Museder_Restoreone_Restore_Lock' ) ) {
+            $lock = Museder_Restoreone_Restore_Lock::current_lock();
+            if ( is_array( $lock ) && isset( $lock['job_id'] ) ) {
+                $lock_owner = sanitize_text_field( (string) $lock['job_id'] );
+            }
+        }
+
+        $db_offset = isset( $meta['checkpoints']['db_offset'] ) ? (int) $meta['checkpoints']['db_offset'] : 0;
+        $payload = [
+            'event'             => sanitize_text_field( (string) $event ),
+            'job_id'            => sanitize_text_field( (string) $job_id ),
+            'source'            => sanitize_text_field( (string) $source ),
+            'slice_seconds'     => (int) $slice,
+            'stage'             => sanitize_text_field( $stage ),
+            'progress'          => isset( $meta['progress'] ) ? (int) $meta['progress'] : 0,
+            'message'           => isset( $meta['message'] ) ? sanitize_text_field( (string) $meta['message'] ) : '',
+            'completed'         => ! empty( $meta['completed'] ),
+            'cancel_requested'  => ! empty( $meta['cancel_requested'] ),
+            'db_offset'         => $db_offset,
+            'active_job_option' => sanitize_text_field( $active_job ),
+            'lock_owner'        => $lock_owner,
+            'memory_mb'         => round( memory_get_usage( true ) / 1048576, 2 ),
+            'memory_peak_mb'    => round( memory_get_peak_usage( true ) / 1048576, 2 ),
+        ];
+        if ( '' !== $stage_before ) {
+            $payload['stage_before'] = sanitize_text_field( (string) $stage_before );
+        }
+        if ( $elapsed > 0 ) {
+            $payload['elapsed'] = round( (float) $elapsed, 3 );
+        }
+
+        museder_restoreone_log( 'info', 'restore_process_slice_telemetry', $payload );
     }
 
     /**

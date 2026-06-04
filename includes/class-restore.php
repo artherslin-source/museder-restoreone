@@ -293,6 +293,17 @@ class Museder_Restoreone_Restore {
             $result['log']     = museder_restoreone_log( 'error', 'NDJSON DB file not readable.', [ 'path' => $path ] );
             return $result;
         }
+        $path_size = (int) @filesize( $path ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+        if ( function_exists( 'museder_restoreone_log' ) ) {
+            museder_restoreone_log( 'info', 'NDJSON import entry.', [
+                'path'      => sanitize_text_field( basename( $path ) ),
+                'size'      => $path_size,
+                'readable'  => is_readable( $path ),
+            ] );
+        }
+        if ( is_callable( $progress_cb ) ) {
+            call_user_func( $progress_cb, 46, __( 'Opening database import stream…', 'museder-restoreone' ) );
+        }
 
         // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fgets, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
         $handle = fopen( $path, 'rb' );
@@ -301,6 +312,12 @@ class Museder_Restoreone_Restore {
             $result['message'] = __( 'Unable to open database backup file.', 'museder-restoreone' );
             $result['log']     = museder_restoreone_log( 'error', 'NDJSON DB file open failed.', [ 'path' => $path ] );
             return $result;
+        }
+        if ( function_exists( 'museder_restoreone_log' ) ) {
+            museder_restoreone_log( 'info', 'NDJSON import stream opened.', [
+                'path' => sanitize_text_field( basename( $path ) ),
+                'size' => $path_size,
+            ] );
         }
 
         // Preserve current admin session state before DB tables are replaced.
@@ -328,6 +345,8 @@ class Museder_Restoreone_Restore {
         $rows_imported    = 0;
         $decoded_lines    = 0;
         $saw_first_payload_line = false;
+        $first_schema_logged = false;
+        $first_row_logged = false;
 
         // Best-effort compute options table name once (target site).
         if ( isset( $wpdb->options ) ) {
@@ -412,6 +431,13 @@ class Museder_Restoreone_Restore {
 
                     dbDelta( $create . ';' );
                     $schemas_imported++;
+                    if ( ! $first_schema_logged && function_exists( 'museder_restoreone_log' ) ) {
+                        $first_schema_logged = true;
+                        museder_restoreone_log( 'info', 'NDJSON import first schema applied.', [
+                            'table' => sanitize_text_field( (string) $table ),
+                            'line'  => $line_num,
+                        ] );
+                    }
 
                     continue;
                 }
@@ -444,6 +470,13 @@ class Museder_Restoreone_Restore {
                     $wpdb->replace( $table, $row );
                     // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
                     $rows_imported++;
+                    if ( ! $first_row_logged && function_exists( 'museder_restoreone_log' ) ) {
+                        $first_row_logged = true;
+                        museder_restoreone_log( 'info', 'NDJSON import first row applied.', [
+                            'table' => sanitize_text_field( (string) $table ),
+                            'line'  => $line_num,
+                        ] );
+                    }
 
                     // Capture active_plugins for later restoration (best-effort).
                     if ( '' !== $options_table_safe && $table === $options_table_safe ) {
@@ -504,6 +537,15 @@ class Museder_Restoreone_Restore {
         $result['success'] = true;
         $result['message'] = __( 'Database restore completed successfully.', 'museder-restoreone' );
         $result['code']    = 'database_restored';
+        if ( function_exists( 'museder_restoreone_log' ) ) {
+            museder_restoreone_log( 'info', 'NDJSON import completed.', [
+                'decoded_lines' => $decoded_lines,
+                'schemas'       => $schemas_imported,
+                'rows'          => $rows_imported,
+                'source_prefix' => sanitize_text_field( (string) $source_prefix ),
+                'target_prefix' => sanitize_text_field( (string) $target_prefix ),
+            ] );
+        }
         if ( '' !== $source_prefix ) {
             $result['source_prefix'] = (string) $source_prefix;
         }
