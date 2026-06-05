@@ -1956,20 +1956,48 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
             ] );
         }
         $progress_last = -1;
+        $progress_last_persist = 0;
         $result_t0 = microtime( true );
-        $progress_cb = static function ( $pct, $msg ) use ( $job_id, &$meta, &$progress_last ) {
+        $cp = isset( $meta['checkpoints'] ) && is_array( $meta['checkpoints'] ) ? $meta['checkpoints'] : [];
+        $ndjson_state = [
+            'source_prefix'          => isset( $cp['db_source_prefix'] ) ? (string) $cp['db_source_prefix'] : '',
+            'schemas_imported'       => isset( $cp['db_schemas_imported'] ) ? (int) $cp['db_schemas_imported'] : 0,
+            'rows_imported'          => isset( $cp['db_rows_imported'] ) ? (int) $cp['db_rows_imported'] : 0,
+            'decoded_lines'          => isset( $cp['db_decoded_lines'] ) ? (int) $cp['db_decoded_lines'] : 0,
+            'line_num'               => isset( $cp['db_line_num'] ) ? (int) $cp['db_line_num'] : 0,
+            'saw_first_payload_line' => ! empty( $cp['db_saw_first_payload'] ),
+            'first_schema_logged'    => ! empty( $cp['db_first_schema_logged'] ),
+            'first_row_logged'       => ! empty( $cp['db_first_row_logged'] ),
+            'session_state'          => ( isset( $cp['db_session_state'] ) && is_array( $cp['db_session_state'] ) ) ? $cp['db_session_state'] : null,
+            'active_plugins'         => ( isset( $cp['db_active_plugins'] ) && is_array( $cp['db_active_plugins'] ) ) ? $cp['db_active_plugins'] : [],
+        ];
+        $progress_cb = static function ( $pct, $msg, $byte_offset = null ) use ( $job_id, &$meta, &$cp, &$progress_last, &$progress_last_persist, $db_file_size ) {
             $pct = (int) round( (float) $pct );
             if ( $pct < 0 ) {
                 $pct = 0;
             } elseif ( $pct > 99 ) {
                 $pct = 99;
             }
-            if ( $pct === $progress_last ) {
+            $should_persist = false;
+            if ( null !== $byte_offset && (int) $byte_offset > 0 ) {
+                $cp['db_offset'] = (int) $byte_offset;
+                $should_persist  = true;
+            }
+            if ( $pct !== $progress_last ) {
+                $progress_last = $pct;
+                $should_persist = true;
+            }
+            if ( ! $should_persist && ( time() - $progress_last_persist ) < 2 ) {
                 return;
             }
-            $progress_last = $pct;
+            $progress_last_persist = time();
             $meta['progress'] = max( 80, $pct );
+            if ( $db_file_size > 0 && isset( $cp['db_offset'] ) && (int) $cp['db_offset'] > 0 ) {
+                $file_pct = (int) floor( min( 99, ( (int) $cp['db_offset'] / $db_file_size ) * 100 ) );
+                $meta['progress'] = max( 80, min( 94, 80 + (int) floor( $file_pct * 0.14 ) ) );
+            }
             $meta['message'] = (string) $msg;
+            $meta['checkpoints'] = $cp;
             $meta['updated_at'] = current_time( 'mysql' );
             $meta['last_tick'] = time();
             self::write_job_meta( $job_id, $meta );
@@ -1979,16 +2007,70 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
             }
         };
 
-        // New database format (database.ndjson) is imported directly by Museder_Restoreone_Restore.
-        // Legacy SQL backups are manual-only (Museder_Restoreone_Restore::import_database returns manual_db_required).
-        $result = Museder_Restoreone_Restore::import_database( $db_file, $progress_cb );
+        $ext = strtolower( pathinfo( $db_file, PATHINFO_EXTENSION ) );
+        if ( 'ndjson' === $ext ) {
+            $ndjson_offset = $db_offset;
+            $result = Museder_Restoreone_Restore::import_database_ndjson_sliced(
+                $db_file,
+                $ndjson_offset,
+                max( 3, (int) $slice_seconds ),
+                $ndjson_state,
+                $progress_cb
+            );
+            $cp['db_offset']              = (int) $ndjson_offset;
+            $cp['db_source_prefix']       = isset( $ndjson_state['source_prefix'] ) ? (string) $ndjson_state['source_prefix'] : '';
+            $cp['db_schemas_imported']    = isset( $ndjson_state['schemas_imported'] ) ? (int) $ndjson_state['schemas_imported'] : 0;
+            $cp['db_rows_imported']       = isset( $ndjson_state['rows_imported'] ) ? (int) $ndjson_state['rows_imported'] : 0;
+            $cp['db_decoded_lines']       = isset( $ndjson_state['decoded_lines'] ) ? (int) $ndjson_state['decoded_lines'] : 0;
+            $cp['db_line_num']            = isset( $ndjson_state['line_num'] ) ? (int) $ndjson_state['line_num'] : 0;
+            $cp['db_saw_first_payload']   = ! empty( $ndjson_state['saw_first_payload_line'] );
+            $cp['db_first_schema_logged'] = ! empty( $ndjson_state['first_schema_logged'] );
+            $cp['db_first_row_logged']    = ! empty( $ndjson_state['first_row_logged'] );
+            if ( isset( $ndjson_state['session_state'] ) && is_array( $ndjson_state['session_state'] ) ) {
+                $cp['db_session_state'] = $ndjson_state['session_state'];
+            }
+            if ( isset( $ndjson_state['active_plugins'] ) && is_array( $ndjson_state['active_plugins'] ) ) {
+                $cp['db_active_plugins'] = $ndjson_state['active_plugins'];
+            }
+            $meta['checkpoints'] = $cp;
+
+            if ( empty( $result['completed'] ) ) {
+                if ( isset( $result['code'] ) && 'db_import_in_progress' === (string) $result['code'] ) {
+                    if ( function_exists( 'museder_restoreone_log' ) ) {
+                        museder_restoreone_log( 'info', 'restore_db_stage_slice_checkpoint', [
+                            'job_id'    => $job_id,
+                            'db_offset' => (int) $ndjson_offset,
+                            'db_size'   => $db_file_size,
+                            'rows'      => (int) $cp['db_rows_imported'],
+                            'schemas'   => (int) $cp['db_schemas_imported'],
+                            'elapsed'   => round( microtime( true ) - $result_t0, 3 ),
+                        ] );
+                    }
+                    $meta['stage'] = 'restore-db';
+                    $meta['message'] = isset( $result['message'] ) ? (string) $result['message'] : __( 'Importing database…', 'museder-restoreone' );
+                    $meta['updated_at'] = current_time( 'mysql' );
+                    $meta['last_tick'] = time();
+                    self::write_job_meta( $job_id, $meta );
+                    update_option( self::ACTIVE_JOB_OPTION, $job_id, false );
+                    if ( class_exists( 'Museder_Restoreone_Restore_Lock' ) ) {
+                        Museder_Restoreone_Restore_Lock::refresh( $job_id );
+                    }
+                    return;
+                }
+            }
+        } else {
+            // Legacy SQL backups are manual-only (Museder_Restoreone_Restore::import_database returns manual_db_required).
+            $result = Museder_Restoreone_Restore::import_database( $db_file, $progress_cb );
+        }
         if ( function_exists( 'museder_restoreone_log' ) ) {
             museder_restoreone_log( 'info', 'restore_db_stage_import_result', [
                 'job_id'         => $job_id,
                 'elapsed'        => round( microtime( true ) - $result_t0, 3 ),
                 'success'        => ! empty( $result['success'] ),
+                'completed'      => ! empty( $result['completed'] ),
                 'code'           => isset( $result['code'] ) ? sanitize_text_field( (string) $result['code'] ) : '',
                 'message'        => isset( $result['message'] ) ? sanitize_text_field( (string) $result['message'] ) : '',
+                'db_offset'      => isset( $cp['db_offset'] ) ? (int) $cp['db_offset'] : 0,
                 'active_plugins' => isset( $result['active_plugins'] ) && is_array( $result['active_plugins'] ) ? count( $result['active_plugins'] ) : 0,
             ] );
         }
@@ -4863,7 +4945,7 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
      */
     protected static function drain_restore_stage_slices( $job_id, $slice, $slice_start ) {
         $meta_after = self::get_job_meta( $job_id );
-        $drain_stages = [ 'restore-files', 'search-replace', 'cleanup' ];
+        $drain_stages = [ 'restore-db', 'restore-files', 'search-replace', 'cleanup' ];
 
         while ( ! empty( $meta_after ) && empty( $meta_after['completed'] ) ) {
             $stage = isset( $meta_after['stage'] ) ? (string) $meta_after['stage'] : '';
@@ -4877,6 +4959,9 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
             $remaining = max( 1, (int) floor( $slice - ( microtime( true ) - $slice_start ) ) );
 
             switch ( $stage ) {
+                case 'restore-db':
+                    self::stage_import_database( $job_id, $meta_after, $remaining );
+                    break;
                 case 'restore-files':
                     self::stage_restore_files( $job_id, $meta_after, $remaining );
                     break;

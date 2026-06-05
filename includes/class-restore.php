@@ -277,14 +277,37 @@ class Museder_Restoreone_Restore {
      *   prefix_rewrite_applied?:bool
      * }
      */
-    private static function import_database_from_ndjson( $path, $progress_cb = null ) {
+    /**
+     * Time-sliced NDJSON database import with byte-offset resume.
+     *
+     * @param string                   $path             NDJSON file path.
+     * @param int                      $offset           Byte offset (updated by reference).
+     * @param int                      $timeout_seconds  Slice budget.
+     * @param array<string,mixed>      $state            Resume state (updated by reference).
+     * @param callable|null            $progress_cb      Optional progress callback (pct, message, byte_offset).
+     * @return array{
+     *   success:bool,
+     *   completed:bool,
+     *   message:string,
+     *   code?:string,
+     *   log?:string,
+     *   offset?:int,
+     *   active_plugins?:array,
+     *   source_prefix?:string,
+     *   target_prefix?:string,
+     *   prefix_rewrite_applied?:bool
+     * }
+     */
+    public static function import_database_ndjson_sliced( $path, &$offset, $timeout_seconds, array &$state, $progress_cb = null ) {
         global $wpdb;
 
         $path = wp_normalize_path( (string) $path );
         $result = [
-            'success' => false,
-            'message' => __( 'Database restore failed.', 'museder-restoreone' ),
-            'code'    => 'db_import_failed',
+            'success'   => false,
+            'completed' => false,
+            'message'   => __( 'Database restore failed.', 'museder-restoreone' ),
+            'code'      => 'db_import_failed',
+            'offset'    => (int) $offset,
         ];
 
         if ( '' === $path || ! file_exists( $path ) || ! is_readable( $path ) ) {
@@ -293,39 +316,42 @@ class Museder_Restoreone_Restore {
             $result['log']     = museder_restoreone_log( 'error', 'NDJSON DB file not readable.', [ 'path' => $path ] );
             return $result;
         }
+
         $path_size = (int) @filesize( $path ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
-        if ( function_exists( 'museder_restoreone_log' ) ) {
+        $offset    = max( 0, (int) $offset );
+        $deadline  = microtime( true ) + max( 1, (int) $timeout_seconds );
+
+        if ( $offset <= 0 && function_exists( 'museder_restoreone_log' ) ) {
             museder_restoreone_log( 'info', 'NDJSON import entry.', [
-                'path'      => sanitize_text_field( basename( $path ) ),
-                'size'      => $path_size,
-                'readable'  => is_readable( $path ),
+                'path'     => sanitize_text_field( basename( $path ) ),
+                'size'     => $path_size,
+                'readable' => is_readable( $path ),
             ] );
         }
-        if ( is_callable( $progress_cb ) ) {
-            call_user_func( $progress_cb, 46, __( 'Opening database import stream…', 'museder-restoreone' ) );
+        if ( $offset <= 0 && is_callable( $progress_cb ) ) {
+            call_user_func( $progress_cb, 46, __( 'Opening database import stream…', 'museder-restoreone' ), 0 );
         }
 
-        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fgets, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-        $handle = fopen( $path, 'rb' );
-        if ( ! $handle ) {
-            $result['code']    = 'db_file_open_failed';
-            $result['message'] = __( 'Unable to open database backup file.', 'museder-restoreone' );
-            $result['log']     = museder_restoreone_log( 'error', 'NDJSON DB file open failed.', [ 'path' => $path ] );
-            return $result;
-        }
-        if ( function_exists( 'museder_restoreone_log' ) ) {
-            museder_restoreone_log( 'info', 'NDJSON import stream opened.', [
-                'path' => sanitize_text_field( basename( $path ) ),
-                'size' => $path_size,
-            ] );
+        $source_prefix          = isset( $state['source_prefix'] ) ? (string) $state['source_prefix'] : '';
+        $target_prefix          = isset( $wpdb->prefix ) ? (string) $wpdb->prefix : '';
+        $schemas_imported       = isset( $state['schemas_imported'] ) ? (int) $state['schemas_imported'] : 0;
+        $rows_imported          = isset( $state['rows_imported'] ) ? (int) $state['rows_imported'] : 0;
+        $decoded_lines          = isset( $state['decoded_lines'] ) ? (int) $state['decoded_lines'] : 0;
+        $line_num               = isset( $state['line_num'] ) ? (int) $state['line_num'] : 0;
+        $saw_first_payload_line = ! empty( $state['saw_first_payload_line'] );
+        $first_schema_logged    = ! empty( $state['first_schema_logged'] );
+        $first_row_logged       = ! empty( $state['first_row_logged'] );
+        $active_plugins         = ( isset( $state['active_plugins'] ) && is_array( $state['active_plugins'] ) ) ? $state['active_plugins'] : [];
+        $session_state          = ( isset( $state['session_state'] ) && is_array( $state['session_state'] ) ) ? $state['session_state'] : null;
+
+        if ( $offset <= 0 ) {
+            if ( ! is_array( $session_state ) ) {
+                $session_state = self::preserve_session_before_import();
+                $state['session_state'] = $session_state;
+            }
+            self::run_database_primers();
         }
 
-        // Preserve current admin session state before DB tables are replaced.
-        // After import, wp_usermeta is rebuilt from backup data, destroying the
-        // active admin's session tokens and causing forced logout.
-        $preserved_session = self::preserve_session_before_import();
-
-        // Ensure dbDelta exists for schema creation (core upgrade API), via centralized path resolution.
         if ( ! function_exists( 'dbDelta' ) ) {
             $upgrade = function_exists( 'museder_restoreone_get_core_admin_include_path' ) ? museder_restoreone_get_core_admin_include_path( 'upgrade.php' ) : '';
             if ( '' !== $upgrade ) {
@@ -334,21 +360,7 @@ class Museder_Restoreone_Restore {
             }
         }
 
-        $file_size = (int) filesize( $path );
-        $last_progress = -1;
-        $line_num = 0;
-        $active_plugins = [];
         $options_table_safe = '';
-        $source_prefix = '';
-        $target_prefix = isset( $wpdb->prefix ) ? (string) $wpdb->prefix : '';
-        $schemas_imported = 0;
-        $rows_imported    = 0;
-        $decoded_lines    = 0;
-        $saw_first_payload_line = false;
-        $first_schema_logged = false;
-        $first_row_logged = false;
-
-        // Best-effort compute options table name once (target site).
         if ( isset( $wpdb->options ) ) {
             $options_table_safe = preg_replace( '/[^A-Za-z0-9_]/', '', (string) $wpdb->options );
         }
@@ -364,13 +376,77 @@ class Museder_Restoreone_Restore {
             return $table;
         };
 
-        self::run_database_primers();
+        $emit_progress = static function ( $handle, $file_size, $last_progress ) use ( $progress_cb ) {
+            if ( ! is_callable( $progress_cb ) || $file_size <= 0 ) {
+                return $last_progress;
+            }
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_ftell -- progress tracking on local file handle
+            $pos = ftell( $handle );
+            if ( ! is_int( $pos ) || $pos <= 0 ) {
+                return $last_progress;
+            }
+            $pct = (int) floor( min( 99, ( $pos / $file_size ) * 100 ) );
+            if ( $pct !== $last_progress && ( 0 === $pct % 5 || $pct >= 95 ) ) {
+                call_user_func( $progress_cb, 50 + ( $pct * 0.15 ), __( 'Importing database…', 'museder-restoreone' ), $pos );
+                return $pct;
+            }
+            return $last_progress;
+        };
+
+        $persist_state = static function ( $next_offset ) use ( &$state, &$source_prefix, &$schemas_imported, &$rows_imported, &$decoded_lines, &$line_num, &$saw_first_payload_line, &$first_schema_logged, &$first_row_logged, &$active_plugins, &$session_state ) {
+            $state['source_prefix']          = $source_prefix;
+            $state['schemas_imported']       = $schemas_imported;
+            $state['rows_imported']          = $rows_imported;
+            $state['decoded_lines']          = $decoded_lines;
+            $state['line_num']               = $line_num;
+            $state['saw_first_payload_line'] = $saw_first_payload_line;
+            $state['first_schema_logged']    = $first_schema_logged;
+            $state['first_row_logged']       = $first_row_logged;
+            $state['active_plugins']         = $active_plugins;
+            if ( is_array( $session_state ) ) {
+                $state['session_state'] = $session_state;
+            }
+            return max( 0, (int) $next_offset );
+        };
+
+        // phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fgets, WordPress.WP.AlternativeFunctions.file_system_operations_fseek, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+        $handle = fopen( $path, 'rb' );
+        if ( ! $handle ) {
+            $result['code']    = 'db_file_open_failed';
+            $result['message'] = __( 'Unable to open database backup file.', 'museder-restoreone' );
+            $result['log']     = museder_restoreone_log( 'error', 'NDJSON DB file open failed.', [ 'path' => $path ] );
+            return $result;
+        }
+        if ( $offset > 0 ) {
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fseek -- resume checkpoint
+            if ( 0 !== fseek( $handle, $offset ) ) {
+                fclose( $handle );
+                $result['code']    = 'db_file_seek_failed';
+                $result['message'] = __( 'Unable to resume database import stream.', 'museder-restoreone' );
+                $result['log']     = museder_restoreone_log( 'error', 'NDJSON DB file seek failed.', [ 'path' => $path, 'offset' => $offset ] );
+                return $result;
+            }
+        } elseif ( function_exists( 'museder_restoreone_log' ) ) {
+            museder_restoreone_log( 'info', 'NDJSON import stream opened.', [
+                'path' => sanitize_text_field( basename( $path ) ),
+                'size' => $path_size,
+            ] );
+        }
+
+        $last_progress = -1;
+        $timed_out     = false;
 
         try {
             while ( false !== ( $line = fgets( $handle ) ) ) {
+                if ( microtime( true ) >= $deadline ) {
+                    $timed_out = true;
+                    break;
+                }
+
                 $line_num++;
                 $line = trim( (string) $line );
                 if ( '' === $line ) {
+                    $offset = $persist_state( ftell( $handle ) );
                     continue;
                 }
 
@@ -383,6 +459,7 @@ class Museder_Restoreone_Restore {
 
                 $obj = json_decode( $line, true );
                 if ( ! is_array( $obj ) ) {
+                    $offset = $persist_state( ftell( $handle ) );
                     continue;
                 }
                 $decoded_lines++;
@@ -395,32 +472,32 @@ class Museder_Restoreone_Restore {
                             $source_prefix = $maybe;
                         }
                     }
+                    $offset = $persist_state( ftell( $handle ) );
                     continue;
                 }
 
                 if ( 'schema' === $type ) {
                     $raw_table = isset( $obj['table'] ) ? preg_replace( '/[^A-Za-z0-9_]/', '', (string) $obj['table'] ) : '';
-                    $table = $rewrite_table( $raw_table );
-                    $create = isset( $obj['create'] ) ? (string) $obj['create'] : '';
+                    $table     = $rewrite_table( $raw_table );
+                    $create    = isset( $obj['create'] ) ? (string) $obj['create'] : '';
                     if ( '' === $table || '' === $create ) {
+                        $offset = $persist_state( ftell( $handle ) );
                         continue;
                     }
 
-                    // Align with SQL-parse path: only touch tables allowed for this site (prefix whitelist).
                     if ( ! self::is_restore_sql_table_allowed( $table ) ) {
                         museder_restoreone_log( 'warning', 'NDJSON schema import skipped: table not allowed by prefix policy.', [
                             'table' => $table,
                             'raw'   => $raw_table,
                         ] );
+                        $offset = $persist_state( ftell( $handle ) );
                         continue;
                     }
 
-                    // Rewrite CREATE TABLE statement to match target prefix (best-effort).
                     if ( '' !== $raw_table && '' !== $table && $raw_table !== $table ) {
                         $create = str_replace( '`' . $raw_table . '`', '`' . $table . '`', $create );
                     }
 
-                    // Reset table before data import.
                     // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
                     $wpdb->query( 'DROP TABLE IF EXISTS `' . esc_sql( $table ) . '`' ); // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- identifier is strict-sanitized + esc_sql()
                     // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
@@ -438,15 +515,16 @@ class Museder_Restoreone_Restore {
                             'line'  => $line_num,
                         ] );
                     }
-
+                    $offset = $persist_state( ftell( $handle ) );
                     continue;
                 }
 
                 if ( 'row' === $type ) {
                     $raw_table = isset( $obj['table'] ) ? preg_replace( '/[^A-Za-z0-9_]/', '', (string) $obj['table'] ) : '';
-                    $table = $rewrite_table( $raw_table );
-                    $row   = isset( $obj['row'] ) && is_array( $obj['row'] ) ? $obj['row'] : null;
+                    $table     = $rewrite_table( $raw_table );
+                    $row       = isset( $obj['row'] ) && is_array( $obj['row'] ) ? $obj['row'] : null;
                     if ( '' === $table || ! is_array( $row ) ) {
+                        $offset = $persist_state( ftell( $handle ) );
                         continue;
                     }
 
@@ -455,17 +533,18 @@ class Museder_Restoreone_Restore {
                             'table' => $table,
                             'raw'   => $raw_table,
                         ] );
+                        $offset = $persist_state( ftell( $handle ) );
                         continue;
                     }
 
                     if ( '' !== $options_table_safe && $table === $options_table_safe ) {
                         $opt_name_for_skip = isset( $row['option_name'] ) ? (string) $row['option_name'] : '';
                         if ( self::is_restoreone_runtime_option_name( $opt_name_for_skip ) ) {
+                            $offset = $persist_state( ftell( $handle ) );
                             continue;
                         }
                     }
 
-                    // Restore: write rows into the target table (direct DB required for bulk import; no caching applicable).
                     // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
                     $wpdb->replace( $table, $row );
                     // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
@@ -478,7 +557,6 @@ class Museder_Restoreone_Restore {
                         ] );
                     }
 
-                    // Capture active_plugins for later restoration (best-effort).
                     if ( '' !== $options_table_safe && $table === $options_table_safe ) {
                         $opt_name = isset( $row['option_name'] ) ? (string) $row['option_name'] : '';
                         if ( 'active_plugins' === $opt_name && isset( $row['option_value'] ) ) {
@@ -490,19 +568,11 @@ class Museder_Restoreone_Restore {
                     }
                 }
 
-                if ( is_callable( $progress_cb ) && $file_size > 0 ) {
-                    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_ftell -- progress tracking on local file handle
-                    $pos = ftell( $handle );
-                    if ( is_int( $pos ) && $pos > 0 ) {
-                        $pct = (int) floor( min( 99, ( $pos / $file_size ) * 100 ) );
-                        if ( $pct !== $last_progress && ( $pct % 5 === 0 ) ) {
-                            $last_progress = $pct;
-                            call_user_func( $progress_cb, 50 + ( $pct * 0.15 ), __( 'Importing database…', 'museder-restoreone' ) );
-                        }
-                    }
-                }
+                $offset        = $persist_state( ftell( $handle ) );
+                $last_progress = $emit_progress( $handle, $path_size, $last_progress );
             }
         } catch ( Throwable $e ) {
+            fclose( $handle );
             if ( 'db_format_invalid' === $e->getMessage() ) {
                 $result['code']    = 'db_format_invalid';
                 $result['message'] = __( 'Database backup file is not valid NDJSON. Please re-create the backup with the updated plugin.', 'museder-restoreone' );
@@ -511,16 +581,36 @@ class Museder_Restoreone_Restore {
             }
             $result['message'] = __( 'Database restore encountered an error. Check logs.', 'museder-restoreone' );
             $result['log']     = museder_restoreone_log( 'error', 'NDJSON DB import failed.', [ 'line' => $line_num, 'error' => $e->getMessage() ] );
-            // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fgets, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+            $result['offset']  = $offset;
             return $result;
         }
 
-        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fgets, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+        if ( $timed_out ) {
+            $offset = $persist_state( ftell( $handle ) );
+            fclose( $handle );
+            $result['code']      = 'db_import_in_progress';
+            $result['message']   = __( 'Importing database…', 'museder-restoreone' );
+            $result['offset']    = $offset;
+            $result['completed'] = false;
+            if ( function_exists( 'museder_restoreone_log' ) ) {
+                museder_restoreone_log( 'info', 'NDJSON import slice checkpoint.', [
+                    'offset'  => $offset,
+                    'size'    => $path_size,
+                    'rows'    => $rows_imported,
+                    'schemas' => $schemas_imported,
+                ] );
+            }
+            return $result;
+        }
+
+        $offset = $persist_state( ftell( $handle ) );
+        fclose( $handle );
+        // phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fgets, WordPress.WP.AlternativeFunctions.file_system_operations_fseek, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
 
         self::restore_database_constraints();
-
-        // Re-inject the preserved session so the admin stays logged in.
-        self::restore_session_after_import( $preserved_session );
+        if ( is_array( $session_state ) ) {
+            self::restore_session_after_import( $session_state );
+        }
 
         if ( $decoded_lines <= 0 || $schemas_imported <= 0 ) {
             $result['code']    = 'db_format_invalid';
@@ -534,9 +624,11 @@ class Museder_Restoreone_Restore {
             return $result;
         }
 
-        $result['success'] = true;
-        $result['message'] = __( 'Database restore completed successfully.', 'museder-restoreone' );
-        $result['code']    = 'database_restored';
+        $result['success']   = true;
+        $result['completed'] = true;
+        $result['message']   = __( 'Database restore completed successfully.', 'museder-restoreone' );
+        $result['code']      = 'database_restored';
+        $result['offset']    = $offset;
         if ( function_exists( 'museder_restoreone_log' ) ) {
             museder_restoreone_log( 'info', 'NDJSON import completed.', [
                 'decoded_lines' => $decoded_lines,
@@ -559,6 +651,19 @@ class Museder_Restoreone_Restore {
             $result['active_plugins'] = $active_plugins;
         }
         return $result;
+    }
+
+    /**
+     * Import database from NDJSON backup file generated by this plugin.
+     *
+     * @param string        $path
+     * @param callable|null $progress_cb
+     * @return array<string,mixed>
+     */
+    private static function import_database_from_ndjson( $path, $progress_cb = null ) {
+        $offset = 0;
+        $state  = [];
+        return self::import_database_ndjson_sliced( $path, $offset, 86400, $state, $progress_cb );
     }
 
     /**

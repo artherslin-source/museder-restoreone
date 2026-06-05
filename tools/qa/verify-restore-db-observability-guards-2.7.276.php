@@ -29,16 +29,21 @@ $service_needles = array(
 	'restore_db_stage_entry',
 	'restore_db_stage_import_result',
 	'restore_db_stage_recovery',
+	'restore_db_stage_slice_checkpoint',
 	'Restore DB stage is stale with db_offset=0.',
+	"case 'restore-db':",
 );
 
 $restore_needles = array(
+	'import_database_ndjson_sliced',
 	'NDJSON import entry.',
 	'NDJSON import stream opened.',
+	'NDJSON import slice checkpoint.',
 	'NDJSON import first schema applied.',
 	'NDJSON import first row applied.',
 	'NDJSON import completed.',
 	'Opening database import stream…',
+	'db_import_in_progress',
 );
 
 $failures = array();
