@@ -873,6 +873,7 @@ class Museder_Restoreone_Restore_Handler {
         }
 
         try {
+            Museder_Restoreone_Restore_Service::ensure_running_job_scheduled( $job_id, 'ajax_job_status' );
             $status = Museder_Restoreone_Restore_Service::status( $job_id );
             $job    = self::map_restore_service_status_to_job( $job_id, $status );
 
@@ -975,6 +976,7 @@ class Museder_Restoreone_Restore_Handler {
 
         $job = null;
         try {
+            Museder_Restoreone_Restore_Service::ensure_running_job_scheduled( $job_id, 'ajax_final_status' );
             $status = Museder_Restoreone_Restore_Service::status( $job_id );
             $job    = self::map_restore_service_status_to_job( $job_id, $status );
             if ( ! empty( $job['status'] ) && in_array( (string) $job['status'], [ 'success', 'failed', 'cancelled' ], true ) && method_exists( 'Museder_Restoreone_Restore_Service', 'ensure_terminal_history' ) ) {

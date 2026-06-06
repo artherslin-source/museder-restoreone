@@ -868,6 +868,7 @@ class Museder_Restoreone_Restore_Service {
             try {
                 $meta = self::get_job_meta( $active );
                 if ( ! empty( $meta ) && empty( $meta['completed'] ) ) {
+                    self::ensure_running_job_scheduled( $active, 'active_job_lookup', $meta );
                     return $active;
                 }
                 if ( ! empty( $meta['completed'] ) ) {
@@ -908,6 +909,73 @@ class Museder_Restoreone_Restore_Service {
         }
 
         return $job_id;
+    }
+
+    /**
+     * Ensure a running restore job always has a cron process event.
+     *
+     * This is a liveness repair entry point used by status/final-status readers:
+     * if a running job is orphaned after DB import (active job exists but cron event missing),
+     * we re-seed the process event so background slices can continue.
+     *
+     * @param string                   $job_id Job identifier.
+     * @param string                   $source Caller tag for diagnostics.
+     * @param array<string,mixed>|null $meta   Optional preloaded job meta.
+     * @return bool True when a cron event is present after this check.
+     */
+    public static function ensure_running_job_scheduled( $job_id, $source = 'status', $meta = null ) {
+        $job_id = sanitize_text_field( (string) $job_id );
+        if ( '' === $job_id ) {
+            return false;
+        }
+
+        if ( ! is_array( $meta ) ) {
+            try {
+                $meta = self::get_job_meta( $job_id );
+            } catch ( Exception $e ) {
+                return false;
+            }
+        }
+
+        $stage = isset( $meta['stage'] ) ? (string) $meta['stage'] : '';
+        if ( ! empty( $meta['completed'] ) || in_array( $stage, [ 'done', 'rollback-done', 'failed', 'cancelled' ], true ) ) {
+            return false;
+        }
+
+        $running_stages = [ 'restore-extract-db', 'restore-db', 'restore-files', 'search-replace', 'cleanup', 'prefix-migrate' ];
+        if ( ! in_array( $stage, $running_stages, true ) ) {
+            return false;
+        }
+
+        $active_before = (string) get_option( self::ACTIVE_JOB_OPTION, '' );
+        if ( $active_before !== $job_id ) {
+            update_option( self::ACTIVE_JOB_OPTION, $job_id, false );
+        }
+
+        $scheduled_before = (bool) wp_next_scheduled( self::CRON_HOOK_PROCESS, [ $job_id ] );
+        if ( ! $scheduled_before ) {
+            wp_schedule_single_event( time() + 1, self::CRON_HOOK_PROCESS, [ $job_id ] );
+            self::spawn_cron();
+        }
+        $scheduled_after = (bool) wp_next_scheduled( self::CRON_HOOK_PROCESS, [ $job_id ] );
+
+        if ( function_exists( 'museder_restoreone_log' ) && ( ! $scheduled_before || $active_before !== $job_id ) ) {
+            $last_tick = isset( $meta['last_tick'] ) ? (int) $meta['last_tick'] : 0;
+            $db_offset = isset( $meta['checkpoints']['db_offset'] ) ? (int) $meta['checkpoints']['db_offset'] : 0;
+            museder_restoreone_log( 'warning', 'restore_liveness_schedule_check', [
+                'source'            => sanitize_text_field( (string) $source ),
+                'job_id'            => $job_id,
+                'stage'             => sanitize_text_field( $stage ),
+                'last_tick'         => $last_tick,
+                'age'               => ( $last_tick > 0 ) ? max( 0, time() - $last_tick ) : 0,
+                'db_offset'         => $db_offset,
+                'active_job_option' => sanitize_text_field( (string) get_option( self::ACTIVE_JOB_OPTION, '' ) ),
+                'scheduled_before'  => $scheduled_before,
+                'scheduled_after'   => $scheduled_after,
+            ] );
+        }
+
+        return $scheduled_after;
     }
 
     protected static function spawn_cron() {
@@ -4860,6 +4928,7 @@ add_filter( \'pre_option_active_plugins\', \'museder_restoreone_mu_filter_active
      * @return array
      */
     public static function status( $job_id ) {
+        self::ensure_running_job_scheduled( $job_id, 'status' );
         $meta = self::get_job_meta( $job_id );
 
         return [

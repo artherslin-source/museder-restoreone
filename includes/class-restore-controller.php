@@ -154,6 +154,7 @@ class Museder_Restoreone_Restore_Controller {
     public static function status( WP_REST_Request $request ) {
         try {
             $job_id = $request->get_param( 'job_id' );
+            Museder_Restoreone_Restore_Service::ensure_running_job_scheduled( $job_id, 'rest_status' );
             $status = Museder_Restoreone_Restore_Service::status( $job_id );
 
             return rest_ensure_response( $status );
@@ -168,6 +169,7 @@ class Museder_Restoreone_Restore_Controller {
         $job = null;
         $status = [];
         try {
+            Museder_Restoreone_Restore_Service::ensure_running_job_scheduled( $job_id, 'rest_final_status' );
             $status = Museder_Restoreone_Restore_Service::status( $job_id );
             $job    = Museder_Restoreone_Restore_Handler::map_restore_service_status_to_job( $job_id, $status );
         } catch ( Exception $e ) {
