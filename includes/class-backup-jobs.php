@@ -252,11 +252,18 @@ class Museder_Restoreone_Backup_Jobs {
         $save_interval_batches = 5;
         $save_interval_seconds = 3.0;
 
-        // Open ZipArchive once for the entire time budget loop to reduce I/O overhead
+        // Open ZipArchive once for the entire time budget loop to reduce I/O overhead.
+        // Never keep ZipArchive open while pack_method is pclzip: PclZip mutates the same file and
+        // ZipArchive::close() can take minutes on huge archives or clobber PclZip's central directory.
         $zip = null;
+        $pack_method_for_handle = isset( $job['pack_method'] ) ? (string) $job['pack_method'] : '';
+        $reuse_zip_handle        = museder_restoreone_can_use_ziparchive()
+            && 'pclzip' !== $pack_method_for_handle
+            && ! empty( $job['archive_path'] )
+            && file_exists( (string) $job['archive_path'] );
         // Only keep ZipArchive open while we are actively packing.
         // Finalizing should run after close (and may be sliced across multiple cron ticks).
-        if ( isset( $job['stage'] ) && 'packing' === $job['stage'] && museder_restoreone_can_use_ziparchive() && ! empty( $job['archive_path'] ) && file_exists( $job['archive_path'] ) ) {
+        if ( isset( $job['stage'] ) && 'packing' === $job['stage'] && $reuse_zip_handle ) {
             $zip = new ZipArchive();
             if ( true === $zip->open( $job['archive_path'], ZipArchive::CREATE ) ) {
                 museder_restoreone_log( 'info', 'Opened ZipArchive for time budget loop.', [
@@ -346,8 +353,9 @@ class Museder_Restoreone_Backup_Jobs {
                         $job['status'] = 'running';
                     }
 
-                    // If archive is now available and we can reuse ZipArchive, open it.
-                    if ( null === $zip && 'packing' === $job['stage'] && museder_restoreone_can_use_ziparchive() && ! empty( $job['archive_path'] ) && file_exists( $job['archive_path'] ) ) {
+                    // If archive is now available and we can reuse ZipArchive, open it (never alongside PclZip packing).
+                    $pm = isset( $job['pack_method'] ) ? (string) $job['pack_method'] : '';
+                    if ( null === $zip && 'packing' === $job['stage'] && museder_restoreone_can_use_ziparchive() && 'pclzip' !== $pm && ! empty( $job['archive_path'] ) && file_exists( $job['archive_path'] ) ) {
                         $zip = new ZipArchive();
                         if ( true !== $zip->open( $job['archive_path'], ZipArchive::CREATE ) ) {
                             $zip = null;
@@ -951,21 +959,22 @@ class Museder_Restoreone_Backup_Jobs {
      * @return string Lock token when acquired; empty string otherwise.
      */
     private static function acquire_option_lock( $job_id ) {
-        $key   = self::get_option_lock_key( $job_id );
-        $now   = time();
-        $token = wp_generate_uuid4();
-        $value = [
+        // WordPress.org review: option name prefix must be literal at add_option() call sites (not only via indirect $key).
+        $option_key = self::OPTION_LOCK_PREFIX . sanitize_key( (string) $job_id );
+        $now        = time();
+        $token      = wp_generate_uuid4();
+        $value      = [
             'ts'    => $now,
             'token' => $token,
         ];
 
-        // Atomic attempt.
-        if ( add_option( $key, $value, '', 'no' ) ) {
+        // Atomic attempt (prefix visible above for static analysis).
+        if ( add_option( $option_key, $value, '', 'no' ) ) {
             return $token;
         }
 
         // Check staleness and try to recover.
-        $existing = get_option( $key );
+        $existing = get_option( $option_key );
         $ts       = 0;
         if ( is_array( $existing ) && isset( $existing['ts'] ) ) {
             $ts = (int) $existing['ts'];
@@ -976,8 +985,8 @@ class Museder_Restoreone_Backup_Jobs {
         }
 
         if ( $ts > 0 && ( $now - $ts ) > self::OPTION_LOCK_TTL ) {
-            delete_option( $key );
-            if ( add_option( $key, $value, '', 'no' ) ) {
+            delete_option( $option_key );
+            if ( add_option( $option_key, $value, '', 'no' ) ) {
                 return $token;
             }
         }

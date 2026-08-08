@@ -4,29 +4,11 @@ Tags: backup, migration, restore, site-backup, database-backup
 Requires at least: 5.8
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 2.7.243
+Stable tag: 2.7.262
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
 A lightweight WordPress backup & restore plugin focused on compatibility, single-file site snapshots, and clean restore workflows.
-
-== Changelog ==
-
-For full changelog history, please see the project repository changelog archive.
-
-= 2.7.243 =
-* Schedule handler: GLOB_BRACE fallback for PHP builds that omit it; retention apply_retention_rules file_exists check before filemtime to avoid warnings. Restore page: Exit Safe Mode button id unified to museder-restoreone-exit-safe-mode-btn with JS fallback for backup-lite-exit-safe-mode-btn. Small-site flow verified (backup, restore, settings, schedules, safe mode exit).
-
-= 2.7.242 =
-* WP.org compliance: Plugin Check 1.7.0 clean (0 errors, 0 warnings). Security and request handling (nonce/capability, sanitize/validate, json whitelist). Path and storage under wp_upload_dir. Removed direct core includes where possible; ABSPATH guards. Naming: menu/REST/JS prefixes unified to museder-restoreone. Readme external services (S3, OpenAI); Plugin URI updated.
-
-= 2.7.220 =
-* WP.org compliance hardening (nonce/cap checks, sanitization/escaping, uploads storage under wp_upload_dir).
-* S3: migrate cURL usage to WordPress HTTP API (wp_remote_request) with multipart upload support.
-* Restore reliability fixes (mysqldump stderr handling, file ops portability, progress UI smoothing).
-
-= 2.7.218 =
-* Internal testing build.
 
 == Description ==
 
@@ -49,31 +31,51 @@ It is designed for shared hosting environments and uses WordPress APIs for datab
   Uses pure PHP + WordPress APIs for database backup/restore, and falls back from `ZipArchive` to PclZip compression when needed.
 
 * Schedules and logs  
-  Create at least one automatic schedule, then inspect, download, or clean up structured backup and restore logs.
+  Create one or more automatic backup schedules (or run backups manually), then inspect, download, or clean up structured backup and restore logs.
 
 * Neo-glass admin UI  
   Modern Dashboard, Backups, Restore, Schedules, Logs and Settings screens with clear calls-to-action, status messages, and responsive layout.
 
+**Multisite**
+
+This release is **not formally tested on WordPress Multisite**. For predictable results, use RestoreOne on **standard single-site** installs (one site per admin context). If you run a network, treat use as **experimental** until you have verified backups and restores on a staging clone.
+
 == External services ==
 
-This plugin does not use external services by default.
+This plugin does not use external services.
 
-When PRO features are enabled and configured by the site owner, the plugin may connect to the following external services:
+The **only programmatic outbound HTTP** the base plugin performs by default is an optional, short **non-blocking** request to **your own site’s** `wp-cron.php` (same host / local loopback) to encourage scheduled tasks to run. No third-party API is called for backups or restores.
 
-= Amazon S3 (or S3-compatible storage endpoints) =
+All **admin JavaScript and CSS** for RestoreOne are loaded from files shipped under this plugin’s `assets/` directory (including vendored libraries under `assets/vendor/`). Optional add-ons, if you install them separately, may introduce their own network behavior; see each add-on’s readme. See the FAQ for more on the local `wp-cron.php` nudge.
 
-- What for: Upload backup archives to a cloud storage bucket configured by the site owner.
-- What data is sent: The backup archive file itself (which can contain site files and database content). Nothing is uploaded unless the site owner explicitly enables cloud destinations and triggers an upload.
-- When: Only when the site owner runs a backup with cloud upload enabled (manual or scheduled).
-- Domains/Endpoints: Typically connects to *.amazonaws.com (for example s3.{region}.amazonaws.com or {bucket}.s3.{region}.amazonaws.com) or the configured S3-compatible endpoint.
-- Terms/Privacy: Governed by the chosen provider (Amazon S3 or the configured S3-compatible provider). For Amazon Web Services, see https://aws.amazon.com/service-terms/ and https://aws.amazon.com/privacy/.
+== Privacy ==
 
-= OpenAI (AI features) =
+**What this plugin stores on your server**
 
-- What for: Optional AI-based analysis, reports, and smart scheduling (PRO only).
-- What data is sent: Only the data explicitly provided for analysis by the site owner through the plugin UI/API. AI features are opt-in and disabled by default unless configured.
-- When: Only when the site owner triggers an AI action in the plugin.
-- Terms/Privacy: Governed by OpenAI's terms and privacy policy: https://openai.com/policies/terms-of-use and https://openai.com/policies/privacy-policy.
+* **Backups** — Complete-site archives are written under your WordPress uploads area (typically `wp-content/uploads/museder-restoreone/backups/` or the path shown on the Backups screen). Each archive contains a database export (`database.ndjson`), `meta.json`, and a copy of `wp-content/` from your site at backup time.  
+* **Logs** — Text logs for backup, restore, and related operations are stored under `wp-content/uploads/museder-restoreone/logs/` (see the **Logs** admin screen).  
+* **Restore reports** — When you generate a restore report, files are stored under `wp-content/uploads/museder-restoreone/reports/` (or the path configured for reports on your install).  
+* **Schedules and settings** — Options and scheduled events are stored in your WordPress database like other plugins.
+
+**Diagnostics**
+
+* **Version / build heartbeat** — After an upgrade, the plugin may write a one-line informational entry to the local **Logs** directory (same server, no remote host) noting the active plugin version and build id. This is for support troubleshooting only.
+
+Exact folder names may vary with your uploads path or custom content directory; nothing is sent to a fixed external hostname by this plugin. The plugin resolves these locations using WordPress APIs (for example `wp_upload_dir()` and path helpers derived from your install) rather than hard-coded internal constants, so custom `wp-content` or uploads layouts can be reflected correctly where your host allows.
+
+**Third parties**
+
+The free plugin does **not** upload your backup contents, database, or logs to third-party APIs or clouds. That statement matches **External services** above and the FAQ entries on external data and local `wp-cron` loopback.
+
+Optional **add-ons** (separate plugins or extensions, if you install and activate them) could send specific categories of data to remote storage or services only when you enable and configure those extensions; the base RestoreOne plugin does not do that on its own.
+
+**Retention and deletion**
+
+You can delete backup archives from the **Backups** screen, remove or download logs from **Logs**, and adjust retention-related options where provided.
+
+**Uninstall (`uninstall.php`)** removes plugin-owned **options**, **transients** (including timeout rows), **dynamic job-lock option rows**, and **scheduled cron hooks** whose names start with `museder_restoreone_`. It does **not** delete backup ZIP archives, log files, restore reports, or other files under your uploads/storage tree; delete those manually from the Backups / Logs UI or your host if you no longer need them.
+
+On **Multisite**, uninstall walks sites in **batches** (100 IDs per query) instead of loading the entire network at once. Very large networks should still use a **maintenance window** so uninstall is not interrupted by web-server timeouts.
 
 == Installation ==
 
@@ -94,6 +96,10 @@ Each backup archive includes:
 
 Together, these files are enough to recreate your site on the same or another server.
 
+= Does compatibility with third-party backup formats imply an official partnership? =
+
+**No.** RestoreOne may document or implement **technical compatibility** with certain third-party archive or migration formats so you can move data between tools on **your own server**. That compatibility is **not** an endorsement, partnership, or affiliation with those projects unless explicitly stated elsewhere by the authors.
+
 = Are there any file size limits? =
 
 Yes. For safety and compatibility, **single files larger than 2GB are skipped** during backup. This means they will not be included in the backup ZIP and will not be restored.
@@ -110,6 +116,20 @@ Museder RestoreOne does not require `mysqldump`. Database backup/restore is impl
 
 If your server does not have the `ZipArchive` PHP extension, the plugin will automatically use WordPress’ built-in PclZip library to create and extract archives.
 
+PclZip can be **slower** and more memory- or disk-sensitive on very large sites than `ZipArchive`. If a host blocks reading WordPress core’s `wp-admin/includes/class-pclzip.php` (for example via `open_basedir`), backup or restore may fail with a clear error in **Logs** — use the `museder_restoreone_core_admin_include_path` filter if your layout is non-standard (see FAQ below).
+
+= How does chunked restore upload work over REST? =
+
+Large archive uploads use the plugin’s **authenticated** REST API (`museder-restoreone/v2`). Chunk bytes are streamed from the HTTP request body (`php://input`) **only for that request**, assembled into temporary files under your WordPress uploads area, and **never forwarded** to third-party URLs. Multipart uploads use PHP’s normal uploaded-file handling instead. All chunk routes require `manage_options` and a valid REST nonce.
+
+= Will scheduled backups and email always run? =
+
+Scheduled backups depend on **WordPress cron** (or your host’s **system cron** if `DISABLE_WP_CRON` is enabled). Email notifications depend on your server’s **`wp_mail`** configuration (SMTP plugin, host mail relay, etc.). If cron or mail is blocked, use **Settings → Send Test Email**, check **Logs**, and configure host cron / mail as needed.
+
+= Can I run a full restore (execute) on a very large archive? =
+
+Very large restores may hit **PHP time limits**, **web server timeouts**, or **disk space** constraints on shared hosting. The Restore wizard supports **validate** and **dry run** steps so you can verify an archive before a full **execute**. For huge sites, prefer a **staging clone** or **WP-CLI**-driven restore where your host allows long-running PHP.
+
 = Where are the logs stored? =
 
 All logs are stored under:
@@ -120,15 +140,37 @@ You can view or download the latest logs directly from the **Logs** page in the 
 
 = What happens to plugins during restore? =
 
-During restore, the plugin may temporarily adjust the active plugin list to keep the restore process stable (safe mode). After the restore completes (or when the user exits safe mode), the plugin will restore the previously active plugins. This behavior is triggered by the site owner's actions in the admin UI.
+Optional **safe mode** (chosen in the Restore screen) saves a snapshot of the active plugin list and sets an admin notice so you can verify the site before clearing the marker. RestoreOne does **not** automatically deactivate or reactivate other plugins; you manage plugins in WordPress as usual. **Exit Safe Mode** only clears the marker and the stored snapshot.
 
-= Does the Lite version send data to external services? =
+= Does this plugin send data to external services? =
 
-No. The Lite version runs entirely on your server and does not send backup contents or site data to any external API or cloud service.
+No. This plugin runs entirely on your server and does not send backup contents or site data to any external API or cloud service as part of the free base plugin.
+
+The **Offline readiness / local rules** scan on the Dashboard uses **local heuristics** only (no remote AI service is invoked by the shipped free build).
+
+= Does the plugin make HTTP requests to my own site? =
+
+Sometimes. To help scheduled tasks run promptly, the plugin may send a short, non-blocking HTTP request to your own site's `wp-cron.php` (a local loopback). That stays on your server, does not transmit backup contents to third parties, and is a common WordPress pattern. If `DISABLE_WP_CRON` is enabled, your host may rely on system cron instead.
 
 = Does this plugin expose my backup files publicly? =
 
 No. Backup download and upload endpoints are protected by time-limited tokens and secret keys generated inside your WordPress site. Only users with access to your WordPress admin can generate valid links, and each link expires after a short period of time.
+
+= Does Museder RestoreOne support WordPress Multisite? =
+
+Not as a formally supported configuration in this release. The plugin is built and QA’d primarily for **single-site** WordPress. Multisite networks may behave differently across subsites, uploads paths, and roles; use on Multisite only after your own testing on a **staging copy** of the network.
+
+= Can I use a custom languages directory? =
+
+Yes, advanced sites can override the detected languages directory with the `museder_restoreone_languages_dir` filter. Return an absolute path without a trailing slash, or return an empty string to skip language-directory handling.
+
+= Can I use a custom mu-plugins directory? =
+
+Yes, advanced sites can override the detected must-use plugins directory with the `museder_restoreone_mu_plugins_dir` filter. Return an absolute path without a trailing slash, or return an empty string if your site does not use a must-use plugins directory.
+
+= What if my WordPress core admin include files are in a non-standard location? =
+
+Most sites do not need any changes. For unusual server layouts where core admin API files cannot be found automatically, developers can use the `museder_restoreone_core_admin_include_path` filter to return a readable absolute path for the requested core file. Invalid or unreadable values are ignored and the plugin falls back to its default resolution.
 
 == Screenshots ==
 
@@ -141,12 +183,128 @@ No. Backup download and upload endpoints are protected by time-limited tokens an
 
 == Changelog ==
 
+= 2.7.262 =
+* Backup reliability: when **PclZip** compatibility repack is active, the async job runner **no longer keeps a long-lived `ZipArchive` handle** on the same `.zip` file (PclZip and ZipArchive were both mutating the archive, making `close()` extremely slow on large sites and risking central-directory corruption).
+* Backup verification: post-close archive checks now resolve ZIP entry names more robustly (`zip_archive_has_entry()` — forward slashes, optional `./` prefix, and `ZipArchive::FL_NOCASE` when available) so **false “verification failed”** results are less likely to trigger a full repack.
+
+= 2.7.261 =
+* Developer / review automation (not shipped in the WordPress.org ZIP): WP-CLI matrices for **all registered `wp_ajax_museder_restoreone_*` actions**, **REST routes** under `museder-restoreone/v1` + `v2`, and **`admin_post_museder_restoreone_*` downloads** (capability + nonce / referer expectations); nginx **reverse-proxy** smoke in front of the stock Apache WordPress image; **ZIP clean install** + Plugin Check; **Multisite** 2-site stack + network uninstall option/cron verification; **mail pipeline** smoke (`wp_mail` / `Email_Handler::test_email` reaches PHPMailer); **PHPCS** tooling (`phpcs.xml.dist` + `tools/phpcs` Composer kit) with `run-phpcs-summary.sh`.
+* Documentation: `docs/2026-05-06__v2.7.261__readme-key-features__admin-ui-map.md` maps readme **Key features** to admin `page=` slugs for manual review.
+* Maintenance: restore job AJAX handlers that “clean” output now use **`ob_clean()`** instead of **`ob_end_clean()`** so they flush stray bytes **without** popping the whole output-buffer stack (same idea for REST chunk `prepare_request_environment()`). Behavior for real browsers is unchanged; this avoids breaking nested buffers in automated tests and CLI.
+
+= 2.7.260 =
+* Security: REST chunk v2 **`upload_id`** limited to **UUID v4** (same format as `wp_generate_uuid4()`); `status` / `chunk` / `finalize` / `abort` and temp directory helpers reject garbage ids; cleanup skips non-UUID folders under `v2-uploads`.
+* Security: **`museder_restoreone_get_chunk_path()`** second argument now uses **`museder_restoreone_safe_path_join()`** (no traversal via relative fragments).
+* Security: **WPress** `safe_join()` final check uses **directory-prefix boundary** (aligned with other path helpers).
+* Review UX: admin script globals **`MusederRestoreOneAddon`** (primary) with **`MusederRestoreOnePro`** kept as an alias for backward compatibility; strings unchanged.
+* UI: fixed **`[data-bl-theme="dark"]`** selectors in `admin-style.css` that were escaped incorrectly so dark-theme list/table header styles apply.
+* Multisite: **`uninstall.php`** processes sites in **batches** to reduce memory spikes on large networks (readme Privacy note updated).
+* Developer: `docs/2026-05-06__v2.7.260__端點矩陣__REST-AJAX-AdminPost.md` — hook → capability → nonce / `permission_callback` matrix for reviewers.
+
+= 2.7.259 =
+* Security: `museder_restoreone_safe_path_join()` now uses a **trailing-slash directory prefix** check; log path resolution and admin download handlers (`logs`, `reports`, restore-job `database.sql`) validate **`realpath()` + prefix** to avoid ambiguous `strpos` matches.
+* Review UX: neutral copy for optional **add-on** placeholders (`MusederRestoreOnePro` / admin UI modal); Dashboard “AI” strings describe **local / offline** scan behavior only.
+* Documentation: readme **External services** (loopback `wp-cron.php`, local `assets/vendor` JS/CSS), **Privacy / uninstall** aligned with `uninstall.php`, FAQ on **third-party format compatibility** (no endorsement).
+* Maintenance: added root **`uninstall.php`** (options, transients, job-lock rows, `museder_restoreone_*` crons only — **no** backup/log/report file deletion). `create-package.sh` ships `uninstall.php` in the ZIP.
+* Developer tooling: `tools/functional-test/` adds REST permission smoke, `safe_path_join` traversal checks, external-URL scan script, and uninstall manifest verification (still **not** included in the WordPress.org ZIP).
+* Vendor: restored **`assets/vendor/chart.4.5.1.min.js`** alongside `chart.4.5.1.js`; expanded `assets/vendor/README.txt` (versions, licenses, sources).
+
+= 2.7.258 =
+* Security: `museder_restoreone_get_backup_path()` now compares backup directory roots with a **trailing-slash boundary** after `realpath()` normalization, preventing ambiguous prefix matches between similarly named directories.
+* Multisite: when WordPress Multisite is enabled, RestoreOne admin screens show a **non-blocking** notice that Multisite is **experimental** (readme stance unchanged).
+* Documentation: FAQ entries for **PclZip performance**, **REST chunk / `php://input`**, **cron and mail dependencies**, and **large-archive restore limits**; Privacy notes optional local **build/version log** heartbeat after upgrades.
+* Developer tooling: added `tools/functional-test/` scripts (not shipped in the WordPress.org ZIP) to reproduce small-site, large-site, PclZip-forced, chunk REST smoke, and cron listing checks via Docker/WP-CLI.
+* Email: test email body no longer uses emoji (broader mail client compatibility).
+
+= 2.7.257 =
+* UI: Improved dark-theme contrast for Settings field labels, helper text under General Settings, Environment Compatibility success badges, and System Diagnostics uppercase labels (avoids light-theme label colors on dark cards).
+* Documentation: Readme feature line for schedules now matches optional scheduling (no longer implies a minimum number of schedules).
+* Maintenance: Removed unused legacy template `templates/restore-page.php` (Restore admin screen uses `page-restore.php` only) to avoid mixed-language placeholder strings in the distributed tree.
+
+= 2.7.256 =
+* WordPress.org review follow-up: core admin include paths are now built in segments (root + directory parts + whitelisted filename), avoiding a single literal core-relative include path while preserving graceful fallback behavior.
+* Developer filters: added `museder_restoreone_core_admin_include_path` for non-standard WordPress directory layouts; invalid or unreadable filtered paths are ignored.
+* Documentation: FAQ now explains custom languages, mu-plugins, and core admin include path filters for advanced non-standard installs.
+
+= 2.7.255 =
+* WordPress.org review: replaced hardcoded/internal WordPress path constants used for core includes and language/mu-plugin directory discovery with helper-based path resolution derived from WordPress APIs (`wp_upload_dir()`, plugin path helpers) and graceful fallbacks.
+* Backup scope: language and mu-plugin directory prefixes are now resolved through plugin helpers and filters (`museder_restoreone_languages_dir`, `museder_restoreone_mu_plugins_dir`) instead of `WP_LANG_DIR` / `WPMU_PLUGIN_DIR`.
+* Restore/upload helpers: core admin include loading is centralized in `museder_restoreone_get_core_admin_include_path()` and avoids `ABSPATH` path concatenation; missing core helpers fail gracefully instead of fataling.
+
+= 2.7.254 =
+* REST: Chunk upload (`includes/class-chunk-handler-v2.php`) `permission_check` now uses the same two-step REST nonce pattern as v2 restore (`check_permissions`): `X-WP-Nonce` then `rest_nonce` parameter, empty token vs `wp_verify_nonce` as separate `WP_Error` branches; HTTP **401** for invalid/missing nonce and shared `museder_restoreone_invalid_nonce` / `museder_restoreone_forbidden` codes with v2 restore.
+* REST: Free AI REST `permission_check` nonce failures now return **401** with `museder_restoreone_invalid_nonce` (aligned with v2 restore; same user-facing message).
+* Readme: added **== Privacy ==** (data locations, third parties, optional add-ons, retention) and explicit **Multisite** stance in Description + FAQ.
+* Security hygiene: added `index.php` sentinels under `includes/`, `includes/wpress/`, `templates/`, `assets/` (+ `assets/css/`, `assets/js/`), and `languages/` to avoid directory listing on misconfigured hosts.
+
+= 2.7.253 =
+* Compliance / Plugin Check: PclZip fallback now loads WordPress core’s PclZip file instead of shipping a duplicate `includes/vendor/pclzip` copy, so the broader `plugin-check.ruleset.xml` scan is not dominated by third-party PHPCS violations in bundled library code.
+* Documentation: Clarifies that changelog lines mentioning `tests/` or `tools/docker/` refer to the public development repository only; those paths are not part of the distributed plugin ZIP from WordPress.org.
+
+= 2.7.252 =
+* Developer / WordPress Plugin Check: Report download `wp_die()` branches use per-status literal `response` codes with inline `esc_html()` / `esc_html__()` so `OutputNotEscaped` passes under Plugin Check.
+* Developer: `tests/php-regression/final_review_248_regression.php` uses `esc_html()` on CLI output and wraps checks in `museder_restoreone_final_review_248_regression_run()` to satisfy prefix / escaping static analysis.
+* Docker sync (`tools/docker/setup.sh`): exclude root `.DS_Store` from the plugin tarball so Plugin Check does not flag hidden files in `wp-content/plugins`.
+
+= 2.7.251 =
+* WordPress Plugin Check: Report download error path now passes HTTP status to `wp_die()` via the `response` args array (avoids `OutputNotEscaped` on a dynamic third-argument integer).
+
+= 2.7.250 =
+* Security: NDJSON database import now applies the same table prefix allow-list as the SQL restore path before `DROP TABLE` / `replace()`; disallowed names are skipped and logged.
+* Stability: `get_ai_recommendations()` checks `class_exists( 'Museder_Restoreone_AI_Service' )` before calling it (avoids fatal if an add-on filter is misconfigured).
+* WordPress.org review: AI schedule recommendation errors use neutral codes/messages (`addon_not_active`, `addon_service_missing`) instead of `pro_required`.
+* REST (v2 restore): `check_permissions` validates `X-WP-Nonce` / `_wpnonce` in two steps (empty check, then `wp_verify_nonce`), matching the AI REST controller pattern.
+
+= 2.7.249 =
+* WordPress.org strict review: AJAX `museder_restoreone_refresh_nonce` now requires a valid existing nonce before issuing a new one; admin JS sends the current nonce on refresh.
+* AI (free): removed daily scan quota / `remaining` / `dailyScans` from the hosted build (local preview only; no trialware-style limits in API responses).
+* Safe mode: readme, Restore/Dashboard notices, restore options help text, and admin toasts now match implementation — snapshot + marker only; **Exit Safe Mode** clears the marker without claiming automatic plugin activation changes.
+
+= 2.7.248 =
+* WordPress.org review: `add_option()` job locks now use an explicitly prefixed `$option_key` built from `OPTION_LOCK_PREFIX` at the call site (addresses static analysis / human review feedback on dynamic option names).
+* WordPress.org guidelines: removed the free-tier limit of a single backup schedule; multiple local schedules are allowed for all users.
+* Schedules: cron pattern, exclude paths, and retention policy fields are saved for all installs (local features; not gated on a separate add-on).
+* Backups: optional backup labels apply to archive names and metadata for all users; encryption and cloud destination metadata/upload remain add-on scoped, with a `class_exists()` guard on cloud upload.
+* Admin log download: `check_admin_referer()` runs immediately after resolving the log basename and before reading the file from disk.
+
+= 2.7.247 =
+* Security & WordPress.org review: Added explicit `check_ajax_referer()` calls in admin AJAX handlers (UI, restore, logs, settings, email) so tooling and reviewers can see nonce verification in each handler.
+* Backup download (`admin-post`): For nonce-based links, `check_admin_referer()` now runs before reading `$_GET['file']`; signed-token downloads unchanged. Clearer error when the filename is missing after a valid nonce.
+* Report download: Replaced missing Pro controller with `Museder_Restoreone_Restore_Report::download()` plus `check_admin_referer( 'museder_restoreone_download_report' )`, path confinement under the reports directory, and safe streaming headers.
+* Backup jobs: Clarified comments for dynamic `add_option()` lock keys (no invalid PHPCS ignore).
+
+= 2.7.246 =
+* Admin UI: improved text contrast when using dark appearance (`data-bl-theme="dark"`) — Restore Center step cards, glass cards, and status colors align with theme tokens (`--text-dark`, `--surface`, `--glass-*`).
+* Restore Center: progress track uses a deeper neutral background; percentage label uses a subtle text shadow so it stays readable at low fill levels.
+* Safe mode notices (Restore + Dashboard) use `var(--text-muted)` so body copy follows the active theme.
+* Legacy restore wizard (restore.css): completed-step label uses a brighter green in dark mode.
+
+= 2.7.245 =
+* WordPress.org review follow-up: readme — single Changelog section (removed duplicate header); FAQ documents local `wp-cron.php` loopback requests. Code — `trigger_restore_job()` formatting in class-restore-handler.php; AI REST API namespace aligned to `museder-restoreone/v1` for consistency with the plugin slug.
+
+= 2.7.244 =
+* WordPress.org review hardening: removed bundled PRO activation, license verification, embedded PRO modules, and review-facing upgrade messaging from the free plugin package. Free build now keeps only the core backup, restore, schedule, logs, and settings experience, while preserving a clean add-on detection boundary for a separate plugin.
+
+= 2.7.243 =
+* Schedule handler: GLOB_BRACE fallback for PHP builds that omit it; retention apply_retention_rules file_exists check before filemtime to avoid warnings. Restore page: Exit Safe Mode button id unified to museder-restoreone-exit-safe-mode-btn with JS fallback for backup-lite-exit-safe-mode-btn. Small-site flow verified (backup, restore, settings, schedules, safe mode exit).
+
+= 2.7.242 =
+* WP.org compliance: Plugin Check 1.7.0 clean (0 errors, 0 warnings). Security and request handling (nonce/capability, sanitize/validate, json whitelist). Path and storage under wp_upload_dir. Removed direct core includes where possible; ABSPATH guards. Naming: menu/REST/JS prefixes unified to museder-restoreone. Readme external services (S3, OpenAI); Plugin URI updated.
+
 = 2.7.223 =
 * Compliance: Reworked deprecated download handler to avoid bootstrapping WordPress and route downloads via admin-post.php.
 * Compliance: Documented external services with plain Terms/Privacy URLs for review tooling.
 * Security: Added explicit nonce checks in key AJAX handlers for clearer automated detection.
 * Security: Hardened restore SQL import with a conservative allow/deny statement strategy.
 * Compatibility: Reduced reliance on hard-coded WP_* directory constants by using wp_upload_dir()-derived paths where possible.
+
+= 2.7.220 =
+* WP.org compliance hardening (nonce/cap checks, sanitization/escaping, uploads storage under wp_upload_dir).
+* S3: migrate cURL usage to WordPress HTTP API (wp_remote_request) with multipart upload support.
+* Restore reliability fixes (mysqldump stderr handling, file ops portability, progress UI smoothing).
+
+= 2.7.218 =
+* Internal testing build.
 
 = 2.7.17 =
 * Code Quality: Fixed remaining AlternativeFunctions errors in class-chunk-handler-v2.php (fopen, rename, ini_set)
@@ -235,10 +393,10 @@ No. Backup download and upload endpoints are protected by time-limited tokens an
 * Enhancement: Improved archive extraction error handling with detailed logging for ZipArchive and PclZip failures.
 
 = 2.7.04 =
-* Enhancement: Added Safe Mode after restore - automatically disables non-essential plugins after restore to prevent white screen issues. Administrators can restore plugins via a one-click button in the admin interface.
+* Enhancement: Added Safe Mode after restore — records active plugins and shows an admin notice; Exit Safe Mode clears the marker (no automatic plugin activation changes).
 * Enhancement: Enhanced URL search-replace functionality - now handles http/https, www/non-www, and subdirectory path variations automatically for better cross-domain migration support.
 * Enhancement: Added restore completion hooks - `backup_lite_after_restore` and `backup_lite_after_restore_safe_mode` hooks allow other plugins to integrate with restore workflow.
-* Enhancement: Improved diagnostic logging - added detailed logs for database import (siteurl/home changes), URL replacement pairs, and safe mode plugin management for easier troubleshooting.
+* Enhancement: Improved diagnostic logging - added detailed logs for database import (siteurl/home changes), URL replacement pairs, and safe mode marker handling for easier troubleshooting.
 * Security: All new features follow WordPress coding standards and security best practices.
 
 = 2.7.03 =
@@ -299,6 +457,60 @@ No. Backup download and upload endpoints are protected by time-limited tokens an
 (Older changelog entries are maintained in the project repository.)
 
 == Upgrade Notice ==
+
+= 2.7.262 =
+Fixes large-site backup jobs that could appear **stuck near 95%** after a failed post-close verification (PclZip repack conflicting with an open ZipArchive handle). Recommended if you run **large full-site backups** on production.
+
+= 2.7.261 =
+No behavior change intended for production sites; this release mainly adds reviewer-oriented automation in the development repository (endpoint matrices, nginx+Apache smoke, ZIP install check, Multisite uninstall verification, mail/PHPCS tooling) and readme↔admin UI mapping for manual checks.
+
+= 2.7.260 =
+Stricter REST chunk session ids; safer chunk/WPress paths; neutral `MusederRestoreOneAddon` global (Pro alias retained); dark-theme CSS selector fix; batched Multisite uninstall.
+
+= 2.7.259 =
+Path-boundary hardening for helpers and download handlers; neutral add-on/“AI” admin copy; `uninstall.php` for clean option/cron removal without deleting your backups; functional-test helpers in the development repository.
+
+= 2.7.258 =
+Tightens backup-path directory prefix checks; Multisite admin notice; expanded FAQ for chunk uploads, PclZip, cron/mail, and large restores; optional functional-test tooling in the development repository.
+
+= 2.7.257 =
+UI contrast fixes for dark theme on Settings and dashboard status badges; readme schedule wording aligned with optional schedules; legacy unused restore template removed.
+
+= 2.7.256 =
+Further reduces review risk around path determination: segmented core admin include path resolution, a documented override filter for non-standard layouts, and FAQ guidance for custom language / mu-plugin paths.
+
+= 2.7.255 =
+Addresses WordPress.org feedback on determining plugin/content directories correctly: no `ABSPATH`-based core includes, no `WP_LANG_DIR` / `WPMU_PLUGIN_DIR` in backup scope; centralized core include helper with graceful failures. Recommended before resubmitting to the Plugin Directory.
+
+= 2.7.254 =
+REST nonce handling aligned across Chunk, AI, and v2 restore; readme adds Privacy and Multisite statements; directory index sentinels. Recommended before WordPress.org resubmission.
+
+= 2.7.253 =
+Loads PclZip from WordPress core (no bundled duplicate library); readme clarifies dev-only paths. Recommended before running full Plugin Check ruleset or resubmitting to WordPress.org.
+
+= 2.7.252 =
+Plugin Check–clean report download handling, regression test script escaping, and Docker exclude for `.DS_Store`. Recommended before resubmitting Plugin Check results.
+
+= 2.7.251 =
+Plugin Check / escaping fix for report download `wp_die()` status handling. Recommended update before WordPress.org Plugin Check resubmission.
+
+= 2.7.250 =
+Tighter NDJSON import table policy, safer AI recommendations hook, REST nonce checks aligned with AI routes. Recommended update before directory resubmission.
+
+= 2.7.249 =
+Stricter admin AJAX nonce refresh, AI scan response without quota fields, safe mode copy aligned with actual behavior. Recommended before WordPress.org resubmission.
+
+= 2.7.248 =
+Review-driven fixes: visible prefixed option keys for job locks, unlimited local schedules, backup labels for everyone, safer log download nonce order. Recommended before resubmitting to WordPress.org.
+
+= 2.7.247 =
+Security and directory-review hardening: clearer nonce checks in AJAX handlers, safer backup download order, working admin report download handler. Recommended update before WordPress.org resubmission.
+
+= 2.7.246 =
+UI polish: better dark-theme contrast on Restore Center and related cards; clearer restore progress label. Recommended update for admin readability.
+
+= 2.7.245 =
+Readme and review polish: unified changelog, FAQ for local wp-cron loopback, code formatting and AI REST namespace alignment. Update recommended before WordPress.org resubmission.
 
 = 2.7.21 =
 Security & compliance: Hardened security with comprehensive nonce verification, input sanitization, and WordPress.org standards compliance. Fixed Restore History timestamp accuracy and restore success detection. Update recommended for all users.

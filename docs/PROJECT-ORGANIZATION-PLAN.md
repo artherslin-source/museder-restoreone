@@ -1,7 +1,9 @@
 # Museder RestoreOne 專案整理方案（不影響開發與執行）
 
-更新日期：2026-02-22  
+更新日期：2026-02-22（知識庫補充：2026-08-08）  
 目標：在**不影響外掛後續開發、打包、測試、執行**前提下，整理半年累積檔案，降低混亂與誤提交風險。
+
+**演化補充（2026-08-08）**：可複用決策記憶集中於 [`docs/knowledge/`](./knowledge/README.md)；專案 Skill 提交於 `.cursor/skills/museder-restoreone-release-ops/`（為共享刻意進版控；與下文「`.cursor/` 本機忽略」建議並存時，以知識庫 [`EVOLUTION-INDEX.md`](./knowledge/EVOLUTION-INDEX.md) §6 為準）。
 
 ---
 

@@ -1,9 +1,14 @@
 # Museder RestoreOne 版本開發重點整理
 ## 2.6.126 之後各版本開發重點
 
+> **⚠️ 過時敘事（2026-08-08）**  
+> 本檔開頭仍保留歷史「2.8.00／S3／Pro Dashboard」等段落，**不是**現行 Free 發行真相。  
+> **現行產品版本與決策**請以 `readme.txt`（Stable tag）、`museder-restoreone.php` 的 Version，以及 `docs/knowledge/EVOLUTION-INDEX.md` 為準。  
+> 本檔保留作歷史對照，勿直接複製進 WP.org 說明。
+
 ---
 
-## 版本 2.8.00 (最新版本)
+## 版本 2.8.00（歷史草稿段落；非現行 Free 最新版）
 
 ### 開發重點
 - **Dashboard 顯示問題修正**

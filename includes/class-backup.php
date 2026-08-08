@@ -90,8 +90,7 @@ class Museder_Restoreone_Backup {
         $random_code = wp_generate_password( 6, false, false );
         
         $label_suffix = '';
-        // PRO: Backup label
-        if ( ! empty( $options['label'] ) && Museder_Restoreone_Pro::is_pro_active() ) {
+        if ( ! empty( $options['label'] ) ) {
             $label_suffix = '-' . sanitize_file_name( $options['label'] );
         }
         
@@ -197,8 +196,10 @@ class Museder_Restoreone_Backup {
             'started_at' => isset( $backup_started_at ) ? $backup_started_at : null,
             'completed_at' => $backup_completed_at,
         ];
-        if ( Museder_Restoreone_Pro::is_pro_active() && ! empty( $options['label'] ) ) {
+        if ( ! empty( $options['label'] ) ) {
             $backup_metadata['label'] = sanitize_text_field( $options['label'] );
+        }
+        if ( museder_is_pro_active() ) {
             $backup_metadata['encrypted'] = ! empty( $options['encrypt'] );
             $backup_metadata['cloud_destinations'] = $options['cloud_destinations'] ?? [];
         }
@@ -222,8 +223,8 @@ class Museder_Restoreone_Backup {
             'duration_seconds' => $backup_duration_seconds,
         ] );
 
-        // PRO: Upload to cloud storage if specified
-        if ( Museder_Restoreone_Pro::is_pro_active() && ! empty( $options['cloud_destinations'] ) && is_array( $options['cloud_destinations'] ) ) {
+        // Add-on: upload to external storage when a separate provider is present.
+        if ( museder_is_pro_active() && class_exists( 'Museder_Restoreone_Cloud_Storage' ) && ! empty( $options['cloud_destinations'] ) && is_array( $options['cloud_destinations'] ) ) {
             foreach ( $options['cloud_destinations'] as $destination ) {
                 if ( 'local' !== $destination ) {
                     Museder_Restoreone_Cloud_Storage::upload_backup( $archive_path, $destination );
@@ -298,11 +299,10 @@ class Museder_Restoreone_Backup {
             'php_version'       => PHP_VERSION,
         ];
 
-        // PRO: Add label and encryption info
-        if ( Museder_Restoreone_Pro::is_pro_active() ) {
-            if ( ! empty( $options['label'] ) ) {
-                $meta['label'] = sanitize_text_field( $options['label'] );
-            }
+        if ( ! empty( $options['label'] ) ) {
+            $meta['label'] = sanitize_text_field( $options['label'] );
+        }
+        if ( museder_is_pro_active() ) {
             if ( ! empty( $options['encrypt'] ) ) {
                 $meta['encrypted'] = true;
             }
@@ -660,7 +660,7 @@ class Museder_Restoreone_Backup {
         $random_code  = wp_generate_password( 6, false, false );
         $label_suffix = '';
 
-        if ( class_exists( 'Museder_Restoreone_Pro' ) && Museder_Restoreone_Pro::is_pro_active() && ! empty( $options['label'] ) ) {
+        if ( ! empty( $options['label'] ) ) {
             $label_suffix = '-' . sanitize_file_name( $options['label'] );
         }
 
@@ -714,7 +714,7 @@ class Museder_Restoreone_Backup {
         $random_code = wp_generate_password( 6, false, false );
         
         $label_suffix = '';
-        if ( Museder_Restoreone_Pro::is_pro_active() && ! empty( $options['label'] ) ) {
+        if ( ! empty( $options['label'] ) ) {
             $label_suffix = '-' . sanitize_file_name( $options['label'] );
         }
 
@@ -2210,6 +2210,40 @@ class Museder_Restoreone_Backup {
     }
 
     /**
+     * Whether an opened ZipArchive contains an entry for the given relative path.
+     *
+     * Normalizes slashes and tries common libzip/Windows quirks so post-close verification
+     * does not false-trigger a full repack.
+     *
+     * @param ZipArchive $zip  Open archive.
+     * @param string     $name Expected entry path (forward slashes, no leading slash).
+     * @return bool
+     */
+    private static function zip_archive_has_entry( ZipArchive $zip, $name ) {
+        $name = ltrim( str_replace( '\\', '/', (string) $name ), '/' );
+        if ( '' === $name ) {
+            return false;
+        }
+        if ( false !== $zip->locateName( $name ) ) {
+            return true;
+        }
+        // Some tooling stores names with a leading "./".
+        if ( false !== $zip->locateName( './' . $name ) ) {
+            return true;
+        }
+        if ( defined( 'ZipArchive::FL_NOCASE' ) ) {
+            if ( false !== $zip->locateName( $name, ZipArchive::FL_NOCASE ) ) {
+                return true;
+            }
+            if ( false !== $zip->locateName( './' . $name, ZipArchive::FL_NOCASE ) ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * Verify the closed archive contains expected WordPress site root data.
      *
      * We require the archive to contain at least one file from each core directory:
@@ -2298,7 +2332,7 @@ class Museder_Restoreone_Backup {
 
             foreach ( $required as $file ) {
                 $checked++;
-                if ( false === $zip->locateName( $file ) ) {
+                if ( ! self::zip_archive_has_entry( $zip, $file ) ) {
                     $missing++;
                     if ( count( $missing_samples ) < 12 ) {
                         $missing_samples[] = $file;
@@ -2359,7 +2393,7 @@ class Museder_Restoreone_Backup {
                             foreach ( $needles as $prefix ) {
                                 if ( ! $found[ $prefix ] && 0 === strpos( $target, $prefix ) ) {
                                     // Require at least one actual file under the prefix (not just the directory entry).
-                                    if ( false === $zip->locateName( $target ) ) {
+                                    if ( ! self::zip_archive_has_entry( $zip, $target ) ) {
                                         $missing++;
                                         if ( count( $missing_samples ) < 12 ) {
                                             $missing_samples[] = 'missing_sample:' . $target;
@@ -2510,8 +2544,7 @@ class Museder_Restoreone_Backup {
             $checked++;
             $roots[ $root ]['checked']++;
 
-            $idx = $zip->locateName( $target );
-            if ( false === $idx ) {
+            if ( ! self::zip_archive_has_entry( $zip, $target ) ) {
                 $missing++;
                 if ( count( $missing_samples ) < 12 ) {
                     $missing_samples[] = $target;
@@ -2535,8 +2568,7 @@ class Museder_Restoreone_Backup {
                 continue;
             }
             $checked++;
-            $idx = $zip->locateName( $file );
-            if ( false === $idx ) {
+            if ( ! self::zip_archive_has_entry( $zip, $file ) ) {
                 $missing++;
                 $files_ok[ $file ] = false;
                 if ( count( $missing_samples ) < 12 ) {
@@ -2564,7 +2596,7 @@ class Museder_Restoreone_Backup {
         // Also ensure database/meta exist.
         $zip2 = new ZipArchive();
         if ( true === $zip2->open( $archive_path ) ) {
-            if ( false === $zip2->locateName( 'database.ndjson' ) || false === $zip2->locateName( 'meta.json' ) ) {
+            if ( ! self::zip_archive_has_entry( $zip2, 'database.ndjson' ) || ! self::zip_archive_has_entry( $zip2, 'meta.json' ) ) {
                 $ok = false;
             }
             $zip2->close();
@@ -3998,8 +4030,10 @@ class Museder_Restoreone_Backup {
             'started_at' => isset( $job['started_at'] ) ? (int) $job['started_at'] : null,
             'completed_at' => $backup_completed_at,
         ];
-        if ( Museder_Restoreone_Pro::is_pro_active() && ! empty( $job['options']['label'] ) ) {
+        if ( ! empty( $job['options']['label'] ) ) {
             $backup_metadata['label'] = sanitize_text_field( $job['options']['label'] );
+        }
+        if ( museder_is_pro_active() ) {
             $backup_metadata['encrypted'] = ! empty( $job['options']['encrypt'] );
             $backup_metadata['cloud_destinations'] = $job['options']['cloud_destinations'] ?? [];
         }
@@ -4511,12 +4545,14 @@ class Museder_Restoreone_Backup {
                     $prefixes[] = wp_normalize_path( trailingslashit( (string) get_theme_root() ) );
                 }
                 if ( empty( $options['no_muplugins'] ) ) {
-                    if ( defined( 'WPMU_PLUGIN_DIR' ) ) {
-                        $prefixes[] = wp_normalize_path( trailingslashit( WPMU_PLUGIN_DIR ) );
+                    $mu_dir = function_exists( 'museder_restoreone_get_mu_plugins_dir' ) ? museder_restoreone_get_mu_plugins_dir() : '';
+                    if ( '' !== $mu_dir ) {
+                        $prefixes[] = wp_normalize_path( trailingslashit( $mu_dir ) );
                     }
                 }
-                if ( defined( 'WP_LANG_DIR' ) ) {
-                    $prefixes[] = wp_normalize_path( trailingslashit( WP_LANG_DIR ) );
+                $lang_dir = function_exists( 'museder_restoreone_get_languages_dir' ) ? museder_restoreone_get_languages_dir() : '';
+                if ( '' !== $lang_dir ) {
+                    $prefixes[] = wp_normalize_path( trailingslashit( $lang_dir ) );
                 }
             }
         }
@@ -4621,8 +4657,9 @@ class Museder_Restoreone_Backup {
             $prefixes[] = wp_normalize_path( trailingslashit( (string) get_theme_root() ) );
         }
         if ( ! empty( $options['no_muplugins'] ) ) {
-            if ( defined( 'WPMU_PLUGIN_DIR' ) ) {
-                $prefixes[] = wp_normalize_path( trailingslashit( WPMU_PLUGIN_DIR ) );
+            $mu_dir = function_exists( 'museder_restoreone_get_mu_plugins_dir' ) ? museder_restoreone_get_mu_plugins_dir() : '';
+            if ( '' !== $mu_dir ) {
+                $prefixes[] = wp_normalize_path( trailingslashit( $mu_dir ) );
             }
         }
         if ( ! empty( $options['no_cache'] ) ) {
