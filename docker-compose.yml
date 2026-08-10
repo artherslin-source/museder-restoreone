@@ -10,7 +10,7 @@ services:
       - db_data:/var/lib/mysql
 
   wordpress:
-    image: wordpress:6.6.2-php8.2-apache
+    image: wordpress:7.0-php8.2-apache
     depends_on:
       - db
     ports:
@@ -29,6 +29,8 @@ services:
       - ./logs/test-one:/tmp/test-one:ro
       # PHP limits for large backup/restore testing
       - ./tools/docker/php.ini:/usr/local/etc/php/conf.d/zzz-museder-restoreone.ini:ro
+      # Local browser E2E: clickable login link on wp-login.php (do not ship to WP.org)
+      - ./tools/docker/mu-plugins/restoreone-e2e-login.php:/var/www/html/wp-content/mu-plugins/restoreone-e2e-login.php:ro
 
   wpcli:
     image: wordpress:cli-php8.2

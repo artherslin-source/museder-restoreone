@@ -41,6 +41,16 @@ if ! docker compose run --rm wpcli core is-installed >/dev/null 2>&1; then
     --skip-email
 fi
 
+# Official wordpress:7.0-php8.2-apache may lag latest patch (e.g. 7.0.2); pin to 7.0.3 for local/FT parity.
+TARGET_WP="${MR_FT_WP_CORE_VERSION:-7.0.3}"
+CUR_WP="$(docker compose run --rm wpcli core version 2>/dev/null | tr -d '\r' | tail -n 1 || true)"
+echo "[wp] core version: ${CUR_WP:-unknown} (target ${TARGET_WP})"
+if [[ -n "${CUR_WP}" && "${CUR_WP}" != "${TARGET_WP}" ]]; then
+  echo "[wp] updating core to ${TARGET_WP}…"
+  docker compose run --rm wpcli core update --version="${TARGET_WP}" --force || true
+  docker compose run --rm wpcli core update-db || true
+fi
+
 echo "[wp] syncing plugin source into wp-content/plugins (excluding dev-only folders)..."
 docker compose exec -T wordpress bash -lc '
   set -e
@@ -49,12 +59,16 @@ docker compose exec -T wordpress bash -lc '
   rm -rf "$dst"
   mkdir -p "$dst"
   tar -C "$src" \
+    --exclude=./.DS_Store \
+    --exclude=./.github \
+    --exclude=./tests \
     --exclude=./logs \
     --exclude=./docs \
     --exclude=./dist \
     --exclude=./release \
     --exclude=./tools \
     --exclude=./tmp \
+    --exclude=./.worktrees \
     --exclude=./create-package.sh \
     --exclude=./docker-compose.yml \
     --exclude=./VERSION_DEVELOPMENT_HIGHLIGHTS.md \

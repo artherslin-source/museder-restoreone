@@ -21,6 +21,7 @@ if [[ "${MR_FT_SKIP_SMALL:-1}" != "1" ]]; then
 fi
 
 echo "[ft-large] Ensure default stack is up (docker compose) …"
+docker compose pull wordpress || true
 docker compose up -d db wordpress
 
 # shellcheck source=/dev/null
@@ -29,8 +30,10 @@ ft_wait_db || true
 ft_wait_wp_config || true
 
 if docker compose run --rm wpcli core is-installed >/dev/null 2>&1; then
+  ft_ensure_wp_core_version "${MR_FT_WP_CORE_VERSION:-7.0.3}" || true
   ft_sync_plugin_into_container || true
   docker compose run --rm wpcli plugin activate museder-restoreone 2>/dev/null || true
+  echo "[ft-large] WordPress core: $(docker compose run --rm wpcli core version 2>/dev/null | tr -d '\r' | tail -n 1 || true)"
 fi
 
 echo "[ft-large] Plugin Check …"

@@ -1,0 +1,53 @@
+# Multisite functional-test stack (subdirectory network). Port 8095 by default.
+# Usage:
+#   COMPOSE_PROJECT_NAME=restoreone-ft-ms docker compose -f tools/docker/docker-compose.ft-multisite-8095.yml up -d
+services:
+  db:
+    image: mariadb:10.11
+    environment:
+      MYSQL_DATABASE: wordpress
+      MYSQL_USER: wordpress
+      MYSQL_PASSWORD: wordpress
+      MYSQL_ROOT_PASSWORD: root
+    volumes:
+      - db_data_ft8095:/var/lib/mysql
+
+  wordpress:
+    image: wordpress:7.0-php8.2-apache
+    depends_on:
+      - db
+    ports:
+      - "${MR_FT_MS_HOST_PORT:-8095}:80"
+    environment:
+      WORDPRESS_DB_HOST: db:3306
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: wordpress
+      WORDPRESS_DB_NAME: wordpress
+      WORDPRESS_DEBUG: "0"
+    volumes:
+      - wp_data_ft8095:/var/www/html
+      - ../../:/tmp/museder-restoreone-src:ro
+      - ../../logs/test-one:/tmp/test-one:ro
+      - ./php.ini:/usr/local/etc/php/conf.d/zzz-museder-restoreone.ini:ro
+
+  wpcli:
+    image: wordpress:cli-php8.2
+    user: "33:33"
+    depends_on:
+      - wordpress
+    environment:
+      WORDPRESS_DB_HOST: db:3306
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: wordpress
+      WORDPRESS_DB_NAME: wordpress
+    volumes:
+      - wp_data_ft8095:/var/www/html
+      - ../../:/tmp/museder-restoreone-src:ro
+      - ../../logs/test-one:/tmp/test-one:ro
+      - ./php.ini:/usr/local/etc/php/conf.d/zzz-museder-restoreone.ini:ro
+    working_dir: /var/www/html
+    entrypoint: ["wp"]
+
+volumes:
+  db_data_ft8095:
+  wp_data_ft8095:

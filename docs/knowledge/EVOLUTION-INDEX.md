@@ -73,6 +73,7 @@
 | 2.7.260 | 端點／chunk UUID | 矩陣文件 |
 | 2.7.261 | FT 矩陣＋大小站證據 | 8080 大站跑通；mail From 陷阱 |
 | **2.7.262** | **正式站大站 95% 卡關** | PclZip＋ZipArchive handle；verify 假陰性；封裝 `dist/museder-restoreone-2.7.262.zip` |
+| **2.7.263** | **WP 7.0 相容標示** | Tested up to **7.0**；Docker → `wordpress:7.0-php8.2-apache`；FT pin **7.0.3**；`reports/museder-restoreone-2.7.263-validation.md` |
 
 ---
 

@@ -1,0 +1,54 @@
+# Standalone stack for second WordPress (port 8081) — avoids compose port merge with base 8080.
+# Usage from repo root:
+#   COMPOSE_PROJECT_NAME=restoreone-sm docker compose -f tools/docker/docker-compose.isolated-8081.yml up -d
+services:
+  db:
+    image: mariadb:10.11
+    environment:
+      MYSQL_DATABASE: wordpress
+      MYSQL_USER: wordpress
+      MYSQL_PASSWORD: wordpress
+      MYSQL_ROOT_PASSWORD: root
+    volumes:
+      - db_data_sm:/var/lib/mysql
+
+  wordpress:
+    image: wordpress:7.0-php8.2-apache
+    depends_on:
+      - db
+    ports:
+      - "8081:80"
+    environment:
+      WORDPRESS_DB_HOST: db:3306
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: wordpress
+      WORDPRESS_DB_NAME: wordpress
+      WORDPRESS_DEBUG: "0"
+    volumes:
+      - wp_data_sm:/var/www/html
+      - ../../:/tmp/museder-restoreone-src:ro
+      - ../../logs/test-one:/tmp/test-one:ro
+      - ./php.ini:/usr/local/etc/php/conf.d/zzz-museder-restoreone.ini:ro
+      - ./mu-plugins/restoreone-e2e-login.php:/var/www/html/wp-content/mu-plugins/restoreone-e2e-login.php:ro
+
+  wpcli:
+    image: wordpress:cli-php8.2
+    user: "33:33"
+    depends_on:
+      - wordpress
+    environment:
+      WORDPRESS_DB_HOST: db:3306
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: wordpress
+      WORDPRESS_DB_NAME: wordpress
+    volumes:
+      - wp_data_sm:/var/www/html
+      - ../../:/tmp/museder-restoreone-src:ro
+      - ../../logs/test-one:/tmp/test-one:ro
+      - ./php.ini:/usr/local/etc/php/conf.d/zzz-museder-restoreone.ini:ro
+    working_dir: /var/www/html
+    entrypoint: ["wp"]
+
+volumes:
+  db_data_sm:
+  wp_data_sm:

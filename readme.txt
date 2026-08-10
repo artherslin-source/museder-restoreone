@@ -2,9 +2,9 @@
 Contributors: artherslin
 Tags: backup, migration, restore, site-backup, database-backup
 Requires at least: 5.8
-Tested up to: 6.9
+Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 2.7.262
+Stable tag: 2.7.263
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -182,6 +182,10 @@ Most sites do not need any changes. For unusual server layouts where core admin 
 6. Settings page with general options and system diagnostics.
 
 == Changelog ==
+
+= 2.7.263 =
+* Compatibility: **Tested up to WordPress 7.0** (validated on **7.0.3** via Docker FT: small + large stacks).
+* Developer tooling: Docker images moved to **`wordpress:7.0-php8.2-apache`**; functional-test helpers pin core to **7.0.3** with `wp core update` when the official image lags the latest patch.
 
 = 2.7.262 =
 * Backup reliability: when **PclZip** compatibility repack is active, the async job runner **no longer keeps a long-lived `ZipArchive` handle** on the same `.zip` file (PclZip and ZipArchive were both mutating the archive, making `close()` extremely slow on large sites and risking central-directory corruption).
@@ -457,6 +461,9 @@ Most sites do not need any changes. For unusual server layouts where core admin 
 (Older changelog entries are maintained in the project repository.)
 
 == Upgrade Notice ==
+
+= 2.7.263 =
+Marks compatibility with **WordPress 7.0** (tested on 7.0.3). No intentional functional change beyond the 2.7.262 backup finalize fix; update for directory “Tested up to” accuracy.
 
 = 2.7.262 =
 Fixes large-site backup jobs that could appear **stuck near 95%** after a failed post-close verification (PclZip repack conflicting with an open ZipArchive handle). Recommended if you run **large full-site backups** on production.
