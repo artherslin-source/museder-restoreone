@@ -2,7 +2,7 @@
 Contributors: artherslin
 Tags: backup, migration, restore, site-backup, database-backup
 Requires at least: 5.8
-Tested up to: 7.0
+Tested up to: 7.1.3
 Requires PHP: 7.4
 Stable tag: 2.7.276
 License: GPLv2 or later

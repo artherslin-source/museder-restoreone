@@ -3,7 +3,7 @@
 # Provision: bash tools/qa/approach-b-provision.sh all
 
 x-wp-qa-base: &wp-qa-base
-  image: wordpress:6.6.2-php8.2-apache
+  image: wordpress:7.1.3-php8.2-apache
   environment: &wp-qa-env
     WORDPRESS_DB_USER: wordpress
     WORDPRESS_DB_PASSWORD: wordpress
