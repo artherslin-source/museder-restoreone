@@ -13,6 +13,10 @@ logs/
 # Release artifacts live on GitHub Releases, not in git.
 dist/*.zip
 
+# Local checkouts and a vendored Plugin Check tree. Not part of the plugin.
+.worktrees/
+tools/plugin-check-dist/
+
 # Nested copy from mistaken plugin packaging
 museder-restoreone/
 
