@@ -7,8 +7,6 @@ vendor/
 !assets/vendor/
 !assets/vendor/**
 logs/
-!logs/
-!logs/**
 
 # Release artifacts live on GitHub Releases, not in git.
 dist/*.zip
